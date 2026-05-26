@@ -7,6 +7,11 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
     case mouseMotion = "mou"
     case mouseWheel = "whe"
     case mouseWheelStep = "whs"
+    case midiNote = "mni"
+    case midiCC = "mcc"
+    case midiPitchBend = "mpb"
+    case midiProgramChange = "mpc"
+    case midiTransport = "mtr"
 
     var id: String { rawValue }
 
@@ -17,6 +22,45 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
         case .mouseMotion: return "Mouse Motion"
         case .mouseWheel: return "Mouse Wheel"
         case .mouseWheelStep: return "Mouse Wheel Step"
+        case .midiNote: return "MIDI Note"
+        case .midiCC: return "MIDI CC (Control Change)"
+        case .midiPitchBend: return "MIDI Pitch Bend"
+        case .midiProgramChange: return "MIDI Program Change"
+        case .midiTransport: return "MIDI Transport"
+        }
+    }
+
+    var isMIDI: Bool {
+        switch self {
+        case .midiNote, .midiCC, .midiPitchBend, .midiProgramChange, .midiTransport: return true
+        default: return false
+        }
+    }
+}
+
+/// Which MIDI real-time transport message to send. The DAW typically responds
+/// by playing, stopping, or continuing playback at its current position.
+enum MIDITransport: String, Codable, CaseIterable, Identifiable {
+    case start = "start"
+    case stop = "stop"
+    case `continue` = "continue"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .start: return "Start"
+        case .stop: return "Stop"
+        case .continue: return "Continue"
+        }
+    }
+
+    /// The MIDI real-time status byte for this transport message.
+    var statusByte: UInt8 {
+        switch self {
+        case .start: return 0xFA
+        case .stop: return 0xFC
+        case .continue: return 0xFB
         }
     }
 }
@@ -57,7 +101,7 @@ enum MouseDirection: String, Codable, CaseIterable {
     }
 }
 
-/// Represents a single output action (keyboard key, mouse button, mouse movement, etc.)
+/// Represents a single output action (keyboard key, mouse button, mouse movement, MIDI message, etc.)
 struct OutputAction: Codable, Hashable, Identifiable {
     let id: UUID
 
@@ -68,8 +112,24 @@ struct OutputAction: Codable, Hashable, Identifiable {
     var mouseDirection: MouseDirection?
     var speed: Int?
 
+    // MIDI-specific fields (only used when type is one of the MIDI cases).
+    // midiNote/midiCC values are 0-127. midiChannel is 1-16 (stored as 0-15
+    // internally to match the MIDI spec).
+    var midiNote: Int?         // 0-127, e.g. 60 = middle C
+    var midiVelocity: Int?     // 0-127
+    var midiCCNumber: Int?     // 0-127, e.g. 1 = modulation, 7 = volume, 11 = expression
+    var midiCCValue: Int?      // 0-127 (used for fixed-value CC presses; variable axes drive it dynamically)
+    var midiChannel: Int?      // 1-16 (defaults to 1 if nil)
+    var midiProgramNumber: Int?  // 0-127, used for Program Change messages
+    var midiTransport: MIDITransport?  // Start, Stop, Continue for transport bindings
+
     init(type: OutputType, keyCode: Int? = nil, mouseButtonIndex: Int? = nil,
-         mouseAxis: MouseAxis? = nil, mouseDirection: MouseDirection? = nil, speed: Int? = nil) {
+         mouseAxis: MouseAxis? = nil, mouseDirection: MouseDirection? = nil, speed: Int? = nil,
+         midiNote: Int? = nil, midiVelocity: Int? = nil,
+         midiCCNumber: Int? = nil, midiCCValue: Int? = nil,
+         midiChannel: Int? = nil,
+         midiProgramNumber: Int? = nil,
+         midiTransport: MIDITransport? = nil) {
         self.id = UUID()
         self.type = type
         self.keyCode = keyCode
@@ -77,6 +137,13 @@ struct OutputAction: Codable, Hashable, Identifiable {
         self.mouseAxis = mouseAxis
         self.mouseDirection = mouseDirection
         self.speed = speed
+        self.midiNote = midiNote
+        self.midiVelocity = midiVelocity
+        self.midiCCNumber = midiCCNumber
+        self.midiCCValue = midiCCValue
+        self.midiChannel = midiChannel
+        self.midiProgramNumber = midiProgramNumber
+        self.midiTransport = midiTransport
     }
 
     var displayName: String {
@@ -116,6 +183,23 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 return "Scroll Step \(dirName)"
             }
             return "Mouse Wheel Step"
+        case .midiNote:
+            let note = midiNote ?? 60
+            let ch = midiChannel ?? 1
+            return "MIDI \(MIDIService.noteName(note)) · ch \(ch)"
+        case .midiCC:
+            let cc = midiCCNumber ?? 1
+            let ch = midiChannel ?? 1
+            return "MIDI CC \(cc) · ch \(ch)"
+        case .midiPitchBend:
+            let ch = midiChannel ?? 1
+            return "MIDI Pitch Bend · ch \(ch)"
+        case .midiProgramChange:
+            let prog = midiProgramNumber ?? 0
+            let ch = midiChannel ?? 1
+            return "MIDI Program \(prog) · ch \(ch)"
+        case .midiTransport:
+            return "MIDI \(midiTransport?.displayName ?? "Start")"
         }
     }
 
@@ -140,6 +224,16 @@ struct OutputAction: Codable, Hashable, Identifiable {
             let a = mouseAxis?.rawValue ?? 0
             let d = mouseDirection?.rawValue ?? "+"
             return "whs \(a) \(d)"
+        case .midiNote:
+            return "mni \(midiNote ?? 60) \(midiVelocity ?? 100) \(midiChannel ?? 1)"
+        case .midiCC:
+            return "mcc \(midiCCNumber ?? 1) \(midiCCValue ?? 127) \(midiChannel ?? 1)"
+        case .midiPitchBend:
+            return "mpb \(midiChannel ?? 1)"
+        case .midiProgramChange:
+            return "mpc \(midiProgramNumber ?? 0) \(midiChannel ?? 1)"
+        case .midiTransport:
+            return "mtr \(midiTransport?.rawValue ?? "start")"
         }
     }
 
@@ -175,6 +269,35 @@ struct OutputAction: Codable, Hashable, Identifiable {
                   let axis = MouseAxis(rawValue: axisVal) else { return nil }
             let dir = MouseDirection(rawValue: parts[2]) ?? .positive
             return OutputAction(type: .mouseWheelStep, mouseAxis: axis, mouseDirection: dir)
+        case "mni":
+            // mni <note> <velocity> <channel>
+            guard parts.count >= 4,
+                  let note = Int(parts[1]),
+                  let vel = Int(parts[2]),
+                  let ch = Int(parts[3]) else { return nil }
+            return OutputAction(type: .midiNote, midiNote: note, midiVelocity: vel, midiChannel: ch)
+        case "mcc":
+            // mcc <ccNumber> <ccValue> <channel>
+            guard parts.count >= 4,
+                  let cc = Int(parts[1]),
+                  let val = Int(parts[2]),
+                  let ch = Int(parts[3]) else { return nil }
+            return OutputAction(type: .midiCC, midiCCNumber: cc, midiCCValue: val, midiChannel: ch)
+        case "mpb":
+            // mpb <channel>
+            guard parts.count >= 2, let ch = Int(parts[1]) else { return nil }
+            return OutputAction(type: .midiPitchBend, midiChannel: ch)
+        case "mpc":
+            // mpc <program> <channel>
+            guard parts.count >= 3,
+                  let prog = Int(parts[1]),
+                  let ch = Int(parts[2]) else { return nil }
+            return OutputAction(type: .midiProgramChange, midiChannel: ch, midiProgramNumber: prog)
+        case "mtr":
+            // mtr <start|stop|continue>
+            guard parts.count >= 2 else { return nil }
+            let t = MIDITransport(rawValue: parts[1]) ?? .start
+            return OutputAction(type: .midiTransport, midiTransport: t)
         default:
             return nil
         }
@@ -183,5 +306,7 @@ struct OutputAction: Codable, Hashable, Identifiable {
     // Custom coding to handle UUID stability
     enum CodingKeys: String, CodingKey {
         case id, type, keyCode, mouseButtonIndex, mouseAxis, mouseDirection, speed
+        case midiNote, midiVelocity, midiCCNumber, midiCCValue, midiChannel
+        case midiProgramNumber, midiTransport
     }
 }

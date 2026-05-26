@@ -1,9 +1,32 @@
 import SwiftUI
 
+/// Payload that asks the editor to scroll to and highlight a specific
+/// binding row. Posted from the Live Visualizer popovers via the
+/// `joystickConfigJumpToBinding` notification and routed in by ContentView.
+struct EditorJumpTarget: Equatable, Hashable {
+    /// Joystick index the visualizer click came from. The editor uses this
+    /// to disambiguate when multiple joystick groups all bind the same input
+    /// (e.g. two controllers each mapping Button A).
+    let joystickIndex: Int
+    /// Serialized form of the InputEvent (e.g. "axi 0 +", "btn 5"). Matched
+    /// against every binding's `input.serialized` to locate the right row.
+    let inputSerialized: String
+    /// Re-triggers the jump even when the user clicks the same widget twice
+    /// in a row. Equatable comparison includes this token.
+    var token: UUID = UUID()
+}
+
 /// Full-featured preset editor with joystick groups and bindings.
 /// Shows live input highlighting via mappingEngine environment object.
 struct PresetEditorView: View {
     @State var preset: Preset
+    /// True when the mapping engine was active at the moment the editor
+    /// opened. Drives the "Engine paused while editing" banner so the user
+    /// sees why their preset stopped firing inputs.
+    var enginePausedNotice: Bool = false
+    /// Optional jump-to-row request set by ContentView when the user clicks
+    /// an input on the Live Visualizer. nil for a normal open.
+    var pendingJump: EditorJumpTarget? = nil
     let onSave: (Preset) -> Void
 
     @EnvironmentObject var controllerService: GameControllerService
@@ -13,16 +36,78 @@ struct PresetEditorView: View {
     @State private var scanningBinding: (joystickIndex: Int, bindingIndex: Int)?
     @State private var showingScanOverlay = false
     @State private var preSortSnapshot: [JoystickMapping]?
+    /// UUID of the binding row currently pulsing yellow because we just
+    /// jumped to it. nil when no pulse is active.
+    @State private var pulsingBindingID: UUID?
+    /// After a directional scan we pop a confirmation dialog asking whether
+    /// to wire the input directly to mouse motion or just record it raw and
+    /// let the user assign an output manually.
+    @State private var pendingScanMapping: PendingScanMapping?
+
+    /// Carries the scan result + the binding location through the
+    /// confirmation dialog. We have to keep these together because
+    /// confirmationDialog's button closures need the data captured at the
+    /// time of presentation.
+    private struct PendingScanMapping: Identifiable {
+        let id = UUID()
+        let event: InputEvent
+        let joystickIndex: Int
+        let bindingIndex: Int
+        /// True for axis + touchpad. We don't prompt on plain button taps.
+        let isDirectional: Bool
+        /// True only for touchpad inputs - drives the "Calibrate touchpad
+        /// first" hint and the optional Region path.
+        let isTouchpad: Bool
+    }
+
+    // Unlimited undo/redo: every time the preset changes we push the
+    // previous state onto undoStack. Redo is populated when the user
+    // undoes - undoing pushes the current state onto redoStack so they
+    // can redo back up the chain. A small flag `isApplyingHistory`
+    // prevents the change observer from re-recording history during
+    // undo/redo itself.
+    @State private var undoStack: [Preset] = []
+    @State private var redoStack: [Preset] = []
+    @State private var isApplyingHistory: Bool = false
+    @State private var lastSnapshot: Preset? = nil
+
+    /// Drives the Calibrate Touchpad sheet. Only shown when at least one
+    /// connected controller reports a touchpad (DualSense, DualSense Edge,
+    /// DualShock 4, etc.).
+    @State private var showingTouchpadCalibration: Bool = false
+    /// Drives the Calibrate Motion sheet from the toolbar button.
+    @State private var showingMotionCalibration: Bool = false
+    /// True when a motion input was scanned but no controller is yet
+    /// calibrated. Drives an alert that offers to jump into calibration.
+    @State private var pendingMotionCalibrationOffer: Bool = false
+
+    /// True when any connected controller has a touchpad surface. The
+    /// Calibrate Touchpad toolbar button is hidden otherwise.
+    private var hasTouchpadCapableController: Bool {
+        controllerService.controllerDetails.values.contains { $0.hasTouchpad }
+    }
+
+    /// True when any connected controller exposes motion sensors. Drives
+    /// the Calibrate Motion toolbar button's visibility.
+    private var hasMotionCapableController: Bool {
+        controllerService.controllerDetails.values.contains { $0.supportsMotion }
+    }
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if enginePausedNotice {
+                        enginePausedBanner
+                    }
+
                     headerSection
 
                     Divider()
 
-                    ForEach(Array(preset.joysticks.enumerated()), id: \.element.id) { index, joystick in
+                    ForEach(preset.joysticks.indices, id: \.self) { index in
+                        let joystick = preset.joysticks[index]
                         JoystickGroupView(
                             joystick: binding(for: index),
                             joystickIndex: index,
@@ -33,8 +118,10 @@ struct PresetEditorView: View {
                             onScanInput: { bindIdx in startScan(joystickIndex: index, bindingIndex: bindIdx) },
                             onSortBindings: { sortBindings(in: index) },
                             onDuplicate: { duplicateJoystick(at: index) },
-                            onRemoveJoystick: { removeJoystick(at: index) }
+                            onRemoveJoystick: { removeJoystick(at: index) },
+                            pulsingBindingID: pulsingBindingID
                         )
+                        .id(joystick.id)
                         .environmentObject(mappingEngine)
                     }
 
@@ -56,7 +143,11 @@ struct PresetEditorView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("Edit Preset")
+            .navigationTitle("Edit Bindings & Mappings")
+            .onAppear {
+                if lastSnapshot == nil { lastSnapshot = preset }
+            }
+            .onChange(of: preset) { _, _ in recordHistory() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -65,6 +156,54 @@ struct PresetEditorView: View {
                     Button("Save") {
                         onSave(preset)
                         dismiss()
+                    }
+                }
+                // Undo / Redo. Available everywhere in the editor and bound
+                // to the standard Cmd+Z / Cmd+Shift+Z shortcuts.
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        performUndo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .disabled(undoStack.isEmpty)
+                    .keyboardShortcut("z", modifiers: .command)
+                    .help("Undo")
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        performRedo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.forward")
+                    }
+                    .disabled(redoStack.isEmpty)
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .help("Redo")
+                }
+                // Touchpad calibration button - only visible when a
+                // touchpad-capable controller (DualSense / DS4) is connected.
+                if hasTouchpadCapableController {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            showingTouchpadCalibration = true
+                        } label: {
+                            Label("Calibrate Touchpad", systemImage: "rectangle.and.hand.point.up.left.fill")
+                        }
+                        .help("Calibrate the touchpad surface so swipes feel uniform")
+                    }
+                }
+                // Motion calibration button - visible when at least one
+                // motion-capable controller is connected. Mirrors the
+                // touchpad calibration button so editing a motion preset
+                // can reach calibration in one click.
+                if hasMotionCapableController {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            showingMotionCalibration = true
+                        } label: {
+                            Label("Calibrate Motion", systemImage: "gyroscope")
+                        }
+                        .help("Set the resting zero for the controller's gyro and accelerometer")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -100,6 +239,65 @@ struct PresetEditorView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingTouchpadCalibration) {
+                TouchpadCalibrationView()
+            }
+            .sheet(isPresented: $showingMotionCalibration) {
+                MotionCalibrationView()
+                    .environmentObject(controllerService)
+            }
+            .alert("Calibrate motion first?",
+                   isPresented: $pendingMotionCalibrationOffer) {
+                Button("Calibrate now") {
+                    showingMotionCalibration = true
+                }
+                Button("Skip", role: .cancel) { }
+            } message: {
+                Text("You just scanned a gyroscope input. Without calibration, a still controller will still slowly drift the cursor. Run a 2-second calibration to set the resting zero.")
+            }
+            // Post-scan prompt for axis + touchpad inputs: offer to auto-wire
+            // the matching mouse motion, or keep the input raw so the user
+            // can choose an output manually. For touchpad inputs we also
+            // surface a one-tap "Calibrate first" shortcut so the resulting
+            // mouse motion uses the user's actual touchpad bounds.
+            .confirmationDialog(
+                pendingScanMapping?.event.displayName ?? "Scanned input",
+                isPresented: Binding(
+                    get: { pendingScanMapping != nil },
+                    set: { newValue in
+                        if newValue == false { pendingScanMapping = nil }
+                    }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let pending = pendingScanMapping {
+                    Button("Auto-map to mouse motion") {
+                        applyScanMapping(pending, kind: .mouse)
+                        pendingScanMapping = nil
+                    }
+                    if pending.isTouchpad {
+                        Button("Calibrate touchpad first…") {
+                            // Leave the raw input on the binding; user can
+                            // come back and auto-map after calibrating.
+                            applyScanMapping(pending, kind: .raw)
+                            pendingScanMapping = nil
+                            showingTouchpadCalibration = true
+                        }
+                    }
+                    Button("Keep raw, I'll pick the output", role: .cancel) {
+                        applyScanMapping(pending, kind: .raw)
+                        pendingScanMapping = nil
+                    }
+                }
+            } message: {
+                if let pending = pendingScanMapping {
+                    if pending.isTouchpad {
+                        Text("This is a touchpad input. Auto-map sends mouse motion in the matching direction. If your touchpad hasn't been calibrated yet, calibrating first will make the cursor speed feel right.")
+                    } else {
+                        Text("Auto-map sends mouse motion in the matching direction. Keep raw to wire your own output (key, MIDI, macro, etc.).")
+                    }
+                }
+            }
             .overlay {
                 if showingScanOverlay {
                     ScanOverlayView(
@@ -114,7 +312,96 @@ struct PresetEditorView: View {
                     )
                 }
             }
+            // Honor a pending jump-to-binding when the editor first appears,
+            // and also any time ContentView updates the target (e.g. the user
+            // clicks another input on the Live Visualizer while the editor is
+            // already open).
+            .onAppear {
+                if let target = pendingJump {
+                    performJump(to: target, using: proxy)
+                }
+            }
+            .onChange(of: pendingJump) { _, newValue in
+                if let target = newValue {
+                    performJump(to: target, using: proxy)
+                }
+            }
+            }  // ScrollViewReader
         }
+    }
+
+    // MARK: - Jump-to-binding
+
+    /// Locate the binding row matching the jump target's joystick + input
+    /// and scroll/pulse it. Walks the joystick group first to honor the
+    /// click's controller-of-origin, then falls back to *any* joystick
+    /// group that binds the same input.
+    private func performJump(to target: EditorJumpTarget, using proxy: ScrollViewProxy) {
+        guard let bindingID = locateBindingID(for: target) else { return }
+        // Slight delay so the editor has time to lay out before we scroll.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeOut(duration: 0.4)) {
+                proxy.scrollTo(bindingID, anchor: .center)
+            }
+            pulsingBindingID = bindingID
+        }
+        // Clear the pulse after the ring fades out.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if pulsingBindingID == bindingID {
+                pulsingBindingID = nil
+            }
+        }
+    }
+
+    private func locateBindingID(for target: EditorJumpTarget) -> UUID? {
+        // 1) Prefer a binding in the joystick group that matches the
+        // visualizer's controller slot.
+        if target.joystickIndex < preset.joysticks.count {
+            let group = preset.joysticks[target.joystickIndex]
+            if let hit = group.bindings.first(where: { $0.input.serialized == target.inputSerialized }) {
+                return hit.id
+            }
+        }
+        // 2) Fall back: search every joystick for any binding that matches.
+        for group in preset.joysticks {
+            if let hit = group.bindings.first(where: { $0.input.serialized == target.inputSerialized }) {
+                return hit.id
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Engine Paused Banner
+
+    /// Yellow banner at the top of the editor while a preset is being edited
+    /// over a running engine. Outputs are paused (no cursor motion, no
+    /// keystrokes, no MIDI) but the engine keeps polling inputs so the green
+    /// row highlight still fires when you press a button on the controller.
+    /// Outputs resume automatically when the editor closes.
+    private var enginePausedBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pause.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Outputs paused while editing")
+                    .font(.subheadline.weight(.semibold))
+                Text("Your active preset is still detecting inputs so binding rows highlight as you press buttons, but the cursor, keystrokes, and MIDI are paused. Outputs resume when you close the editor.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.yellow.opacity(0.15))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.yellow.opacity(0.55), lineWidth: 1)
+        )
     }
 
     // MARK: - Header
@@ -138,6 +425,40 @@ struct PresetEditorView: View {
                     .textFieldStyle(.roundedBorder)
             }
         }
+    }
+
+    // MARK: - Undo / Redo
+
+    /// Record the previous preset value before a change. Called from the
+    /// editor's `.onChange(of: preset)` observer. Skips recording when
+    /// `isApplyingHistory` is true so undo/redo themselves don't pollute
+    /// the history. Redo is cleared on any fresh edit, like every other
+    /// editor on the planet.
+    private func recordHistory() {
+        guard !isApplyingHistory else { return }
+        if let previous = lastSnapshot, previous != preset {
+            undoStack.append(previous)
+            redoStack.removeAll()
+        }
+        lastSnapshot = preset
+    }
+
+    private func performUndo() {
+        guard let previous = undoStack.popLast() else { return }
+        isApplyingHistory = true
+        redoStack.append(preset)
+        preset = previous
+        lastSnapshot = previous
+        DispatchQueue.main.async { isApplyingHistory = false }
+    }
+
+    private func performRedo() {
+        guard let next = redoStack.popLast() else { return }
+        isApplyingHistory = true
+        undoStack.append(preset)
+        preset = next
+        lastSnapshot = next
+        DispatchQueue.main.async { isApplyingHistory = false }
     }
 
     // MARK: - Binding Helpers
@@ -216,10 +537,108 @@ struct PresetEditorView: View {
 
     private func handleScannedInput(_ event: InputEvent) {
         guard let scanning = scanningBinding else { return }
+        // Always record the input on the binding so the row reflects what
+        // the user just scanned.
         preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].input = event
         showingScanOverlay = false
         controllerService.stopScanning()
+
+        // Motion-scanned input: gate on calibration. If no motion-capable
+        // controller has been calibrated, prompt the user to run calibration
+        // first - tilt-to-aim feels wrong otherwise.
+        if event.type == .motion {
+            let anyCalibrated = controllerService.connectedControllers.contains { ctrl in
+                let key = MotionCalibrationService.identityKey(for: ctrl)
+                return MotionCalibrationService.shared.isCalibrated(forKey: key)
+            }
+            if !anyCalibrated {
+                pendingMotionCalibrationOffer = true
+            }
+        }
+
+        // For axis + touchpad + motion inputs, offer to auto-wire the
+        // output. Plain button presses don't get this dialog - the user
+        // already knows it's a button-style binding.
+        let isAxis = event.type == .axis
+        let isTouchpad = event.type == .touchpad
+        let isMotion = event.type == .motion
+        if isAxis || isTouchpad || isMotion {
+            pendingScanMapping = PendingScanMapping(
+                event: event,
+                joystickIndex: scanning.joystickIndex,
+                bindingIndex: scanning.bindingIndex,
+                isDirectional: true,
+                isTouchpad: isTouchpad
+            )
+        }
+
         scanningBinding = nil
+    }
+
+    /// Apply the user's choice from the post-scan confirmation dialog.
+    /// `.mouse` auto-wires a mouse-motion output in the matching direction;
+    /// `.raw` keeps just the recorded input and lets the user pick an output
+    /// manually. Used by both the axis-scan and touchpad-scan flows.
+    private enum ScanAutoMapping { case mouse, raw }
+
+    private func applyScanMapping(_ pending: PendingScanMapping, kind: ScanAutoMapping) {
+        switch kind {
+        case .raw:
+            // Nothing to do - the input is already recorded.
+            return
+        case .mouse:
+            // Translate the input direction into a sensible mouseMotion
+            // output. Standard convention: axis 0/touchpad-X → horizontal,
+            // axis 1/touchpad-Y → vertical. Direction flows straight from
+            // the scanned event's axisDirection.
+            let mouseAxis: MouseAxis
+            let mouseDirection: MouseDirection
+            switch pending.event.type {
+            case .axis:
+                // Even axes (0, 2, 4) are X-style, odd (1, 3) Y-style in MFi.
+                mouseAxis = (pending.event.index % 2 == 0) ? .horizontal : .vertical
+                mouseDirection = (pending.event.axisDirection == .negative) ? .negative : .positive
+            case .touchpad:
+                mouseAxis = (pending.event.touchpadAxis == .y) ? .vertical : .horizontal
+                mouseDirection = (pending.event.axisDirection == .negative) ? .negative : .positive
+            case .motion:
+                // Gyro Y (yaw rate) -> horizontal mouse, Gyro X (pitch)
+                // -> vertical mouse. Z (roll) is unusual to bind so we
+                // default to horizontal too. Matches the Showcase: Gyro
+                // Aim preset's defaults.
+                switch pending.event.motionChannel {
+                case .gyroY, .yawAngle:
+                    mouseAxis = .horizontal
+                case .gyroX, .pitchAngle:
+                    mouseAxis = .vertical
+                default:
+                    mouseAxis = .horizontal
+                }
+                mouseDirection = (pending.event.axisDirection == .negative) ? .negative : .positive
+            default:
+                return
+            }
+            let speed: Int
+            switch pending.event.type {
+            case .touchpad: speed = 12
+            case .motion:   speed = 14  // Gyro is sensitive; lower-than-stick speed feels right.
+            default:        speed = 18
+            }
+            let output = OutputAction(type: .mouseMotion,
+                                      mouseAxis: mouseAxis,
+                                      mouseDirection: mouseDirection,
+                                      speed: speed)
+            preset.joysticks[pending.joystickIndex].bindings[pending.bindingIndex].outputs = [output]
+            // Sensible defaults to make this feel like the showcase preset.
+            var binding = preset.joysticks[pending.joystickIndex].bindings[pending.bindingIndex]
+            binding.variableSensitivity = true
+            if pending.event.type == .axis {
+                // Mild smooth curve + moderate deadzone for joysticks.
+                binding.deadzone = 0.10
+                binding.sensitivityCurve = .exponential
+            }
+            preset.joysticks[pending.joystickIndex].bindings[pending.bindingIndex] = binding
+        }
     }
 }
 

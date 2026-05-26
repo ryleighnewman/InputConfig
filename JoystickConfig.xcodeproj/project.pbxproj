@@ -12,6 +12,17 @@
 		1D832C989E14A5A9DE291597 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8038B8B7970BB4B800991EE0 /* GameController.framework */; };
 		1F7C4BE8694DBEA3E836AF50 /* InputEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9953EE66C8AB92001E3C8F60 /* InputEvent.swift */; };
 		306FAA3C20CF616DF8599590 /* BindingRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97FA28EE21F9D6A4DA2907A /* BindingRowView.swift */; };
+		FB2001GYROVIZ001000000000 /* GyroVisualizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001GYROVIZ002000000000 /* GyroVisualizationView.swift */; };
+		FB10010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift */; };
+		FB10010006TIPJARSVC0000001 /* TipJarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010006TIPJARSVC0000001 /* TipJarService.swift */; };
+		FB10010007TIPJARVIEW000001 /* TipJarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010007TIPJARVIEW000001 /* TipJarView.swift */; };
+		FB10010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift */; };
+		FB10010009MIDISERVICE00001 /* MIDIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010009MIDISERVICE00001 /* MIDIService.swift */; };
+		FB1001000ATESTBENCHSVC0001 /* TestBenchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */; };
+		FB1001000BTESTBENCHVIEW001 /* TestBenchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */; };
+		FB1001000CTHROTTLED000001 /* ThrottledSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000CTHROTTLED000001 /* ThrottledSlider.swift */; };
+		FB1001000DMENUBARVIEW00001 /* MenuBarContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */; };
+		FB1001000ELOGINITEM0000001 /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000ELOGINITEM0000001 /* LoginItemService.swift */; };
 		3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1008D4FE7819632F4C378FD /* HIDLightController.swift */; };
 		35903CFFA9BFF5EB883BA3E8 /* JoystickGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */; };
 		400237FA664F7DF515A5036A /* MappingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5119FD097588A76BA1AD62 /* MappingEngine.swift */; };
@@ -25,6 +36,18 @@
 		CD148292D638DA4E358AE151 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E2154449F218F9A156C2716 /* ContentView.swift */; };
 		CE610649378750D0BCCD4169 /* InputSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ADD0DB9D63A081D226051F7 /* InputSimulator.swift */; };
 		FB10010001FEEDBACK000001 /* FeedbackService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010001FEEDBACK000001 /* FeedbackService.swift */; };
+		FB1001000FTOUCHPADSVC00001 /* TouchpadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000FTOUCHPADSVC00001 /* TouchpadService.swift */; };
+		FB10010010FEATUREDEMO0001 /* FeatureDemoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010010FEATUREDEMO0001 /* FeatureDemoView.swift */; };
+		FB1001TUTORIALVIEW000001 /* TutorialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001TUTORIALVIEW000001 /* TutorialView.swift */; };
+		FB10010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift */; };
+		FB10010012COPYICONBUTN001 /* CopyIconButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010012COPYICONBUTN001 /* CopyIconButton.swift */; };
+		FB10010013STEAMCTRLSVC001 /* SteamControllerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */; };
+		FB10010014STATSSVC0000001 /* StatsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010014STATSSVC0000001 /* StatsService.swift */; };
+		FB10010015STATSVIEW000001 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010015STATSVIEW000001 /* StatsView.swift */; };
+		FB10010016MOTIONCALSVC001 /* MotionCalibrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */; };
+		FB10010017MOTIONCALVW0001 /* MotionCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */; };
+		FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */; };
+		FB10010004EIGHTBITDO000001 /* EightBitDoDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */; };
 		FB10010002HELPGUIDES00001 /* HelpGuides.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010002HELPGUIDES00001 /* HelpGuides.swift */; };
 		FB10010003HELPVIEW0000001 /* HelpGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010003HELPVIEW0000001 /* HelpGuideView.swift */; };
 		CF97327A192CF8FA603B8E98 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 86B1CDE4228157DC93E5DAF3 /* AppKit.framework */; };
@@ -41,6 +64,18 @@
 		1A95E8B26BF8FC8349144B7B /* ExamplePresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExamplePresets.swift; sourceTree = "<group>"; };
 		1ADD0DB9D63A081D226051F7 /* InputSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputSimulator.swift; sourceTree = "<group>"; };
 		FB20010001FEEDBACK000001 /* FeedbackService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackService.swift; sourceTree = "<group>"; };
+		FB2001000FTOUCHPADSVC00001 /* TouchpadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchpadService.swift; sourceTree = "<group>"; };
+		FB20010010FEATUREDEMO0001 /* FeatureDemoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureDemoView.swift; sourceTree = "<group>"; };
+		FB2001TUTORIALVIEW000001 /* TutorialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialView.swift; sourceTree = "<group>"; };
+		FB20010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchpadCalibrationView.swift; sourceTree = "<group>"; };
+		FB20010012COPYICONBUTN001 /* CopyIconButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyIconButton.swift; sourceTree = "<group>"; };
+		FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamControllerService.swift; sourceTree = "<group>"; };
+		FB20010014STATSSVC0000001 /* StatsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsService.swift; sourceTree = "<group>"; };
+		FB20010015STATSVIEW000001 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
+		FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationService.swift; sourceTree = "<group>"; };
+		FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationView.swift; sourceTree = "<group>"; };
+		FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualControllerView.swift; sourceTree = "<group>"; };
+		FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EightBitDoDetector.swift; sourceTree = "<group>"; };
 		FB20010002HELPGUIDES00001 /* HelpGuides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpGuides.swift; sourceTree = "<group>"; };
 		FB20010003HELPVIEW0000001 /* HelpGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpGuideView.swift; sourceTree = "<group>"; };
 		2C5119FD097588A76BA1AD62 /* MappingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MappingEngine.swift; sourceTree = "<group>"; };
@@ -61,7 +96,18 @@
 		9953EE66C8AB92001E3C8F60 /* InputEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEvent.swift; sourceTree = "<group>"; };
 		9A55F49CC8E2B40BD0376ED9 /* ScanOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanOverlayView.swift; sourceTree = "<group>"; };
 		9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoystickGroupView.swift; sourceTree = "<group>"; };
+		FB2001GYROVIZ002000000000 /* GyroVisualizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroVisualizationView.swift; sourceTree = "<group>"; };
 		D97FA28EE21F9D6A4DA2907A /* BindingRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindingRowView.swift; sourceTree = "<group>"; };
+		FB20010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeadzoneCalibrationView.swift; sourceTree = "<group>"; };
+		FB20010006TIPJARSVC0000001 /* TipJarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TipJarService.swift; sourceTree = "<group>"; };
+		FB20010007TIPJARVIEW000001 /* TipJarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TipJarView.swift; sourceTree = "<group>"; };
+		FB20010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerTypeDetector.swift; sourceTree = "<group>"; };
+		FB20010009MIDISERVICE00001 /* MIDIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIService.swift; sourceTree = "<group>"; };
+		FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBenchService.swift; sourceTree = "<group>"; };
+		FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBenchView.swift; sourceTree = "<group>"; };
+		FB2001000CTHROTTLED000001 /* ThrottledSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThrottledSlider.swift; sourceTree = "<group>"; };
+		FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
+		FB2001000ELOGINITEM0000001 /* LoginItemService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemService.swift; sourceTree = "<group>"; };
 		D9AFC638DF7D9B649E63CD4D /* KeyCodeMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCodeMap.swift; sourceTree = "<group>"; };
 		F1008D4FE7819632F4C378FD /* HIDLightController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDLightController.swift; sourceTree = "<group>"; };
 		F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetEditorView.swift; sourceTree = "<group>"; };
@@ -120,10 +166,14 @@
 			isa = PBXGroup;
 			children = (
 				D97FA28EE21F9D6A4DA2907A /* BindingRowView.swift */,
+				FB20010012COPYICONBUTN001 /* CopyIconButton.swift */,
+				FB20010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift */,
 				0FD0D3A62AD97DC81F3FF52B /* DebugLogView.swift */,
+				FB2001GYROVIZ002000000000 /* GyroVisualizationView.swift */,
 				9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */,
 				78B2AC33DEB3ABD558D03415 /* KeyCodePicker.swift */,
 				9A55F49CC8E2B40BD0376ED9 /* ScanOverlayView.swift */,
+				FB2001000CTHROTTLED000001 /* ThrottledSlider.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -131,12 +181,22 @@
 		9C21B2EB3BCE07C2FA6F351B /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				FB20010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift */,
+				FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */,
 				FB20010001FEEDBACK000001 /* FeedbackService.swift */,
 				8207CB5F209C9B16F9F67675 /* GameControllerService.swift */,
 				F1008D4FE7819632F4C378FD /* HIDLightController.swift */,
 				1ADD0DB9D63A081D226051F7 /* InputSimulator.swift */,
+				FB2001000ELOGINITEM0000001 /* LoginItemService.swift */,
 				2C5119FD097588A76BA1AD62 /* MappingEngine.swift */,
+				FB20010009MIDISERVICE00001 /* MIDIService.swift */,
 				5B3F9303B5602B756C4652DF /* PresetStore.swift */,
+				FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */,
+				FB20010006TIPJARSVC0000001 /* TipJarService.swift */,
+				FB2001000FTOUCHPADSVC00001 /* TouchpadService.swift */,
+				FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */,
+				FB20010014STATSSVC0000001 /* StatsService.swift */,
+				FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -174,9 +234,18 @@
 			isa = PBXGroup;
 			children = (
 				4E2154449F218F9A156C2716 /* ContentView.swift */,
+				FB20010010FEATUREDEMO0001 /* FeatureDemoView.swift */,
+				FB2001TUTORIALVIEW000001 /* TutorialView.swift */,
+				FB20010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift */,
+				FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */,
+				FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */,
+				FB20010015STATSVIEW000001 /* StatsView.swift */,
 				FB20010003HELPVIEW0000001 /* HelpGuideView.swift */,
+				FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */,
 				F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */,
 				726EEF6CFAA7F842D5D0B903 /* SettingsView.swift */,
+				FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */,
+				FB20010007TIPJARVIEW000001 /* TipJarView.swift */,
 				8AF01C10AC20892908C67FFD /* Components */,
 			);
 			path = Views;
@@ -249,10 +318,25 @@
 			buildActionMask = 2147483647;
 			files = (
 				306FAA3C20CF616DF8599590 /* BindingRowView.swift in Sources */,
+				FB2001GYROVIZ001000000000 /* GyroVisualizationView.swift in Sources */,
+				FB10010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift in Sources */,
+				FB10010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift in Sources */,
 				CD148292D638DA4E358AE151 /* ContentView.swift in Sources */,
 				12F586F001E7C3D2B8750E19 /* DebugLogView.swift in Sources */,
+				FB10010004EIGHTBITDO000001 /* EightBitDoDetector.swift in Sources */,
 				63FDB1C76F8F3C345A2365E5 /* ExamplePresets.swift in Sources */,
 				FB10010001FEEDBACK000001 /* FeedbackService.swift in Sources */,
+				FB10010010FEATUREDEMO0001 /* FeatureDemoView.swift in Sources */,
+				FB1001TUTORIALVIEW000001 /* TutorialView.swift in Sources */,
+				FB10010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift in Sources */,
+				FB10010012COPYICONBUTN001 /* CopyIconButton.swift in Sources */,
+				FB10010013STEAMCTRLSVC001 /* SteamControllerService.swift in Sources */,
+				FB10010014STATSSVC0000001 /* StatsService.swift in Sources */,
+				FB10010015STATSVIEW000001 /* StatsView.swift in Sources */,
+				FB10010016MOTIONCALSVC001 /* MotionCalibrationService.swift in Sources */,
+				FB10010017MOTIONCALVW0001 /* MotionCalibrationView.swift in Sources */,
+				FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */,
+				FB1001000FTOUCHPADSVC00001 /* TouchpadService.swift in Sources */,
 				D1BABA54C5FFEC5A13FA70B6 /* GameControllerService.swift in Sources */,
 				3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */,
 				FB10010002HELPGUIDES00001 /* HelpGuides.swift in Sources */,
@@ -264,12 +348,20 @@
 				900FEE2FB264A318D065B39A /* KeyCodeMap.swift in Sources */,
 				B272CB5AC52088595142272D /* KeyCodePicker.swift in Sources */,
 				400237FA664F7DF515A5036A /* MappingEngine.swift in Sources */,
+				FB10010009MIDISERVICE00001 /* MIDIService.swift in Sources */,
 				7E0199073833F2D9F20E23DB /* OutputAction.swift in Sources */,
 				E753B7D373A453F72513C4A3 /* Preset.swift in Sources */,
 				F5507342D4D6DD92F3857308 /* PresetEditorView.swift in Sources */,
 				4D20653BDBA1B3C512F4A4FA /* PresetStore.swift in Sources */,
 				DBA89E693D7C54FEEBBE54DD /* ScanOverlayView.swift in Sources */,
 				99DFEFC3C45DB71FA7E58F26 /* SettingsView.swift in Sources */,
+				FB1001000ATESTBENCHSVC0001 /* TestBenchService.swift in Sources */,
+				FB1001000BTESTBENCHVIEW001 /* TestBenchView.swift in Sources */,
+				FB1001000CTHROTTLED000001 /* ThrottledSlider.swift in Sources */,
+				FB1001000DMENUBARVIEW00001 /* MenuBarContentView.swift in Sources */,
+				FB1001000ELOGINITEM0000001 /* LoginItemService.swift in Sources */,
+				FB10010006TIPJARSVC0000001 /* TipJarService.swift in Sources */,
+				FB10010007TIPJARVIEW000001 /* TipJarView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -284,7 +376,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JoystickConfig/Info.plist;
@@ -292,7 +384,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.joystickconfig.app;
 				PRODUCT_MODULE_NAME = JoystickConfig;
 				PRODUCT_NAME = JoystickConfig;
@@ -374,7 +466,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = JoystickConfig/JoystickConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 8;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JoystickConfig/Info.plist;
@@ -382,7 +474,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.joystickconfig.app;
 				PRODUCT_MODULE_NAME = JoystickConfig;
 				PRODUCT_NAME = JoystickConfig;

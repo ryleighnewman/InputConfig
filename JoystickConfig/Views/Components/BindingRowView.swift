@@ -7,9 +7,25 @@ struct BindingRowView: View {
     let onRemove: () -> Void
     var onDuplicate: (() -> Void)?
     var isHighlighted: Bool = false
+    /// 1-based position of this binding within its joystick group. Drives the
+    /// "#N" chip at the start of every row so the Live Visualizer can refer
+    /// to a specific row by number.
+    var displayNumber: Int = 0
+    /// True while this row is the target of a jump-to-binding pulse triggered
+    /// by clicking on the Live Visualizer. Shows a yellow ring for ~1.2 s.
+    var isPulsing: Bool = false
 
     @State private var showAdvanced = false
     @State private var showMacroEditor = false
+    @State private var showDeadzoneCalibration = false
+
+    /// Live mirrors of slider values, updated every drag tick so the value
+    /// shown next to each slider follows the thumb in real time. The
+    /// underlying BindingModel still only commits on slider release to keep
+    /// the editor's re-render chain off the per-frame hot path.
+    @State private var liveSpeed: [Int: Double] = [:]
+    @State private var liveHaptic: Double?
+    @State private var liveDeadzone: Double?
 
     // Fixed column widths for perfect alignment
     private let dragWidth: CGFloat = 16
@@ -31,6 +47,22 @@ struct BindingRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Primary row
             HStack(spacing: colGap) {
+                // Row number chip - matches the number shown in the Live
+                // Visualizer popover so users can find the right row when
+                // they click an input on the visualizer.
+                if displayNumber > 0 {
+                    Text("#\(displayNumber)")
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.secondary.opacity(0.12))
+                        )
+                        .frame(minWidth: 28, alignment: .leading)
+                }
+
                 // Drag handle
                 Image(systemName: "line.3.horizontal")
                     .font(.caption2)
@@ -73,7 +105,7 @@ struct BindingRowView: View {
                     HStack(spacing: 4) {
                         Image(systemName: outputIcon(for: binding.outputs[0]))
                             .font(.caption)
-                            .foregroundStyle(binding.outputs[0].type == .key ? .orange : .purple)
+                            .foregroundStyle(outputColor(for: binding.outputs[0]))
                             .frame(width: 14)
 
                         Picker("", selection: firstOutputTypeBinding) {
@@ -118,13 +150,8 @@ struct BindingRowView: View {
                     .help("Add output")
 
                     if let onDuplicate {
-                        Button(action: onDuplicate) {
-                            Image(systemName: "doc.on.doc")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Duplicate this binding")
+                        CopyIconButton(action: onDuplicate,
+                                       helpText: "Duplicate this binding")
                     }
 
                     Button(action: onRemove) {
@@ -148,15 +175,39 @@ struct BindingRowView: View {
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(isHighlighted ? Color.green.opacity(0.18) : Color.secondary.opacity(0.05))
-                .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+                // Instant fade-in (so quick taps feel snappy), longer fade-out (so the
+// green dwell tracks the latched visibility period from
+// GameControllerService.rawActiveExpiry).
+.animation(isHighlighted ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
+           value: isHighlighted)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(isHighlighted ? Color.green.opacity(0.4) : Color.clear, lineWidth: 1.5)
-                .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+                // Instant fade-in (so quick taps feel snappy), longer fade-out (so the
+// green dwell tracks the latched visibility period from
+// GameControllerService.rawActiveExpiry).
+.animation(isHighlighted ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
+           value: isHighlighted)
+        )
+        .overlay(
+            // Jump-to-binding pulse: bright yellow ring that fades out
+            // after the user clicks an input on the Live Visualizer.
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isPulsing ? Color.yellow.opacity(0.85) : Color.clear, lineWidth: 2.5)
+                .animation(.easeOut(duration: 0.6), value: isPulsing)
         )
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
+        .sheet(isPresented: $showDeadzoneCalibration) {
+            DeadzoneCalibrationView(
+                axisIndex: binding.input.index,
+                deadzone: deadzoneCalibrationBinding,
+                outerDeadzone: outerDeadzoneBinding,
+                isInverted: binding.invertAxis ?? false,
+                onClose: { showDeadzoneCalibration = false }
+            )
+        }
     }
 
     // MARK: - Index Picker (fixed width)
@@ -165,22 +216,30 @@ struct BindingRowView: View {
     private var indexPicker: some View {
         switch binding.input.type {
         case .button:
-            Picker("", selection: $binding.input.index) {
+            // Use Menu instead of Picker so 64 button-index items only
+            // instantiate when the menu is opened, not on every editor render.
+            Menu {
                 ForEach(0..<64, id: \.self) { i in
-                    Text("Button \(i)").tag(i)
+                    Button("Button \(i)") { binding.input.index = i }
                 }
+            } label: {
+                menuLabel("Button \(binding.input.index)")
             }
-            .labelsHidden()
+            .menuStyle(.borderlessButton)
             .controlSize(.small)
+            .fixedSize()
 
         case .axis:
-            Picker("", selection: $binding.input.index) {
+            Menu {
                 ForEach(0..<16, id: \.self) { i in
-                    Text("Axis #\(i)").tag(i)
+                    Button("Axis #\(i)") { binding.input.index = i }
                 }
+            } label: {
+                menuLabel("Axis #\(binding.input.index)")
             }
-            .labelsHidden()
+            .menuStyle(.borderlessButton)
             .controlSize(.small)
+            .fixedSize()
 
         case .hat:
             Picker("", selection: $binding.input.index) {
@@ -190,7 +249,62 @@ struct BindingRowView: View {
             }
             .labelsHidden()
             .controlSize(.small)
+
+        case .touchpad:
+            // Touchpad "index" represents the finger slot (0 or 1).
+            Picker("", selection: touchpadFingerBinding) {
+                Text("Finger 1").tag(0)
+                Text("Finger 2").tag(1)
+            }
+            .labelsHidden()
+            .controlSize(.small)
+
+        case .motion:
+            // Pick the motion channel (gyro X/Y/Z, accel X/Y/Z, attitude
+            // roll/pitch/yaw). Direction picker handles + / -.
+            Menu {
+                ForEach(MotionChannel.allCases) { channel in
+                    Button(channel.displayName) {
+                        binding.input.motionChannel = channel
+                    }
+                }
+            } label: {
+                menuLabel((binding.input.motionChannel ?? .gyroY).displayName)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+
+        case .touchpadRegion:
+            // Pick from defined regions by name. If none are defined yet, the
+            // menu shows a hint so users know to open Calibrate Touchpad.
+            Menu {
+                let regions = TouchpadService.shared.allRegions()
+                if regions.isEmpty {
+                    Text("No regions defined")
+                    Text("Open Calibrate Touchpad to add some")
+                } else {
+                    ForEach(regions) { region in
+                        Button(region.name) {
+                            binding.input.touchpadRegionID = region.id
+                        }
+                    }
+                }
+            } label: {
+                menuLabel(touchpadRegionDisplayName)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
         }
+    }
+
+    private var touchpadRegionDisplayName: String {
+        if let id = binding.input.touchpadRegionID,
+           let r = TouchpadService.shared.region(with: id) {
+            return r.name
+        }
+        return "Pick region"
     }
 
     // MARK: - Direction Picker (fixed width, empty for buttons)
@@ -219,7 +333,58 @@ struct BindingRowView: View {
             }
             .labelsHidden()
             .controlSize(.small)
+
+        case .touchpadRegion:
+            // Region inputs are button-like; no direction picker needed.
+            Color.clear
+
+        case .motion:
+            // Motion inputs read like axes: pick + or - polarity.
+            Picker("", selection: axisDirectionBinding) {
+                ForEach(AxisDirection.allCases) { dir in
+                    Text(dir.displayName).tag(dir)
+                }
+            }
+            .labelsHidden()
+            .controlSize(.small)
+
+        case .touchpad:
+            // For touchpad, the direction picker is a compound: X/Y axis +
+            // half-axis direction. We render it as a single Menu so it fits
+            // in the existing column width.
+            Menu {
+                Section("X (left/right)") {
+                    Button("X +  (right)") { setTouchpad(axis: .x, dir: .positive) }
+                    Button("X \u{2212}  (left)") { setTouchpad(axis: .x, dir: .negative) }
+                }
+                Section("Y (up/down)") {
+                    Button("Y +  (down)") { setTouchpad(axis: .y, dir: .positive) }
+                    Button("Y \u{2212}  (up)")   { setTouchpad(axis: .y, dir: .negative) }
+                }
+            } label: {
+                let axisLabel = (binding.input.touchpadAxis ?? .x).rawValue.uppercased()
+                let dirLabel = (binding.input.axisDirection ?? .positive).displayName
+                menuLabel("\(axisLabel) \(dirLabel)")
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
         }
+    }
+
+    private func setTouchpad(axis: TouchpadAxis, dir: AxisDirection) {
+        binding.input.touchpadAxis = axis
+        binding.input.axisDirection = dir
+    }
+
+    private var touchpadFingerBinding: SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: { binding.input.touchpadFinger ?? binding.input.index },
+            set: { newValue in
+                binding.input.touchpadFinger = newValue
+                binding.input.index = newValue
+            }
+        )
     }
 
     // MARK: - Output Value Controls
@@ -233,12 +398,17 @@ struct BindingRowView: View {
             KeyCodePicker(selectedCode: keyCodeBinding(at: index))
 
         case .mouseButton:
-            Picker("", selection: mouseButtonBinding(at: index)) {
+            // Lazy Menu: only builds the 32 button options when opened.
+            Menu {
                 ForEach(0..<32, id: \.self) { i in
-                    Text(mouseButtonName(i)).tag(i)
+                    Button(mouseButtonName(i)) {
+                        binding.outputs[index].mouseButtonIndex = i
+                    }
                 }
+            } label: {
+                menuLabel(mouseButtonName(binding.outputs[index].mouseButtonIndex ?? 0))
             }
-            .labelsHidden()
+            .menuStyle(.borderlessButton)
             .frame(minWidth: 120)
             .controlSize(.small)
 
@@ -258,10 +428,15 @@ struct BindingRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
 
-                Slider(value: speedBinding(at: index), in: 1...50, step: 1)
+                ThrottledSlider(
+                    value: speedBinding(at: index),
+                    in: 1...50,
+                    step: 1,
+                    onLiveChange: { liveSpeed[index] = $0 }
+                )
                     .frame(minWidth: 80, idealWidth: 100)
 
-                TextField("", value: speedIntBinding(at: index), format: .number)
+                TextField("", value: liveSpeedBinding(at: index), format: .number)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 44)
                     .controlSize(.small)
@@ -278,6 +453,147 @@ struct BindingRowView: View {
             .labelsHidden()
             .frame(width: 70)
             .controlSize(.small)
+
+        case .midiNote:
+            HStack(spacing: 6) {
+                Text("Note")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                // Lazy Menu so the 128 note options only build when opened.
+                Menu {
+                    ForEach(MIDIService.notePickerLabels, id: \.number) { entry in
+                        Button(entry.label) {
+                            binding.outputs[index].midiNote = entry.number
+                        }
+                    }
+                } label: {
+                    let current = binding.outputs[index].midiNote ?? 60
+                    menuLabel("\(MIDIService.noteName(current)) (\(current))")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 100)
+                .controlSize(.small)
+
+                Text("Vel")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                TextField("", value: midiVelocityBinding(at: index), format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 44)
+                    .controlSize(.small)
+                    .multilineTextAlignment(.center)
+
+                Text("Ch")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Picker("", selection: midiChannelBinding(at: index)) {
+                    ForEach(1...16, id: \.self) { c in
+                        Text("\(c)").tag(c)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 50)
+                .controlSize(.small)
+            }
+
+        case .midiCC:
+            HStack(spacing: 6) {
+                Text("CC")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                // Lazy Menu so the 128 CC options only build when opened.
+                Menu {
+                    ForEach(MIDIService.ccPickerLabels, id: \.number) { entry in
+                        Button(entry.label) {
+                            binding.outputs[index].midiCCNumber = entry.number
+                        }
+                    }
+                } label: {
+                    let current = binding.outputs[index].midiCCNumber ?? 1
+                    let label = MIDIService.ccNameByNumber[current].map { "\(current) - \($0)" } ?? "\(current)"
+                    menuLabel(label)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 160)
+                .controlSize(.small)
+
+                Text("Ch")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Picker("", selection: midiChannelBinding(at: index)) {
+                    ForEach(1...16, id: \.self) { c in
+                        Text("\(c)").tag(c)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 50)
+                .controlSize(.small)
+            }
+
+        case .midiPitchBend:
+            HStack(spacing: 6) {
+                Text("Ch")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Picker("", selection: midiChannelBinding(at: index)) {
+                    ForEach(1...16, id: \.self) { c in
+                        Text("\(c)").tag(c)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 50)
+                .controlSize(.small)
+                Text("Use with a continuous axis for smooth bend.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+        case .midiProgramChange:
+            HStack(spacing: 6) {
+                Text("Program")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Menu {
+                    ForEach(0...127, id: \.self) { p in
+                        Button("\(p)") { binding.outputs[index].midiProgramNumber = p }
+                    }
+                } label: {
+                    menuLabel("\(binding.outputs[index].midiProgramNumber ?? 0)")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 70)
+                .controlSize(.small)
+
+                Text("Ch")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Picker("", selection: midiChannelBinding(at: index)) {
+                    ForEach(1...16, id: \.self) { c in
+                        Text("\(c)").tag(c)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 50)
+                .controlSize(.small)
+            }
+
+        case .midiTransport:
+            HStack(spacing: 6) {
+                Text("Action")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Picker("", selection: midiTransportBinding(at: index)) {
+                    ForEach(MIDITransport.allCases) { t in
+                        Text(t.displayName).tag(t)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 100)
+                .controlSize(.small)
+                Text("Sends a real-time transport message to the DAW.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -304,7 +620,7 @@ struct BindingRowView: View {
             HStack(spacing: 4) {
                 Image(systemName: outputIcon(for: output))
                     .font(.caption)
-                    .foregroundStyle(output.type == .key ? .orange : .purple)
+                    .foregroundStyle(outputColor(for: output))
                     .frame(width: 14)
 
                 Picker("", selection: outputTypeBinding(at: index)) {
@@ -375,20 +691,14 @@ struct BindingRowView: View {
 
     @ViewBuilder
     private var advancedOptionsRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 16) {
-                if binding.input.type == .axis {
-                    advancedAxisOptions
-                }
-                advancedModeOptions
-                Spacer()
+        // Vertical list. One option per line keeps the row readable and
+        // matches the way the macro toggle now behaves.
+        VStack(alignment: .leading, spacing: 4) {
+            if binding.input.type == .axis {
+                advancedAxisOptions
             }
-
-            // Feedback section (haptic + speech)
-            HStack(spacing: 16) {
-                advancedFeedbackOptions
-                Spacer()
-            }
+            advancedModeOptions
+            advancedFeedbackOptions
 
             if binding.speechEnabled == true {
                 speechDetailRow
@@ -422,9 +732,14 @@ struct BindingRowView: View {
                 Text("Strength")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
-                Slider(value: hapticIntensityBinding, in: 0.1...1.0, step: 0.05)
+                ThrottledSlider(
+                    value: hapticIntensityBinding,
+                    in: 0.1...1.0,
+                    step: 0.05,
+                    onLiveChange: { liveHaptic = $0 }
+                )
                     .frame(width: 60)
-                Text(String(format: "%.0f%%", (binding.hapticIntensity ?? 0.6) * 100))
+                Text(String(format: "%.0f%%", (liveHaptic ?? Double(binding.hapticIntensity ?? 0.6)) * 100))
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .frame(width: 30)
@@ -478,13 +793,37 @@ struct BindingRowView: View {
             Text("Deadzone")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
-            Slider(value: deadzoneBinding, in: 0.01...0.9, step: 0.01)
+            ThrottledSlider(
+                value: deadzoneBinding,
+                in: 0.01...0.9,
+                step: 0.01,
+                onLiveChange: { liveDeadzone = $0 }
+            )
                 .frame(width: 70)
-            let dzPct = String(format: "%.0f%%", (binding.deadzone ?? 0.25) * 100)
+            let dzPct = String(format: "%.0f%%", (liveDeadzone ?? Double(binding.deadzone ?? 0.25)) * 100)
             Text(dzPct)
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 30)
+            // Visible "Calibrate" button. The icon differs for triggers
+            // (1D pressure gauge) vs joysticks (2D circle) so the user
+            // can tell at a glance which kind of input this binding uses.
+            Button {
+                showDeadzoneCalibration = true
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: isTriggerAxis ? "gauge.with.dots.needle.50percent" : "dot.circle.and.hand.point.up.left.fill")
+                        .font(.system(size: 9))
+                    Text("Calibrate")
+                        .font(.system(size: 9))
+                }
+                .foregroundStyle(.tint)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .help(isTriggerAxis
+                  ? "Open the trigger pressure calibration view."
+                  : "Calibrate the joystick by moving it around in a circle.")
         }
 
         // Invert
@@ -584,19 +923,29 @@ struct BindingRowView: View {
             }
         }
 
-        // Macro button
-        Button {
-            withAnimation { showMacroEditor.toggle() }
-        } label: {
-            HStack(spacing: 2) {
+        // Macro toggle - opens the macro editor below the row when on.
+        // Matches the visual style of the other toggles in this section.
+        Toggle(isOn: macroToggleBinding) {
+            HStack(spacing: 3) {
                 Image(systemName: "bolt.fill")
                     .font(.system(size: 8))
                 Text("Macro")
                     .font(.system(size: 9))
             }
-            .foregroundStyle(binding.macroSteps?.isEmpty == false ? Color.orange : Color.gray.opacity(0.5))
+            .foregroundStyle(binding.macroSteps?.isEmpty == false ? Color.orange : .secondary)
         }
-        .buttonStyle(.plain)
+        .toggleStyle(.checkbox)
+        .controlSize(.mini)
+    }
+
+    /// Bridges the macro toggle to the existing `showMacroEditor` state.
+    /// Turning the toggle on opens the editor; turning it off hides it
+    /// (but does not delete any existing macro steps).
+    private var macroToggleBinding: SwiftUI.Binding<Bool> {
+        SwiftUI.Binding(
+            get: { showMacroEditor },
+            set: { showMacroEditor = $0 }
+        )
     }
 
     // MARK: - Advanced Bindings
@@ -605,6 +954,32 @@ struct BindingRowView: View {
         SwiftUI.Binding(
             get: { Double(binding.deadzone ?? 0.25) },
             set: { binding.deadzone = Float($0) }
+        )
+    }
+
+    /// Triggers live on axis indices 4 (left) and 5 (right) by convention.
+    /// Used to switch the Calibrate button icon between trigger gauge and
+    /// joystick circle styles.
+    private var isTriggerAxis: Bool {
+        binding.input.type == .axis && (binding.input.index == 4 || binding.input.index == 5)
+    }
+
+    /// Like `deadzoneBinding` but always writes the value (even the 0.25 default).
+    /// The calibration view always wants to persist what the user picked so the
+    /// next time they open the editor the slider matches what they set.
+    private var deadzoneCalibrationBinding: SwiftUI.Binding<Double> {
+        SwiftUI.Binding(
+            get: { Double(binding.deadzone ?? 0.25) },
+            set: { binding.deadzone = Float($0) }
+        )
+    }
+
+    /// Outer deadzone binding for the calibration sheet. Defaults to 1.0
+    /// (no saturation), which the view interprets as "no outer ring".
+    private var outerDeadzoneBinding: SwiftUI.Binding<Double> {
+        SwiftUI.Binding(
+            get: { Double(binding.outerDeadzone ?? 1.0) },
+            set: { binding.outerDeadzone = $0 >= 0.99 ? nil : Float($0) }
         )
     }
 
@@ -885,10 +1260,38 @@ struct BindingRowView: View {
 
     // MARK: - Helpers
 
+    /// Compact label used by Menu-style controls so they look like Pickers
+    /// but with lazy contents. Shows the current value and a chevron.
+    @ViewBuilder
+    private func menuLabel(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func outputIcon(for action: OutputAction) -> String {
         switch action.type {
         case .key: return "keyboard"
         case .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep: return "computermouse"
+        case .midiNote: return "music.note"
+        case .midiCC: return "slider.horizontal.3"
+        case .midiPitchBend: return "waveform.path"
+        case .midiProgramChange: return "guitars"
+        case .midiTransport: return "playpause"
+        }
+    }
+
+    private func outputColor(for action: OutputAction) -> Color {
+        switch action.type {
+        case .key: return .orange
+        case .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep: return .purple
+        case .midiNote, .midiCC, .midiPitchBend, .midiProgramChange, .midiTransport: return .pink
         }
     }
 
@@ -985,6 +1388,60 @@ struct BindingRowView: View {
         SwiftUI.Binding(
             get: { binding.outputs[index].speed ?? 6 },
             set: { binding.outputs[index].speed = max(1, min(50, $0)) }
+        )
+    }
+
+    /// TextField binding that reads from the live drag mirror so the box
+    /// updates while the user is sliding, and writes go to both the mirror
+    /// and the underlying preset (so typing into the field still works).
+    private func liveSpeedBinding(at index: Int) -> SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: {
+                if let live = liveSpeed[index] { return Int(live) }
+                return binding.outputs[index].speed ?? 6
+            },
+            set: { newValue in
+                let clamped = max(1, min(50, newValue))
+                binding.outputs[index].speed = clamped
+                liveSpeed[index] = Double(clamped)
+            }
+        )
+    }
+
+    // MARK: - MIDI Bindings
+
+    private func midiNoteBinding(at index: Int) -> SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: { binding.outputs[index].midiNote ?? 60 },
+            set: { binding.outputs[index].midiNote = max(0, min(127, $0)) }
+        )
+    }
+
+    private func midiVelocityBinding(at index: Int) -> SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: { binding.outputs[index].midiVelocity ?? 100 },
+            set: { binding.outputs[index].midiVelocity = max(0, min(127, $0)) }
+        )
+    }
+
+    private func midiCCNumberBinding(at index: Int) -> SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: { binding.outputs[index].midiCCNumber ?? 1 },
+            set: { binding.outputs[index].midiCCNumber = max(0, min(127, $0)) }
+        )
+    }
+
+    private func midiChannelBinding(at index: Int) -> SwiftUI.Binding<Int> {
+        SwiftUI.Binding(
+            get: { binding.outputs[index].midiChannel ?? 1 },
+            set: { binding.outputs[index].midiChannel = max(1, min(16, $0)) }
+        )
+    }
+
+    private func midiTransportBinding(at index: Int) -> SwiftUI.Binding<MIDITransport> {
+        SwiftUI.Binding(
+            get: { binding.outputs[index].midiTransport ?? .start },
+            set: { binding.outputs[index].midiTransport = $0 }
         )
     }
 

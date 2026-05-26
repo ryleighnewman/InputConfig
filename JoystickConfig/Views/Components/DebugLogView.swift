@@ -153,17 +153,11 @@ struct DebugLogView: View {
                 }
 
                 // Copy
-                Button {
+                CopyIconButton(action: {
                     let text = mappingEngine.debugLog.map(\.text).joined(separator: "\n")
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Copy log to clipboard")
+                }, helpText: "Copy log to clipboard", size: .caption)
 
                 // Clear
                 Button {
@@ -307,7 +301,7 @@ struct DebugLogView: View {
             Spacer()
 
             if mappingEngine.isRunning {
-                Text("120 Hz polling")
+                Text("240 Hz polling")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }

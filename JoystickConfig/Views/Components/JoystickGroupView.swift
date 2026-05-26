@@ -13,8 +13,12 @@ struct JoystickGroupView: View {
     let onSortBindings: () -> Void
     let onDuplicate: () -> Void
     let onRemoveJoystick: () -> Void
+    /// Binding UUID currently pulsing (jump-to-binding from Live Visualizer).
+    /// nil when no pulse is active.
+    var pulsingBindingID: UUID? = nil
 
     @EnvironmentObject var mappingEngine: MappingEngine
+    @EnvironmentObject var controllerService: GameControllerService
     @State private var preSortSnapshot: [BindingModel]?
 
     var body: some View {
@@ -22,19 +26,32 @@ struct JoystickGroupView: View {
             headerView
 
             if joystick.isExpanded {
-                VStack(spacing: 2) {
-                    ForEach(Array(joystick.bindings.enumerated()), id: \.element.id) { index, binding in
+                // Use `bindings.indices` instead of `Array(...).enumerated()`
+                // to avoid allocating a new array on every render.
+                LazyVStack(spacing: 2) {
+                    ForEach(joystick.bindings.indices, id: \.self) { index in
+                        let binding = joystick.bindings[index]
                         BindingRowView(
                             binding: bindingAt(index),
                             onScan: { onScanInput(index) },
                             onRemove: { onRemoveBinding(index) },
                             onDuplicate: { onDuplicateBinding(index) },
-                            isHighlighted: mappingEngine.activeInputs.contains(binding.input.serialized)
+                            // Light up against raw controller state OR the
+                            // engine's preset-aware set, whichever is firing.
+                            // This works even with no preset active.
+                            isHighlighted:
+                                mappingEngine.activeInputsPublished.contains(binding.input.serialized)
+                                || controllerService.rawActiveInputs.contains(binding.input.serialized),
+                            displayNumber: index + 1,
+                            isPulsing: pulsingBindingID == binding.id
                         )
+                        .id(binding.id)
                     }
                 }
-                .padding(.horizontal, 4)
                 .padding(.vertical, 2)
+                // Suppress implicit transitions on row insertion/removal so
+                // scrolling does not trigger animation work for new rows.
+                .animation(nil, value: joystick.bindings.count)
 
                 Button(action: onAddBinding) {
                     HStack {
@@ -45,7 +62,7 @@ struct JoystickGroupView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
@@ -120,12 +137,9 @@ struct JoystickGroupView: View {
                     .help("Undo sort")
                 }
 
-                Button(action: onDuplicate) {
-                    Image(systemName: "doc.on.doc")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help("Clone this joystick group")
+                CopyIconButton(action: onDuplicate,
+                               helpText: "Clone this joystick group",
+                               size: .caption)
 
                 Button(action: onRemoveJoystick) {
                     Image(systemName: "trash")

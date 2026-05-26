@@ -30,23 +30,23 @@ The binding editor is where you set up your mappings. Hit Scan to detect a butto
 
 ## Features
 
-- Map buttons, triggers, joysticks, and d-pad to keyboard keys
-- Map joysticks to mouse movement and scroll wheel with adjustable speed
-- Scan for controller inputs directly from the editor
-- Macro sequences with custom wait and hold timing per step
-- Turbo (rapid fire) at adjustable rates
-- Toggle mode for hold-on-press, release-on-press behavior
-- Per-axis deadzones, inversion, and sensitivity curves
-- Repeat count and delay per binding
-- Multiple outputs per input
-- DualSense light bar color control
-- Unlimited presets with one-click activation
-- Import, export, and share preset files
-- Convert presets between controller types (DualSense, PlayStation, Xbox)
-- Sort and reorder bindings
-- Live input monitor and debug log
-- 120Hz input polling
-- Native macOS app built with SwiftUI
+- Map buttons, triggers, joysticks, and D-pad to keyboard keys, mouse movement, mouse buttons, and scroll wheel
+- Built-in presets for adaptive controllers, desktop navigation, web browsing, media control, and popular games
+- Live controller visualizer mirrors your input in real time
+- Record macro sequences with custom timing per step
+- Turbo (rapid fire) and toggle mode on any button
+- Adjustable deadzones, axis inversion, and sensitivity curves with visual calibration
+- Customize controller light bar colors per preset with a full RGB color picker
+- Send MIDI output to your favorite DAW
+- Built-in 3D gyroscope and motion tracking
+- Touchpad surface calibration
+- Create unlimited presets and switch instantly
+- Import, export, and share presets between users
+- Convert presets between controller types
+- Works with any HID-compatible gamepad, no drivers needed
+- Lifetime usage statistics
+
+100% free.
 
 ## Supported Controllers
 
