@@ -31,10 +31,20 @@ struct PresetEditorView: View {
 
     @EnvironmentObject var controllerService: GameControllerService
     @EnvironmentObject var mappingEngine: MappingEngine
+    @EnvironmentObject var presetStore: PresetStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var scanningBinding: (joystickIndex: Int, bindingIndex: Int)?
     @State private var showingScanOverlay = false
+
+    /// Identifies which header text field (if any) currently owns the
+    /// keyboard focus. Used to:
+    /// 1. Let the user click anywhere outside the field to deselect it.
+    /// 2. Force focus off when a scan starts, so keypresses don't type
+    ///    into the name/tag field while the user is trying to scan
+    ///    a controller input.
+    @FocusState private var focusedHeaderField: HeaderField?
+    private enum HeaderField: Hashable { case name, tag }
     @State private var preSortSnapshot: [JoystickMapping]?
     /// UUID of the binding row currently pulsing yellow because we just
     /// jumped to it. nil when no pulse is active.
@@ -80,6 +90,12 @@ struct PresetEditorView: View {
     /// True when a motion input was scanned but no controller is yet
     /// calibrated. Drives an alert that offers to jump into calibration.
     @State private var pendingMotionCalibrationOffer: Bool = false
+
+    /// Brief toast shown after the Quick Zero toolbar button fires so
+    /// users get visible confirmation that the snapshot calibration
+    /// landed (the actual save is silent on disk).
+    @State private var showQuickZeroToast: Bool = false
+    @State private var quickZeroToastMessage: String = ""
 
     /// True when any connected controller has a touchpad surface. The
     /// Calibrate Touchpad toolbar button is hidden otherwise.
@@ -140,10 +156,47 @@ struct PresetEditorView: View {
                             )
                     }
                     .buttonStyle(.plain)
+
+                    Divider()
+                        .padding(.vertical, 8)
+
+                    // Per-preset Automation: cursor utilities + auto-
+                    // launch an app on activation. The collapsed state
+                    // is a single-line summary; expanding reveals the
+                    // toggles + path picker.
+                    PresetAutomationSection(automation: $preset.automation)
+                        .id("editor-automation")
                 }
                 .padding(20)
+                // Transparent tap-anywhere layer that releases keyboard
+                // focus from the Name / Tag fields. Child controls
+                // (TextFields, Buttons, Pickers) hit-test first and keep
+                // their normal click behaviour; only a click on empty
+                // editor whitespace falls through here.
+                .background(
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { focusedHeaderField = nil }
+                )
             }
             .navigationTitle("Edit Bindings & Mappings")
+            .overlay(alignment: .top) {
+                // Brief confirmation toast for the Quick Zero toolbar
+                // button. Calibration save is silent on disk; the toast
+                // gives the user visible confirmation the click took
+                // effect. Auto-dismisses ~2 s after quickZeroGyro fires.
+                if showQuickZeroToast {
+                    Text(quickZeroToastMessage)
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.accentColor.opacity(0.4), lineWidth: 1))
+                        .padding(.top, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: showQuickZeroToast)
             .onAppear {
                 if lastSnapshot == nil { lastSnapshot = preset }
             }
@@ -151,12 +204,18 @@ struct PresetEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .spotlightAnchor(SpotlightID.editorCancel)
+                        .accessibilityLabel("Cancel editing")
+                        .accessibilityHint("Discards unsaved changes and closes the editor")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave(preset)
                         dismiss()
                     }
+                    .spotlightAnchor(SpotlightID.editorSave)
+                    .accessibilityLabel("Save preset")
+                    .accessibilityHint("Saves the current bindings and closes the editor")
                 }
                 // Undo / Redo. Available everywhere in the editor and bound
                 // to the standard Cmd+Z / Cmd+Shift+Z shortcuts.
@@ -205,6 +264,19 @@ struct PresetEditorView: View {
                         }
                         .help("Set the resting zero for the controller's gyro and accelerometer")
                     }
+                    // Quick zero gyro: lives right next to the Motion
+                    // calibration button so users see the relationship
+                    // (one is a multi-second still-hold capture; this
+                    // one is a one-frame snapshot for fast re-zeroing
+                    // when the controller is already at rest).
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            quickZeroGyro()
+                        } label: {
+                            Label("Quick Zero", systemImage: "scope")
+                        }
+                        .help("Snapshot current gyro reading as the new zero (place controller flat first)")
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -241,6 +313,7 @@ struct PresetEditorView: View {
             }
             .sheet(isPresented: $showingTouchpadCalibration) {
                 TouchpadCalibrationView()
+                    .environmentObject(presetStore)
             }
             .sheet(isPresented: $showingMotionCalibration) {
                 MotionCalibrationView()
@@ -326,6 +399,24 @@ struct PresetEditorView: View {
                     performJump(to: target, using: proxy)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .joystickConfigScrollToAutomation)) { _ in
+                withAnimation(.easeInOut(duration: 0.6)) {
+                    proxy.scrollTo("editor-automation", anchor: .top)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .joystickConfigScrollToFirstBinding)) { _ in
+                // Scroll to the first binding's ID so the Options
+                // disclosure is in view. preset.joysticks.first?.bindings.first
+                // gives the row's id; ForEach in JoystickGroupView
+                // applies .id(binding.id) so this resolves.
+                if let firstID = preset.joysticks.first?.bindings.first?.id {
+                    withAnimation(.easeInOut(duration: 0.6)) {
+                        proxy.scrollTo(firstID, anchor: .center)
+                    }
+                }
+            }
             }  // ScrollViewReader
         }
     }
@@ -336,6 +427,36 @@ struct PresetEditorView: View {
     /// and scroll/pulse it. Walks the joystick group first to honor the
     /// click's controller-of-origin, then falls back to *any* joystick
     /// group that binds the same input.
+    /// Snapshot every motion-capable connected controller's current
+    /// gyro+accel reading and save it as their new resting baseline.
+    /// One-frame variant of the multi-second still-hold capture in
+    /// MotionCalibrationView; intended for quick re-zero when the
+    /// controller is already at rest.
+    private func quickZeroGyro() {
+        var count = 0
+        for controller in controllerService.connectedControllers {
+            guard let motion = controller.motion else { continue }
+            let key = MotionCalibrationService.identityKey(for: controller)
+            MotionCalibrationService.shared.quickZero(
+                forKey: key,
+                gyroX: Float(motion.rotationRate.x),
+                gyroY: Float(motion.rotationRate.y),
+                gyroZ: Float(motion.rotationRate.z),
+                accelX: Float(motion.userAcceleration.x),
+                accelY: Float(motion.userAcceleration.y),
+                accelZ: Float(motion.userAcceleration.z)
+            )
+            count += 1
+        }
+        quickZeroToastMessage = count == 0
+            ? "No motion-capable controller connected"
+            : "Gyro zeroed on \(count) controller\(count == 1 ? "" : "s")"
+        showQuickZeroToast = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showQuickZeroToast = false
+        }
+    }
+
     private func performJump(to target: EditorJumpTarget, using proxy: ScrollViewProxy) {
         guard let bindingID = locateBindingID(for: target) else { return }
         // Slight delay so the editor has time to lay out before we scroll.
@@ -415,6 +536,7 @@ struct PresetEditorView: View {
                     .frame(width: 44, alignment: .trailing)
                 TextField("Preset Name", text: $preset.name)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedHeaderField, equals: .name)
             }
             HStack {
                 Text("Tag:")
@@ -423,6 +545,7 @@ struct PresetEditorView: View {
                     .frame(width: 44, alignment: .trailing)
                 TextField("Tag / Description", text: $preset.tag)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedHeaderField, equals: .tag)
             }
         }
     }
@@ -495,14 +618,33 @@ struct PresetEditorView: View {
     }
 
     private func sortBindings(in joystickIndex: Int) {
+        // Delegate to the model's authoritative sort which covers every
+        // InputType case. Earlier this view had its own truncated
+        // table (button/axis/hat only) that silently collapsed every
+        // other input type to slot 0 in the editor list.
         withAnimation {
             preset.joysticks[joystickIndex].bindings.sort { a, b in
-                let typeOrder: [InputType: Int] = [.button: 0, .axis: 1, .hat: 2]
-                let aType = typeOrder[a.input.type] ?? 0
-                let bType = typeOrder[b.input.type] ?? 0
-                if aType != bType { return aType < bType }
+                let aOrder = Self.bindingSortOrder(for: a.input.type)
+                let bOrder = Self.bindingSortOrder(for: b.input.type)
+                if aOrder != bOrder { return aOrder < bOrder }
                 return a.input.index < b.input.index
             }
+        }
+    }
+
+    private static func bindingSortOrder(for type: InputType) -> Int {
+        switch type {
+        case .button:          return 0
+        case .axis:            return 1
+        case .hat:             return 2
+        case .touchpad:        return 3
+        case .touchpadRegion:  return 4
+        case .touchpadGesture: return 5
+        case .motion:          return 6
+        case .extKey:          return 7
+        case .extMouse:        return 8
+        case .cursorRegion:    return 9
+        case .stickRegion:     return 10
         }
     }
 
@@ -528,6 +670,11 @@ struct PresetEditorView: View {
     // MARK: - Scanning
 
     private func startScan(joystickIndex: Int, bindingIndex: Int) {
+        // Release any keyboard focus from the Name / Tag fields so that
+        // pressing keys during scan doesn't accidentally type into them.
+        // (The user's intent during a scan is to identify a controller
+        // input, not to edit the preset name.)
+        focusedHeaderField = nil
         scanningBinding = (joystickIndex, bindingIndex)
         showingScanOverlay = true
         controllerService.startScanning { event in

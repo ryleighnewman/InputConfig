@@ -21,6 +21,15 @@ enum SpotlightID {
     static let notesSection     = "notes-section"
     static let createNew        = "create-new-preset"
     static let welcomeCard      = "welcome-card-showcase"
+    // Anchors added for the Minecraft hands-on walkthrough at the end
+    // of the Quick Tour. Each one is attached to a real UI element so
+    // the spotlight ring lands on the exact thing being explained.
+    static let automationPanel  = "automation-panel"
+    static let templatePicker   = "template-picker"
+    static let slotChip         = "slot-chip"
+    static let importButton     = "import-button"
+    static let editorSave       = "editor-save"
+    static let editorCancel     = "editor-cancel"
 }
 
 struct SpotlightAnchor: Equatable {
@@ -92,6 +101,17 @@ final class TutorialState: ObservableObject {
     @Published var stepIndex: Int = 0
     @Published private(set) var steps: [TutorialStep] = []
 
+    /// Anchor ID the simulated cursor is currently animating toward.
+    /// nil = no demo cursor visible. TutorialOverlay reads this and
+    /// the spotlight anchor preference dict to position a fake cursor
+    /// that flies to the target before the step's UI action fires.
+    @Published private(set) var simulatedClickTarget: String?
+    /// Marks the simulated click as actually "depressing" the button
+    /// (small cursor scale-down + ring pulse). Flips true 0.55 s
+    /// after the cursor lands; cleared along with the target when
+    /// the animation completes.
+    @Published private(set) var simulatedClickPressed: Bool = false
+
     private init() {}
 
     /// Start the tour. Spins up the floating panel so the card sits
@@ -128,6 +148,32 @@ final class TutorialState: ObservableObject {
         guard isActive, stepIndex < steps.count else { return nil }
         return steps[stepIndex]
     }
+
+    /// Standard pattern for tour steps that auto-perform a UI action:
+    /// first move a simulated cursor to the target button, depress it,
+    /// then fire `action`. Lets the user see WHERE the action lands
+    /// instead of a sheet appearing from nowhere.
+    ///
+    /// Timeline (total ≈1.4 s):
+    ///   0.00s - cursor appears, starts gliding to anchor
+    ///   0.55s - cursor "presses" (scale + ring pulse)
+    ///   0.95s - action() fires
+    ///   1.20s - cursor fades out
+    func simulateClickThen(at anchorID: String,
+                            action: @escaping () -> Void) {
+        simulatedClickPressed = false
+        simulatedClickTarget = anchorID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+            self?.simulatedClickPressed = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+            action()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.simulatedClickTarget = nil
+            self?.simulatedClickPressed = false
+        }
+    }
 }
 
 // MARK: - Tutorial overlay (spotlight only; lives in main window)
@@ -141,13 +187,65 @@ struct TutorialOverlay: View {
     let anchors: [String: CGRect]
 
     var body: some View {
-        if let step = state.currentStep,
-           let id = step.spotlight,
-           let rect = anchors[id] {
-            SpotlightDimView(rect: rect, shape: step.spotlightShape)
-                .ignoresSafeArea()
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.22), value: state.stepIndex)
+        ZStack {
+            // Spotlight dim/cutout.
+            if let step = state.currentStep,
+               let id = step.spotlight,
+               let rect = anchors[id] {
+                SpotlightDimView(rect: rect, shape: step.spotlightShape)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.22), value: state.stepIndex)
+            }
+            // Simulated cursor flying to a target anchor. Tour steps
+            // that auto-perform UI actions trigger this so the user
+            // sees WHERE the click landed before the sheet opens.
+            if let target = state.simulatedClickTarget,
+               let rect = anchors[target] {
+                SimulatedCursor(targetCenter: CGPoint(x: rect.midX, y: rect.midY),
+                                pressed: state.simulatedClickPressed)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+    }
+}
+
+/// A fake mouse cursor that flies from a slightly-off-screen anchor
+/// to the target frame's center, then "presses" (shrinks slightly +
+/// emits a ring pulse) when `pressed` flips true. Stylized to read as
+/// a system pointer without conflicting with the real cursor.
+fileprivate struct SimulatedCursor: View {
+    let targetCenter: CGPoint
+    let pressed: Bool
+    @State private var landed: Bool = false
+
+    var body: some View {
+        ZStack {
+            // Click-ring pulse, fires when pressed flips true.
+            Circle()
+                .stroke(Color.green.opacity(pressed ? 0.0 : 0.6),
+                        lineWidth: 2)
+                .frame(width: pressed ? 64 : 20,
+                       height: pressed ? 64 : 20)
+                .opacity(pressed ? 0 : 1)
+                .animation(.easeOut(duration: 0.45), value: pressed)
+            // Cursor arrow icon.
+            Image(systemName: "cursorarrow.click.2")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.6), radius: 3, x: 1, y: 2)
+                .scaleEffect(pressed ? 0.85 : 1.0)
+                .animation(.easeOut(duration: 0.18), value: pressed)
+        }
+        .position(landed ? targetCenter
+                          : CGPoint(x: targetCenter.x - 220,
+                                    y: targetCenter.y - 140))
+        .animation(.easeOut(duration: 0.5), value: landed)
+        .onAppear {
+            // Start off-screen, then glide to the target on the next
+            // runloop tick so SwiftUI sees the position change.
+            DispatchQueue.main.async { landed = true }
         }
     }
 }

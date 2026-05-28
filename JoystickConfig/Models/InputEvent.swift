@@ -16,6 +16,31 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     /// yields a negative value. Available on controllers whose `motion`
     /// property is non-nil (DualSense, DualShock 4, Switch Pro, Joy-Con).
     case motion = "mtn"
+    /// Key on an external keyboard (anything reported through IOHIDManager
+    /// as a Generic Desktop / Keyboard usage). Behaves like a button; the
+    /// HID usage code is stored in `index`.
+    case extKey = "ekb"
+    /// Button or axis on an external mouse. `extMouseKind` discriminates
+    /// between button, scroll, and motion sub-roles. Motion / scroll
+    /// behave as half-axes; button behaves like a button.
+    case extMouse = "ems"
+    /// A user-defined rectangular zone on the Mac display, evaluated
+    /// against the cursor's current position. Same model as
+    /// `.touchpadRegion` but the "finger" is the mouse cursor -
+    /// lets a Mac trackpad / mouse user reuse the region-binding
+    /// workflow without DualSense hardware.
+    case cursorRegion = "crg"
+    /// A user-defined rectangular zone on a joystick stick's X/Y
+    /// plane. Lets the user bind diagonal/quadrant deflections
+    /// directly (e.g. "stick pushed to upper-right corner") instead
+    /// of having to combine separate axis + or axis - half-bindings.
+    /// Index = stick index (0 = left, 1 = right).
+    case stickRegion = "srg"
+    /// Quick gesture on the controller's touchpad surface: two-finger
+    /// tap, two-finger swipes, etc. Stored discriminator is in
+    /// `touchpadGestureKind`. Behaves like a button - fires for one
+    /// poll frame when the gesture is recognised.
+    case touchpadGesture = "tpg"
 
     var id: String { rawValue }
 
@@ -27,6 +52,52 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
         case .touchpad: return "Touchpad"
         case .touchpadRegion: return "Touchpad Region"
         case .motion: return "Motion"
+        case .extKey: return "Keyboard Key"
+        case .extMouse: return "Mouse"
+        case .cursorRegion: return "Cursor Region"
+        case .stickRegion: return "Stick Region"
+        case .touchpadGesture: return "Touchpad Gesture"
+        }
+    }
+}
+
+/// Recognised gesture kinds for an `.touchpadGesture` input. Detected
+/// by `TouchpadService`'s gesture state machine - the model just stores
+/// the discriminator.
+enum TouchpadGestureKind: String, Codable, CaseIterable, Identifiable {
+    /// Two fingers touch and lift within ~250 ms with very little
+    /// movement on either contact. The most useful "modifier" gesture
+    /// because it's instantly recognisable and doesn't conflict with
+    /// scrolling / region taps.
+    case twoFingerTap
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .twoFingerTap: return "Two-finger tap"
+        }
+    }
+}
+
+/// Sub-role of an `.extMouse` input. Maps the same physical mouse onto
+/// multiple bindable sources without exploding the InputType enum.
+enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
+    case button
+    case moveX
+    case moveY
+    case scrollX
+    case scrollY
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .button:  return "Button"
+        case .moveX:   return "Move X"
+        case .moveY:   return "Move Y"
+        case .scrollX: return "Scroll X"
+        case .scrollY: return "Scroll Y"
         }
     }
 }
@@ -55,15 +126,26 @@ enum MotionChannel: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .gyroX:      return "Gyro X (pitch rate)"
-        case .gyroY:      return "Gyro Y (yaw rate)"
-        case .gyroZ:      return "Gyro Z (roll rate)"
+        case .gyroX:      return "Gyro X"
+        case .gyroY:      return "Gyro Y"
+        case .gyroZ:      return "Gyro Z"
         case .accelX:     return "Accel X"
         case .accelY:     return "Accel Y"
         case .accelZ:     return "Accel Z"
         case .rollAngle:  return "Roll angle"
         case .pitchAngle: return "Pitch angle"
         case .yawAngle:   return "Yaw angle"
+        }
+    }
+
+    /// Fuller description used in the dropdown menu so the picker
+    /// label stays short but the menu items remain self-explanatory.
+    var menuDescription: String {
+        switch self {
+        case .gyroX:      return "Gyro X (pitch rate)"
+        case .gyroY:      return "Gyro Y (yaw rate)"
+        case .gyroZ:      return "Gyro Z (roll rate)"
+        default:          return displayName
         }
     }
 }
@@ -133,8 +215,27 @@ struct InputEvent: Codable, Hashable, Identifiable {
     /// ID of the user-defined touchpad region. Only valid for `.touchpadRegion`.
     /// Serialized as a hex UUID string in the binding JSON.
     var touchpadRegionID: UUID?
+    /// ID of the user-defined cursor region. Only valid for `.cursorRegion`.
+    /// Same on-disk format as `touchpadRegionID` - kept on a separate
+    /// field so the two region kinds don't collide in tooling.
+    var cursorRegionID: UUID?
+    /// Recognised touchpad gesture (two-finger tap, etc.). Only valid
+    /// for `.touchpadGesture`. Stored as the raw enum string in JSON
+    /// so older saves without the field decode as nil.
+    var touchpadGestureKind: TouchpadGestureKind?
     /// Motion-sensor channel for `.motion` inputs.
     var motionChannel: MotionChannel?
+    /// Stable ID of the external keyboard / mouse the binding listens to.
+    /// `nil` means "any" matching device. Only valid for `.extKey` /
+    /// `.extMouse`. Serialized as "any" when nil to keep the binding
+    /// string portable across machines.
+    var extDeviceID: String?
+    /// Sub-role for `.extMouse` inputs.
+    var extMouseKind: ExtMouseKind?
+    /// ID of the user-defined stick region. Only valid for `.stickRegion`.
+    /// Same on-disk format as `touchpadRegionID`; the stickIndex (left
+    /// vs right stick) is carried in the InputEvent's `index` field.
+    var stickRegionID: UUID?
 
     var displayName: String {
         switch type {
@@ -160,6 +261,26 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let ch = motionChannel?.displayName ?? "Motion"
             let dir = axisDirection?.displayName ?? "+"
             return "\(ch) \(dir)"
+        case .extKey:
+            return "Key \(index)"
+        case .extMouse:
+            let kind = extMouseKind?.displayName ?? "Button"
+            switch extMouseKind ?? .button {
+            case .button:
+                return "Mouse Button \(index)"
+            case .moveX, .moveY, .scrollX, .scrollY:
+                let dir = axisDirection?.displayName ?? "+"
+                return "Mouse \(kind) \(dir)"
+            }
+        case .cursorRegion:
+            // Like `.touchpadRegion`, the human name lives in the
+            // CursorRegionService and is resolved in the binding row.
+            return "Cursor Region"
+        case .stickRegion:
+            let stick = index == 1 ? "Right" : "Left"
+            return "\(stick) Stick Region"
+        case .touchpadGesture:
+            return touchpadGestureKind?.displayName ?? "Touchpad Gesture"
         }
     }
 
@@ -188,6 +309,31 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let ch = motionChannel?.rawValue ?? "gyroY"
             let dir = axisDirection?.rawValue ?? "+"
             return "mtn \(ch) \(dir)"
+        case .extKey:
+            // "ekb <hid_code> <deviceID|any>"
+            let dev = extDeviceID ?? "any"
+            return "ekb \(index) \(dev)"
+        case .extMouse:
+            // "ems <kind> <indexOrZero> <dir> <deviceID|any>"
+            let kind = (extMouseKind ?? .button).rawValue
+            let dir = axisDirection?.rawValue ?? "+"
+            let dev = extDeviceID ?? "any"
+            return "ems \(kind) \(index) \(dir) \(dev)"
+        case .cursorRegion:
+            // "crg <32-char hex UUID>" - same format as .touchpadRegion's
+            // "tpr" entry but lives in a separate namespace so the two
+            // can't be confused at parse time.
+            let raw = (cursorRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+                .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            return "crg \(raw)"
+        case .stickRegion:
+            // "srg <stickIndex> <32-char hex UUID>"
+            let raw = (stickRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+                .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            return "srg \(index) \(raw)"
+        case .touchpadGesture:
+            // "tpg <kind>" e.g. "tpg twoFingerTap"
+            return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")"
         }
     }
 
@@ -233,6 +379,47 @@ struct InputEvent: Codable, Hashable, Identifiable {
             return InputEvent(type: .motion, index: 0,
                               axisDirection: dir,
                               motionChannel: channel)
+        case "ekb":
+            // "ekb <hid_code> <deviceID|any>"
+            guard parts.count >= 3, let code = Int(parts[1]) else { return nil }
+            let device = parts[2] == "any" ? nil : parts[2]
+            return InputEvent(type: .extKey, index: code, extDeviceID: device)
+        case "ems":
+            // "ems <kind> <indexOrZero> <dir> <deviceID|any>"
+            guard parts.count >= 5,
+                  let kind = ExtMouseKind(rawValue: parts[1]),
+                  let idx = Int(parts[2]) else { return nil }
+            let dir = AxisDirection(rawValue: parts[3]) ?? .positive
+            let device = parts[4] == "any" ? nil : parts[4]
+            return InputEvent(type: .extMouse, index: idx,
+                              axisDirection: dir,
+                              extDeviceID: device,
+                              extMouseKind: kind)
+        case "crg":
+            // "crg <32-char hex UUID>"
+            guard parts.count >= 2 else { return nil }
+            let raw = parts[1]
+            guard raw.count == 32 else { return nil }
+            let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
+            guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
+            return InputEvent(type: .cursorRegion, index: 0,
+                              cursorRegionID: uuid)
+        case "srg":
+            // "srg <stickIndex> <32-char hex UUID>"
+            guard parts.count >= 3,
+                  let stickIdx = Int(parts[1]) else { return nil }
+            let raw = parts[2]
+            guard raw.count == 32 else { return nil }
+            let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
+            guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
+            return InputEvent(type: .stickRegion, index: stickIdx,
+                              stickRegionID: uuid)
+        case "tpg":
+            // "tpg <kind>" e.g. "tpg twoFingerTap"
+            guard parts.count >= 2,
+                  let kind = TouchpadGestureKind(rawValue: parts[1]) else { return nil }
+            return InputEvent(type: .touchpadGesture, index: 0,
+                              touchpadGestureKind: kind)
         default:
             return nil
         }
@@ -261,8 +448,38 @@ struct InputEvent: Codable, Hashable, Identifiable {
         InputEvent(type: .touchpadRegion, index: 0, touchpadRegionID: id)
     }
 
+    static func cursorRegion(_ id: UUID) -> InputEvent {
+        InputEvent(type: .cursorRegion, index: 0, cursorRegionID: id)
+    }
+
+    static func stickRegion(stickIndex: Int, id: UUID) -> InputEvent {
+        InputEvent(type: .stickRegion, index: stickIndex, stickRegionID: id)
+    }
+
+    static func touchpadGesture(_ kind: TouchpadGestureKind) -> InputEvent {
+        InputEvent(type: .touchpadGesture, index: 0, touchpadGestureKind: kind)
+    }
+
     static func motion(_ channel: MotionChannel, direction: AxisDirection) -> InputEvent {
         InputEvent(type: .motion, index: 0,
                    axisDirection: direction, motionChannel: channel)
+    }
+
+    static func extKey(hidCode: Int, deviceID: String? = nil) -> InputEvent {
+        InputEvent(type: .extKey, index: hidCode, extDeviceID: deviceID)
+    }
+
+    static func extMouseButton(_ button: Int, deviceID: String? = nil) -> InputEvent {
+        InputEvent(type: .extMouse, index: button,
+                   extDeviceID: deviceID, extMouseKind: .button)
+    }
+
+    static func extMouseMotion(_ kind: ExtMouseKind,
+                               direction: AxisDirection,
+                               deviceID: String? = nil) -> InputEvent {
+        InputEvent(type: .extMouse, index: 0,
+                   axisDirection: direction,
+                   extDeviceID: deviceID,
+                   extMouseKind: kind)
     }
 }

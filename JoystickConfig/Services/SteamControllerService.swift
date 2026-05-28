@@ -108,26 +108,84 @@ final class SteamControllerService: @unchecked Sendable {
     private var retainCount = 0
     private var stdoutBuffer = Data()
 
+    /// Captured diagnostic state for the Test Bench / Settings to surface
+    /// to the user when "Steam Controller doesn't work" is reported.
+    /// Every step the helper launch + handshake goes through writes here.
+    struct Diagnostics {
+        var helperPath: String?
+        var helperBundled: Bool = false
+        var helperLaunched: Bool = false
+        var helperLaunchError: String?
+        var helperPID: Int32?
+        var totalStdoutLines: Int = 0
+        var lastStdoutLineAt: Date?
+        var lastStdoutLineSample: String?
+        var readyHandshakeReceived: Bool = false
+        var firstStateLineReceived: Bool = false
+        var lastDiagnosticUpdate: Date = Date()
+    }
+
+    private var _diagnostics = Diagnostics()
+
+    /// Thread-safe snapshot of the helper's current state for diagnostics.
+    func diagnostics() -> Diagnostics {
+        lock.lock(); defer { lock.unlock() }
+        return _diagnostics
+    }
+
     private init() {}
 
     // MARK: - Lifecycle
 
     func retain() {
+        // Serialize retain/release under the same lock that guards
+        // state, otherwise two concurrent callers can both observe
+        // retainCount==0, both call start(), and we spawn two helper
+        // processes (the second one leaks the first's Process handle).
+        lock.lock()
         retainCount += 1
-        if retainCount == 1 { start() }
+        let shouldStart = (retainCount == 1)
+        lock.unlock()
+        if shouldStart { start() }
     }
 
     func release() {
+        lock.lock()
         retainCount = max(0, retainCount - 1)
-        if retainCount == 0 { stop() }
+        let shouldStop = (retainCount == 0)
+        lock.unlock()
+        if shouldStop { stop() }
+    }
+
+    /// Called from the EOF branch of the stdout readabilityHandler.
+    /// Flips the connected flag back to false so the chip/banner UI
+    /// stops reporting a phantom Steam Controller after the helper
+    /// has exited unexpectedly. Idempotent; no-op if state was
+    /// already disconnected.
+    fileprivate func markHelperDisconnected() {
+        lock.lock()
+        if state.connected {
+            state = SteamControllerState()
+        }
+        lock.unlock()
     }
 
     private func start() {
         guard !helperRunning else { return }
-        guard let helperURL = helperPath() else {
-            #if DEBUG
-            print("[SteamControllerService] SteamControllerHelper not found in bundle")
-            #endif
+        let resolvedPath = helperPath()
+
+        lock.lock()
+        _diagnostics.helperPath = resolvedPath?.path
+        _diagnostics.helperBundled = (resolvedPath != nil)
+        _diagnostics.lastDiagnosticUpdate = Date()
+        lock.unlock()
+
+        guard let helperURL = resolvedPath else {
+            let msg = "SteamControllerHelper not found in the app bundle. The Copy Helpers build phase may have been removed, or this is an App Store build where the helper was stripped."
+            lock.lock()
+            _diagnostics.helperLaunchError = msg
+            lock.unlock()
+            NSLog("SteamControllerService: \(msg)")
             return
         }
         let p = Process()
@@ -139,7 +197,23 @@ final class SteamControllerService: @unchecked Sendable {
         p.standardInput = inPipe
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            // CRITICAL: empty data from a readabilityHandler is the EOF
+            // signal (the helper exited - typically because no Steam
+            // Controller is connected). If we DON'T detach the handler
+            // here, libdispatch keeps invoking it at the dispatcher's
+            // discretion which can pin a CPU thread at 100% spinning on
+            // a closed pipe. The bug previously surfaced as the entire
+            // app sitting at ~100% CPU after launch even when idle.
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                // Also clear the connected state so the UI doesn't
+                // keep showing "Steam Controller detected" forever
+                // after the helper crashes or exits. Previous version
+                // detached the handler but left `state.connected = true`
+                // sticky until the next retain/release cycle.
+                self?.markHelperDisconnected()
+                return
+            }
             self?.consumeStdout(data)
         }
         do {
@@ -148,10 +222,19 @@ final class SteamControllerService: @unchecked Sendable {
             pipeOut = outPipe
             pipeIn = inPipe
             helperRunning = true
+            lock.lock()
+            _diagnostics.helperLaunched = true
+            _diagnostics.helperPID = p.processIdentifier
+            _diagnostics.helperLaunchError = nil
+            _diagnostics.lastDiagnosticUpdate = Date()
+            lock.unlock()
         } catch {
-            #if DEBUG
-            print("[SteamControllerService] Helper launch failed: \(error)")
-            #endif
+            let msg = "Helper launch failed: \(error.localizedDescription)"
+            lock.lock()
+            _diagnostics.helperLaunchError = msg
+            _diagnostics.lastDiagnosticUpdate = Date()
+            lock.unlock()
+            NSLog("SteamControllerService: \(msg)")
         }
     }
 
@@ -189,6 +272,57 @@ final class SteamControllerService: @unchecked Sendable {
         return state.connected
     }
 
+    // MARK: - Test injection
+
+    /// True while a synthetic state is overriding the real helper output.
+    /// Set by `simulate*` methods; reset to false by `endSimulation()`.
+    private(set) var isSimulating: Bool = false
+
+    /// Inject a fully-formed synthetic state for testing. Marks `connected`
+    /// true so the engine reads from us as if the helper were running.
+    /// Use this to exercise the Steam Controller pipeline without real
+    /// hardware: write a state, give the 120 Hz engine poll a few frames
+    /// to see it, then call `endSimulation()` to clear.
+    func injectTestState(_ s: SteamControllerState) {
+        lock.lock()
+        var simulated = s
+        simulated.connected = true
+        state = simulated
+        isSimulating = true
+        lock.unlock()
+    }
+
+    /// Convenience: simulate a single Steam Controller button held down for
+    /// the duration of the call's enclosing scope. The button index is the
+    /// `SteamControllerButton.bindingIndex` (rawValue 0...22).
+    func simulateButtonDown(_ button: SteamControllerButton) {
+        lock.lock()
+        var simulated = state
+        simulated.buttons |= (UInt32(1) << UInt32(button.rawValue))
+        simulated.connected = true
+        state = simulated
+        isSimulating = true
+        lock.unlock()
+    }
+
+    /// Releases a previously-pressed simulated button.
+    func simulateButtonUp(_ button: SteamControllerButton) {
+        lock.lock()
+        var simulated = state
+        simulated.buttons &= ~(UInt32(1) << UInt32(button.rawValue))
+        state = simulated
+        lock.unlock()
+    }
+
+    /// Clears any simulated state and goes back to whatever the helper
+    /// (if running) reports. If the helper isn't running, marks disconnected.
+    func endSimulation() {
+        lock.lock()
+        state = SteamControllerState()
+        isSimulating = false
+        lock.unlock()
+    }
+
     // MARK: - Stdout parsing
 
     private func consumeStdout(_ chunk: Data) {
@@ -200,6 +334,15 @@ final class SteamControllerService: @unchecked Sendable {
                 handleLine(line)
             }
         }
+        // Hard cap to catch a malformed helper run that never emits a
+        // newline. Each state line is well under 256 bytes; 64 KB of
+        // garbage means the helper is broken and we should drop it.
+        // Without this guard a buggy helper could grow stdoutBuffer
+        // unbounded over a long session and consume hundreds of MB.
+        if stdoutBuffer.count > 65_536 {
+            NSLog("SteamControllerService: stdoutBuffer exceeded 64 KB without a newline; truncating")
+            stdoutBuffer.removeAll(keepingCapacity: false)
+        }
     }
 
     /// Lines:
@@ -207,9 +350,17 @@ final class SteamControllerService: @unchecked Sendable {
     ///   "S <seq> <buttonsHex> <lx> <ly> <rx> <ry> <lt> <rt> \
     ///      <gx> <gy> <gz> <ax> <ay> <az>"
     private func handleLine(_ line: String) {
+        lock.lock()
+        _diagnostics.totalStdoutLines += 1
+        _diagnostics.lastStdoutLineAt = Date()
+        _diagnostics.lastStdoutLineSample = String(line.prefix(120))
+        _diagnostics.lastDiagnosticUpdate = Date()
+        lock.unlock()
+
         if line.hasPrefix("R ") {
             lock.lock()
             state.connected = true
+            _diagnostics.readyHandshakeReceived = true
             lock.unlock()
             return
         }
@@ -245,6 +396,7 @@ final class SteamControllerService: @unchecked Sendable {
         state.accelY = ay
         state.accelZ = az
         state.connected = true
+        _diagnostics.firstStateLineReceived = true
         lock.unlock()
     }
 
@@ -276,9 +428,20 @@ final class SteamControllerService: @unchecked Sendable {
 extension SteamControllerService {
     /// Convert the latest Steam Controller snapshot into a `ControllerState`
     /// that the mapping engine can consume the same way it consumes
-    /// GCController data. Buttons map 1:1 to indices 0-22, axes map to the
-    /// MFi axis indices (0=LX, 1=LY, 2=RX, 3=RY, 4=LT, 5=RT) so existing
-    /// presets can target the Steam Controller without a separate axis space.
+    /// GCController data.
+    ///
+    /// Axis layout (chosen so existing MFi presets keep working AND the
+    /// Steam Controller's extra surfaces are independently bindable):
+    ///   0 / 1 : analog thumbstick X / Y       (left side)
+    ///   2 / 3 : right trackpad X / Y          (always the right pad)
+    ///   4 / 5 : left trigger / right trigger
+    ///   6 / 7 : left trackpad X / Y           (Steam Controller specific)
+    ///
+    /// The Steam Controller multiplexes leftX/leftY between the analog
+    /// stick and the left trackpad based on the `stickActive` bit; we
+    /// route the raw values into either the stick axes OR the left-pad
+    /// axes here so a binding to axis 0 only fires from the stick and a
+    /// binding to axis 6 only fires from the left pad - never both.
     func makeControllerState() -> ControllerState {
         let s = currentState()
         var st = ControllerState()
@@ -287,15 +450,32 @@ extension SteamControllerService {
             let on: Float = (s.buttons & (1 << UInt32(bit))) != 0 ? 1.0 : 0.0
             st.buttons[bit] = on
         }
-        // Axes - Int16 -> Float in [-1, 1]. The left axis is either stick
-        // (when stickActive is set) or trackpad; both ranges are the same
-        // Int16 span, so the conversion is identical.
-        st.axes[0] = Float(s.leftX) / 32767.0
-        st.axes[1] = -Float(s.leftY) / 32767.0
+        let stickIsActive = (s.buttons & (1 << UInt32(SteamControllerButton.stickActive.rawValue))) != 0
+
+        // Stick axes - only populated when the stick is the active source.
+        if stickIsActive {
+            st.axes[0] = Float(s.leftX) / 32767.0
+            st.axes[1] = -Float(s.leftY) / 32767.0
+        } else {
+            st.axes[0] = 0
+            st.axes[1] = 0
+        }
+        // Right trackpad - always the right side, no multiplexing.
         st.axes[2] = Float(s.rightX) / 32767.0
         st.axes[3] = -Float(s.rightY) / 32767.0
+        // Triggers.
         st.axes[4] = Float(s.leftTrigger) / 255.0
         st.axes[5] = Float(s.rightTrigger) / 255.0
+        // Left trackpad - only populated when the stick is NOT active so
+        // an "axis 6 right" binding never spuriously fires from stick
+        // motion and vice-versa.
+        if !stickIsActive {
+            st.axes[6] = Float(s.leftX) / 32767.0
+            st.axes[7] = -Float(s.leftY) / 32767.0
+        } else {
+            st.axes[6] = 0
+            st.axes[7] = 0
+        }
         // Hat: synthesize from D-pad bits so existing hat-based bindings
         // work. A four-direction hat is enough.
         let up = (s.buttons & (1 << UInt32(SteamControllerButton.dpadUp.rawValue))) != 0

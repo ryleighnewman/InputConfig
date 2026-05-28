@@ -36,6 +36,9 @@ struct StatsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showResetConfirmation = false
     @State var selectedDetail: StatDetail?
+    /// Subscribed to live so the power tiles update once per second
+    /// while the dashboard is open.
+    @ObservedObject private var sysStats = SystemStatsService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -70,6 +73,10 @@ struct StatsView: View {
                         sectionHeader("Output mix")
                         outputsChart
                     }
+                    sectionCard {
+                        sectionHeader("Power & energy (this session)")
+                        powerSection
+                    }
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 16)
@@ -91,6 +98,8 @@ struct StatsView: View {
             .padding(.vertical, 14)
         }
         .frame(width: 740, height: 720)
+        .onAppear { sysStats.retain() }
+        .onDisappear { sysStats.release() }
         .confirmationDialog("Reset all statistics?",
                             isPresented: $showResetConfirmation,
                             titleVisibility: .visible) {
@@ -512,6 +521,134 @@ struct StatsView: View {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
         if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
         return "\(n)"
+    }
+
+    /// Live power / energy tiles. Pulls cumulative + battery info
+    /// straight from `SystemStatsService`. Distinct from the Settings
+    /// → System Performance panel: this one is part of the lifetime
+    /// Statistics dashboard so power sits next to all the other
+    /// session/usage charts.
+    private var powerSection: some View {
+        let c = sysStats.cumulative
+        let p = sysStats.power
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 16) {
+                powerTile(label: "Uptime",
+                          value: timeShort(c.sessionUptime),
+                          icon: "clock",
+                          tint: .secondary,
+                          hint: "Time the engine + stats panel have been polling.")
+                powerTile(label: "Energy used",
+                          value: formatEnergy(c.estimatedEnergyJoules),
+                          icon: "bolt.fill",
+                          tint: .yellow,
+                          hint: "Coarse estimate: CPU% × time × 5 W package.")
+                powerTile(label: "Avg CPU",
+                          value: String(format: "%.1f%%", c.averageCpuPercent),
+                          icon: "cpu",
+                          tint: cpuTint(for: c.averageCpuPercent),
+                          hint: "Running mean since session start.")
+                powerTile(label: "Peak CPU",
+                          value: String(format: "%.1f%%", c.peakCpuPercent),
+                          icon: "speedometer",
+                          tint: cpuTint(for: c.peakCpuPercent),
+                          hint: "Highest single sample this session.")
+            }
+            if p.source != nil || p.batteryPercent != nil {
+                HStack(alignment: .top, spacing: 16) {
+                    powerTile(label: "Source",
+                              value: p.source ?? "Unknown",
+                              icon: (p.source ?? "").lowercased().contains("battery")
+                                    ? "battery.50" : "powerplug.fill",
+                              tint: (p.source ?? "").lowercased().contains("battery")
+                                    ? .orange : .green,
+                              hint: "AC = wall power, Battery = on battery.")
+                    if let pct = p.batteryPercent {
+                        powerTile(label: "Battery",
+                                  value: "\(pct)%",
+                                  icon: batteryIcon(for: pct),
+                                  tint: batteryTint(for: pct),
+                                  hint: p.batteryState ?? "Charge level.")
+                    }
+                    if abs(p.batteryDeltaPercent) >= 0.5 {
+                        let delta = -p.batteryDeltaPercent
+                        powerTile(label: "Δ session",
+                                  value: String(format: "%+.0f%%", delta),
+                                  icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
+                                  tint: delta < 0 ? .orange : .green,
+                                  hint: "Battery change since the panel opened.")
+                    }
+                    if let mins = p.minutesRemaining {
+                        powerTile(label: "Time left",
+                                  value: "\(mins)m",
+                                  icon: "hourglass",
+                                  tint: .secondary,
+                                  hint: "Estimate to empty or full.")
+                    }
+                }
+            } else {
+                Text("This Mac has no battery / power source data. Desktops show only CPU + energy estimates.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Text("Energy is a coarse estimate (CPU% × duration × 5 W). Battery delta and source come from IOKit's power-source API; CPU values come from task_info().")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func powerTile(label: String, value: String, icon: String,
+                           tint: Color, hint: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.title3.monospacedDigit())
+                .foregroundStyle(tint)
+            Text(hint)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    private func formatEnergy(_ joules: Double) -> String {
+        if joules < 1000 { return String(format: "%.0f J", joules) }
+        return String(format: "%.1f kJ", joules / 1000.0)
+    }
+
+    private func cpuTint(for v: Double) -> Color {
+        if v > 80 { return .red }
+        if v > 40 { return .orange }
+        return .green
+    }
+
+    private func batteryTint(for pct: Int) -> Color {
+        if pct <= 15 { return .red }
+        if pct <= 35 { return .orange }
+        return .green
+    }
+
+    private func batteryIcon(for pct: Int) -> String {
+        if pct >= 90 { return "battery.100" }
+        if pct >= 65 { return "battery.75" }
+        if pct >= 40 { return "battery.50" }
+        if pct >= 15 { return "battery.25" }
+        return "battery.0"
     }
 
     private func timeShort(_ seconds: TimeInterval) -> String {

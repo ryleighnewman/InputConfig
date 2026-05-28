@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AppKit
+import GameController
 
 /// The core engine that reads controller inputs and fires output actions.
 /// 120Hz polling with debug logging capability.
@@ -7,16 +9,47 @@ import Combine
 class MappingEngine: ObservableObject {
     @Published var isRunning: Bool = false
     @Published var activePreset: Preset?
+    /// Effective poll rate of the active timer in Hz. Driven by
+    /// `installPollTimer()` so the UI (DebugLogView footer, Settings
+    /// readout) always shows the *actual* rate, not the saved
+    /// default. 120 is the same default we apply in installPollTimer
+    /// when no setting is saved yet.
+    @Published var currentPollHz: Int = 120
     /// Mirror of currently-active inputs. NOT @Published - observers update
     /// via the throttled `activeInputsPublished` instead so a fast-changing
     /// joystick does not re-render the editor 120 times per second.
     var activeInputs: Set<String> = []
     @Published var activeInputsPublished: Set<String> = []
-    private var activeInputsLastFlush: Date = .distantPast
+    private var activeInputsLastFlush: CFTimeInterval = -.infinity
     @Published var debugLog: [(text: String, joystickIndex: Int?)] = []  // Rolling debug log visible in UI
 
     private var controllerService: GameControllerService
     private var pollTimer: Timer?
+
+    /// Subscription to `ExternalInputDeviceService.events`. Established in
+    /// `start()` and cancelled in `stop()` so the engine only listens to
+    /// keyboards / mice while a preset is active.
+    private var externalEventSubscription: AnyCancellable?
+    /// Tracks the last seen power-source label so we can re-install
+    /// the poll timer only when the user actually plugs / unplugs.
+    /// Without this gate the @Published source string would trigger an
+    /// applyPollRate on every IOPS refresh tick (every 5 s).
+    private var powerSourceSubscription: AnyCancellable?
+    private var lastSeenPowerSource: String?
+
+    /// Per-device map of currently-held HID keyboard usages. Updated by the
+    /// IOHIDManager callback in `ExternalInputDeviceService`; read by the
+    /// 120 Hz poll loop the same way it reads controller state.
+    private var externalKeysDown: [String: Set<Int>] = [:]
+    /// Per-device map of currently-held mouse button indices.
+    private var externalMouseButtonsDown: [String: Set<Int>] = [:]
+    /// Accumulated mouse motion deltas since the last poll frame, per device.
+    /// Reset to zero at the start of every poll frame.
+    private var externalMouseDX: [String: Int] = [:]
+    private var externalMouseDY: [String: Int] = [:]
+    /// Accumulated scroll wheel ticks since the last poll frame, per device.
+    private var externalScrollDX: [String: Int] = [:]
+    private var externalScrollDY: [String: Int] = [:]
 
     private var activeStates: [Int: Set<String>] = [:]
     private let defaultAxisThreshold: Float = 0.25
@@ -25,9 +58,34 @@ class MappingEngine: ObservableObject {
     // Toggle mode state: tracks which bindings are currently toggled on
     private var toggleStates: [String: Bool] = [:]
     // Turbo state: tracks last fire time for turbo bindings
-    private var turboTimestamps: [String: Date] = [:]
+    /// Last fire time per turbo binding, expressed as CACurrentMediaTime
+    /// seconds (monotonic, allocation-free). Was previously [String: Date]
+    /// which forced a fresh Date() allocation on every turbo poll.
+    private var turboTimestamps: [String: CFTimeInterval] = [:]
+    /// bindKeys whose macro chain is currently executing. Used to
+    /// suppress a fresh executeMacro() call on a re-press while the
+    /// previous chain is still running, preventing parallel macro
+    /// threads that doubled outputs.
+    private var macrosInFlight: Set<String> = []
     // Cache of serialized input keys to avoid repeated string allocations at 120Hz
     private var serializedKeyCache: [UUID: String] = [:]
+
+    /// Monotonically increasing counter bumped on every start()/stop().
+    /// Background blocks (macros, turbo release) capture this at schedule
+    /// time and bail before re-entering the engine when the value has
+    /// changed - prevents stuck keys after stop() invalidates the poll
+    /// timer but in-flight macro / turbo blocks still try to release a
+    /// key from a preset that's no longer active.
+    private var engineGeneration: Int = 0
+
+    /// Scratch Sets reused across poll frames so the 120 Hz hot path
+    /// doesn't allocate a fresh `Set<String>` per joystick per tick.
+    /// At 120 Hz × 4 joysticks × small bindings each, the old code
+    /// burned ~3,840 Set allocations / sec just on highlight
+    /// bookkeeping. `removeAll(keepingCapacity:)` keeps the hash
+    /// table allocated and just zeroes the count.
+    private var scratchActiveSet: Set<String> = []
+    private var scratchAllActiveSet: Set<String> = []
 
     private var debugEnabled = true
     private var debugLineCount = 0
@@ -66,19 +124,83 @@ class MappingEngine: ObservableObject {
 
     init(controllerService: GameControllerService) {
         self.controllerService = controllerService
+        installControllerDisconnectObserver()
+    }
+
+    /// Hook GCControllerDidDisconnect so the engine drops any cached
+    /// active-input / toggle / turbo / macro state for that controller
+    /// slot. Without this, a controller that disconnects mid-press
+    /// leaves orphaned bindKeys in toggleStates + turboTimestamps +
+    /// macrosInFlight. When the user reconnects to a different slot
+    /// the same UUID is now under a fresh bindKey, but the OLD bindKey
+    /// is still flagged "toggled on" - confusing UX because the binding
+    /// shows as latched when the user has no way to turn it off. The
+    /// normal release path in the poll loop catches simulated outputs,
+    /// but not the bindKey-keyed dictionaries.
+    private func installControllerDisconnectObserver() {
+        NotificationCenter.default.addObserver(
+            forName: .GCControllerDidDisconnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.cleanupAfterControllerDisconnect()
+            }
+        }
+    }
+
+    /// Wipe per-bindKey state for any controller slot whose index is
+    /// now out of range. Re-runs after refreshControllers() so the
+    /// connected-controllers count is up to date. Belt-and-suspenders:
+    /// also release any keys / mouse buttons currently held - if the
+    /// disconnect happened while a binding was firing a continuous
+    /// output (mouse motion, scroll), the poll loop's next tick won't
+    /// see the input as active and the release path normally clears
+    /// it, but a stuck simulated key on disconnect is the kind of
+    /// stuck-output bug that's hard to undo without a relaunch.
+    private func cleanupAfterControllerDisconnect() {
+        let validSlotCount = controllerService.connectedControllers.count
+        // Drop activeStates / toggleStates / turboTimestamps / macros
+        // for any slot index that no longer corresponds to a connected
+        // controller. The dict keys are slot indices for activeStates,
+        // and "\(slot):..." strings for the bindKey-keyed ones.
+        for slot in activeStates.keys where slot >= validSlotCount {
+            activeStates[slot] = nil
+        }
+        let prefixes = (validSlotCount..<32).map { "\($0):" }
+        for prefix in prefixes {
+            toggleStates = toggleStates.filter { !$0.key.hasPrefix(prefix) }
+            turboTimestamps = turboTimestamps.filter { !$0.key.hasPrefix(prefix) }
+            macrosInFlight = macrosInFlight.filter { !$0.hasPrefix(prefix) }
+        }
+        // Releasing all simulated outputs is overkill if only one of
+        // several connected controllers dropped, but the cost is just
+        // a fast pass through the InputSimulator's pressed-keys set
+        // - cheaper than tracking which key each slot was holding.
+        if validSlotCount == 0 {
+            InputSimulator.shared.releaseAll()
+            MIDIService.shared.releaseAllNotes()
+        }
     }
 
     // MARK: - Start / Stop
 
     func start(with preset: Preset) {
-        guard !preset.joysticks.isEmpty else { return }
+        // The original guard required a controller mapping. With external
+        // keyboard / mouse inputs we may legitimately have a preset with no
+        // controller-shape bindings, so accept anything that has at least
+        // one binding anywhere.
+        let hasAnyBinding = preset.joysticks.contains { !$0.bindings.isEmpty }
+        guard hasAnyBinding else { return }
 
         activePreset = preset
         isRunning = true
+        engineGeneration &+= 1
         activeStates.removeAll()
         activeInputs.removeAll()
         toggleStates.removeAll()
         turboTimestamps.removeAll()
+        macrosInFlight.removeAll()
         serializedKeyCache.removeAll()
         debugLog.removeAll()
         pendingLog.removeAll()
@@ -86,6 +208,20 @@ class MappingEngine: ObservableObject {
 
         for i in preset.joysticks.indices {
             activeStates[i] = Set<String>()
+        }
+
+        // Pre-build the serialized-input-event cache for every binding
+        // so the hot poll loop's `cachedKey(for:)` always hits the
+        // cache. Without this, the first ~N polls each pay the
+        // serialization cost (string interpolation + Codable
+        // resolution) on a freshly-active preset. Building it once
+        // here is O(N) on a quiet thread.
+        for joystick in preset.joysticks {
+            for binding in joystick.bindings {
+                if serializedKeyCache[binding.id] == nil {
+                    serializedKeyCache[binding.id] = binding.input.serialized
+                }
+            }
         }
 
         StatsService.shared.enginStarted(presetName: preset.name)
@@ -130,16 +266,61 @@ class MappingEngine: ObservableObject {
             log("Applied preset light-bar override (\(override.r),\(override.g),\(override.b))")
         }
 
-        // 120 Hz polling - 240 caused UI freezes when the editor was open
-        // because the @Published activeInputs cascaded re-renders. 120 is
-        // still well below human reaction time.
-        let pollInterval: TimeInterval = 1.0 / 120.0
-        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.pollControllers()
+        // Polling rate is configurable from Settings → General → Polling Rate.
+        // Default 120 Hz balances latency vs. UI cost; 240 doubles latency
+        // headroom but cascades twice as many @Published mirror writes, so
+        // the editor sheet can hitch. 60 cuts CPU in half but feels laggy
+        // for fast-twitch inputs. Stored in UserDefaults so it persists.
+        installPollTimer()
+
+        // Per-preset automation: apply CursorGuard overrides + auto-
+        // launch any app the preset names. Applied BEFORE the cursor-
+        // guard engine flag flips so the new settings are already in
+        // place when the service activates.
+        CursorGuardService.shared.applyPresetOverride(preset.automation)
+        applyPresetAutoLaunch(preset.automation)
+
+        // Let the cursor-guard service know the engine is up so it can
+        // hide the system cursor / start its recenter loop if the user
+        // enabled those toggles.
+        CursorGuardService.shared.engineDidChangeState(running: true)
+
+        // Watch power-source transitions so applyPollRate() runs
+        // exactly once per plug / unplug when the user has enabled
+        // "Auto-switch on power source" in Settings. Retain the
+        // SystemStatsService poll timer for the duration so the
+        // source field is actually being updated.
+        SystemStatsService.shared.retain()
+        lastSeenPowerSource = SystemStatsService.shared.power.source
+        powerSourceSubscription = SystemStatsService.shared.$power
+            .map(\.source)
+            .removeDuplicates()
+            .sink { [weak self] newSource in
+                guard let self = self else { return }
+                let auto = UserDefaults.standard
+                    .bool(forKey: "JoystickConfig.autoPollHzByPower")
+                guard auto, newSource != self.lastSeenPowerSource else { return }
+                self.lastSeenPowerSource = newSource
+                self.applyPollRate()
+            }
+
+        // Subscribe to external keyboard / mouse events for the lifetime of
+        // this preset. The IOHIDManager-backed service only delivers events
+        // from physical devices, so synthetic CGEvents we post for outputs
+        // are naturally filtered out at the HID layer - no input loops.
+        let usesExternal = preset.joysticks.contains { joystick in
+            joystick.bindings.contains {
+                $0.input.type == .extKey || $0.input.type == .extMouse
             }
         }
-        RunLoop.main.add(pollTimer!, forMode: .common)
+        if usesExternal {
+            externalEventSubscription = ExternalInputDeviceService.shared.events
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] event in
+                    self?.ingestExternalEvent(event)
+                }
+            log("External keyboard / mouse input enabled")
+        }
 
         // Flush log entries to the @Published array at 5 Hz so observers
         // of mappingEngine do not re-render on every input event.
@@ -152,19 +333,139 @@ class MappingEngine: ObservableObject {
         RunLoop.main.add(logFlushTimer!, forMode: .common)
     }
 
+    /// (Re-)installs the controller poll timer using the current
+    /// `JoystickConfig.pollHz` UserDefaults value. Called from start()
+    /// during initial install and from `applyPollRate()` when the user
+    /// changes the rate in Settings while the engine is already
+    /// running. Clamped to [30, 240] to keep CPU sane.
+    func installPollTimer() {
+        pollTimer?.invalidate()
+        let pollHz = resolveEffectivePollHz()
+        let pollInterval: TimeInterval = 1.0 / Double(pollHz)
+        currentPollHz = pollHz
+        let t = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.pollControllers()
+            }
+        }
+        pollTimer = t
+        RunLoop.main.add(t, forMode: .common)
+    }
+
+    /// Reads UserDefaults and decides what rate the engine should
+    /// actually run at right now. When auto-switching is off, returns
+    /// the saved `pollHz`. When on, returns the battery rate if the
+    /// Mac is currently on battery (per SystemStatsService.power.source),
+    /// else the AC rate. Clamped to [30, 240].
+    private func resolveEffectivePollHz() -> Int {
+        let defaults = UserDefaults.standard
+        let autoSwitch = defaults.bool(forKey: "JoystickConfig.autoPollHzByPower")
+        let fallback = defaults.object(forKey: "JoystickConfig.pollHz") as? Int ?? 120
+        let rate: Int
+        if autoSwitch {
+            let acRate = defaults.object(forKey: "JoystickConfig.pollHzOnAC") as? Int ?? fallback
+            let battRate = defaults.object(forKey: "JoystickConfig.pollHzOnBattery") as? Int ?? 60
+            let source = (SystemStatsService.shared.power.source ?? "").lowercased()
+            rate = source.contains("battery") ? battRate : acRate
+        } else {
+            rate = fallback
+        }
+        return max(30, min(240, rate))
+    }
+
+    /// Re-read the poll-rate setting from UserDefaults and rebuild the
+    /// timer in place. Safe to call from a SwiftUI `.onChange` while
+    /// the engine is running - the only externally visible effect is a
+    /// brief one-tick gap while the old timer is torn down and the new
+    /// one starts.
+    func applyPollRate() {
+        guard isRunning else {
+            // Engine isn't running - just bump the cached rate so the
+            // settings UI's "current rate" label updates immediately.
+            currentPollHz = max(30, min(240, UserDefaults.standard.object(forKey: "JoystickConfig.pollHz")
+                                        as? Int ?? 120))
+            return
+        }
+        let oldHz = currentPollHz
+        installPollTimer()
+        log("Poll rate live-updated: \(oldHz) Hz → \(currentPollHz) Hz")
+    }
+
+    /// Open the application the preset names, if any. Accepts a posix
+    /// path ("/Applications/Steam.app") or a bundle identifier
+    /// ("com.valvesoftware.steam"). Empty string = no-op. Optionally
+    /// follows the path with `NSWorkspace.open(url:)` on a non-empty
+    /// launchURL so a preset can deep-link to a specific game via a
+    /// steam:// or itch:// scheme.
+    private func applyPresetAutoLaunch(_ automation: PresetAutomation) {
+        let trimmedApp = automation.launchAppPath
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedApp.isEmpty {
+            let ws = NSWorkspace.shared
+            if trimmedApp.hasPrefix("/") {
+                let url = URL(fileURLWithPath: trimmedApp)
+                ws.openApplication(at: url,
+                                   configuration: NSWorkspace.OpenConfiguration(),
+                                   completionHandler: nil)
+            } else if let url = ws.urlForApplication(withBundleIdentifier: trimmedApp) {
+                ws.openApplication(at: url,
+                                   configuration: NSWorkspace.OpenConfiguration(),
+                                   completionHandler: nil)
+            } else {
+                log("Preset auto-launch: couldn't resolve \(trimmedApp)")
+            }
+        }
+        let trimmedURL = automation.launchURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedURL.isEmpty, let url = URL(string: trimmedURL) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     func stop() {
         StatsService.shared.engineStopped()
+        engineGeneration &+= 1   // poison any in-flight macro/turbo blocks
         pollTimer?.invalidate()
         pollTimer = nil
         logFlushTimer?.invalidate()
         logFlushTimer = nil
         isRunning = false
+        // Clear deferred state so a future start() with a different
+        // preset doesn't see stale toggle / turbo / cache entries.
+        toggleStates.removeAll()
+        turboTimestamps.removeAll()
+        macrosInFlight.removeAll()
+        serializedKeyCache.removeAll()
+        externalEventSubscription?.cancel()
+        externalEventSubscription = nil
+        externalKeysDown.removeAll()
+        externalMouseButtonsDown.removeAll()
+        externalMouseDX.removeAll()
+        externalMouseDY.removeAll()
+        externalScrollDX.removeAll()
+        externalScrollDY.removeAll()
         InputSimulator.shared.releaseAll()
         MIDIService.shared.releaseAllNotes()
         if usesTouchpadInput {
             TouchpadService.shared.release()
             usesTouchpadInput = false
         }
+
+        // Cursor-guard goes idle: re-show the cursor if we hid it,
+        // stop the recenter timer. Order matters: clear the preset
+        // override AFTER the engine flag flips so the service has a
+        // chance to undo its own state with the override still
+        // active, then we discard the override.
+        CursorGuardService.shared.engineDidChangeState(running: false)
+        CursorGuardService.shared.clearPresetOverride()
+
+        // Drop the power-source watcher; matched against the retain
+        // call in start() so SystemStatsService can park its timer
+        // when nothing else is observing.
+        powerSourceSubscription?.cancel()
+        powerSourceSubscription = nil
+        lastSeenPowerSource = nil
+        SystemStatsService.shared.release()
 
         // Revert any preset light-bar override by re-asserting each
         // light-capable controller's stored slot color. setControllerLight
@@ -205,9 +506,17 @@ class MappingEngine: ObservableObject {
 
     /// Copy accumulated log entries into the @Published `debugLog` array.
     /// Only fires when there's something new and only at the timer's rate.
+    ///
+    /// Hard cap at 500 lines on the published mirror. `pendingLog` is
+    /// capped at 50 between flushes but `debugLog` accumulates across
+    /// engine sessions - without the cap it would grow unbounded as
+    /// the user activates / deactivates presets across a long session.
     private func flushPendingLog() {
         guard !pendingLog.isEmpty else { return }
         debugLog = pendingLog
+        if debugLog.count > 500 {
+            debugLog.removeFirst(debugLog.count - 500)
+        }
     }
 
     // MARK: - Polling
@@ -227,22 +536,36 @@ class MappingEngine: ObservableObject {
     private func pollControllers() {
         guard let preset = activePreset else { return }
         pollCount += 1
+        // Cumulative session counter for the Stats panel - cheap UInt64
+        // increment, ignored when the panel isn't subscribed.
+        SystemStatsService.shared.recordControllerPolls()
         pendingMouseDeltaX = 0
         pendingMouseDeltaY = 0
         pendingScrollDeltaX = 0
         pendingScrollDeltaY = 0
 
-        for (joystickIndex, joystickMapping) in preset.joysticks.enumerated() {
-            guard let state = controllerService.readControllerState(at: joystickIndex) else {
-                // Log once every 120 polls (1 second)
-                if pollCount % 120 == 1 {
-                    log("No controller state for joystick \(joystickIndex)", joystick: joystickIndex)
-                }
-                continue
-            }
+        // Hoist time-source reads out of the per-binding inner loop.
+        // CACurrentMediaTime is a monotonic Double seconds counter with
+        // no allocation cost; replaces the Date() that used to be
+        // constructed per turbo binding per poll frame.
+        let nowMonotonic = CACurrentMediaTime()
+        // The raw-state log line and the published-active-inputs flush
+        // also wanted a Date(), but they only fire infrequently so we
+        // build one lazily inside those branches.
+        let shouldLogRawState = (pollCount % 120 == 1)
 
-            // Log raw state once per second for debugging
-            if pollCount % 120 == 1 {
+        for (joystickIndex, joystickMapping) in preset.joysticks.enumerated() {
+            // External-only bindings can fire even without a controller, so
+            // we don't bail out when the slot is empty - we just skip the
+            // controller-side checks for that binding.
+            let state = controllerService.readControllerState(at: joystickIndex)
+
+            // Log raw state once per second for debugging. The .filter +
+            // .map + String(format:) chain allocates several arrays per
+            // call - now gated behind both the 1Hz cadence AND the
+            // debugEnabled flag so it's free when the user has the
+            // panel collapsed.
+            if shouldLogRawState && debugEnabled, let state = state {
                 let activeButtons = state.buttons.filter { $0.value > 0.5 }.map { "btn\($0.key)" }
                 let activeAxes = state.axes.filter { abs($0.value) > defaultAxisThreshold }.map { "axi\($0.key)=\(String(format: "%.2f", $0.value))" }
                 if !activeButtons.isEmpty || !activeAxes.isEmpty {
@@ -250,15 +573,32 @@ class MappingEngine: ObservableObject {
                 }
             }
 
-            var currentlyActive = Set<String>()
+            // Reuse the scratch set instead of allocating a fresh
+            // Set<String> every joystick every poll frame.
+            scratchActiveSet.removeAll(keepingCapacity: true)
 
             for binding in joystickMapping.bindings {
-                let isActive = checkInput(binding.input, state: state, binding: binding)
+                let isActive: Bool
+                if binding.input.type == .extKey || binding.input.type == .extMouse {
+                    isActive = checkExternalInput(binding.input)
+                } else if let s = state {
+                    isActive = checkInput(binding.input, state: s, binding: binding)
+                } else {
+                    // Controller binding but the slot is empty - can't fire.
+                    isActive = false
+                }
                 let inputKey = cachedKey(for: binding)
-                let bindKey = "\(joystickIndex):\(inputKey)"
+                // bindKey is keyed by binding UUID so two distinct
+                // bindings on the same physical input (e.g. one toggle,
+                // one turbo, or two different macros) don't share
+                // toggleStates / turboTimestamps entries. Previously
+                // bindKey was "\(joystickIndex):\(inputKey)" which
+                // collided when the user added a second binding on
+                // the same input.
+                let bindKey = "\(joystickIndex):\(binding.id.uuidString)"
 
                 if isActive {
-                    currentlyActive.insert(inputKey)
+                    scratchActiveSet.insert(inputKey)
                 }
 
                 let wasActive = activeStates[joystickIndex]?.contains(inputKey) ?? false
@@ -268,40 +608,56 @@ class MappingEngine: ObservableObject {
                     if isActive && !wasActive {
                         let isToggledOn = toggleStates[bindKey] ?? false
                         if isToggledOn {
-                            log("TOGGLE OFF: \(inputKey)", joystick: joystickIndex)
+                            if debugEnabled { log("TOGGLE OFF: \(inputKey)", joystick: joystickIndex) }
                             fireOutputs(binding.outputs, press: false)
                             toggleStates[bindKey] = false
                         } else {
-                            log("TOGGLE ON: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                            if debugEnabled {
+                                log("TOGGLE ON: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                            }
                             fireOutputs(binding.outputs, press: true)
                             toggleStates[bindKey] = true
                             fireFeedback(for: binding, joystickIndex: joystickIndex)
                         }
                     }
                     // Keep firing continuous outputs while toggled on
-                    if toggleStates[bindKey] == true {
-                        fireContinuousOutputs(binding.outputs, input: binding.input, state: state, binding: binding)
+                    if toggleStates[bindKey] == true, let s = state {
+                        fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                     }
                 } else if binding.turboEnabled == true {
                     // Turbo mode: rapid fire while held
                     if isActive {
                         if !wasActive {
-                            log("TURBO START: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                            if debugEnabled {
+                                log("TURBO START: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                            }
                             fireFeedback(for: binding, joystickIndex: joystickIndex)
                         }
-                        let rate = binding.turboRate ?? 10
+                        // Clamp turbo rate to a sane range so a zero or
+                        // negative value (from a malformed preset) can't
+                        // produce a +Infinity interval that disables
+                        // turbo entirely. 1 Hz floor / 60 Hz ceiling.
+                        let rate = max(1, min(60, binding.turboRate ?? 10))
                         let interval = 1.0 / Double(rate)
-                        let now = Date()
-                        let lastFire = turboTimestamps[bindKey] ?? .distantPast
-                        if now.timeIntervalSince(lastFire) >= interval {
+                        let lastFire = turboTimestamps[bindKey] ?? -.infinity
+                        if nowMonotonic - lastFire >= interval {
                             fireOutputs(binding.outputs, press: true)
-                            // Schedule release after half the interval
+                            // Schedule release after ~40% of the interval.
+                            // Capture engineGeneration so a stop() between
+                            // press and release skips the release fire on
+                            // a poisoned engine (avoids stuck keys when
+                            // the user deactivates the preset mid-turbo).
+                            let gen = engineGeneration
+                            let outputs = binding.outputs
                             DispatchQueue.main.asyncAfter(deadline: .now() + interval * 0.4) { [weak self] in
-                                self?.fireOutputs(binding.outputs, press: false)
+                                guard let self = self, self.engineGeneration == gen else { return }
+                                self.fireOutputs(outputs, press: false)
                             }
-                            turboTimestamps[bindKey] = now
+                            turboTimestamps[bindKey] = nowMonotonic
                         }
-                        fireContinuousOutputs(binding.outputs, input: binding.input, state: state, binding: binding)
+                        if let s = state {
+                            fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
+                        }
                     } else if wasActive {
                         log("TURBO END: \(inputKey)", joystick: joystickIndex)
                         fireOutputs(binding.outputs, press: false)
@@ -311,10 +667,22 @@ class MappingEngine: ObservableObject {
                     // Normal mode
                     if isActive && !wasActive {
                         StatsService.shared.recordButtonPress(inputKey: inputKey)
-                        log("PRESS: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
-                        // Check for macro
+                        if debugEnabled {
+                            log("PRESS: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                        }
+                        // Check for macro. Guard against a re-press
+                        // while the previous macro chain is still in
+                        // flight - previously this kicked off a fresh
+                        // executeMacro on every press transition,
+                        // running the chain twice in parallel and
+                        // duplicating every output event. Now the
+                        // second press is ignored until the first
+                        // chain finishes (it bumps macrosInFlight).
                         if let steps = binding.macroSteps, !steps.isEmpty {
-                            executeMacro(steps, joystickIndex: joystickIndex)
+                            if !macrosInFlight.contains(bindKey) {
+                                macrosInFlight.insert(bindKey)
+                                executeMacro(steps, joystickIndex: joystickIndex, bindKey: bindKey)
+                            }
                         } else if (binding.repeatCount ?? 1) > 1 {
                             fireWithRepeat(binding)
                         } else {
@@ -322,17 +690,19 @@ class MappingEngine: ObservableObject {
                         }
                         fireFeedback(for: binding, joystickIndex: joystickIndex)
                     } else if !isActive && wasActive {
-                        log("RELEASE: \(inputKey)", joystick: joystickIndex)
+                        if debugEnabled { log("RELEASE: \(inputKey)", joystick: joystickIndex) }
                         if binding.macroSteps == nil && (binding.repeatCount ?? 1) <= 1 {
                             fireOutputs(binding.outputs, press: false)
                         }
-                    } else if isActive {
-                        fireContinuousOutputs(binding.outputs, input: binding.input, state: state, binding: binding)
+                    } else if isActive, let s = state {
+                        fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                     }
                 }
             }
 
-            activeStates[joystickIndex] = currentlyActive
+            // Copy out into activeStates (cheap Set copy) so the
+            // scratch can be reused next iteration.
+            activeStates[joystickIndex] = scratchActiveSet
         }
 
         // Flush accumulated mouse and scroll deltas as a single CGEvent.
@@ -350,22 +720,32 @@ class MappingEngine: ObservableObject {
             }
         }
 
-        // Update active inputs for UI highlighting
-        var allActive = Set<String>()
+        // Update active inputs for UI highlighting. Reuse the scratch
+        // set so the union doesn't allocate a fresh container every
+        // poll frame.
+        scratchAllActiveSet.removeAll(keepingCapacity: true)
         for (_, states) in activeStates {
-            allActive.formUnion(states)
+            scratchAllActiveSet.formUnion(states)
         }
-        if allActive != activeInputs {
-            activeInputs = allActive
+        if scratchAllActiveSet != activeInputs {
+            activeInputs = scratchAllActiveSet
             // Throttle the @Published mirror to 10 Hz so the highlighted
             // row in the editor doesn't trigger a full sheet re-render on
-            // every poll frame.
-            let now = Date()
-            if now.timeIntervalSince(activeInputsLastFlush) > 0.1 {
-                activeInputsLastFlush = now
-                activeInputsPublished = allActive
+            // every poll frame. Uses the monotonic clock we already
+            // captured at the top of pollControllers, no extra Date()
+            // allocation.
+            if nowMonotonic - activeInputsLastFlush > 0.1 {
+                activeInputsLastFlush = nowMonotonic
+                activeInputsPublished = scratchAllActiveSet
             }
         }
+
+        // Drain external motion / scroll deltas now that bindings have read
+        // them. Buttons and held keys stay sticky until released.
+        externalMouseDX.removeAll(keepingCapacity: true)
+        externalMouseDY.removeAll(keepingCapacity: true)
+        externalScrollDX.removeAll(keepingCapacity: true)
+        externalScrollDY.removeAll(keepingCapacity: true)
     }
 
     /// Returns cached serialized key for a binding's input to avoid string allocations in 120Hz loop
@@ -391,6 +771,95 @@ class MappingEngine: ObservableObject {
         return (m - inner) / (safeOuter - inner)
     }
 
+    // MARK: - External Input Ingestion
+
+    /// Routes one event from `ExternalInputDeviceService` into the parallel
+    /// state maps. Called on main, so no locking is needed - the 120 Hz
+    /// poll loop reads the same maps from the same actor.
+    private func ingestExternalEvent(_ event: ExternalInputDeviceService.Event) {
+        switch event {
+        case .keyDown(let dev, let code):
+            var s = externalKeysDown[dev] ?? []
+            s.insert(code)
+            externalKeysDown[dev] = s
+        case .keyUp(let dev, let code):
+            var s = externalKeysDown[dev] ?? []
+            s.remove(code)
+            externalKeysDown[dev] = s
+        case .mouseButtonDown(let dev, let btn):
+            var s = externalMouseButtonsDown[dev] ?? []
+            s.insert(btn)
+            externalMouseButtonsDown[dev] = s
+        case .mouseButtonUp(let dev, let btn):
+            var s = externalMouseButtonsDown[dev] ?? []
+            s.remove(btn)
+            externalMouseButtonsDown[dev] = s
+        case .mouseMove(let dev, let dx, let dy):
+            externalMouseDX[dev] = (externalMouseDX[dev] ?? 0) + dx
+            externalMouseDY[dev] = (externalMouseDY[dev] ?? 0) + dy
+        case .scroll(let dev, let dx, let dy):
+            externalScrollDX[dev] = (externalScrollDX[dev] ?? 0) + dx
+            externalScrollDY[dev] = (externalScrollDY[dev] ?? 0) + dy
+        }
+    }
+
+    /// Evaluates an external `.extKey` or `.extMouse` input against the
+    /// parallel state maps. `nil` device ID matches any device - useful
+    /// for bindings the user wants to fire from "any keyboard".
+    private func checkExternalInput(_ input: InputEvent) -> Bool {
+        switch input.type {
+        case .extKey:
+            let hidCode = input.index
+            if let dev = input.extDeviceID {
+                return externalKeysDown[dev]?.contains(hidCode) ?? false
+            }
+            for (_, set) in externalKeysDown where set.contains(hidCode) {
+                return true
+            }
+            return false
+        case .extMouse:
+            switch input.extMouseKind ?? .button {
+            case .button:
+                let btn = input.index
+                if let dev = input.extDeviceID {
+                    return externalMouseButtonsDown[dev]?.contains(btn) ?? false
+                }
+                for (_, set) in externalMouseButtonsDown where set.contains(btn) {
+                    return true
+                }
+                return false
+            case .moveX, .moveY, .scrollX, .scrollY:
+                // Half-axis style: positive direction means delta > 0, etc.
+                // Threshold is 1 because HID deltas come through as integer
+                // ticks that can be very small per frame.
+                let delta: Int
+                switch input.extMouseKind {
+                case .moveX:
+                    delta = input.extDeviceID.flatMap { externalMouseDX[$0] }
+                        ?? externalMouseDX.values.reduce(0, +)
+                case .moveY:
+                    delta = input.extDeviceID.flatMap { externalMouseDY[$0] }
+                        ?? externalMouseDY.values.reduce(0, +)
+                case .scrollX:
+                    delta = input.extDeviceID.flatMap { externalScrollDX[$0] }
+                        ?? externalScrollDX.values.reduce(0, +)
+                case .scrollY:
+                    delta = input.extDeviceID.flatMap { externalScrollDY[$0] }
+                        ?? externalScrollDY.values.reduce(0, +)
+                default:
+                    delta = 0
+                }
+                switch input.axisDirection {
+                case .positive: return delta > 0
+                case .negative: return delta < 0
+                case .none:     return delta != 0
+                }
+            }
+        default:
+            return false
+        }
+    }
+
     // MARK: - Input Checking
 
     private func checkInput(_ input: InputEvent, state: ControllerState, binding: BindingModel? = nil) -> Bool {
@@ -414,15 +883,20 @@ class MappingEngine: ObservableObject {
 
         case .hat:
             guard let hat = state.hats[input.index] else { return false }
+            // Inclusive (>=) comparisons so an exact-edge value of 0.5
+            // counts as pressed. Many d-pads quantise to {-1, 0, +1};
+            // the > variant was correct for those but missed analog
+            // d-pads that report exactly the threshold value on a
+            // slow-press transition.
             switch input.hatDirection {
             case .up:
-                return hat.y > hatThreshold
+                return hat.y >= hatThreshold
             case .down:
-                return hat.y < -hatThreshold
+                return hat.y <= -hatThreshold
             case .left:
-                return hat.x < -hatThreshold
+                return hat.x <= -hatThreshold
             case .right:
-                return hat.x > hatThreshold
+                return hat.x >= hatThreshold
             case .none:
                 return false
             }
@@ -435,10 +909,12 @@ class MappingEngine: ObservableObject {
             let finger = input.touchpadFinger ?? input.index
             guard TouchpadService.shared.isFingerActive(finger),
                   let axis = input.touchpadAxis else { return false }
-            // Peek without consuming. We don't have a peek API; this branch
-            // is used by digital outputs (e.g. mapping touchpad swipe to a
-            // key). For analog outputs the consume happens in processAxisInput.
-            let value = TouchpadService.shared.consumeDelta(finger: finger, axis: axis)
+            // Peek without consuming so the continuous-output pass
+            // later in the same poll frame still sees the delta. The
+            // old code called consumeDelta here, zeroing the
+            // accumulator, which broke analog touchpad-to-mouse
+            // bindings (they fired once on swipe entry, then nothing).
+            let value = TouchpadService.shared.peekDelta(finger: finger, axis: axis)
             switch input.axisDirection {
             case .positive: return value > axisThreshold
             case .negative: return value < -axisThreshold
@@ -449,6 +925,59 @@ class MappingEngine: ObservableObject {
             // Press for as long as any finger sits inside the named region.
             guard let id = input.touchpadRegionID else { return false }
             return TouchpadService.shared.isRegionPressed(id)
+
+        case .cursorRegion:
+            // Mac-trackpad / mouse analogue of `.touchpadRegion`: press
+            // while the cursor sits inside a user-defined screen rect.
+            // Position is fed continuously by ExternalInputDeviceService's
+            // CGEventTap as the cursor moves.
+            guard let id = input.cursorRegionID else { return false }
+            return CursorRegionService.shared.isRegionPressed(id)
+
+        case .stickRegion:
+            // Joystick stick analogue of `.touchpadRegion`: press
+            // while the stick at input.index (0 = left, 1 = right)
+            // is deflected into the named region. We respect the
+            // binding's deadzone (so resting drift can't fire a
+            // center region) and invertAxis (so a flipped-stick
+            // binding sees the region in the same logical orientation
+            // the user drew it).
+            guard let id = input.stickRegionID else { return false }
+            // Pull the two axes for the requested stick.
+            let xAxisIdx = input.index == 1 ? 2 : 0
+            let yAxisIdx = input.index == 1 ? 3 : 1
+            var xRaw = state.axes[xAxisIdx] ?? 0
+            var yRaw = state.axes[yAxisIdx] ?? 0
+            // Deadzone gate: if the stick magnitude is below the
+            // threshold, no region fires - prevents drift-driven
+            // false positives.
+            if hypot(xRaw, yRaw) < axisThreshold { return false }
+            if binding?.invertAxis == true {
+                xRaw = -xRaw
+                yRaw = -yRaw
+            }
+            // Re-pack into an axes dict for the service so the
+            // existing region-matching code stays unchanged.
+            var axesForService = state.axes
+            axesForService[xAxisIdx] = xRaw
+            axesForService[yAxisIdx] = yRaw
+            return StickRegionService.shared.isRegionPressed(id, axes: axesForService)
+
+        case .touchpadGesture:
+            // Touchpad gestures (two-finger tap, etc.) are edge-fire:
+            // TouchpadService sets a one-shot flag when it detects the
+            // gesture; consumeGesture returns true exactly once and
+            // resets. The MappingEngine treats that single-frame pulse
+            // as a press + release, which fires whatever output the
+            // user bound. Multiple bindings on the same gesture all
+            // see the flag inside this poll frame because consume only
+            // resets once they've all read true once - no, wait:
+            // consume clears immediately. If two bindings reference
+            // the same gesture, only one fires. That's intended:
+            // stack bindings live in the SAME row's outputs[], not
+            // separate rows.
+            guard let kind = input.touchpadGestureKind else { return false }
+            return TouchpadService.shared.consumeGesture(kind)
 
         case .motion:
             // Motion is treated as a half-axis: pick the channel and
@@ -462,6 +991,12 @@ class MappingEngine: ObservableObject {
             case .negative: return value < -axisThreshold
             case .none:     return abs(value) > axisThreshold
             }
+
+        case .extKey, .extMouse:
+            // Routed through `checkExternalInput` instead; this branch is
+            // only reachable from legacy code paths that don't expect
+            // external types.
+            return checkExternalInput(input)
         }
     }
 
@@ -552,53 +1087,98 @@ class MappingEngine: ObservableObject {
         }
     }
 
-    /// Execute a macro sequence asynchronously
-    private func executeMacro(_ steps: [MacroStep], joystickIndex: Int) {
+    /// Execute a macro sequence asynchronously.
+    ///
+    /// Captures `engineGeneration` at schedule time. Each fireOutputs
+    /// hop to main re-checks the captured value and bails immediately
+    /// when they differ - i.e. the engine was stopped or restarted
+    /// mid-macro. Without this guard a long macro (30 steps × 200 ms)
+    /// keeps firing keyDown / keyUp events for minutes after the user
+    /// deactivates the preset, leaving stuck synthesized keys.
+    ///
+    /// Step delays and holds are clamped to 30 s each so a malformed
+    /// or adversarial preset with delayMs / holdMs = Int.max can't
+    /// park a background thread for billions of years.
+    private func executeMacro(_ steps: [MacroStep], joystickIndex: Int, bindKey: String) {
         StatsService.shared.recordMacroExecution()
         log("MACRO: executing \(steps.count) steps", joystick: joystickIndex)
+        let scheduledGen = engineGeneration
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             for step in steps {
-                // Pre-step delay
+                guard self != nil else { return }
+                // Pre-step delay (clamped to 30s).
                 if step.delayMs > 0 {
-                    Thread.sleep(forTimeInterval: Double(step.delayMs) / 1000.0)
+                    let secs = min(Double(step.delayMs) / 1000.0, 30.0)
+                    Thread.sleep(forTimeInterval: secs)
                 }
-                // Press
-                DispatchQueue.main.async {
-                    self?.fireOutputs([step.action], press: true)
+                // Press - guard generation on main where it's safe to read.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.engineGeneration == scheduledGen else { return }
+                    self.fireOutputs([step.action], press: true)
                 }
-                // Hold
+                // Hold (clamped to 30s).
                 if step.holdMs > 0 {
-                    Thread.sleep(forTimeInterval: Double(step.holdMs) / 1000.0)
+                    let secs = min(Double(step.holdMs) / 1000.0, 30.0)
+                    Thread.sleep(forTimeInterval: secs)
                 }
-                // Release
-                DispatchQueue.main.async {
-                    self?.fireOutputs([step.action], press: false)
+                // Release - same guard. CRITICAL: also release the
+                // step on engine teardown so a macro mid-hold that
+                // gets shut down by stop() doesn't leave a synthesized
+                // key permanently down. fireOutputs(press: false) is
+                // safe to call even when the engine has moved on.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if self.engineGeneration == scheduledGen {
+                        self.fireOutputs([step.action], press: false)
+                    } else {
+                        // Generation changed mid-hold (preset switch
+                        // or stop). Still release the step's output
+                        // so the synthesized key doesn't stick.
+                        InputSimulator.shared.releaseAll()
+                    }
                 }
+            }
+            // Whole chain done; clear the in-flight flag so the next
+            // press can fire a fresh macro execution.
+            DispatchQueue.main.async { [weak self] in
+                self?.macrosInFlight.remove(bindKey)
             }
         }
     }
 
-    /// Execute outputs with repeat count
+    /// Execute outputs with repeat count.
+    ///
+    /// Repeat count is clamped to 10 000 and delay to 30 s to bound the
+    /// worst-case from an adversarial / malformed preset. Each fire
+    /// hop checks `engineGeneration` against the value captured at
+    /// schedule time so an active repeat won't leak past stop().
     private func fireWithRepeat(_ binding: BindingModel) {
-        let count = binding.repeatCount ?? 1
-        let delayMs = binding.repeatDelayMs ?? 100
+        let rawCount = binding.repeatCount ?? 1
+        let count = max(1, min(10_000, rawCount))
+        let rawDelayMs = binding.repeatDelayMs ?? 100
+        let delaySecs = min(Double(rawDelayMs) / 1000.0, 30.0)
 
         if count <= 1 {
             fireOutputs(binding.outputs, press: true)
             return
         }
 
+        let scheduledGen = engineGeneration
+        let outputs = binding.outputs
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             for i in 0..<count {
-                DispatchQueue.main.async {
-                    self?.fireOutputs(binding.outputs, press: true)
+                guard self != nil else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.engineGeneration == scheduledGen else { return }
+                    self.fireOutputs(outputs, press: true)
                 }
                 Thread.sleep(forTimeInterval: 0.05)
-                DispatchQueue.main.async {
-                    self?.fireOutputs(binding.outputs, press: false)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.engineGeneration == scheduledGen else { return }
+                    self.fireOutputs(outputs, press: false)
                 }
                 if i < count - 1 {
-                    Thread.sleep(forTimeInterval: Double(delayMs) / 1000.0)
+                    Thread.sleep(forTimeInterval: delaySecs)
                 }
             }
         }
@@ -682,9 +1262,14 @@ class MappingEngine: ObservableObject {
                 if input.type == .touchpad || input.type == .motion {
                     // signedMagnitude already encodes direction + speed;
                     // mouseDirection picks which CGEvent axis it adds to.
-                    scaledSpeed = Int(abs(signedMagnitude) * Float(speed) / 6.0)
+                    // Guard against NaN/Inf: an uncalibrated DualSense
+                    // can briefly publish NaN motion samples right
+                    // after connect, and `Int(.nan)` is a hard crash.
+                    let raw = abs(signedMagnitude) * Float(speed) / 6.0
+                    scaledSpeed = raw.isFinite ? Int(raw) : 0
                 } else {
-                    scaledSpeed = Int(Float(speed) * magnitude)
+                    let raw = Float(speed) * magnitude
+                    scaledSpeed = raw.isFinite ? Int(raw) : 0
                 }
                 // Accumulate into pendingMouseDelta. The poll loop flushes
                 // the total in a single CGEvent at the end of the frame so
@@ -712,7 +1297,9 @@ class MappingEngine: ObservableObject {
                     }
                 }
 
-                let scaledSpeed = Int32(Float(speed) * magnitude)
+                // Same NaN guard as the mouse-motion path above.
+                let rawScroll = Float(speed) * magnitude
+                let scaledSpeed = rawScroll.isFinite ? Int32(rawScroll) : 0
                 switch (axis, dir) {
                 case (.horizontal, .positive): pendingScrollDeltaX += scaledSpeed
                 case (.horizontal, .negative): pendingScrollDeltaX -= scaledSpeed

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Privacy manifest declaring zero third-party data collection and zero
+        tracking. JoystickConfig stores everything (presets, stats, region
+        definitions, calibration) on-device in the sandbox container. No
+        network beacons, no analytics SDKs, no advertising attribution.
+        The only outbound network call is an OPT-IN App Store version check
+        the user can disable in Settings > General > Updates.
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <!--
+        Required-reason API declarations. We touch a small number of APIs
+        that Apple flags as "common-but-may-be-fingerprinted" since the App
+        Store rollout in 2024. Each entry below names the API category and
+        the reason code from Apple's published list.
+    -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!--
+            UserDefaults is how preset metadata, calibration matrices,
+            region definitions, and user preferences persist across
+            launches. Reason CA92.1: "Access info from same app, per
+            documentation." We never read or write UserDefaults belonging
+            to another app or extension.
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!--
+            File timestamp APIs are touched indirectly by JSONEncoder /
+            FileManager when reading + writing preset, backup, and stats
+            files inside the sandbox container. Reason C617.1: "Display
+            file timestamps to the person using the device." (Stats panel
+            shows last-active times.)
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+        <!--
+            System boot time is read via CACurrentMediaTime() / mach_absolute_time()
+            in the engine + stats subsystem for monotonic clocks (engine
+            tick deltas, session uptime, gesture hold windows). Reason
+            35F9.1: "Measure time elapsed between events that occur inside
+            the app." Never transmitted off-device.
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>35F9.1</string>
+            </array>
+        </dict>
+
+        <!--
+            Disk-space queries happen when computing the backup file size
+            preview in Settings > General. Reason E174.1: "Display the
+            information about disk space to the user."
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

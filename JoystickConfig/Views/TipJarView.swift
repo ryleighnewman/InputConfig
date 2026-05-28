@@ -72,7 +72,7 @@ struct TipJarView: View {
                 Image(systemName: "info.circle.fill")
                     .foregroundStyle(.pink.opacity(0.7))
                     .font(.caption2)
-                Text("All money goes to pay for the developer, the $100 Apple Developer Program fee, and then toward a non-profit wheelchair company. The rest of it goes to that.")
+                Text("All money goes to pay for the $100 Apple developer program fee and the rest goes towards Rockstar Health, my non-profit wheelchair company.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

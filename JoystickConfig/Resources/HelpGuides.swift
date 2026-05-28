@@ -248,6 +248,10 @@ enum HelpGuideLibrary {
                 body: "A few older or budget 8BitDo controllers do not have a physical mode switch. For those, hold the corresponding button while turning the controller on: hold B while pressing Start to enter Apple mode, hold Y while pressing Start for DirectInput, hold X while pressing Start for XInput, or hold A while pressing Start for Android. Check your model's manual to confirm."
             ),
             HelpSection(
+                heading: "Ultimate 2C (wired) - special case",
+                body: "The 8BitDo Ultimate 2C wired model has no Apple/MFi mode and no physical mode switch. JoystickConfig 1.3 and later can read this controller directly in its default XInput mode without any setup - just plug it in. If you are on an older version, switch the controller to Switch mode by holding Y while plugging in the USB cable; macOS Ventura+ recognizes Switch mode natively as a Nintendo Switch Pro controller."
+            ),
+            HelpSection(
                 heading: "Update the firmware",
                 body: "If you have updated to a recent firmware and the controller still does not connect, install the latest firmware from 8BitDo's website using their firmware tool. Apple mode support was added or improved in firmware updates released after early 2023."
             ),
@@ -450,7 +454,7 @@ enum HelpGuideLibrary {
             ),
             HelpSection(
                 heading: "If you ever uninstall",
-                body: "Drag JoystickConfig.app to the Trash from /Applications. The sandbox container stays in ~/Library/Containers until you manually remove it, so a reinstall picks up exactly where you left off. If you want a truly fresh start, also delete the container folder."
+                body: "Drag the JoystickConfig app to the Trash from /Applications. The sandbox container stays in ~/Library/Containers until you manually remove it, so a reinstall picks up exactly where you left off. If you want a truly fresh start, also delete the container folder."
             ),
         ]
     )
@@ -459,7 +463,7 @@ enum HelpGuideLibrary {
         id: "gyroscope-aim",
         title: "Using the Controller's Gyroscope",
         category: "Bindings",
-        summary: "Controllers with motion sensors (DualSense, DualSense Edge, DualShock 4, Switch Pro, Joy-Con) expose gyroscope rotation rate, accelerometer, and absolute attitude. JoystickConfig can bind any of these channels to mouse motion, keys, or anything else an axis can output.",
+        summary: "Sony controllers with motion sensors (DualSense, DualSense Edge, DualShock 4) expose gyroscope rotation rate, accelerometer, and absolute attitude through Apple's Game Controller framework. JoystickConfig can bind any of these channels to mouse motion, keys, or anything else an axis can output. Nintendo Switch Pro and Joy-Cons report buttons and sticks on macOS, but their motion sensors are NOT exposed by the OS so they cannot drive gyro bindings.",
         sections: [
             HelpSection(
                 heading: "Adding a motion binding",

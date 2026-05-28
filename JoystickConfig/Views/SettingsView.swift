@@ -5,12 +5,40 @@ import GameController
 struct SettingsView: View {
     @EnvironmentObject var presetStore: PresetStore
     @EnvironmentObject var controllerService: GameControllerService
+    @EnvironmentObject var mappingEngine: MappingEngine
 
     /// Which tab is currently visible. Replaces SwiftUI's `TabView` because
     /// `TabView`'s tab bar clips against a sheet's rounded top corners on
     /// macOS, leaving the tab pills half-cut. A plain segmented Picker sits
     /// safely inside the sheet's content area.
     @State private var selectedTab: SettingsTab = .general
+
+    /// Mirrors the same `@AppStorage` key used by the main app scene so
+    /// flipping this toggle immediately hides or shows the menu bar icon.
+    @AppStorage("JoystickConfig.showMenuBarIcon") private var showMenuBarIcon = true
+
+    /// Controller poll rate in Hz. Mirrors the `pollHz` UserDefaults key
+    /// that `MappingEngine.start(with:)` reads when scheduling its poll
+    /// timer. Stored as Int (60/120/180/240). Changes take effect on the
+    /// next preset activation.
+    @AppStorage("JoystickConfig.pollHz") private var pollHz: Int = 120
+
+    /// When true, the engine reads pollHzOnAC vs pollHzOnBattery
+    /// depending on the Mac's current power source and re-installs the
+    /// poll timer the moment that source changes. Off by default for
+    /// existing users so the single-rate behaviour stays.
+    @AppStorage("JoystickConfig.autoPollHzByPower") private var autoPollByPower: Bool = false
+    @AppStorage("JoystickConfig.pollHzOnAC") private var pollHzOnAC: Int = 120
+    @AppStorage("JoystickConfig.pollHzOnBattery") private var pollHzOnBattery: Int = 60
+
+    /// Live references to the reliability services so the freeze
+    /// detection toggle and "last freeze" timestamp update in place.
+    @ObservedObject private var crashRecovery = CrashRecoveryService.shared
+    @ObservedObject private var freezeWatchdog = FreezeWatchdogService.shared
+    @ObservedObject private var externalInput = ExternalInputDeviceService.shared
+    @ObservedObject private var updateCheck = UpdateCheckService.shared
+    @State private var showingCursorRegions = false
+    @State private var showingStickRegions = false
 
     enum SettingsTab: String, CaseIterable, Identifiable {
         case general = "General"
@@ -54,6 +82,12 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .sheet(isPresented: $showingCursorRegions) {
+            CursorRegionsView()
+        }
+        .sheet(isPresented: $showingStickRegions) {
+            StickRegionsView()
+        }
         // macOS Form needs more room. With sections containing descriptions
         // and toggles, 500 px clips the labels and right column. Widening
         // keeps multi-line descriptions readable.
@@ -72,10 +106,220 @@ struct SettingsView: View {
                     LaunchAtLoginToggleView()
                 }
 
-                section(title: "Polling Rate") {
-                    Text("Controller state is polled at 120 Hz for low-latency input.")
+                section(title: "Menu Bar") {
+                    Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                        .onChange(of: showMenuBarIcon) { _, newValue in
+                            MenuBarController.shared.setVisible(newValue)
+                        }
+                    Text("When turned off, the gamecontroller icon in the macOS menu bar is hidden. The app stays running and all features remain available from the main window.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section(title: "Reliability") {
+                    Toggle("Restore active preset after a crash",
+                           isOn: $crashRecovery.sessionRestoreEnabled)
+                    Text("If the app exits unexpectedly, the next launch will re-activate the preset that was active before the crash. If a second crash happens within 90 seconds, recovery is skipped so a bad preset can't trap you in a restart loop. Force quitting from Activity Monitor behaves the same as a crash: your last active preset will come back.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Toggle("Detect freezes and save diagnostics",
+                           isOn: $freezeWatchdog.enabled)
+                    Text("A background watchdog pings the main thread once a second. If the app stops responding for more than 15 seconds the freeze is logged and your active preset is force-saved, so even if you have to force quit while frozen, the next launch will restore it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(.secondary)
+                        if let when = crashRecovery.lastFreezeAt {
+                            Text("Last freeze detected: \(when.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Last freeze detected: never")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+
+                section(title: "Updates") {
+                    Toggle("Automatically check for App Store updates",
+                           isOn: $updateCheck.automaticCheckEnabled)
+                    Text("On launch, JoystickConfig quietly checks Apple's App Store metadata once per day to see if a newer version has been released. If one is, a single alert offers to open the Mac App Store. No telemetry is sent - only your app's numeric Apple ID is included in the request.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            Task { await updateCheck.checkNow(userInitiated: true) }
+                        } label: {
+                            if updateCheck.isChecking {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Text("Check Now")
+                            }
+                        }
+                        .disabled(updateCheck.isChecking)
+
+                        if let when = updateCheck.lastCheckedAt {
+                            Text("Last checked: \(when.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Never checked")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    if let err = updateCheck.lastErrorMessage {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text(err)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                section(title: "Polling Rate") {
+                    Toggle(isOn: $autoPollByPower) {
+                        Label("Auto-switch on power source",
+                              systemImage: "battery.100.bolt")
+                    }
+                    .onChange(of: autoPollByPower) { _, _ in
+                        mappingEngine.applyPollRate()
+                    }
+
+                    if autoPollByPower {
+                        HStack(spacing: 8) {
+                            Image(systemName: "powerplug.fill")
+                                .foregroundStyle(.green)
+                                .frame(width: 16)
+                            Picker("On power adapter", selection: $pollHzOnAC) {
+                                Text("60 Hz").tag(60)
+                                Text("120 Hz").tag(120)
+                                Text("180 Hz").tag(180)
+                                Text("240 Hz").tag(240)
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: pollHzOnAC) { _, _ in mappingEngine.applyPollRate() }
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "battery.50")
+                                .foregroundStyle(.orange)
+                                .frame(width: 16)
+                            Picker("On battery", selection: $pollHzOnBattery) {
+                                Text("60 Hz").tag(60)
+                                Text("120 Hz").tag(120)
+                                Text("180 Hz").tag(180)
+                                Text("240 Hz").tag(240)
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: pollHzOnBattery) { _, _ in mappingEngine.applyPollRate() }
+                        }
+                        Text("The engine switches between these rates the moment macOS reports a power-source change. Pick a lower rate for battery to stretch session time without restarting.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Picker("Controller poll rate", selection: $pollHz) {
+                            Text("60 Hz - power saver").tag(60)
+                            Text("120 Hz - default").tag(120)
+                            Text("180 Hz - high precision").tag(180)
+                            Text("240 Hz - maximum").tag(240)
+                        }
+                        .pickerStyle(.menu)
+                        .onChange(of: pollHz) { _, _ in
+                            // Live-apply: rebuild the poll timer right now so
+                            // the running preset starts honoring the new rate
+                            // within one tick. No restart, no preset reload.
+                            mappingEngine.applyPollRate()
+                        }
+                    }
+
+                    // Live readout: shows what the engine is *actually*
+                    // ticking at. If the user changes the picker, this
+                    // line updates immediately because `currentPollHz`
+                    // is @Published and applyPollRate() updates it.
+                    if mappingEngine.isRunning {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                            Text("Engine running at \(mappingEngine.currentPollHz) Hz")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("Pause") {
+                                mappingEngine.stop()
+                            }
+                            .controlSize(.small)
+                            .buttonStyle(.bordered)
+                            .help("Stop the active preset. You can change the rate, then click Resume on the main screen to start again.")
+                        }
+                    } else if let last = mappingEngine.activePreset {
+                        HStack(spacing: 6) {
+                            Image(systemName: "pause.circle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("Engine stopped. Rate will be \(pollHz) Hz on next start.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            Button("Resume") {
+                                mappingEngine.start(with: last)
+                            }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                            .help("Re-start the most recently active preset with the chosen rate.")
+                        }
+                    } else {
+                        Text("Default rate. Balances latency and battery life. New rate applies the moment you activate a preset.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if pollHz > 120 {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text("Sacrifices battery life and CPU. Higher rates can also cause UI hitches in the binding editor while a preset is active. Drop back to 120 Hz if the app feels sluggish.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else if pollHz < 120 {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.blue)
+                                .font(.caption)
+                            Text("Lower rate saves battery but may add noticeable latency on fast-twitch inputs like rapid-fire and gyro aim.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                section(title: "System Performance") {
+                    SystemStatsPanel()
+                }
+
+                section(title: "Gaming Utilities") {
+                    GamingUtilitiesPanel()
                 }
 
                 section(title: "Data & Storage") {
@@ -107,14 +351,34 @@ struct SettingsView: View {
     /// Section header + indented content. Replaces SwiftUI's `Form > Section`
     /// which produces a cramped two-column layout on macOS.
     @ViewBuilder
-    private func section<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// Visually-grouped section card. Each section gets a bold header,
+    /// inset content with consistent vertical rhythm, and a subtle
+    /// rounded-rectangle background that delineates one section from
+    /// the next. Improves readability of long tab contents (the user
+    /// said the Controllers / About tabs were "not easy to see").
+    private func section<Content: View>(title: String,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.headline)
-            VStack(alignment: .leading, spacing: 8) {
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+            VStack(alignment: .leading, spacing: 10) {
                 content()
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+        )
     }
 
     // MARK: - Backup / Restore
@@ -170,13 +434,61 @@ struct SettingsView: View {
                 groupsArray.append(dict)
             }
         }
+        // Trash (soft-deleted presets). Captures both the preset and the
+        // original deletedAt timestamp so a "restore on new Mac" landing
+        // doesn't reset the trash's chronological ordering. Older
+        // restores that lack this field just skip the trash block.
+        var trashArray: [[String: Any]] = []
+        for snap in presetStore.snapshotTrashForBackup() {
+            if let data = try? JSONEncoder().encode(snap),
+               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                trashArray.append(dict)
+            }
+        }
         // Mirror selected UserDefaults that we own.
         let defaults = UserDefaults.standard
         var prefs: [String: Any] = [:]
-        for key in ["JoystickConfig.touchpadCalibration.v1",
-                    "JoystickConfig.touchpadRegions.v1",
-                    "JoystickConfig.tipCount",
-                    "JoystickConfig.seededExampleGroups.v1"] {
+        // Every UserDefaults key the app owns. Adding new keys here is
+        // how they get carried by Export Backup; missing entries silently
+        // reset when the user restores on a new Mac. Grouped roughly
+        // by subsystem for readability.
+        let exportedKeys: [String] = [
+            // Touchpad
+            "JoystickConfig.touchpadCalibration.v1",
+            "JoystickConfig.touchpadRegions.v1",
+            "JoystickConfig.touchpadActiveDevice.v2",
+            // Cursor / stick regions
+            "JoystickConfig.cursorRegions.v1",
+            "JoystickConfig.stickRegions.v1",
+            // Cursor guard (gaming utilities)
+            "CursorGuard.edgeConfine",
+            "CursorGuard.edgeBufferPx",
+            "CursorGuard.autoRecenter",
+            "CursorGuard.recenterIntervalMs",
+            "CursorGuard.hideWhileRunning",
+            "CursorGuard.sensitivity",
+            // Engine poll rate
+            "JoystickConfig.pollHz",
+            "JoystickConfig.autoPollHzByPower",
+            "JoystickConfig.pollHzOnAC",
+            "JoystickConfig.pollHzOnBattery",
+            // UI
+            "JoystickConfig.showMenuBarIcon",
+            "JoystickConfig.debugLogExpanded",
+            "VirtualController.scale",
+            // External input
+            "JoystickConfig.externalInput.excludeBuiltIn",
+            // Update + session
+            "JoystickConfig.updateCheck.enabled",
+            "JoystickConfig.updateCheck.dismissedVersions",
+            "JoystickConfig.sessionRestore.enabled",
+            "JoystickConfig.freezeWatchdog.enabled",
+            // Misc
+            "JoystickConfig.tipCount",
+            "JoystickConfig.seededExampleGroups.v1",
+            "JoystickConfig.appliedDefaultGroupColors.v2",
+        ]
+        for key in exportedKeys {
             if let v = defaults.object(forKey: key) {
                 // Encode Data values as base64 strings for JSON portability.
                 if let d = v as? Data {
@@ -191,11 +503,23 @@ struct SettingsView: View {
             "exportedAt": ISO8601DateFormatter().string(from: Date()),
             "presets": presetsArray,
             "groups": groupsArray,
+            "trash": trashArray,
             "userDefaults": prefs
         ]
     }
 
     private func restoreBackup(_ envelope: [String: Any]) {
+        // Schema-version gate. v1 is the only published format right now.
+        // Anything higher means the backup was written by a newer app
+        // version; we refuse rather than partially-restore unknown keys.
+        // Anything missing the field at all is treated as v1 for
+        // backwards compatibility with the original beta backups.
+        let version = (envelope["schemaVersion"] as? Int) ?? 1
+        guard version <= 1 else {
+            NSLog("SettingsView.restoreBackup: unsupported schema version \(version) - aborting restore")
+            return
+        }
+
         // Presets
         if let presetsArray = envelope["presets"] as? [[String: Any]] {
             for dict in presetsArray {
@@ -205,13 +529,38 @@ struct SettingsView: View {
                 }
             }
         }
-        // Groups - overwrite by name if missing
+        // Groups: match existing entries by UUID, not name. The old code
+        // skipped a backup group when ANY existing group happened to
+        // share its display name, which silently destroyed the user's
+        // saved group color and merged unrelated presets together if
+        // two users on different Macs both had a "Gaming" group. Going
+        // through UUID lets us tell apart same-name-different-identity
+        // and preserves the original group's color + name + ordering.
         if let groupsArray = envelope["groups"] as? [[String: Any]] {
+            let existingIDs = Set(presetStore.groups.map { $0.id })
             for dict in groupsArray {
+                guard let data = try? JSONSerialization.data(withJSONObject: dict),
+                      let group = try? JSONDecoder().decode(PresetGroup.self, from: data) else {
+                    continue
+                }
+                if existingIDs.contains(group.id) {
+                    // Same group identity already exists locally; skip
+                    // so we don't clobber the user's current name +
+                    // color tint. (Future enhancement: surface a merge
+                    // dialog rather than silently skipping.)
+                    continue
+                }
+                presetStore.upsertGroup(group)
+            }
+        }
+        // Trash: legacy backups don't have this section. Newer backups
+        // include the recently-deleted preset list so a user restoring
+        // on a new Mac sees the same trash bin they had on the original.
+        if let trashArray = envelope["trash"] as? [[String: Any]] {
+            for dict in trashArray {
                 if let data = try? JSONSerialization.data(withJSONObject: dict),
-                   let group = try? JSONDecoder().decode(PresetGroup.self, from: data),
-                   !presetStore.groups.contains(where: { $0.name == group.name }) {
-                    presetStore.createGroup(named: group.name)
+                   let snap = try? JSONDecoder().decode(PresetStore.TrashSnapshot.self, from: data) {
+                    presetStore.restoreTrashFromBackup(preset: snap.preset, deletedAt: snap.deletedAt)
                 }
             }
         }
@@ -231,25 +580,262 @@ struct SettingsView: View {
     // MARK: - Controllers
 
     private var controllersTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Connected Controllers")
-                    .font(.subheadline)
-                Spacer()
-                Button {
-                    controllerService.refreshControllers()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+        // Wrapped in a ScrollView with section helpers so the layout reads
+        // top-down like the General tab. The previous version used
+        // ContentUnavailableView which expanded to fill the whole sheet,
+        // leaving a huge gap between the header and a floating empty state.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                section(title: "Connected Controllers") {
+                    HStack {
+                        Spacer()
+                        Button {
+                            controllerService.refreshControllers()
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.bottom, -4)
+
+                    if controllerService.connectedControllers.isEmpty {
+                        // Compact empty state that sits flush under the
+                        // header rather than centering itself in dead space.
+                        emptyControllersCard
+                    } else {
+                        controllersList
+                    }
+                }
+
+                if controllerService.connectedControllers.isEmpty {
+                    section(title: "How to Connect") {
+                        connectionTipsView
+                    }
+                }
+
+                section(title: "Cursor Regions") {
+                    Text("Define rectangular zones on your screen, then bind to them as Cursor Region inputs in the binding editor. Same workflow as the DualSense touchpad regions, but using the Mac cursor position so you can use it with any pointing device including the built-in trackpad. No private APIs, no extra permissions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack {
+                        Button("Open Cursor Regions Editor…") {
+                            showingCursorRegions = true
+                        }
+                        Text("\(CursorRegionService.shared.allRegions().count) defined")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                section(title: "Stick Regions") {
+                    Text("Define rectangular zones on a joystick stick's X/Y plane. Lets you bind diagonals and quadrants (like the upper-right corner of the right stick) as single bindings instead of stitching together separate axis + and axis - half-bindings. Each stick has its own region set.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack {
+                        Button("Open Stick Regions Editor…") {
+                            showingStickRegions = true
+                        }
+                        let leftCount = StickRegionService.shared.regions(forStick: 0).count
+                        let rightCount = StickRegionService.shared.regions(forStick: 1).count
+                        Text("\(leftCount) left / \(rightCount) right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                section(title: "Keyboards & Mice") {
+                    Text("External keyboards and mice can act as input sources too. Bind any key or mouse button to keyboard output, mouse output, or MIDI through the binding editor. Apple's HID layer filters out our own synthetic events, so a binding can't echo back into itself.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Toggle("Hide built-in keyboard and trackpad",
+                           isOn: $externalInput.excludeBuiltInDevices)
+
+                    if externalInput.devices.isEmpty {
+                        emptyKeyboardsCard
+                    } else {
+                        keyboardsList
+                    }
+
+                    if !externalInput.receivedAnyKeyboardEvent
+                        && externalInput.devices.contains(where: { $0.kind == .keyboard }) {
+                        inputMonitoringHint
+                    }
                 }
             }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 
-            if controllerService.connectedControllers.isEmpty {
-                ContentUnavailableView {
-                    Label("No Controllers", systemImage: "gamecontroller")
-                } description: {
-                    Text("Connect a game controller to get started.")
+    private var emptyKeyboardsCard: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+                .frame(width: 40)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No keyboards or mice detected")
+                    .font(.body)
+                Text("Plug in or pair a USB / Bluetooth device. The built-in keyboard and trackpad show up unless hidden above.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Banner shown when a keyboard is detected but no events arrive - almost
+    /// certainly an Input Monitoring permission issue.
+    private var inputMonitoringHint: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Input Monitoring permission required")
+                    .font(.caption.weight(.semibold))
+                Text("macOS hides keystrokes from apps that haven't been granted Input Monitoring. Open System Settings → Privacy & Security → Input Monitoring and turn on JoystickConfig.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Privacy Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
-            } else {
+                .controlSize(.small)
+                .padding(.top, 4)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.1),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.orange.opacity(0.3), lineWidth: 0.5))
+    }
+
+    @ViewBuilder
+    private var keyboardsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(externalInput.devices) { dev in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        Image(systemName: dev.kind == .mouse
+                              ? "computermouse.fill"
+                              : "keyboard.fill")
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(dev.productName)
+                                .font(.body)
+                            HStack(spacing: 6) {
+                                Text(dev.kind.rawValue.capitalized)
+                                Text("·")
+                                Text(dev.bus.rawValue.uppercased())
+                                if !dev.vendorName.isEmpty {
+                                    Text("·")
+                                    Text(dev.vendorName)
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+
+                    if let log = externalInput.recentEvents[dev.id], !log.isEmpty {
+                        DisclosureGroup("Live press log (\(log.count))") {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(log) { entry in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "circle.fill")
+                                            .font(.system(size: 6))
+                                            .foregroundStyle(.green)
+                                        Text(entry.label)
+                                            .font(.caption.monospaced())
+                                        Spacer()
+                                    }
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.06),
+                            in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    /// Quiet inline card replacing the old `ContentUnavailableView`. Keeps the
+    /// "no controllers" message visible without claiming the entire sheet.
+    private var emptyControllersCard: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "gamecontroller")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+                .frame(width: 40)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No controllers connected")
+                    .font(.body)
+                Text("Plug in a USB controller or pair one over Bluetooth. It will show up here automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Practical connection hints shown only when nothing is plugged in.
+    private var connectionTipsView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            tipRow(icon: "cable.connector",
+                   title: "USB",
+                   body: "Plug the controller in with its USB cable. Wired DualSense, DualShock 4, Xbox, and 8BitDo show up immediately.")
+            tipRow(icon: "wave.3.right",
+                   title: "Bluetooth",
+                   body: "Hold the controller's pair button until its light flashes, then add it from System Settings → Bluetooth.")
+            tipRow(icon: "checkmark.seal",
+                   title: "Supported",
+                   body: "DualSense / DualSense Edge, DualShock 4, Xbox One / Series / Elite, Switch Pro, Joy-Cons, Stadia, 8BitDo, Steam Controller, and any MFi or HID gamepad.")
+        }
+    }
+
+    @ViewBuilder
+    private func tipRow(icon: String, title: String, body: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.blue)
+                .frame(width: 22, alignment: .center)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(body)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var controllersList: some View {
                 // Live press log across all controllers. Press the button
                 // you want to map (PS, mute, paddle, FN, etc.) and the
                 // exact name Apple's framework reports appears here. Lets
@@ -283,7 +869,7 @@ struct SettingsView: View {
                     .padding(.bottom, 8)
                 }
 
-                List {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(controllerService.connectedControllers.enumerated()), id: \.offset) { index, controller in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -327,12 +913,11 @@ struct SettingsView: View {
                             }
                             .font(.caption)
                         }
-                        .padding(.vertical, 4)
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.06),
+                                    in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
-            }
-        }
-        .padding()
     }
 
     /// Look up the binding index assigned to the named physical button.
@@ -359,69 +944,98 @@ struct SettingsView: View {
     }
 
     private var aboutTab: some View {
-        VStack(spacing: 10) {
-            if let appIcon = NSApp.applicationIconImage {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .frame(width: 96, height: 96)
-            }
-
-            Text("JoystickConfig")
-                .font(.largeTitle)
-
-            Text("Game Controller Configuration")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Link(destination: URL(string: "https://apps.apple.com/us/app/joystickconfig/id6761875440?mt=12")!) {
-                HStack(spacing: 4) {
-                    Text("Version \(bundleShortVersion) (Build \(bundleBuildNumber))")
-                    Image(systemName: "arrow.up.right.square")
+        ScrollView {
+            VStack(spacing: 22) {
+                // App identity card - icon, name, tagline, version.
+                VStack(spacing: 12) {
+                    if let appIcon = NSApp.applicationIconImage {
+                        Image(nsImage: appIcon)
+                            .resizable()
+                            .frame(width: 96, height: 96)
+                    }
+                    Text("JoystickConfig")
+                        .font(.largeTitle.weight(.semibold))
+                    Text("Universal Input Mapping for macOS")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Link(destination: URL(string: "https://apps.apple.com/us/app/joystickconfig/id6761875440?mt=12")!) {
+                        HStack(spacing: 5) {
+                            Text("Version \(bundleShortVersion) · Build \(bundleBuildNumber)")
+                            Image(systemName: "arrow.up.right.square")
+                        }
+                        .font(.caption.monospacedDigit())
+                    }
+                    .help("Open JoystickConfig on the Mac App Store")
+                    Text("Map controllers, keyboards, and mice to keyboard, mouse, MIDI, and more, anywhere on macOS.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 4)
                 }
-                .font(.caption.monospacedDigit())
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 22)
+                .padding(.horizontal, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                )
+
+                // Creator + links.
+                VStack(spacing: 6) {
+                    Text("Created by Ryleigh Newman")
+                        .font(.body.weight(.medium))
+                    HStack(spacing: 12) {
+                        Link(destination: URL(string: "https://ryleighnewman.com")!) {
+                            Label("ryleighnewman.com", systemImage: "link")
+                                .font(.callout)
+                        }
+                        Link(destination: URL(string: "https://github.com/ryleighnewman/JoystickConfig")!) {
+                            Label("Open Source", systemImage: "chevron.left.forwardslash.chevron.right")
+                                .font(.callout)
+                        }
+                    }
+                    Text("Contact me if you ever need anything.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .padding(.horizontal, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                )
+
+                // Tip jar.
+                Button {
+                    TipJarWindowController.shared.show()
+                } label: {
+                    Label("Support Development", systemImage: "heart.fill")
+                        .frame(minWidth: 200)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.pink)
+
+                // Footer copyright.
+                Text("Copyright \u{00A9} 2026 Ryleigh Newman. All rights reserved.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 6)
             }
-            .help("Open JoystickConfig on the Mac App Store")
-            .padding(.top, 2)
-
-            Text("Configure game controller buttons, triggers, and joysticks\nto behave as keyboard and mouse input on macOS.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
-            Text("Created by Ryleigh Newman")
-                .font(.body)
-
-            Link("ryleighnewman.com", destination: URL(string: "https://ryleighnewman.com")!)
-                .font(.body)
-
-            Text("This app is open source.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Link("View on GitHub", destination: URL(string: "https://github.com/ryleighnewman/JoystickConfig")!)
-                .font(.caption)
-
-            Text("Copyright \u{00A9} 2026 Ryleigh Newman. All rights reserved.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text("Contact me if you ever need anything")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Button {
-                TipJarWindowController.shared.show()
-            } label: {
-                Label("Support Development", systemImage: "heart.fill")
-                    .frame(minWidth: 180)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .tint(.pink)
-            .padding(.top, 8)
+            .padding(20)
         }
-        .padding()
     }
 }
 

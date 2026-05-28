@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// A single binding row with fixed-width columns for consistent alignment.
 struct BindingRowView: View {
@@ -15,6 +16,14 @@ struct BindingRowView: View {
     /// by clicking on the Live Visualizer. Shows a yellow ring for ~1.2 s.
     var isPulsing: Bool = false
 
+    /// Named extra buttons exposed by the controller for this slot.
+    /// Passed in as a plain value type by the parent so we don't have
+    /// to inject `GameControllerService` as an `@EnvironmentObject` -
+    /// avoids a strict-concurrency boundary and keeps this view
+    /// trivially previewable. Empty when no controller is connected or
+    /// the slot has no extras.
+    var extraButtons: [GameControllerService.ExtraButton] = []
+
     @State private var showAdvanced = false
     @State private var showMacroEditor = false
     @State private var showDeadzoneCalibration = false
@@ -30,9 +39,17 @@ struct BindingRowView: View {
     // Fixed column widths for perfect alignment
     private let dragWidth: CGFloat = 16
     private let scanColWidth: CGFloat = 54
-    private let typeColWidth: CGFloat = 78
-    private let indexColWidth: CGFloat = 98
-    private let dirColWidth: CGFloat = 58
+    /// Wider than before (was 78) so the full input-type names like
+    /// "Keyboard Key", "Cursor Region", "Stick Region" actually show
+    /// in the picker label instead of getting truncated to "Keyboa..."
+    /// which made the picker look locked.
+    private let typeColWidth: CGFloat = 116
+    private let indexColWidth: CGFloat = 124
+    /// Wider than before (was 58) because for extKey / extMouse this
+    /// column hosts the device picker, and device names like
+    /// "Built-in Keyboard" overflowed and visually collided with the
+    /// next column's keyboard icon.
+    private let dirColWidth: CGFloat = 130
     private let arrowWidth: CGFloat = 24
     private let outTypeColWidth: CGFloat = 130
     private let actionsWidth: CGFloat = 48
@@ -60,7 +77,8 @@ struct BindingRowView: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(Color.secondary.opacity(0.12))
                         )
-                        .frame(minWidth: 28, alignment: .leading)
+                        .fixedSize()
+                        .frame(width: 32, alignment: .leading)
                 }
 
                 // Drag handle
@@ -75,6 +93,8 @@ struct BindingRowView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
                     .frame(width: scanColWidth, alignment: .center)
+                    .accessibilityLabel("Scan binding \(displayNumber)")
+                    .accessibilityHint("Press a button, key, or axis on your controller to record this binding")
 
                 // COL 2: Input Type
                 Picker("", selection: $binding.input.type) {
@@ -208,6 +228,24 @@ struct BindingRowView: View {
                 onClose: { showDeadzoneCalibration = false }
             )
         }
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("JoystickConfig.ExpandBindingOptions"))) { note in
+            // Tutorial / external trigger to auto-expand this row's
+            // Options disclosure so the user sees what's inside
+            // without having to click. Notification's object is the
+            // target binding's UUID; we only react if it matches us.
+            if let id = note.object as? UUID, id == binding.id {
+                withAnimation(.easeInOut(duration: 0.4)) { showAdvanced = true }
+            }
+        }
+        .onDisappear {
+            // Cancel any in-flight scan when this row goes away.
+            // Without this, closing the editor mid-scan leaves the
+            // static timer/subscription alive; when its 5-second
+            // deadline fires it writes into a `@Binding` whose source
+            // is gone, routing the keypress to a stale preset draft.
+            Self.cancelActiveScan()
+        }
     }
 
     // MARK: - Index Picker (fixed width)
@@ -216,14 +254,38 @@ struct BindingRowView: View {
     private var indexPicker: some View {
         switch binding.input.type {
         case .button:
-            // Use Menu instead of Picker so 64 button-index items only
-            // instantiate when the menu is opened, not on every editor render.
+            // Three sections in priority order:
+            // 1. "This Controller" - dynamically discovered extras
+            //    (paddles, FN, mute, Home, touchpad) for the slot's
+            //    connected controller. Lets users pick by physical
+            //    name instead of guessing the index.
+            // 2. "Standard" - canonical MFi labels for the well-known
+            //    button indices (A/B/X/Y, LB/RB, Start/Back/Home...).
+            // 3. "All Indices" - generic Button 0-63 fallback.
             Menu {
-                ForEach(0..<64, id: \.self) { i in
-                    Button("Button \(i)") { binding.input.index = i }
+                if !extraButtons.isEmpty {
+                    Section("This Controller") {
+                        ForEach(extraButtons.sorted(by: { $0.index < $1.index })) { extra in
+                            Button("\(extra.label) (#\(extra.index))") {
+                                binding.input.index = extra.index
+                            }
+                        }
+                    }
+                }
+                Section("Standard") {
+                    ForEach(Self.standardButtonLabels, id: \.index) { entry in
+                        Button("\(entry.label) (#\(entry.index))") {
+                            binding.input.index = entry.index
+                        }
+                    }
+                }
+                Section("All Indices") {
+                    ForEach(0..<64, id: \.self) { i in
+                        Button("Button \(i)") { binding.input.index = i }
+                    }
                 }
             } label: {
-                menuLabel("Button \(binding.input.index)")
+                menuLabel(buttonMenuLabel(for: binding.input.index))
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
@@ -260,11 +322,15 @@ struct BindingRowView: View {
             .controlSize(.small)
 
         case .motion:
-            // Pick the motion channel (gyro X/Y/Z, accel X/Y/Z, attitude
-            // roll/pitch/yaw). Direction picker handles + / -.
+            // Pick the motion channel. Menu items use the long
+            // `menuDescription` ("Gyro Z (roll rate)") so users
+            // recognize the axis, but the closed-button label shows
+            // the short `displayName` ("Gyro Z") so it fits the
+            // fixed-width index column without overlapping the next
+            // column.
             Menu {
                 ForEach(MotionChannel.allCases) { channel in
-                    Button(channel.displayName) {
+                    Button(channel.menuDescription) {
                         binding.input.motionChannel = channel
                     }
                 }
@@ -296,7 +362,194 @@ struct BindingRowView: View {
             .menuStyle(.borderlessButton)
             .controlSize(.small)
             .fixedSize()
+
+        case .cursorRegion:
+            // Parallel to `.touchpadRegion` but the regions are screen-space
+            // zones tracked against the macOS cursor position.
+            Menu {
+                let regions = CursorRegionService.shared.allRegions()
+                if regions.isEmpty {
+                    Text("No cursor regions defined")
+                    Text("Open Settings → Devices → Cursor Regions to add some")
+                } else {
+                    ForEach(regions) { region in
+                        Button(region.name) {
+                            binding.input.cursorRegionID = region.id
+                        }
+                    }
+                }
+            } label: {
+                menuLabel(cursorRegionDisplayName)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+
+        case .stickRegion:
+            // Parallel to `.cursorRegion` but the regions are zones in
+            // the joystick stick's X/Y plane. The index field carries
+            // the stick selection (0 = left, 1 = right); the picker
+            // groups regions by stick so users can see both sticks'
+            // regions at once.
+            Menu {
+                let leftRegions = StickRegionService.shared.regions(forStick: 0)
+                let rightRegions = StickRegionService.shared.regions(forStick: 1)
+                if leftRegions.isEmpty && rightRegions.isEmpty {
+                    Text("No stick regions defined")
+                    Text("Open Settings → Devices → Stick Regions to add some")
+                } else {
+                    if !leftRegions.isEmpty {
+                        Section("Left Stick") {
+                            ForEach(leftRegions) { region in
+                                Button(region.name) {
+                                    binding.input.index = 0
+                                    binding.input.stickRegionID = region.id
+                                }
+                            }
+                        }
+                    }
+                    if !rightRegions.isEmpty {
+                        Section("Right Stick") {
+                            ForEach(rightRegions) { region in
+                                Button(region.name) {
+                                    binding.input.index = 1
+                                    binding.input.stickRegionID = region.id
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                menuLabel(stickRegionDisplayName)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+
+        case .extKey:
+            // HID usage code. Most users won't remember a code by number, so
+            // we surface a Scan affordance: if the user clicks "Scan" the next
+            // physical key press on any detected keyboard becomes the binding.
+            Menu {
+                Section("Common keys") {
+                    ForEach(commonHIDKeys, id: \.code) { entry in
+                        Button("\(entry.label) (code \(entry.code))") {
+                            binding.input.index = entry.code
+                        }
+                    }
+                }
+                Section("Scan") {
+                    Button("Press any key on detected keyboard…") {
+                        scanForExternalKey()
+                    }
+                }
+            } label: {
+                menuLabel("Key \(binding.input.index)")
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+
+        case .extMouse:
+            // Sub-kind: button vs motion vs scroll.
+            Menu {
+                ForEach(ExtMouseKind.allCases) { kind in
+                    Button(kind.displayName) {
+                        binding.input.extMouseKind = kind
+                        // Reset the index for kinds that don't need one.
+                        if kind != .button { binding.input.index = 0 }
+                    }
+                }
+            } label: {
+                menuLabel((binding.input.extMouseKind ?? .button).displayName)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+
+        case .touchpadGesture:
+            // The gesture kind discriminator (two-finger tap, etc.).
+            Menu {
+                ForEach(TouchpadGestureKind.allCases) { kind in
+                    Button(kind.displayName) {
+                        binding.input.touchpadGestureKind = kind
+                    }
+                }
+            } label: {
+                menuLabel(binding.input.touchpadGestureKind?.displayName
+                          ?? "Two-finger tap")
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
         }
+    }
+
+    /// 12 most-used HID Keyboard / Keypad usage codes for the dropdown.
+    private var commonHIDKeys: [(label: String, code: Int)] {
+        [
+            ("A", 4), ("S", 22), ("D", 7), ("W", 26),
+            ("Space", 44), ("Return", 40), ("Escape", 41), ("Tab", 43),
+            ("Left", 80), ("Right", 79), ("Up", 82), ("Down", 81)
+        ]
+    }
+
+    /// Watches `ExternalInputDeviceService.events` for one key-down then
+    /// assigns it as this binding's input. Guaranteed to cancel via a
+    /// scheduled timer even if no key is ever pressed - earlier versions
+    /// relied on a `Date()` check inside the sink, which only ran when
+    /// the subject fired, leaking the subscription forever if nothing
+    /// happened. Also single-shot: re-clicking Scan cancels the previous
+    /// listener via the static reference so multiple rows can't pile up.
+    private func scanForExternalKey() {
+        Self.activeScanCancellable?.cancel()
+        Self.activeScanCancellable = nil
+        Self.activeScanTimer?.invalidate()
+        Self.activeScanTimer = nil
+
+        let svc = ExternalInputDeviceService.shared
+        // Capture `binding` weakly through the binding's UUID so we don't
+        // assign to a stale closure if the row's binding identity changes
+        // before scan completes.
+        let cancellable = svc.events.sink { event in
+            if case .keyDown(let dev, let code) = event {
+                DispatchQueue.main.async {
+                    binding.input.index = code
+                    binding.input.extDeviceID = dev
+                    Self.activeScanCancellable?.cancel()
+                    Self.activeScanCancellable = nil
+                    Self.activeScanTimer?.invalidate()
+                    Self.activeScanTimer = nil
+                }
+            }
+        }
+        Self.activeScanCancellable = cancellable
+
+        // Hard 5-second deadline. Fires on the main run loop so it always
+        // runs even if no events arrive on the subject.
+        Self.activeScanTimer = Timer.scheduledTimer(withTimeInterval: 5,
+                                                    repeats: false) { _ in
+            Self.activeScanCancellable?.cancel()
+            Self.activeScanCancellable = nil
+            Self.activeScanTimer = nil
+        }
+    }
+
+    /// Single global slot for the active "scan for keyboard key" listener.
+    /// Static so re-clicking Scan on a different row always cancels the
+    /// previous subscription instead of stacking them.
+    private static var activeScanCancellable: AnyCancellable?
+    private static var activeScanTimer: Timer?
+
+    /// Cancel any in-flight external-input scan. Called from
+    /// `.onDisappear` so a row that goes away mid-scan doesn't keep
+    /// the static timer/subscription alive and fire its 5-second
+    /// deadline writing into a now-dead `@Binding`.
+    static func cancelActiveScan() {
+        activeScanCancellable?.cancel()
+        activeScanCancellable = nil
+        activeScanTimer?.invalidate()
+        activeScanTimer = nil
     }
 
     private var touchpadRegionDisplayName: String {
@@ -305,6 +558,65 @@ struct BindingRowView: View {
             return r.name
         }
         return "Pick region"
+    }
+
+    private var cursorRegionDisplayName: String {
+        if let id = binding.input.cursorRegionID,
+           let r = CursorRegionService.shared.region(with: id) {
+            return r.name
+        }
+        return "Pick cursor region"
+    }
+
+    /// Canonical labels for the standard 22 MFi button slots. Surfaced
+    /// in the button index picker so users see "A / Cross (#0)" instead
+    /// of just "Button 0". Indices 16-21 cover DualSense Edge paddles
+    /// and Function buttons.
+    private static let standardButtonLabels: [(index: Int, label: String)] = [
+        (0, "A / Cross"),
+        (1, "B / Circle"),
+        (2, "X / Square"),
+        (3, "Y / Triangle"),
+        (4, "LB / L1"),
+        (5, "RB / R1"),
+        (6, "LT / L2 (digital)"),
+        (7, "RT / R2 (digital)"),
+        (8, "Back / Share / Select"),
+        (9, "Start / Options"),
+        (10, "Home / PS / Guide"),
+        (11, "L3 (left stick click)"),
+        (12, "R3 (right stick click)"),
+        (13, "Touchpad press"),
+        (14, "Share (where exposed)"),
+        (15, "Microphone / Mute"),
+        (16, "Left Paddle"),
+        (17, "Right Paddle"),
+        (18, "Paddle 3"),
+        (19, "Paddle 4"),
+        (20, "FN 1 / Left Function"),
+        (21, "FN 2 / Right Function"),
+    ]
+
+    /// Closed-menu label. Prefers the connected controller's named
+    /// extra (e.g. "Left Paddle") for the active index, falls back to
+    /// a canonical standard label, otherwise the bare "Button N".
+    private func buttonMenuLabel(for index: Int) -> String {
+        if let extra = extraButtons.first(where: { $0.index == index }) {
+            return extra.label
+        }
+        if let std = Self.standardButtonLabels.first(where: { $0.index == index }) {
+            return std.label
+        }
+        return "Button \(index)"
+    }
+
+    private var stickRegionDisplayName: String {
+        if let id = binding.input.stickRegionID,
+           let lookup = StickRegionService.shared.region(with: id) {
+            let stick = lookup.stickIndex == 1 ? "Right" : "Left"
+            return "\(stick): \(lookup.region.name)"
+        }
+        return "Pick stick region"
     }
 
     // MARK: - Direction Picker (fixed width, empty for buttons)
@@ -338,6 +650,17 @@ struct BindingRowView: View {
             // Region inputs are button-like; no direction picker needed.
             Color.clear
 
+        case .cursorRegion:
+            // Same shape as `.touchpadRegion`: button-like, no direction.
+            Color.clear
+
+        case .stickRegion:
+            // Stick region also acts like a button (pressed while
+            // stick is inside the rect). The stick index is carried in
+            // the InputEvent's `index` field and chosen from the region
+            // picker, so no direction widget is needed here either.
+            Color.clear
+
         case .motion:
             // Motion inputs read like axes: pick + or - polarity.
             Picker("", selection: axisDirectionBinding) {
@@ -369,6 +692,92 @@ struct BindingRowView: View {
             .menuStyle(.borderlessButton)
             .controlSize(.small)
             .fixedSize()
+
+        case .extKey:
+            // Device picker: which specific keyboard, or "Any".
+            externalDeviceMenu(kind: .keyboard)
+
+        case .extMouse:
+            // For mouse buttons, this column picks button index (1..8).
+            // For motion / scroll, it picks the + / - half-axis direction
+            // and shows the device picker via an inline Menu.
+            switch binding.input.extMouseKind ?? .button {
+            case .button:
+                Menu {
+                    ForEach(1..<9, id: \.self) { btn in
+                        Button("Mouse button \(btn)") { binding.input.index = btn }
+                    }
+                    Divider()
+                    Section("Device") { externalDeviceMenuItems(kind: .mouse) }
+                } label: {
+                    menuLabel("Btn \(binding.input.index)")
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .fixedSize()
+            case .moveX, .moveY, .scrollX, .scrollY:
+                Menu {
+                    Button("+") { binding.input.axisDirection = .positive }
+                    Button("\u{2212}") { binding.input.axisDirection = .negative }
+                    Divider()
+                    Section("Device") { externalDeviceMenuItems(kind: .mouse) }
+                } label: {
+                    menuLabel((binding.input.axisDirection ?? .positive).displayName)
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .fixedSize()
+            }
+
+        case .touchpadGesture:
+            // Gesture bindings have no direction. Render an empty
+            // spacer so the column width stays aligned with the rest
+            // of the rows.
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+
+    /// Borderless menu for picking which detected external device this
+    /// binding targets, including an "Any" sentinel. No `.fixedSize()`
+    /// here on purpose: the parent HStack column width must clip the
+    /// menu so a long device name (e.g. "Built-in Keyboard") doesn't
+    /// run into the next picker.
+    @ViewBuilder
+    private func externalDeviceMenu(kind: ExternalInputDeviceService.Kind) -> some View {
+        Menu {
+            externalDeviceMenuItems(kind: kind)
+        } label: {
+            menuLabel(externalDeviceLabel(kind: kind))
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+    }
+
+    /// Computes the human label for the device-picker button. Pulled out of
+    /// the `Menu`'s `label:` ViewBuilder closure because mixing assignment
+    /// statements with view-builder syntax doesn't compile cleanly.
+    private func externalDeviceLabel(kind: ExternalInputDeviceService.Kind) -> String {
+        if let id = binding.input.extDeviceID,
+           let name = ExternalInputDeviceService.shared.deviceName(for: id) {
+            return name
+        }
+        return "Any \(kind.rawValue)"
+    }
+
+    @ViewBuilder
+    private func externalDeviceMenuItems(kind: ExternalInputDeviceService.Kind) -> some View {
+        Button("Any \(kind.rawValue)") {
+            binding.input.extDeviceID = nil
+        }
+        let matching = ExternalInputDeviceService.shared.devices.filter { $0.kind == kind }
+        if matching.isEmpty {
+            Text("No detected devices")
+        } else {
+            ForEach(matching) { device in
+                Button(device.productName) {
+                    binding.input.extDeviceID = device.id
+                }
+            }
         }
     }
 
@@ -413,7 +822,13 @@ struct BindingRowView: View {
             .controlSize(.small)
 
         case .mouseMotion, .mouseWheel:
-            HStack(spacing: 8) {
+            // Compact horizontal: direction, then slider, then numeric
+            // readout. The "Speed" word was previously here as a label but
+            // it pushed the row over the editor's minWidth on smaller
+            // windows and clipped neighbouring columns; the icon-style
+            // gauge symbol now hints at what the slider controls without
+            // adding meaningful width.
+            HStack(spacing: 6) {
                 Picker("", selection: mouseAxisDirBinding(at: index)) {
                     Text("Up").tag("1 -")
                     Text("Right").tag("0 +")
@@ -421,12 +836,14 @@ struct BindingRowView: View {
                     Text("Left").tag("0 -")
                 }
                 .labelsHidden()
-                .frame(width: 72)
+                .frame(width: 64)
                 .controlSize(.small)
 
-                Text("Speed")
+                Image(systemName: "speedometer")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                    .fixedSize()
+                    .help("Output speed")
 
                 ThrottledSlider(
                     value: speedBinding(at: index),
@@ -434,11 +851,11 @@ struct BindingRowView: View {
                     step: 1,
                     onLiveChange: { liveSpeed[index] = $0 }
                 )
-                    .frame(minWidth: 80, idealWidth: 100)
+                    .frame(minWidth: 60, idealWidth: 90)
 
                 TextField("", value: liveSpeedBinding(at: index), format: .number)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 44)
+                    .frame(width: 40)
                     .controlSize(.small)
                     .multilineTextAlignment(.center)
             }
@@ -670,6 +1087,7 @@ struct BindingRowView: View {
                             .font(.system(size: 9))
                     }
                     .foregroundStyle(hasAdvancedOptions ? Color.blue : Color.gray.opacity(0.4))
+                    .fixedSize()
                 }
                 .buttonStyle(.plain)
                 Spacer()
@@ -1269,9 +1687,11 @@ struct BindingRowView: View {
                 .font(.caption)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .truncationMode(.tail)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.system(size: 8))
                 .foregroundStyle(.secondary)
+                .layoutPriority(1)
         }
     }
 

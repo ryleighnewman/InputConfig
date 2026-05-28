@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Overlay shown while scanning for joystick input
 struct ScanOverlayView: View {
@@ -9,6 +10,12 @@ struct ScanOverlayView: View {
     @State private var timeRemaining: Int = 10
     @State private var detectedInput: InputEvent?
     @State private var timer: Timer?
+    /// While the overlay is up, also listen to external keyboard / mouse
+    /// events from `ExternalInputDeviceService` (which now includes the
+    /// built-in Mac keyboard and trackpad via the CGEventTap) so the
+    /// first physical key/button on ANY device finishes the scan.
+    @State private var externalSubscription: AnyCancellable?
+    @State private var didCompleteScan = false
 
     var body: some View {
         ZStack {
@@ -59,16 +66,40 @@ struct ScanOverlayView: View {
         .onAppear {
             startTimer()
             controllerService.startScanning { event in
-                detectedInput = event
-                // Brief delay to show the detected input before closing
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    cleanup()
-                    onInputDetected(event)
-                }
+                completeScan(with: event)
             }
+            // Also subscribe to external HID + CGEventTap events. First
+            // physical event from any source wins.
+            externalSubscription = ExternalInputDeviceService.shared.events
+                .receive(on: DispatchQueue.main)
+                .sink { event in
+                    guard !didCompleteScan else { return }
+                    switch event {
+                    case .keyDown(let dev, let hid):
+                        completeScan(with: .extKey(hidCode: hid, deviceID: dev))
+                    case .mouseButtonDown(let dev, let btn):
+                        completeScan(with: .extMouseButton(btn, deviceID: dev))
+                    default:
+                        // Ignore key-up, mouse-up, motion, and scroll -
+                        // a scan should latch on a discrete down event.
+                        break
+                    }
+                }
         }
         .onDisappear {
             cleanup()
+        }
+    }
+
+    /// Single completion path so controller, external HID, and CGEventTap
+    /// scan results all flow through identical UI feedback.
+    private func completeScan(with event: InputEvent) {
+        guard !didCompleteScan else { return }
+        didCompleteScan = true
+        detectedInput = event
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            cleanup()
+            onInputDetected(event)
         }
     }
 
@@ -87,6 +118,8 @@ struct ScanOverlayView: View {
     private func cleanup() {
         timer?.invalidate()
         timer = nil
+        externalSubscription?.cancel()
+        externalSubscription = nil
         controllerService.stopScanning()
     }
 }

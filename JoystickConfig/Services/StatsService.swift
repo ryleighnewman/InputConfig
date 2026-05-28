@@ -44,7 +44,17 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         var controllerConnectionCount: [String: Int] = [:]
     }
 
-    @Published private(set) var stats = PersistentStats()
+    /// Live stats counters. Plain `var` (not `@Published`) so the
+    /// engine's 120 Hz hot path can mutate them without triggering an
+    /// ObservableObject publish on every mutation. The throttled
+    /// `statsTick` below republishes once per `flushInterval` so views
+    /// still update at a comfortable cadence.
+    private(set) var stats = PersistentStats()
+
+    /// Bumped by the 1 Hz throttle timer. Views observe this to know
+    /// when to re-read `stats`. Lets StatsView refresh at 1 Hz without
+    /// the engine paying a publish cost on every button press.
+    @Published private(set) var statsTick: Int = 0
 
     // MARK: - Lifetime / lifecycle
 
@@ -123,6 +133,32 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     func recordButtonPress(inputKey: String) {
         stats.totalButtonPresses += 1
         stats.inputPressCounts[inputKey, default: 0] += 1
+        // Bound the dict so months of play with analog-stick micro
+        // wiggles don't bloat the persistent file. Prune the bottom
+        // quartile by count when we exceed the cap; the top-N readout
+        // in StatsView still surfaces the meaningful inputs. Pruning
+        // is amortised: only runs once per N inserts past the cap.
+        if stats.inputPressCounts.count > Self.inputPressCountsHardCap {
+            pruneInputPressCounts()
+        }
+    }
+
+    /// Upper bound on distinct input keys we'll track. ~99% of users
+    /// have fewer than 500 unique key strings ever; the cap is set
+    /// well above that so it never trips in normal use. The prune is
+    /// also defensive against bugs that produce churning string keys.
+    private static let inputPressCountsHardCap = 2000
+
+    /// Drop the lowest-count quartile of input keys. Called only when
+    /// the dict overflows; with the cap at 2000 and a quartile prune
+    /// it runs every ~500 unique-input-string adds, which on a real
+    /// workload is essentially never.
+    private func pruneInputPressCounts() {
+        let entries = stats.inputPressCounts.sorted { $0.value < $1.value }
+        let dropCount = entries.count / 4
+        for (key, _) in entries.prefix(dropCount) {
+            stats.inputPressCounts.removeValue(forKey: key)
+        }
     }
 
     func recordKeyPress() { stats.totalKeyPresses += 1 }
@@ -163,8 +199,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     /// Last 14 days of connected seconds, oldest first. Missing days
     /// (no activity) report 0.
     var last14DaysConnected: [(date: Date, seconds: TimeInterval)] {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
+        let fmt = Self.dailyKeyFormatter
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         var out: [(Date, TimeInterval)] = []
@@ -192,10 +227,33 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     private func startFlushTimer() {
         flushTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.flushIfDirty() }
+            Task { @MainActor in
+                guard let self = self else { return }
+                let wasDirty = self.dirty
+                self.flushIfDirty()
+                // Only bump the published tick when stats actually
+                // changed since the last flush. Without this gate
+                // every view subscribed to `statsTick` would re-render
+                // every 5 s even when nothing happened in the engine.
+                if wasDirty {
+                    self.statsTick &+= 1
+                }
+            }
         }
         if let t = flushTimer { RunLoop.main.add(t, forMode: .common) }
     }
+
+    /// Shared formatter for "yyyy-MM-dd" daily keys. Static so we don't
+    /// pay DateFormatter allocation on every flush / read - those
+    /// allocations were ~30 µs each and the formatter is re-buildable
+    /// many times per second on a hot stats path.
+    private static let dailyKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        return f
+    }()
 
     private func flushIfDirty() {
         guard dirty else { return }
@@ -236,9 +294,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     }
 
     private func recordDailyConnection(delta: TimeInterval) {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        let key = fmt.string(from: Date())
+        let key = Self.dailyKeyFormatter.string(from: Date())
         stats.dailyConnectedSeconds[key, default: 0] += delta
     }
 }

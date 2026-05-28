@@ -79,6 +79,20 @@ class PresetStore: ObservableObject {
         return group.id
     }
 
+    /// Re-insert a group from a backup envelope, preserving its UUID so
+    /// presets that reference `groupID` keep working after restore. Used
+    /// by Settings > Restore Backup; differs from `createGroup` (which
+    /// always mints a fresh UUID). If the same UUID already exists
+    /// locally we skip rather than overwriting - the user's current
+    /// name / color / order wins, since they're the one looking at
+    /// this Mac right now.
+    func upsertGroup(_ group: PresetGroup) {
+        if groups.contains(where: { $0.id == group.id }) { return }
+        groups.append(group)
+        normalizeGroupOrder()
+        saveGroups()
+    }
+
     /// Drag-reorder support for the sidebar's group list. SwiftUI's `.onMove`
     /// hands us source indices and a destination; we mirror that into the
     /// groups array and rewrite `sortOrder` so the new order survives a
@@ -117,6 +131,26 @@ class PresetStore: ObservableObject {
     func toggleGroupExpanded(_ groupID: UUID) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         groups[index].isExpanded.toggle()
+        saveGroups()
+    }
+
+    /// Set the user-pickable tint for a folder. Pass nil to clear the
+    /// tint (renders as neutral). The string must be a name from
+    /// `PresetGroup.colorOptions` so the lookup in the sidebar stays
+    /// stable across app launches.
+    func setGroupColor(_ groupID: UUID, color: String?) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[index].color = color
+        saveGroups()
+    }
+
+    /// Apply the ship-default tint to this folder (looked up by name in
+    /// `ExamplePresets.groupDefaultColors`). No-op for user-created
+    /// folders whose name doesn't match a built-in group.
+    func applyDefaultGroupColor(_ groupID: UUID) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        let defaultColor = ExamplePresets.groupDefaultColors[groups[index].name]
+        groups[index].color = defaultColor
         saveGroups()
     }
 
@@ -189,13 +223,49 @@ class PresetStore: ObservableObject {
                     sortIndex += 1
                     continue
                 }
-                let group = PresetGroup(name: groupName, sortOrder: sortIndex)
+                let group = PresetGroup(
+                    name: groupName,
+                    sortOrder: sortIndex,
+                    color: ExamplePresets.groupDefaultColors[groupName]
+                )
                 groups.append(group)
                 sortIndex += 1
             }
             saveGroups()
             defaults.set(true, forKey: groupSeedKey)
         }
+
+        // Step 1b: on initial install, backfill nil colors. On the
+        // one-shot "v2" pass, OVERWRITE colors for built-in groups so
+        // existing installs pick up the curated palette (orange / green
+        // / red / teal). The version bump lets us re-curate the
+        // defaults without trampling user customisations on every launch:
+        // future launches see the v2 key set and only backfill nils
+        // again. User-renamed groups are untouched because the lookup
+        // matches by group NAME.
+        let colorVersionKey = "JoystickConfig.appliedDefaultGroupColors.v2"
+        let didApplyV2 = defaults.bool(forKey: colorVersionKey)
+        var didColorBackfill = false
+        for index in groups.indices {
+            guard let defaultColor = ExamplePresets.groupDefaultColors[groups[index].name] else {
+                continue
+            }
+            if !didApplyV2 {
+                // First time on this version: apply the new curated tint
+                // to every built-in group, overwriting whatever was there.
+                if groups[index].color != defaultColor {
+                    groups[index].color = defaultColor
+                    didColorBackfill = true
+                }
+            } else if groups[index].color == nil {
+                // Subsequent launches: only fill nils so we never
+                // overwrite a colour the user picked from the menu.
+                groups[index].color = defaultColor
+                didColorBackfill = true
+            }
+        }
+        if didColorBackfill { saveGroups() }
+        if !didApplyV2 { defaults.set(true, forKey: colorVersionKey) }
 
         // Step 2: seed any missing example preset. Assign its group based on
         // ExamplePresets.groupAssignments + the current group list.
@@ -411,6 +481,20 @@ class PresetStore: ObservableObject {
         recentlyDeleted.insert(DeletedPreset(preset: preset, deletedAt: Date()), at: 0)
     }
 
+    /// Permanent delete: skip the trash + Recently Deleted buffer.
+    /// Used when the user cancels out of the editor on a newly created
+    /// draft - we don't want a string of empty "New Preset" drafts
+    /// piling up in the undo history just because the user clicked
+    /// "New" and then changed their mind.
+    func hardDeletePreset(_ preset: Preset) {
+        if preset.id == activePresetId {
+            deactivateAll()
+        }
+        presets.removeAll { $0.id == preset.id }
+        let source = presetsDirectory.appendingPathComponent(preset.filename)
+        try? FileManager.default.removeItem(at: source)
+    }
+
     /// Re-create a previously-deleted preset. Moves the JSON back from
     /// trash/ to presets/ and drops the entry from `recentlyDeleted`.
     @discardableResult
@@ -460,6 +544,34 @@ class PresetStore: ObservableObject {
         return nil
     }
 
+    /// Re-insert a previously-trashed preset from a backup envelope.
+    /// Writes the JSON to trash/ on disk and pushes it into the
+    /// in-memory `recentlyDeleted` list so the trash survives a
+    /// machine migration. Skips when the preset ID is already in the
+    /// trash (idempotent backup restore).
+    func restoreTrashFromBackup(preset: Preset, deletedAt: Date) {
+        if recentlyDeleted.contains(where: { $0.preset.id == preset.id }) { return }
+        let target = trashDirectory.appendingPathComponent(preset.filename)
+        if let data = try? JSONEncoder().encode(preset) {
+            try? data.write(to: target)
+        }
+        recentlyDeleted.insert(DeletedPreset(preset: preset, deletedAt: deletedAt), at: 0)
+    }
+
+    /// Codable snapshot of one trash entry for backup export / restore.
+    /// `DeletedPreset.id` is a transient UUID that's re-minted on every
+    /// load, so we expose `preset` + `deletedAt` only.
+    struct TrashSnapshot: Codable {
+        let preset: Preset
+        let deletedAt: Date
+    }
+
+    /// Export every trash entry for a backup envelope. Empty array if
+    /// the trash is empty - the backup file stays tidy.
+    func snapshotTrashForBackup() -> [TrashSnapshot] {
+        recentlyDeleted.map { TrashSnapshot(preset: $0.preset, deletedAt: $0.deletedAt) }
+    }
+
     /// Re-hydrate `recentlyDeleted` from on-disk trash on launch so the
     /// list survives app restarts. Called once from init.
     func loadTrash() {
@@ -505,12 +617,20 @@ class PresetStore: ObservableObject {
         if let index = presets.firstIndex(where: { $0.id == preset.id }) {
             presets[index].isActive = true
         }
+        // Persist active preset to the recovery sentinel so a crash
+        // here doesn't lose the user's place.
+        Task { @MainActor in
+            CrashRecoveryService.shared.recordActivePreset(preset.id)
+        }
     }
 
     func deactivateAll() {
         activePresetId = nil
         for i in presets.indices {
             presets[i].isActive = false
+        }
+        Task { @MainActor in
+            CrashRecoveryService.shared.recordActivePreset(nil)
         }
     }
 
@@ -524,12 +644,240 @@ class PresetStore: ObservableObject {
 
     // MARK: - Import / Export
 
+    /// Result of an import attempt. Distinguishes file IO errors from
+    /// parse errors from "valid JSON but wrong schema" so the UI can
+    /// give the user a specific message instead of a silent no-op.
+    enum ImportResult {
+        case success(Preset)
+        case fileUnreadable(String)
+        case parseError(String)
+        case schemaError(String)
+    }
+
+    /// One row in the import review sheet. Either a parsed preset
+    /// (which the user can rename before confirming) or a parse error
+    /// (which the sheet shows verbatim). The URL is kept for re-read /
+    /// "Show in Finder" actions.
+    struct ImportPreview: Identifiable {
+        let id = UUID()
+        let url: URL
+        let filename: String
+        /// Editable name shown in the review sheet. Pre-populated from
+        /// the parsed preset's name, or the filename minus extension
+        /// for files we couldn't parse.
+        var nameDraft: String
+        /// Parsed preset value. Mutated when the user types into the
+        /// rename field. nil when the file failed to parse.
+        var preset: Preset?
+        /// Specific failure message when preset is nil.
+        var errorMessage: String?
+        /// Whether this is a parseable file the user accepted.
+        var isImportable: Bool { preset != nil }
+    }
+
+    /// Sheet-driven state: a non-empty array opens the review sheet.
+    /// Reset to empty on dismiss / cancel / completion.
+    @Published var importReviewQueue: [ImportPreview] = []
+
+    /// Reports the last attempted import result so the SwiftUI sheet
+    /// can render a toast / alert. Reset when the user dismisses.
+    @Published var lastImportResult: ImportResult?
+    /// Mirror "did anything fail in the last batch?" so a multi-file
+    /// import can show one summary alert instead of N modal dialogs.
+    @Published var lastImportFailures: [(filename: String, reason: String)] = []
+
+    /// Import a JSON or legacy text file. Tries (1) the modern Preset
+    /// codable shape, (2) the legacy `Preset.fromLegacyJSON` path.
+    /// Returns the imported preset or sets `lastImportResult` to a
+    /// descriptive error case the UI can surface.
+    @discardableResult
     func importLegacyPreset(from url: URL) -> Preset? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        guard var preset = Preset.fromLegacyJSON(data, filename: Preset.generateFilename()) else { return nil }
-        preset.filename = Preset.generateFilename()
-        savePreset(preset)
-        return preset
+        let filename = url.lastPathComponent
+        // Sandbox: security-scoped URL from the user-picker. Must
+        // claim the scope before reading; balance with stop in defer.
+        let scopedAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if scopedAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            let msg = "Couldn't read file '\(filename)'. Permission denied or file missing."
+            lastImportResult = .fileUnreadable(msg)
+            lastImportFailures.append((filename, msg))
+            return nil
+        }
+        // First try the modern Preset codable shape so we get a
+        // specific Swift error if the JSON is structurally wrong.
+        do {
+            var preset = try JSONDecoder().decode(Preset.self, from: data)
+            preset.filename = Preset.generateFilename()
+            savePreset(preset)
+            lastImportResult = .success(preset)
+            return preset
+        } catch let decodeError {
+            // Modern decode failed - try the legacy path before giving
+            // up. fromLegacyJSON returns nil rather than throwing, so
+            // we surface the decode error if THAT fails too.
+            if var legacy = Preset.fromLegacyJSON(data, filename: Preset.generateFilename()) {
+                legacy.filename = Preset.generateFilename()
+                savePreset(legacy)
+                lastImportResult = .success(legacy)
+                return legacy
+            }
+            // Determine whether this was a JSON syntax error (invalid
+            // bytes) or a schema error (valid JSON, wrong shape) so
+            // the message can be specific.
+            let isSyntaxError: Bool
+            if let de = decodeError as? DecodingError {
+                if case .dataCorrupted = de { isSyntaxError = true } else { isSyntaxError = false }
+            } else {
+                isSyntaxError = false
+            }
+            let reason: String
+            if isSyntaxError {
+                reason = "'\(filename)' is not valid JSON. Open it in a text editor and check for missing braces, quotes, or commas."
+                lastImportResult = .parseError(reason)
+            } else {
+                reason = "'\(filename)' is JSON but doesn't match the preset schema (\(describe(decodeError))). It may be from an unsupported app version."
+                lastImportResult = .schemaError(reason)
+            }
+            lastImportFailures.append((filename, reason))
+            return nil
+        }
+    }
+
+    /// Pull the human-readable description out of a DecodingError so
+    /// the import alert can say exactly which field failed (e.g.
+    /// "joysticks: expected array, got number").
+    private func describe(_ error: Error) -> String {
+        guard let de = error as? DecodingError else { return error.localizedDescription }
+        switch de {
+        case .typeMismatch(_, let ctx):
+            let path = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+            return path.isEmpty ? ctx.debugDescription
+                                 : "\(path): \(ctx.debugDescription)"
+        case .valueNotFound(_, let ctx):
+            let path = ctx.codingPath.map(\.stringValue).joined(separator: ".")
+            return "\(path): value not found"
+        case .keyNotFound(let key, _):
+            return "missing field '\(key.stringValue)'"
+        case .dataCorrupted(let ctx):
+            return ctx.debugDescription
+        @unknown default:
+            return de.localizedDescription
+        }
+    }
+
+    /// Clears the buffered import error so the alert can be dismissed.
+    func acknowledgeImportFailures() {
+        lastImportResult = nil
+        lastImportFailures.removeAll()
+    }
+
+    /// Read each URL and produce a preview (parsed preset OR error
+    /// message). Does NOT touch the on-disk preset list - the user
+    /// has to confirm via `commitImportPreviews(_:)` first. Drives the
+    /// ImportReviewSheet.
+    ///
+    /// SwiftUI's fileImporter hands us security-scoped URLs. The app
+    /// is sandboxed, so reading them with plain `Data(contentsOf:)`
+    /// silently fails with "permission denied" unless we claim the
+    /// security scope first. Pair every `startAccessing` with a
+    /// matched `stop`.
+    func previewImports(from urls: [URL]) {
+        var previews: [ImportPreview] = []
+        for url in urls {
+            let filename = url.lastPathComponent
+            let baseName = (filename as NSString).deletingPathExtension
+            let scopedAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if scopedAccess { url.stopAccessingSecurityScopedResource() }
+            }
+            let data: Data
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                previews.append(ImportPreview(
+                    url: url,
+                    filename: filename,
+                    nameDraft: baseName,
+                    preset: nil,
+                    errorMessage: "Couldn't read file: \(error.localizedDescription)"
+                ))
+                continue
+            }
+            // Try modern Preset codable shape first.
+            do {
+                var preset = try JSONDecoder().decode(Preset.self, from: data)
+                preset.filename = Preset.generateFilename()
+                previews.append(ImportPreview(
+                    url: url,
+                    filename: filename,
+                    nameDraft: preset.name.isEmpty ? baseName : preset.name,
+                    preset: preset,
+                    errorMessage: nil
+                ))
+                continue
+            } catch let decodeError {
+                // Try legacy text-based preset format before giving up.
+                if var legacy = Preset.fromLegacyJSON(data, filename: Preset.generateFilename()) {
+                    legacy.filename = Preset.generateFilename()
+                    previews.append(ImportPreview(
+                        url: url,
+                        filename: filename,
+                        nameDraft: legacy.name.isEmpty ? baseName : legacy.name,
+                        preset: legacy,
+                        errorMessage: nil
+                    ))
+                    continue
+                }
+                // Build the human-readable explanation.
+                let isSyntaxError: Bool
+                if let de = decodeError as? DecodingError,
+                   case .dataCorrupted = de {
+                    isSyntaxError = true
+                } else {
+                    isSyntaxError = false
+                }
+                let msg: String
+                if isSyntaxError {
+                    msg = "Invalid JSON. Open the file in a text editor and check for missing braces, quotes, or commas."
+                } else {
+                    msg = "JSON doesn't match the preset schema (\(describe(decodeError)). The file may be from an unsupported app version."
+                }
+                previews.append(ImportPreview(
+                    url: url,
+                    filename: filename,
+                    nameDraft: baseName,
+                    preset: nil,
+                    errorMessage: msg
+                ))
+            }
+        }
+        importReviewQueue = previews
+    }
+
+    /// Commit the user's reviewed selections. Each preview that's
+    /// .isImportable and has a (possibly renamed) draft gets saved
+    /// to the on-disk presets directory. Returns the number of presets
+    /// actually saved.
+    @discardableResult
+    func commitImportPreviews(_ previews: [ImportPreview]) -> Int {
+        var saved = 0
+        for preview in previews {
+            guard var preset = preview.preset else { continue }
+            let trimmed = preview.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { preset.name = trimmed }
+            preset.filename = Preset.generateFilename()
+            savePreset(preset)
+            saved += 1
+        }
+        importReviewQueue = []
+        return saved
+    }
+
+    /// Discard the pending review without saving anything.
+    func cancelImportReview() {
+        importReviewQueue = []
     }
 
     func importLegacyPresetsFromOriginalApp() -> Int {

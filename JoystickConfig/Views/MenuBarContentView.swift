@@ -61,19 +61,24 @@ struct MenuBarContentView: View {
         }
         .keyboardShortcut("o", modifiers: [.command])
 
+        // For the auxiliary windows (Help, Test Bench, Tip Jar) we used to
+        // call openMainWindow() afterwards - which immediately brought the
+        // main window to the front and buried whatever we just opened.
+        // Now we only activate the app, then let each controller's own
+        // show() handle key-window promotion for its window.
         Button("Help Guides") {
+            NSApp.activate(ignoringOtherApps: true)
             HelpGuideWindowController.shared.show()
-            openMainWindow()
         }
 
         Button("Test Bench") {
+            NSApp.activate(ignoringOtherApps: true)
             TestBenchWindowController.shared.show()
-            openMainWindow()
         }
 
         Button("Support JoystickConfig...") {
+            NSApp.activate(ignoringOtherApps: true)
             TipJarWindowController.shared.show()
-            openMainWindow()
         }
 
         Divider()
@@ -107,7 +112,12 @@ struct MenuBarContentView: View {
     /// other apps because the menu bar icon click does not activate us.
     private func openMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.title == "JoystickConfig" || window.contentView != nil {
+        // Match by display name (now "JoystickConfig") OR fall back to any window
+        // that has a content view, so this keeps working if the bundle name
+        // changes again.
+        for window in NSApp.windows where window.title == "JoystickConfig"
+            || window.title == "JoystickConfig"
+            || window.contentView != nil {
             window.makeKeyAndOrderFront(nil)
             break
         }

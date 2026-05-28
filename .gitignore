@@ -21,7 +21,6 @@ xcuserdata/
 *.xcarchive
 
 # Editor / tooling
-.claude/
 .cursor/
 .vscode/
 

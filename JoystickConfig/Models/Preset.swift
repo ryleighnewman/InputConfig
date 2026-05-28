@@ -150,23 +150,93 @@ struct BindingModel: Identifiable, Codable, Hashable {
     }
 }
 
+/// Kind of input device a slot represents. Drives the Live Visualizer
+/// layout: a slot whose `inputKind = .keyboard` swaps the controller
+/// widgets for a keyboard-style chip layout, etc. `.auto` (default for
+/// existing presets) infers from the bindings' type majority.
+enum SlotInputKind: String, Codable, Hashable, CaseIterable {
+    case auto       // pick layout from the bindings' types
+    case controller // game controller widgets
+    case keyboard   // bound-keys chip map
+    case touchpad   // touchpad surface + regions + finger trails
+    case mouse      // bound mouse buttons / axes
+}
+
 /// A joystick mapping group (one physical controller's bindings)
 struct JoystickMapping: Identifiable, Codable, Hashable {
     let id: UUID
     var tag: String
     var bindings: [BindingModel]
     var isExpanded: Bool
+    /// Optional user-provided name for this joystick slot, e.g.
+    /// "Player 1 - Steve's controller". When set, takes priority over
+    /// the auto-derived controller product name in the UI. nil = fall
+    /// back to the connected controller's product name (e.g. "DualSense
+    /// Wireless Controller") or "Joystick #N" if no controller is bound
+    /// to that slot. Stored separately from `tag` (which is a free-form
+    /// description / comment).
+    var customName: String?
+    /// Kind of input device this slot represents. Picking a keyboard /
+    /// mouse / specific controller from the slot menu sets this so the
+    /// Live Visualizer can swap to the matching layout. Defaults to
+    /// `.auto` so existing preset files decode unchanged.
+    var inputKind: SlotInputKind = .auto
 
-    init(tag: String = "", bindings: [BindingModel] = [], isExpanded: Bool = true) {
+    init(tag: String = "", bindings: [BindingModel] = [], isExpanded: Bool = true,
+         customName: String? = nil, inputKind: SlotInputKind = .auto) {
         self.id = UUID()
         self.tag = tag
         self.bindings = bindings
         self.isExpanded = isExpanded
+        self.customName = customName
+        self.inputKind = inputKind
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, tag, bindings, isExpanded
+        case id, tag, bindings, isExpanded, customName, inputKind
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.tag = try c.decode(String.self, forKey: .tag)
+        self.bindings = try c.decode([BindingModel].self, forKey: .bindings)
+        self.isExpanded = try c.decode(Bool.self, forKey: .isExpanded)
+        self.customName = try c.decodeIfPresent(String.self, forKey: .customName)
+        self.inputKind = try c.decodeIfPresent(SlotInputKind.self, forKey: .inputKind) ?? .auto
+    }
+}
+
+/// Per-preset automation: side effects that fire on preset activation
+/// (auto-open an app) plus cursor utilities that only apply while the
+/// preset is running (confine, recenter, hide). Lives on the preset so
+/// each game / workflow gets its own choices; global Settings stays
+/// out of the way.
+struct PresetAutomation: Codable, Hashable {
+    /// Posix path or bundle identifier of an app to launch when the
+    /// preset activates. Empty string = no auto-launch. Examples:
+    /// "/Applications/Steam.app", "com.valvesoftware.steam".
+    var launchAppPath: String = ""
+    /// Optional URL to open after launching the app (e.g. a steam://
+    /// link to start a specific game). Empty = nothing.
+    var launchURL: String = ""
+
+    /// Confine the cursor away from screen edges while this preset
+    /// runs. Same behaviour as the global CursorGuard toggle, just
+    /// preset-scoped.
+    var confineCursor: Bool = false
+    var confineBufferPx: Double = 24
+
+    /// Periodically warp the cursor back to the centre of its screen.
+    var autoRecenterCursor: Bool = false
+    var autoRecenterIntervalMs: Double = 500
+
+    /// Hide the OS cursor for the duration of the preset.
+    var hideCursorWhileActive: Bool = false
+
+    /// Cursor sensitivity multiplier applied to mouse-move outputs the
+    /// preset fires (independent of macOS pointer-speed slider).
+    var sensitivityMultiplier: Double = 1.0
 }
 
 /// A complete preset containing name, tag, and joystick mappings
@@ -196,6 +266,14 @@ struct Preset: Identifiable, Codable, Hashable {
     /// 1 = dim, 2 = bright). nil = inherit the slot's current brightness.
     var lightBarBrightness: Int?
 
+    /// Per-preset automation: cursor confine + recenter, hide cursor,
+    /// auto-open an application on activate. Lives on the preset (not
+    /// global Settings) because these are inherently per-game choices -
+    /// the cursor confinement for an FPS preset shouldn't follow you
+    /// into a desktop-tool preset. Optional so older preset files
+    /// decode cleanly with defaults.
+    var automation: PresetAutomation = PresetAutomation()
+
     init(name: String = "New Preset", tag: String = "No tag", joysticks: [JoystickMapping] = [],
          filename: String = "", isActive: Bool = false, groupID: UUID? = nil) {
         self.id = UUID()
@@ -211,7 +289,7 @@ struct Preset: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, tag, joysticks, filename, isActive, createdAt, modifiedAt
-        case groupID, notes, lightBarColor, lightBarBrightness
+        case groupID, notes, lightBarColor, lightBarBrightness, automation
     }
 
     /// Custom Codable init so older preset files without `notes`,
@@ -231,6 +309,8 @@ struct Preset: Identifiable, Codable, Hashable {
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         self.lightBarColor = try c.decodeIfPresent(RGBLightColor.self, forKey: .lightBarColor)
         self.lightBarBrightness = try c.decodeIfPresent(Int.self, forKey: .lightBarBrightness)
+        self.automation = try c.decodeIfPresent(PresetAutomation.self, forKey: .automation)
+            ?? PresetAutomation()
     }
 
     static func generateFilename() -> String {
@@ -241,16 +321,37 @@ struct Preset: Identifiable, Codable, Hashable {
         return UUID().uuidString + ".json"
     }
 
-    /// Sort all bindings in all joystick groups alphabetically by input type then index
+    /// Sort all bindings in all joystick groups alphabetically by
+    /// input type then index. Every InputType must appear in the
+    /// type-order table so new input categories (motion, touchpad,
+    /// external key/mouse, cursor region, MIDI) don't all silently
+    /// collapse to `0` and intermix with buttons in the editor list.
     mutating func sortBindings() {
         for i in joysticks.indices {
             joysticks[i].bindings.sort { a, b in
-                let typeOrder: [InputType: Int] = [.button: 0, .axis: 1, .hat: 2]
-                let aType = typeOrder[a.input.type] ?? 0
-                let bType = typeOrder[b.input.type] ?? 0
+                let aType = Self.sortOrder(for: a.input.type)
+                let bType = Self.sortOrder(for: b.input.type)
                 if aType != bType { return aType < bType }
                 return a.input.index < b.input.index
             }
+        }
+    }
+
+    /// Authoritative type-sort order. Every InputType case is listed
+    /// so the comparator never falls through to a default of 0.
+    private static func sortOrder(for type: InputType) -> Int {
+        switch type {
+        case .button:          return 0
+        case .axis:            return 1
+        case .hat:             return 2
+        case .touchpad:        return 3
+        case .touchpadRegion:  return 4
+        case .touchpadGesture: return 5
+        case .motion:          return 6
+        case .extKey:          return 7
+        case .extMouse:        return 8
+        case .cursorRegion:    return 9
+        case .stickRegion:     return 10
         }
     }
 }
@@ -282,12 +383,14 @@ extension Preset {
                     }
                 }
 
-                // Sort bindings by type then index
+                // Sort bindings by type then index. Uses the same
+                // authoritative order as sortBindings() so legacy
+                // import doesn't end up with a different layout than
+                // the editor would have produced.
                 bindings.sort { a, b in
-                    let typeOrder: [InputType: Int] = [.button: 0, .axis: 1, .hat: 2, .touchpad: 3, .touchpadRegion: 4, .motion: 5]
-                    let aType = typeOrder[a.input.type] ?? 0
-                    let bType = typeOrder[b.input.type] ?? 0
-                    if aType != bType { return aType < bType }
+                    let aOrder = Self.sortOrder(for: a.input.type)
+                    let bOrder = Self.sortOrder(for: b.input.type)
+                    if aOrder != bOrder { return aOrder < bOrder }
                     return a.input.index < b.input.index
                 }
 
@@ -457,11 +560,40 @@ struct PresetGroup: Identifiable, Codable, Hashable {
     var name: String
     var sortOrder: Int
     var isExpanded: Bool
+    /// User-pickable tint for the folder row in the sidebar. Stored as a
+    /// stable name (matches `PresetGroup.colorOptions`) so it survives
+    /// app updates and SwiftUI palette changes. nil means no tint, which
+    /// renders as the neutral default.
+    var color: String?
 
-    init(id: UUID = UUID(), name: String, sortOrder: Int = 0, isExpanded: Bool = true) {
+    init(id: UUID = UUID(), name: String, sortOrder: Int = 0,
+         isExpanded: Bool = true, color: String? = nil) {
         self.id = id
         self.name = name
         self.sortOrder = sortOrder
         self.isExpanded = isExpanded
+        self.color = color
     }
+
+    /// Lenient Codable so older saves (which don't have a `color` key)
+    /// still load. New saves write color when set.
+    enum CodingKeys: String, CodingKey {
+        case id, name, sortOrder, isExpanded, color
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.sortOrder = (try? c.decode(Int.self, forKey: .sortOrder)) ?? 0
+        self.isExpanded = (try? c.decode(Bool.self, forKey: .isExpanded)) ?? true
+        self.color = try? c.decode(String.self, forKey: .color)
+    }
+
+    /// Palette of named colors the user can pick from. Each entry maps
+    /// to a SwiftUI Color via `PresetGroup.color(named:)`. Kept in the
+    /// model so the picker UI doesn't need its own hard-coded list.
+    static let colorOptions: [String] = [
+        "blue", "purple", "pink", "red", "orange",
+        "yellow", "green", "teal", "indigo", "brown"
+    ]
 }

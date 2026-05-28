@@ -10,5 +10,9 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- Outbound HTTPS for the iTunes Lookup API used by UpdateCheckService.
+	     No inbound listening, no privileged ports. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

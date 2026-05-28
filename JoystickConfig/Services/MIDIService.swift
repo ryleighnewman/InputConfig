@@ -35,6 +35,14 @@ final class MIDIService: @unchecked Sendable {
     static let portName = "JoystickConfig"
 
     private init() {
+        // Pre-allocate the activeNotes dict for every possible MIDI
+        // channel so note-on doesn't pay a "create empty Set + insert
+        // + write back to dict" round trip on every press. With 16
+        // pre-allocated Sets, the hot path becomes a single
+        // `insert(note)` on an existing Set reference.
+        for ch in 0..<16 {
+            activeNotes[ch] = Set<Int>()
+        }
         setup()
     }
 
@@ -102,13 +110,29 @@ final class MIDIService: @unchecked Sendable {
         queue.async { [self] in
             activeNotesLock.lock()
             let snapshot = activeNotes
-            activeNotes.removeAll()
+            // Reset the per-channel sets in place (pre-populated with
+            // empty Set<Int> in init) rather than removing keys, so
+            // future note-on calls don't have to re-allocate the
+            // per-channel storage.
+            for ch in activeNotes.keys {
+                activeNotes[ch]?.removeAll(keepingCapacity: true)
+            }
             activeNotesLock.unlock()
 
+            // Per-note NoteOff for everything we know about.
             for (channel, notes) in snapshot {
                 for note in notes {
                     send(bytes: [0x80 | UInt8(channel), UInt8(note), 0])
                 }
+            }
+
+            // Belt-and-suspenders: also blast CC 123 (All Notes Off)
+            // on every channel. Catches the case where the DAW lost
+            // a NoteOn (dropped packet, clock skew) and would
+            // otherwise hold a stuck note forever after the engine
+            // stops. CC 123 is the standard MIDI panic gesture.
+            for channel in 0..<16 {
+                send(bytes: [0xB0 | UInt8(channel), 123, 0])
             }
         }
     }
@@ -191,10 +215,13 @@ final class MIDIService: @unchecked Sendable {
     private func track(note: Int, channel: Int, on: Bool) {
         activeNotesLock.lock()
         defer { activeNotesLock.unlock() }
+        // `activeNotes` is pre-populated in init for channels 0..15, so
+        // the dict subscript always hits an existing key. Mutate the
+        // stored Set in place via the subscript-with-default pattern,
+        // which avoids the read-copy-write dance the previous version
+        // did (allocated a new Set on every note-on).
         if on {
-            var set = activeNotes[channel] ?? Set<Int>()
-            set.insert(note)
-            activeNotes[channel] = set
+            activeNotes[channel, default: Set<Int>()].insert(note)
         } else {
             activeNotes[channel]?.remove(note)
         }

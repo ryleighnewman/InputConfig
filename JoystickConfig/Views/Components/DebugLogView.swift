@@ -3,7 +3,11 @@ import SwiftUI
 struct DebugLogView: View {
     @EnvironmentObject var mappingEngine: MappingEngine
 
-    @State private var isExpanded = true
+    /// Persist the user's expand choice across launches via UserDefaults,
+    /// but default the log to collapsed so the welcome / home screen
+    /// has full room for the feature grid + Quick Tour. Users who
+    /// expand it (typically while editing a preset) keep their choice.
+    @AppStorage("JoystickConfig.debugLogExpanded") private var isExpanded: Bool = false
     @State private var filterText = ""
     @State private var showPressOnly = false
     @State private var autoScroll = true
@@ -301,7 +305,7 @@ struct DebugLogView: View {
             Spacer()
 
             if mappingEngine.isRunning {
-                Text("240 Hz polling")
+                Text("\(mappingEngine.currentPollHz) Hz polling")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }

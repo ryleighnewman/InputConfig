@@ -98,6 +98,23 @@ final class MotionCalibrationService: @unchecked Sendable {
         saveToDisk()
     }
 
+    /// One-shot calibration: take the controller's current motion
+    /// reading as the new "rest" baseline. Driven from a toolbar
+    /// button so users can re-zero on a flat surface with one click
+    /// instead of opening the per-binding edit menu and running the
+    /// multi-second still-hold capture.
+    func quickZero(forKey key: String,
+                   gyroX: Float, gyroY: Float, gyroZ: Float,
+                   accelX: Float, accelY: Float, accelZ: Float) {
+        let cal = MotionCalibration(
+            controllerKey: key,
+            gyroDriftX: gyroX, gyroDriftY: gyroY, gyroDriftZ: gyroZ,
+            accelDriftX: accelX, accelDriftY: accelY, accelDriftZ: accelZ,
+            savedAt: Date()
+        )
+        save(cal)
+    }
+
     /// Subtract the stored drift from a raw gyro value. Returns the value
     /// unchanged if the controller hasn't been calibrated yet - better to
     /// have uncorrected motion than no motion.

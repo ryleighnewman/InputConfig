@@ -15,9 +15,37 @@ final class InputSimulator: @unchecked Sendable {
     private var pressedKeys: Set<Int> = []
     private var pressedMouseButtons: Set<Int> = []
 
-    /// Create an event source for synthetic events (nil if accessibility not granted)
-    private var eventSource: CGEventSource? {
-        CGEventSource(stateID: .hidSystemState)
+    /// Cached event source for synthetic events. Created once on first
+    /// access. Previously this was a computed property, which meant
+    /// every key press / mouse motion / scroll wheel call paid the
+    /// CGEventSource initialization cost. On a turbo-firing or
+    /// joystick-as-mouse preset that was many hundreds of allocations
+    /// per second.
+    private lazy var eventSource: CGEventSource? = CGEventSource(stateID: .hidSystemState)
+
+    /// Magic marker we stamp onto every `CGEvent` we post via this class.
+    /// `ExternalInputDeviceService`'s `CGEventTap` reads back this field
+    /// and ignores any event carrying this marker - that's how we
+    /// guarantee a binding's keyboard OUTPUT can't loop back as keyboard
+    /// INPUT and trigger itself. "INPUTC01" in ASCII.
+    nonisolated(unsafe) static let ownEventMarker: Int64 = 0x49_4E_50_55_54_43_30_31
+
+    /// Post a CGEvent we created, after stamping our marker so the
+    /// CGEventTap consumer can recognize and skip it. All post call sites
+    /// in this file go through here.
+    ///
+    /// IMPORTANT: posts to **`.cghidEventTap`**, not `.cgSessionEventTap`.
+    /// `.cghidEventTap` is the lowest-level tap - events appear as if
+    /// from real HID hardware, BEFORE the WindowServer's "is this app
+    /// trusted to post events" filter runs. That filter is what gates
+    /// `.cgSessionEventTap` posts on the Accessibility permission and
+    /// silently drops events from apps that haven't been granted it.
+    /// Posting at the HID layer is how Enjoyable, BetterMouse, Karabiner
+    /// and similar input remappers ship without requiring users to add
+    /// the app to System Settings → Privacy & Security → Accessibility.
+    fileprivate func taggedPost(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: Self.ownEventMarker)
+        event.post(tap: .cghidEventTap)
     }
 
     // MARK: - Keyboard Simulation
@@ -32,7 +60,7 @@ final class InputSimulator: @unchecked Sendable {
                 if let flags = flags {
                     event.flags = flags
                 }
-                event.post(tap: .cgSessionEventTap)
+                taggedPost(event)
             }
         } else {
             postSpecialKey(hidCode, keyDown: true)
@@ -45,7 +73,7 @@ final class InputSimulator: @unchecked Sendable {
 
         if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
-                event.post(tap: .cgSessionEventTap)
+                taggedPost(event)
             }
         } else {
             postSpecialKey(hidCode, keyDown: false)
@@ -62,19 +90,23 @@ final class InputSimulator: @unchecked Sendable {
         }
     }
 
-    private func postSpecialKey(_ hidCode: Int, keyDown: Bool) {
-        let specialKeyMap: [Int: Int] = [
-            71: 0x91,   // Brightness Down
-            72: 0x90,   // Brightness Up
-            307: 0x14,  // Rewind
-            308: 0x10,  // Play/Pause
-            309: 0x13,  // Fast Forward
-            310: 0x07,  // Mute
-            311: 0x00,  // Volume Up
-            312: 0x01,  // Volume Down
-        ]
+    /// HID code → NSEvent.subtype:systemDefined NX key code. Static so
+    /// it's allocated once at type init, not per call. Was previously
+    /// a local `let` inside `postSpecialKey`, allocating a fresh dict
+    /// on every media-key press.
+    private static let specialKeyMap: [Int: Int] = [
+        71: 0x91,   // Brightness Down
+        72: 0x90,   // Brightness Up
+        307: 0x14,  // Rewind
+        308: 0x10,  // Play/Pause
+        309: 0x13,  // Fast Forward
+        310: 0x07,  // Mute
+        311: 0x00,  // Volume Up
+        312: 0x01,  // Volume Down
+    ]
 
-        guard let nxKeyType = specialKeyMap[hidCode] else { return }
+    private func postSpecialKey(_ hidCode: Int, keyDown: Bool) {
+        guard let nxKeyType = Self.specialKeyMap[hidCode] else { return }
 
         let flags: Int = keyDown ? 0xa00 : 0xb00
         let data1 = (nxKeyType << 16) | flags
@@ -89,62 +121,68 @@ final class InputSimulator: @unchecked Sendable {
             data1: data1,
             data2: -1
         )
-        event?.cgEvent?.post(tap: .cgSessionEventTap)
+        if let cg = event?.cgEvent { taggedPost(cg) }
     }
 
     // MARK: - Mouse Button Simulation
 
     func mouseButtonDown(_ button: Int) {
         guard !pressedMouseButtons.contains(button) else { return }
+        // `NSScreen.main` can be nil during sleep/wake transitions and
+        // fast-user-switching, and CGMouseButton(rawValue:) returns nil
+        // for buttons outside 0...31. Either case used to force-unwrap
+        // and crash the entire mapping engine mid-binding; now both
+        // fall back gracefully.
+        guard let screenHeight = NSScreen.main?.frame.height,
+              let cgButton = cgMouseButton(for: button) else { return }
         pressedMouseButtons.insert(button)
 
         let location = NSEvent.mouseLocation
-        let cgPoint = CGPoint(x: location.x, y: NSScreen.main!.frame.height - location.y)
+        let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
 
         let eventType: CGEventType
-        let mouseButton: CGMouseButton
         switch button {
-        case 0:
-            eventType = .leftMouseDown
-            mouseButton = .left
-        case 1:
-            eventType = .rightMouseDown
-            mouseButton = .right
-        default:
-            eventType = .otherMouseDown
-            mouseButton = CGMouseButton(rawValue: UInt32(button))!
+        case 0: eventType = .leftMouseDown
+        case 1: eventType = .rightMouseDown
+        default: eventType = .otherMouseDown
         }
 
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: eventType,
-                               mouseCursorPosition: cgPoint, mouseButton: mouseButton) {
-            event.post(tap: .cgSessionEventTap)
+                               mouseCursorPosition: cgPoint, mouseButton: cgButton) {
+            taggedPost(event)
         }
     }
 
     func mouseButtonUp(_ button: Int) {
         guard pressedMouseButtons.contains(button) else { return }
+        guard let screenHeight = NSScreen.main?.frame.height,
+              let cgButton = cgMouseButton(for: button) else { return }
         pressedMouseButtons.remove(button)
 
         let location = NSEvent.mouseLocation
-        let cgPoint = CGPoint(x: location.x, y: NSScreen.main!.frame.height - location.y)
+        let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
 
         let eventType: CGEventType
-        let mouseButton: CGMouseButton
         switch button {
-        case 0:
-            eventType = .leftMouseUp
-            mouseButton = .left
-        case 1:
-            eventType = .rightMouseUp
-            mouseButton = .right
-        default:
-            eventType = .otherMouseUp
-            mouseButton = CGMouseButton(rawValue: UInt32(button))!
+        case 0: eventType = .leftMouseUp
+        case 1: eventType = .rightMouseUp
+        default: eventType = .otherMouseUp
         }
 
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: eventType,
-                               mouseCursorPosition: cgPoint, mouseButton: mouseButton) {
-            event.post(tap: .cgSessionEventTap)
+                               mouseCursorPosition: cgPoint, mouseButton: cgButton) {
+            taggedPost(event)
+        }
+    }
+
+    /// Map a JoystickConfig logical mouse-button index to CGMouseButton.
+    /// Returns nil for indices that don't have a CGMouseButton equivalent
+    /// instead of force-unwrapping; the caller drops the event.
+    private func cgMouseButton(for index: Int) -> CGMouseButton? {
+        switch index {
+        case 0: return .left
+        case 1: return .right
+        default: return CGMouseButton(rawValue: UInt32(index))
         }
     }
 
@@ -160,7 +198,7 @@ final class InputSimulator: @unchecked Sendable {
                                mouseCursorPosition: newPoint, mouseButton: .left) {
             event.setIntegerValueField(.mouseEventDeltaX, value: Int64(deltaX))
             event.setIntegerValueField(.mouseEventDeltaY, value: Int64(deltaY))
-            event.post(tap: .cgSessionEventTap)
+            taggedPost(event)
         }
     }
 
@@ -169,7 +207,7 @@ final class InputSimulator: @unchecked Sendable {
     func scrollWheel(deltaX: Int32, deltaY: Int32) {
         if let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .pixel,
                                wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0) {
-            event.post(tap: .cgSessionEventTap)
+            taggedPost(event)
         }
     }
 
@@ -189,7 +227,7 @@ final class InputSimulator: @unchecked Sendable {
         for key in pressedKeys {
             if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[key] {
                 if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
-                    event.post(tap: .cgSessionEventTap)
+                    taggedPost(event)
                 }
             }
         }
@@ -242,7 +280,8 @@ final class InputSimulator: @unchecked Sendable {
         if let event = mouseEvent {
             event.setIntegerValueField(.mouseEventDeltaX, value: 0)
             event.setIntegerValueField(.mouseEventDeltaY, value: 0)
-            event.post(tap: .cgSessionEventTap)
+            // taggedPost is an instance method; use the singleton.
+            InputSimulator.shared.taggedPost(event)
             results.append("Event Post: OK (no error)")
         } else {
             results.append("Event Post: SKIPPED (no event)")

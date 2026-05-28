@@ -2,8 +2,14 @@ import Foundation
 import GameController
 import Combine
 
-/// Readable info about a connected controller
-struct ControllerInfo {
+/// Readable info about a connected controller.
+///
+/// Equatable so the 30 s details refresh can skip re-assigning the
+/// @Published `controllerDetails` dict when nothing actually changed.
+/// `connectedAt` is intentionally excluded from the comparison - it's
+/// always slightly different per refresh and we don't want that to
+/// invalidate equality and trigger a view storm.
+struct ControllerInfo: Equatable {
     var name: String
     var productCategory: String
     var hasExtendedGamepad: Bool
@@ -20,6 +26,24 @@ struct ControllerInfo {
     var hasAdaptiveTriggers: Bool = false
     var physicalButtonNames: [String] = []
     var brand: ControllerBrand = .unknown
+
+    static func == (lhs: ControllerInfo, rhs: ControllerInfo) -> Bool {
+        return lhs.name == rhs.name
+            && lhs.productCategory == rhs.productCategory
+            && lhs.hasExtendedGamepad == rhs.hasExtendedGamepad
+            && lhs.hasLight == rhs.hasLight
+            && lhs.hasBattery == rhs.hasBattery
+            && lhs.batteryLevel == rhs.batteryLevel
+            && lhs.batteryState == rhs.batteryState
+            && lhs.buttonCount == rhs.buttonCount
+            && lhs.axisCount == rhs.axisCount
+            && lhs.supportsMotion == rhs.supportsMotion
+            && lhs.hasTouchpad == rhs.hasTouchpad
+            && lhs.hasMicroGamepad == rhs.hasMicroGamepad
+            && lhs.hasAdaptiveTriggers == rhs.hasAdaptiveTriggers
+            && lhs.physicalButtonNames == rhs.physicalButtonNames
+            && lhs.brand == rhs.brand
+    }
 }
 
 /// Represents the current state of a connected controller
@@ -49,6 +73,79 @@ class GameControllerService: ObservableObject {
     /// Refreshed at 10 Hz independent of the mapping engine, so the editor's
     /// binding row highlight works even when no preset is running.
     @Published var rawActiveInputs: Set<String> = []
+
+    /// When true, the Quick Tour has injected a synthetic DualSense
+    /// Edge entry into `controllerDetails[0]` so the visualizer can
+    /// render all its widgets even with no real controller connected.
+    /// The tour clears this on tear-down. Backing storage for the
+    /// real entry (if any) is preserved.
+    @Published private(set) var tutorialFakeControllerActive: Bool = false
+    private var preTutorialControllerDetails: ControllerInfo?
+
+    /// Install a synthetic DualSense Edge entry into slot 0 so the
+    /// Quick Tour can light up every visualizer widget regardless of
+    /// what hardware the user has plugged in. Reversible via
+    /// `disableTutorialFakeController()`.
+    func enableTutorialFakeController() {
+        preTutorialControllerDetails = controllerDetails[0]
+        let info = ControllerInfo(
+            name: "DualSense Edge Wireless Controller (Tutorial)",
+            productCategory: "DualSense Edge",
+            hasExtendedGamepad: true,
+            hasLight: true,
+            hasBattery: true,
+            batteryLevel: 1.0,
+            batteryState: "charging",
+            buttonCount: 18,
+            axisCount: 6,
+            supportsMotion: true,
+            hasTouchpad: true,
+            hasMicroGamepad: false,
+            hasAdaptiveTriggers: true,
+            physicalButtonNames: ["A", "B", "X", "Y", "LB", "RB",
+                                  "LT", "RT", "Share", "Menu", "Home",
+                                  "L3", "R3", "Touchpad", "Mute",
+                                  "Left Paddle", "Right Paddle"],
+            brand: .dualSense
+        )
+        controllerDetails[0] = info
+        tutorialFakeControllerActive = true
+        // Set a flag so a force-quit during the tour doesn't leave the
+        // synthetic controller in place on next launch. We check this
+        // in init() and immediately undo if found.
+        UserDefaults.standard.set(true, forKey: Self.tutorialFakeFlagKey)
+    }
+
+    /// Remove the synthetic Quick Tour controller and restore whatever
+    /// real entry was there before (or nothing).
+    func disableTutorialFakeController() {
+        if let real = preTutorialControllerDetails {
+            controllerDetails[0] = real
+        } else {
+            controllerDetails.removeValue(forKey: 0)
+        }
+        preTutorialControllerDetails = nil
+        tutorialFakeControllerActive = false
+        UserDefaults.standard.removeObject(forKey: Self.tutorialFakeFlagKey)
+    }
+
+    /// UserDefaults key for the "synthetic tutorial controller is
+    /// currently injected" flag. Persists across launches so a force-
+    /// quit during the tour can be detected and cleaned up.
+    private static let tutorialFakeFlagKey = "JoystickConfig.tutorialFakeActive"
+
+    /// Called from init() to clear any lingering synthetic controller
+    /// left behind by a force-quit during the previous tour session.
+    /// Safe to call when no synthetic was active.
+    private func clearStaleTutorialFakeIfNeeded() {
+        guard UserDefaults.standard.bool(forKey: Self.tutorialFakeFlagKey) else { return }
+        // The synthetic only ever lives at slot 0. Anything that was
+        // there is gone now anyway - real controllers re-register
+        // through the connect notification.
+        controllerDetails.removeValue(forKey: 0)
+        UserDefaults.standard.removeObject(forKey: Self.tutorialFakeFlagKey)
+        NSLog("[GameControllerService] Cleared stale tutorial fake controller from previous session")
+    }
 
     /// Per-slot snapshot of the latest `ControllerState`. Updated at the
     /// same 30 Hz cadence as `rawActiveInputs`. Drives the live virtual
@@ -88,20 +185,98 @@ class GameControllerService: ObservableObject {
     /// a human-readable label with the current pressed value. The
     /// visualizer renders these as chips so users can see at a glance
     /// what their controller is reporting.
-    struct ExtraButton: Identifiable {
-        let id = UUID()
+    struct ExtraButton: Identifiable, Equatable {
+        /// Stable identity derived from the button's logical index.
+        /// Previously this was a fresh UUID per snapshot, which made
+        /// every call to `extraButtonsSnapshot` return arrays that
+        /// SwiftUI considered "different" - downstream views received
+        /// new `extraButtons` parameters every 30 Hz poll tick and
+        /// interfered with the binding row's highlight animation.
+        var id: Int { index }
         let label: String
         let index: Int
         let pressed: Bool
     }
 
     func extraButtonsSnapshot(for slot: Int) -> [ExtraButton] {
-        guard let cached = cachedExtraButtons[slot] else { return [] }
-        return cached.map { (button, index) in
-            ExtraButton(label: Self.labelForExtraButton(index: index, button: button),
-                        index: index,
-                        pressed: button.value > 0.5)
+        // Native GCController path: KVC-discovered buttons (paddles,
+        // mute, share, FN) live in cachedExtraButtons.
+        if let cached = cachedExtraButtons[slot] {
+            var out = cached.map { (button, index) in
+                ExtraButton(label: Self.labelForExtraButton(index: index, button: button),
+                            index: index,
+                            pressed: button.value > 0.5)
+            }
+            // Augment with DualSense Edge supplemental buttons (paddle/
+            // FN/mute) when the slot's controller is a DualSense. We
+            // read those bits via raw HID in DualSenseSupplementService
+            // because Apple's GameController framework doesn't expose
+            // them. The merge is keyed by index so a name from the
+            // native list (if any) takes priority over our static names.
+            if slot < connectedControllers.count {
+                let c = connectedControllers[slot]
+                let isDualSense = (c.vendorName ?? "").lowercased().contains("dualsense")
+                    || c.productCategory.lowercased().contains("dualsense")
+                if isDualSense {
+                    let supplement = DualSenseSupplementService.shared.anySupplementalButtons()
+                    let existingIndices = Set(out.map(\.index))
+                    let supplementNames: [Int: String] = [
+                        15: "Microphone / Mute",
+                        16: "Left Paddle",
+                        17: "Right Paddle",
+                        20: "FN 1 (Left Function)",
+                        21: "FN 2 (Right Function)",
+                    ]
+                    for (idx, name) in supplementNames where !existingIndices.contains(idx) {
+                        let pressed = (supplement[idx] ?? 0) > 0.5
+                        out.append(ExtraButton(label: name, index: idx, pressed: pressed))
+                    }
+                }
+            }
+            return out.sorted { $0.index < $1.index }
         }
+        // Raw HID path: anything in state.buttons beyond the standard
+        // 0-12 slots (face/shoulder/trigger/menu/stick-click) is an
+        // "extra" button. Most gamepads have none; fight sticks /
+        // arcade pads / custom controllers can have many.
+        if let gamepad = rawHIDGamepadSlots[slot] {
+            let state = gamepad.state
+            let names = gamepad.profile?.physicalButtonNames ?? []
+            let extraKeys = state.buttons.keys.filter { $0 > 12 }.sorted()
+            return extraKeys.map { idx in
+                let label = idx < names.count ? names[idx] : "Button \(idx)"
+                return ExtraButton(label: label,
+                                   index: idx,
+                                   pressed: (state.buttons[idx] ?? 0) > 0.5)
+            }
+        }
+        return []
+    }
+
+    /// Same idea for axes: anything past axis 5 (which is the standard
+    /// RT analog) is an extra axis the visualizer should surface.
+    /// Returns (index, label, value) tuples sorted by index. Currently
+    /// only relevant for raw HID gamepads since GameController
+    /// framework only exposes 6 axes.
+    struct ExtraAxis: Identifiable, Equatable {
+        /// Same stable-id rationale as ExtraButton above - avoids
+        /// re-rendering downstream views on every snapshot tick.
+        var id: Int { index }
+        let label: String
+        let index: Int
+        let value: Float
+    }
+
+    func extraAxesSnapshot(for slot: Int) -> [ExtraAxis] {
+        if let gamepad = rawHIDGamepadSlots[slot] {
+            let state = gamepad.state
+            let extraKeys = state.axes.keys.filter { $0 > 5 }.sorted()
+            return extraKeys.map { idx in
+                ExtraAxis(label: "Axis \(idx)", index: idx,
+                          value: state.axes[idx] ?? 0)
+            }
+        }
+        return []
     }
 
     /// Friendly name to show on each extra-button chip. Prefers the
@@ -129,9 +304,17 @@ class GameControllerService: ObservableObject {
     /// the last real MFi controller so presets keep their numbering.
     @Published var steamControllerSlot: Int?
 
+    /// Slot indices assigned to raw HID gamepads (8BitDo Ultimate 2C in
+    /// XInput mode, Xbox 360 wired, Logitech F310/F710, generic XInput
+    /// pads, DualShock 3 over USB, etc.). Each entry maps a controller
+    /// slot index → `RawHIDGamepad`. Slots are allocated after Steam.
+    /// See `syncRawHIDGamepadSlots()`.
+    @Published var rawHIDGamepadSlots: [Int: RawHIDGamepad] = [:]
+
     private var pollTimer: Timer?
     private var detailsTimer: Timer?
     private var steamWatchTimer: Timer?
+    private var rawHIDWatchTimer: Timer?
     private var rawActivePollTimer: Timer?
     private var scanCallback: ((InputEvent) -> Void)?
     private var cancellables = Set<AnyCancellable>()
@@ -154,15 +337,58 @@ class GameControllerService: ObservableObject {
         SteamControllerService.shared.retain()
         startSteamControllerWatch()
         startRawActiveInputsPolling()
+
+        // Boot the raw HID gamepad layer. Covers controllers that
+        // Apple's GameController framework doesn't see (8BitDo Ultimate
+        // 2C in XInput mode, Xbox 360 wired pads, Logitech F310/F710,
+        // DualShock 3, generic XInput controllers).
+        RawHIDGamepadService.shared.start()
+        startRawHIDGamepadWatch()
+
+        // DualSense / DualSense Edge supplement. Apple's framework
+        // surfaces the standard DualSense buttons but NOT the Edge's
+        // exclusive ones (left/right paddle, FN1/FN2, mute). We open
+        // the device a second time in non-seize mode and parse those
+        // bits out of the raw report, then merge them into the
+        // matching slot's ControllerState below.
+        DualSenseSupplementService.shared.start()
+
+        // If a previous run force-quit during the Quick Tour, the
+        // synthetic DualSense Edge entry could still be sitting at
+        // slot 0 in memory we just initialized. Clean it up before
+        // any UI binds to controllerDetails.
+        clearStaleTutorialFakeIfNeeded()
     }
 
-    /// Periodically refresh battery level and other dynamic details
+    deinit {
+        // GameController + connect/disconnect observers are registered
+        // against the singleton's lifetime. The service almost always
+        // outlives the app process, but adding a clean teardown makes
+        // the type safe to recreate in tests and stops the leak
+        // analyzer flagging it. Timer cleanup is deliberately omitted:
+        // Swift 6 strict-concurrency forbids touching @MainActor /
+        // non-Sendable state from a nonisolated deinit, and Timer
+        // properties on a main-actor class fall into that category.
+        // The Timers retain self, so deinit only ever runs once the
+        // run loop has already dropped them - explicit invalidate
+        // would be a no-op at that point anyway.
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    /// Periodically refresh battery level and other dynamic details.
+    /// Only re-publishes a slot's `ControllerInfo` when it actually
+    /// changed - the equality check excludes the `connectedAt`
+    /// timestamp so an unchanged battery reading doesn't kick every
+    /// observer into a re-render every 30 seconds.
     private func startDetailsPolling() {
         detailsTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
                 for (index, controller) in self.connectedControllers.enumerated() {
-                    self.controllerDetails[index] = self.buildControllerInfo(controller)
+                    let next = self.buildControllerInfo(controller)
+                    if self.controllerDetails[index] != next {
+                        self.controllerDetails[index] = next
+                    }
                 }
             }
         }
@@ -217,14 +443,39 @@ class GameControllerService: ObservableObject {
     }
 
     func refreshControllers() {
+        // Capture light/RGB state by controller identity BEFORE we
+        // rebuild the slot dict. After the rebuild we reassign by
+        // identity rather than blind slot index - otherwise when a
+        // low-numbered controller disconnects, every higher controller
+        // shifts left and a custom color set for slot 1 silently
+        // transfers to whatever controller now occupies slot 1.
+        var lightByIdentity: [ObjectIdentifier: (r: Float, g: Float, b: Float)] = [:]
+        var brightnessByIdentity: [ObjectIdentifier: UInt8] = [:]
+        var rgbActiveByIdentity: Set<ObjectIdentifier> = []
+        for (slot, c) in connectedControllers.enumerated() {
+            let key = ObjectIdentifier(c)
+            if let color = lightColors[slot] { lightByIdentity[key] = color }
+            if let bri = lightBrightness[slot] { brightnessByIdentity[key] = bri }
+            if rgbCycleActive[slot] == true { rgbActiveByIdentity.insert(key) }
+        }
+
         connectedControllers = GCController.controllers()
         controllerNames.removeAll()
         controllerDetails.removeAll()
         cachedExtraButtons.removeAll()
+        lightColors.removeAll()
+        lightBrightness.removeAll()
+        rgbCycleActive.removeAll()
         for (index, controller) in connectedControllers.enumerated() {
+            // Restore per-controller-identity light state into the new slot.
+            let key = ObjectIdentifier(controller)
+            if let color = lightByIdentity[key] { lightColors[index] = color }
+            if let bri = brightnessByIdentity[key] { lightBrightness[index] = bri }
+            if rgbActiveByIdentity.contains(key) { rgbCycleActive[index] = true }
             cacheExtraButtons(for: controller, at: index)
             installPhysicalPressLogger(for: controller, slot: index)
             activateMotionSensors(for: controller)
+            installTouchpadHandlers(for: controller, slot: index)
             controllerNames[index] = controller.vendorName ?? "Controller \(index)"
             controllerDetails[index] = buildControllerInfo(controller)
 
@@ -378,15 +629,21 @@ class GameControllerService: ObservableObject {
         }
 
         // Diagnostic: log every button name the profile reports the
-        // moment we cache. This lets users (and the Live Press Log in
-        // Settings) see exactly what's surfaced - if the PS / mute /
-        // paddle / FN buttons don't appear here AND none were found via
-        // KVC above, Apple's framework isn't sending them and we can't
-        // map them through standard MFi APIs.
+        // moment we cache. NSLog (not print) so it reaches the unified
+        // log immediately and survives across-process redirects - lets
+        // the user see via `log stream` in Terminal exactly which
+        // names Apple's framework is sending. If the PS / mute /
+        // paddle / FN buttons don't appear here AND none were found
+        // via KVC above, Apple's framework isn't sending them and we
+        // can't map them through standard MFi APIs.
         let profileButtonNames = Array(controller.physicalInputProfile.buttons.keys).sorted()
-        #if DEBUG
-        print("[GCS] Profile button names for \(controller.vendorName ?? "?"): \(profileButtonNames)")
-        #endif
+        NSLog("[GCS] Profile button names for %@ (slot %d): %@",
+              controller.vendorName ?? "?",
+              index,
+              profileButtonNames.joined(separator: ", "))
+        NSLog("[GCS] cacheExtraButtons -> %d entries: %@",
+              result.count,
+              result.map { "\($0.1)" }.joined(separator: ", "))
 
         for (name, button) in controller.physicalInputProfile.buttons.sorted(by: { $0.key < $1.key }) {
             if handledObjects.contains(ObjectIdentifier(button)) { continue }
@@ -689,10 +946,27 @@ class GameControllerService: ObservableObject {
         if let l3 = gamepad.leftThumbstickButton { allMappedButtons.append((l3, 11)) }
         if let r3 = gamepad.rightThumbstickButton { allMappedButtons.append((r3, 12)) }
 
+        // Diagnostic: log which typed buttons we successfully wired up.
+        // If buttonHome is missing from this list, gamepad.buttonHome
+        // returned nil on this controller and the PS press won't fire
+        // our typed handler at all - we'd have to fall through to the
+        // physical-profile scan handler instead.
+        NSLog("[GCS] setupScanHandlers wired %d typed buttons on slot %d (controller=%@, hasHome=%@, hasOptions=%@, hasMenu=%@)",
+              allMappedButtons.count, index,
+              controller.vendorName ?? "?",
+              gamepad.buttonHome != nil ? "YES" : "no",
+              gamepad.buttonOptions != nil ? "YES" : "no",
+              gamepad.buttonMenu as GCControllerButtonInput? != nil ? "YES" : "no")
+
         for (button, btnIndex) in allMappedButtons {
             button.pressedChangedHandler = { [weak self] _, _, pressed in
                 if pressed {
                     Task { @MainActor in
+                        // Loud diagnostic so we can see if the typed-handler
+                        // path is actually firing for PS / Home / Mute /
+                        // paddle presses. Visible via `log stream` in
+                        // Terminal so the user can confirm presses reach us.
+                        NSLog("[GCS] SCAN typed btn fired: slot=%d index=%d", index, btnIndex)
                         let event = InputEvent.button(btnIndex)
                         self?.lastInput = (index, event)
                         self?.scanCallback?(event)
@@ -805,14 +1079,46 @@ class GameControllerService: ObservableObject {
         let profile = controller.physicalInputProfile
 
         for (name, button) in profile.buttons {
+            // Capture the button's ObjectIdentifier outside the Task -
+            // it's a Sendable value (just a pointer wrapper) where the
+            // class reference itself is not Sendable and can't cross
+            // the @MainActor boundary under strict concurrency.
+            let buttonID = ObjectIdentifier(button)
             button.pressedChangedHandler = { [weak self] _, _, pressed in
                 if pressed {
                     Task { @MainActor in
-                        // Try to extract button index from name
-                        let btnIndex = self?.extractButtonIndex(from: name) ?? 0
+                        guard let self = self else { return }
+                        // Resolve the right index for this button.
+                        //
+                        // 1) Prefer the cached extras lookup - it was built
+                        //    on connect via KVC, so it has the correct
+                        //    index for DualSense Edge paddles ("Left Paddle"
+                        //    → 16, "Right Paddle" → 17, "Mute"/microphone →
+                        //    15, FN buttons → 20/21) and for special MFi
+                        //    names like "Touchpad Button"/"Share Button"
+                        //    that don't embed a digit in their name.
+                        // 2) Fall back to the static knownButtonMap for
+                        //    common synthetic names.
+                        // 3) As a last resort use extractButtonIndex which
+                        //    only works when the name happens to embed a
+                        //    digit ("Button 5"). This used to be the only
+                        //    path, which silently mapped every extra
+                        //    button to slot 0 (= A button) during scan -
+                        //    the user complained that paddle/FN/Home/mute
+                        //    presses were "not detected" when in fact they
+                        //    were detected but mapped to the wrong slot.
+                        let btnIndex: Int
+                        if let cached = self.cachedExtraButtons[index]?
+                            .first(where: { ObjectIdentifier($0.0) == buttonID }) {
+                            btnIndex = cached.1
+                        } else if let known = Self.knownButtonMap[name] {
+                            btnIndex = known
+                        } else {
+                            btnIndex = self.extractButtonIndex(from: name)
+                        }
                         let event = InputEvent.button(btnIndex)
-                        self?.lastInput = (index, event)
-                        self?.scanCallback?(event)
+                        self.lastInput = (index, event)
+                        self.scanCallback?(event)
                     }
                 }
             }
@@ -875,6 +1181,12 @@ class GameControllerService: ObservableObject {
         if let steamIndex = steamControllerSlot, index == steamIndex {
             return SteamControllerService.shared.makeControllerState()
         }
+        // Raw HID gamepads sit past Steam in the slot range. We pull
+        // their state via the lock-protected snapshot the HID report
+        // callback wrote on the background queue.
+        if let gamepad = rawHIDGamepadSlots[index] {
+            return gamepad.state
+        }
         guard index < connectedControllers.count else { return nil }
         let controller = connectedControllers[index]
 
@@ -902,6 +1214,24 @@ class GameControllerService: ObservableObject {
             if let extras = cachedExtraButtons[index] {
                 for (button, btnIndex) in extras {
                     state.buttons[btnIndex] = button.value
+                }
+            }
+
+            // --- DualSense Edge supplemental buttons ---
+            // Apple's GameController framework doesn't expose the
+            // Edge's paddles, FN1/FN2, or microphone-mute. We read
+            // them directly via IOHIDManager in
+            // `DualSenseSupplementService` and merge the result here
+            // so existing bindings against indices 15/16/17/20/21
+            // light up the same way native MFi buttons do. Skipped
+            // for non-DualSense slots (the dictionary is empty for
+            // those, so the loop is a no-op).
+            let isDualSenseSlot = (controller.vendorName ?? "").lowercased().contains("dualsense")
+                || (controller.productCategory.lowercased().contains("dualsense"))
+            if isDualSenseSlot {
+                let supplement = DualSenseSupplementService.shared.anySupplementalButtons()
+                for (btnIndex, value) in supplement where value > 0.5 {
+                    state.buttons[btnIndex] = value
                 }
             }
 
@@ -1046,36 +1376,200 @@ class GameControllerService: ObservableObject {
     /// the editor uses to match binding rows. Each detected input gets a
     /// 200 ms expiry so quick taps remain visible.
     private func refreshRawActiveInputs() {
-        var freshlyActive = Set<String>()
-        var snapshots: [Int: ControllerState] = [:]
+        // Reuse mutable scratch containers across ticks. Previously this
+        // method allocated fresh Set<String> and [Int: ControllerState]
+        // every 30 Hz frame, generating ~60 collection allocations per
+        // second just for the editor highlight bookkeeping.
+        scratchFreshlyActive.removeAll(keepingCapacity: true)
+        scratchSnapshots.removeAll(keepingCapacity: true)
+
         // Real MFi controllers
         for i in connectedControllers.indices {
             guard let state = readControllerState(at: i) else { continue }
-            snapshots[i] = state
-            accumulate(into: &freshlyActive, state: state)
+            scratchSnapshots[i] = state
+            accumulate(into: &scratchFreshlyActive, state: state)
+            // Bridge any DualSense / DualShock 4 touchpad data the
+            // GameController framework reports through to the touchpad
+            // pipeline (see notes in feedTouchpadFromController).
+            feedTouchpadFromController(connectedControllers[i], slot: i)
         }
         // Steam Controller virtual slot
         if let slot = steamControllerSlot, let state = readControllerState(at: slot) {
-            snapshots[slot] = state
-            accumulate(into: &freshlyActive, state: state)
+            scratchSnapshots[slot] = state
+            accumulate(into: &scratchFreshlyActive, state: state)
         }
-        // ControllerState isn't Equatable (its hat tuples can't auto-derive
-        // it), so always assign. Cost is negligible for 1-2 controllers at
-        // 30 Hz.
-        currentStates = snapshots
+        // Raw HID gamepads (8BitDo XInput, Xbox 360 wired, etc.)
+        for (slot, _) in rawHIDGamepadSlots {
+            guard let state = readControllerState(at: slot) else { continue }
+            scratchSnapshots[slot] = state
+            accumulate(into: &scratchFreshlyActive, state: state)
+        }
+        // ControllerState isn't Equatable (its hat tuples can't auto-
+        // derive it), so we always assign. Cost is negligible for 1-2
+        // controllers at 30 Hz; copy is a single shallow Dict copy.
+        currentStates = scratchSnapshots
+
+        // Bridge supplemental inputs into the scan flow. Some buttons -
+        // notably the PS / Home button on DualSense under macOS 26's
+        // Game Mode - are swallowed by Apple's framework before our
+        // typed pressedChangedHandlers fire. Our raw HID supplement
+        // still sees those presses and merges them into state.buttons;
+        // we detect a 0→1 transition here and fire the scanCallback so
+        // the binding editor's Scan button can still capture them.
+        if isScanning, let cb = scanCallback {
+            // Find a freshly-active input that wasn't active last tick.
+            // Avoid `Set.subtracting`'s new-Set allocation by looping.
+            var firedKey: String?
+            for key in scratchFreshlyActive where !rawActiveInputs.contains(key) {
+                firedKey = key
+                break
+            }
+            if let first = firedKey, let event = InputEvent.parse(first) {
+                let slotForFire = scratchSnapshots.keys.first ?? 0
+                lastInput = (slotForFire, event)
+                cb(event)
+            }
+        }
 
         // Stamp expiry timestamps for everything currently pressed.
         let now = Date()
         let expiryDate = now.addingTimeInterval(rawActiveLingerSeconds)
-        for key in freshlyActive {
+        for key in scratchFreshlyActive {
             rawActiveExpiry[key] = expiryDate
         }
-        // Drop entries whose expiry has passed.
-        rawActiveExpiry = rawActiveExpiry.filter { $0.value > now }
-        let combined = Set(rawActiveExpiry.keys)
-        if combined != rawActiveInputs {
-            rawActiveInputs = combined
+        // Drop entries whose expiry has passed. In-place removal so we
+        // don't pay a fresh-Dict allocation on every tick the way
+        // .filter would. Iterate via collected keys to avoid
+        // mutating-during-iteration UB.
+        for key in Array(rawActiveExpiry.keys) where rawActiveExpiry[key]! <= now {
+            rawActiveExpiry.removeValue(forKey: key)
         }
+        // Build the published Set only when the membership actually
+        // changed. Skip the equality check on the common steady-state
+        // tick where no new keys were added or expired.
+        if rawActiveExpiry.count != rawActiveInputs.count
+            || !rawActiveInputs.isSuperset(of: rawActiveExpiry.keys) {
+            rawActiveInputs = Set(rawActiveExpiry.keys)
+        }
+    }
+
+    /// Scratch containers reused by `refreshRawActiveInputs` so the
+    /// 30 Hz loop doesn't allocate fresh collections on every tick.
+    /// Sit at the type level next to other state so they're not
+    /// re-allocated on every call.
+    private var scratchFreshlyActive: Set<String> = []
+    private var scratchSnapshots: [Int: ControllerState] = [:]
+
+    /// Read touchpad finger positions from a `GCDualSenseGamepad` or
+    /// `GCDualShockGamepad` profile and push them into TouchpadService.
+    /// No-op for any controller that doesn't expose a touchpad.
+    ///
+    /// macOS 14+ exposes the DualSense / DS4 touchpad through
+    /// `touchpadPrimary` / `touchpadSecondary` direction pads on the
+    /// typed extendedGamepad subclass. Reading them this way works
+    /// even when `gamecontrollerd` has the device open exclusively
+    /// and our TouchpadHelper subprocess sees zero bytes.
+    ///
+    /// Slot is accepted for symmetry but not used yet; TouchpadService
+    /// is single-instance and tracks one device's worth of state. If
+    /// we ever support two touchpads simultaneously, we route by slot.
+    /// Wire `valueChangedHandler` on a controller's touchpad direction
+    /// pads so finger motion is pushed into TouchpadService at the
+    /// controller's native HID rate (≈1000 Hz USB DualSense, ≈250 Hz
+    /// Bluetooth) instead of the 30 Hz `refreshRawActiveInputs` poll.
+    ///
+    /// The 30 Hz poll path stays as a fallback for controllers that
+    /// don't take the typed-subclass branch here (generic dpads scan in
+    /// `feedTouchpadFromController`). Dual writes are safe because
+    /// TouchpadService.ingestGameControllerTouchpad locks the underlying
+    /// state and the latest write wins.
+    private func installTouchpadHandlers(for controller: GCController, slot: Int) {
+        guard let pad = controller.extendedGamepad else { return }
+
+        if let ds = pad as? GCDualSenseGamepad {
+            attachTouchpadHandlers(primary: ds.touchpadPrimary,
+                                   secondary: ds.touchpadSecondary)
+        } else if let ds4 = pad as? GCDualShockGamepad {
+            attachTouchpadHandlers(primary: ds4.touchpadPrimary,
+                                   secondary: ds4.touchpadSecondary)
+        }
+    }
+
+    /// Shared handler installer used by both the DualSense and DS4
+    /// branches. Pulls the pair's latest (x, y) on every change and
+    /// pushes both fingers through TouchpadService as a single
+    /// transaction so a one-finger update doesn't latch finger 1 active.
+    private func attachTouchpadHandlers(primary: GCControllerDirectionPad,
+                                        secondary: GCControllerDirectionPad?) {
+        // Capture the optional secondary outside the closure so the
+        // closure body can read it without re-checking the type each
+        // event. Apple guarantees these direction pad objects are
+        // stable for the controller's lifetime.
+        let sec = secondary
+        let push: () -> Void = {
+            let p1x = primary.xAxis.value
+            let p1y = primary.yAxis.value
+            let p1Active = abs(p1x) > 0.001 || abs(p1y) > 0.001
+            let p2x = sec?.xAxis.value ?? 0
+            let p2y = sec?.yAxis.value ?? 0
+            let p2Active = sec != nil && (abs(p2x) > 0.001 || abs(p2y) > 0.001)
+            TouchpadService.shared.ingestGameControllerTouchpad(
+                f0Active: p1Active, f0NormalizedX: p1x, f0NormalizedY: p1y,
+                f1Active: p2Active, f1NormalizedX: p2x, f1NormalizedY: p2y
+            )
+        }
+        primary.valueChangedHandler = { _, _, _ in push() }
+        secondary?.valueChangedHandler = { _, _, _ in push() }
+    }
+
+    private func feedTouchpadFromController(_ controller: GCController, slot: Int) {
+        guard let pad = controller.extendedGamepad else { return }
+
+        // Typed subclasses (DualSense / DualShock 4) are handled by
+        // `installTouchpadHandlers`'s event-driven path which runs at
+        // controller-native rate. Skip them here so we don't double-
+        // write and don't waste cycles re-reading them every 33 ms.
+        if pad is GCDualSenseGamepad || pad is GCDualShockGamepad {
+            return
+        }
+
+        var f0Active = false
+        var f0X: Float = 0
+        var f0Y: Float = 0
+        var f1Active = false
+        var f1X: Float = 0
+        var f1Y: Float = 0
+        var sourced = false
+
+        // Generic fallback for any other touchpad-capable controller
+        // Apple exposes via the physical input profile. Some third-
+        // party gamepads and future controllers ship with a touchpad
+        // surface registered under names like "Touchpad 1" / "Touch 1".
+        // Walk `pad.dpads` looking for those name patterns and use
+        // whichever we find. This means future hardware that exposes
+        // its surface through the standard profile will Just Work
+        // without us shipping a new typed subclass per device.
+        for (name, dpad) in pad.dpads {
+            let lower = name.lowercased()
+            guard lower.contains("touchpad") || lower.contains("touch ")
+                    || lower.contains("trackpad") else { continue }
+            let x = dpad.xAxis.value
+            let y = dpad.yAxis.value
+            let active = abs(x) > 0.001 || abs(y) > 0.001
+            if lower.contains("2") || lower.contains("secondary") {
+                f1X = x; f1Y = y; f1Active = active
+            } else {
+                f0X = x; f0Y = y; f0Active = active
+            }
+            sourced = true
+        }
+
+        guard sourced else { return }
+
+        TouchpadService.shared.ingestGameControllerTouchpad(
+            f0Active: f0Active, f0NormalizedX: f0X, f0NormalizedY: f0Y,
+            f1Active: f1Active, f1NormalizedX: f1X, f1NormalizedY: f1Y
+        )
     }
 
     private func accumulate(into set: inout Set<String>, state: ControllerState) {
@@ -1153,6 +1647,96 @@ class GameControllerService: ObservableObject {
                 physicalButtonNames: SteamControllerButton.allCases.map(\.displayName),
                 brand: .steamController
             )
+        }
+    }
+
+    // MARK: - Raw HID Gamepad integration
+
+    /// Poll `RawHIDGamepadService` at 2 Hz, allocating + reclaiming slot
+    /// indices for HID gamepads the same way `syncSteamControllerSlot`
+    /// does for the Steam Controller. Each detected gamepad gets a slot
+    /// just past the MFi + Steam slots so existing preset slot
+    /// indexes for native controllers stay stable.
+    private func startRawHIDGamepadWatch() {
+        // Idempotent. Stored on the instance so we don't leak timers
+        // if the service is ever recreated (a previous version of
+        // this method dropped the local `let timer` reference, which
+        // kept polling forever in zombie service instances).
+        rawHIDWatchTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncRawHIDGamepadSlots()
+            }
+        }
+        rawHIDWatchTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func syncRawHIDGamepadSlots() {
+        let attached = RawHIDGamepadService.shared.connectedGamepads
+        let baseIndex = connectedControllers.count + (steamControllerSlot != nil ? 1 : 0)
+
+        // Build the desired (slot → gamepad) mapping from the current
+        // attach list. Stable ordering: keep gamepads already mapped at
+        // their current slot, then append any newcomers.
+        var desired: [Int: RawHIDGamepad] = [:]
+        let previouslyMappedIDs = Set(rawHIDGamepadSlots.values.map { $0.id })
+
+        // First pass: preserve existing slot for gamepads still here.
+        var nextSlot = baseIndex
+        var reservedSlots: Set<Int> = []
+        for gamepad in attached where previouslyMappedIDs.contains(gamepad.id) {
+            if let (oldSlot, _) = rawHIDGamepadSlots.first(where: { $0.value.id == gamepad.id }) {
+                desired[oldSlot] = gamepad
+                reservedSlots.insert(oldSlot)
+            }
+        }
+
+        // Second pass: assign new gamepads to the lowest available slot.
+        for gamepad in attached where !previouslyMappedIDs.contains(gamepad.id) {
+            while reservedSlots.contains(nextSlot) { nextSlot += 1 }
+            desired[nextSlot] = gamepad
+            reservedSlots.insert(nextSlot)
+            nextSlot += 1
+        }
+
+        // Apply if changed. Equality is by slot key set + per-slot id.
+        let changed = desired.count != rawHIDGamepadSlots.count
+            || desired.contains(where: { rawHIDGamepadSlots[$0.key]?.id != $0.value.id })
+        if changed {
+            // Detach controller info for slots that are no longer used.
+            let removedSlots = Set(rawHIDGamepadSlots.keys).subtracting(desired.keys)
+            for slot in removedSlots {
+                controllerDetails.removeValue(forKey: slot)
+                controllerNames.removeValue(forKey: slot)
+            }
+
+            rawHIDGamepadSlots = desired
+
+            // Publish controller info for each active slot so the rest
+            // of the app sees these gamepads like any other controller.
+            for (slot, gamepad) in desired {
+                let names = gamepad.profile?.physicalButtonNames
+                    ?? ControllerProfileDatabase.xinputButtonNames
+                controllerNames[slot] = gamepad.displayName
+                controllerDetails[slot] = ControllerInfo(
+                    name: gamepad.displayName,
+                    productCategory: "Raw HID",
+                    hasExtendedGamepad: true,
+                    hasLight: false,
+                    hasBattery: false,
+                    batteryLevel: nil,
+                    batteryState: nil,
+                    buttonCount: names.count,
+                    axisCount: 6,
+                    supportsMotion: false,
+                    hasTouchpad: false,
+                    hasMicroGamepad: false,
+                    hasAdaptiveTriggers: false,
+                    physicalButtonNames: names,
+                    brand: .unknown
+                )
+            }
         }
     }
 

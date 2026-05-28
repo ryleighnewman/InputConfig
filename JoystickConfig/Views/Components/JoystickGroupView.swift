@@ -19,7 +19,12 @@ struct JoystickGroupView: View {
 
     @EnvironmentObject var mappingEngine: MappingEngine
     @EnvironmentObject var controllerService: GameControllerService
+    @ObservedObject private var rawHIDService = RawHIDGamepadService.shared
+    @ObservedObject private var externalInput = ExternalInputDeviceService.shared
     @State private var preSortSnapshot: [BindingModel]?
+    /// Inline rename popover state for the "Custom name..." menu item.
+    @State private var renamePopoverOpen: Bool = false
+    @State private var renameDraft: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,9 +46,15 @@ struct JoystickGroupView: View {
                             // This works even with no preset active.
                             isHighlighted:
                                 mappingEngine.activeInputsPublished.contains(binding.input.serialized)
-                                || controllerService.rawActiveInputs.contains(binding.input.serialized),
+                                || controllerService.rawActiveInputs.contains(binding.input.serialized)
+                                || externalInput.rawActiveInputs.contains(binding.input.serialized),
                             displayNumber: index + 1,
-                            isPulsing: pulsingBindingID == binding.id
+                            isPulsing: pulsingBindingID == binding.id,
+                            // Named extras (paddles/FN/mute/Home) for the
+                            // slot's connected controller, passed by value so
+                            // BindingRowView doesn't need to subscribe to
+                            // the service itself.
+                            extraButtons: controllerService.extraButtonsSnapshot(for: joystickIndex)
                         )
                         .id(binding.id)
                     }
@@ -93,14 +104,23 @@ struct JoystickGroupView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text("Joystick #\(joystickIndex)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(":")
+                    // Slot identity picker - tap to bind this slot to a
+                    // specific detected device, or set a custom name.
+                    // Currently this view doesn't own the assignment
+                    // (slot index → device) so the picker primarily acts
+                    // on the human-readable name; future work threads
+                    // a real binding through, e.g. by storing the
+                    // selected device's persistentIdentifier in
+                    // JoystickMapping.
+                    deviceMenu
+                    Text("#\(joystickIndex)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Text("·")
                         .foregroundStyle(.tertiary)
                     Text(controllerName)
-                        .font(.caption)
-                        .foregroundStyle(controllerName.contains("No controller") ? .red.opacity(0.6) : .primary)
+                        .font(.caption2)
+                        .foregroundStyle(controllerName.contains("No controller") ? .red.opacity(0.6) : .secondary)
                         .lineLimit(1)
                 }
                 TextField("Tag / comment", text: $joystick.tag)
@@ -153,6 +173,131 @@ struct JoystickGroupView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+
+    /// Display name shown in the header chip. Priority:
+    ///   1. user-set customName
+    ///   2. controllerName (passed in by the editor - reflects the
+    ///      controller actually attached to this slot)
+    ///   3. fallback to "Joystick #N"
+    private var resolvedHeaderName: String {
+        if let custom = joystick.customName, !custom.isEmpty { return custom }
+        let trimmed = controllerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && !trimmed.contains("No controller") { return trimmed }
+        return "Joystick #\(joystickIndex)"
+    }
+
+    /// Tap-to-pick menu replacing the previous bare TextField. Lists
+    /// every input device the app knows about (GameController-framework
+    /// controllers, raw HID gamepads, attached keyboards, attached
+    /// mice) so the user can label this slot with the device they
+    /// want it to represent. "Set custom name..." opens an inline
+    /// popover with a TextField for free-form labels.
+    /// Pre-computed device lists pulled out of the Menu's MenuBuilder
+    /// closure. Inline `let` + `filter` chains inside @ViewBuilder /
+    /// @MenuBuilder bodies stalls the Swift type-checker; computed
+    /// properties give it a fixed shape to reason about.
+    private var connectedControllerNames: [String] {
+        controllerService.connectedControllers.map { gc in
+            gc.vendorName ?? gc.productCategory
+        }
+    }
+
+    private var rawHIDNames: [String] {
+        rawHIDService.connectedGamepads.map(\.displayName)
+    }
+
+    private var keyboardNames: [String] {
+        externalInput.devices.filter { $0.kind == .keyboard }.map(\.productName)
+    }
+
+    private var mouseNames: [String] {
+        externalInput.devices.filter { $0.kind == .mouse }.map(\.productName)
+    }
+
+    @ViewBuilder
+    private var deviceMenu: some View {
+        Menu {
+            Button("Auto-detect (\(controllerName))") {
+                joystick.customName = nil
+                joystick.inputKind = .auto
+            }
+            Divider()
+            Section("Game controllers") {
+                ForEach(Array(connectedControllerNames.enumerated()),
+                        id: \.offset) { _, name in
+                    Button(name) {
+                        joystick.customName = name
+                        joystick.inputKind = .controller
+                    }
+                }
+                ForEach(Array(rawHIDNames.enumerated()),
+                        id: \.offset) { _, name in
+                    Button(name) {
+                        joystick.customName = name
+                        joystick.inputKind = .controller
+                    }
+                }
+            }
+            Section("Keyboards") {
+                ForEach(Array(keyboardNames.enumerated()),
+                        id: \.offset) { _, name in
+                    Button(name) {
+                        joystick.customName = name
+                        joystick.inputKind = .keyboard
+                    }
+                }
+            }
+            Section("Mice") {
+                ForEach(Array(mouseNames.enumerated()),
+                        id: \.offset) { _, name in
+                    Button(name) {
+                        joystick.customName = name
+                        joystick.inputKind = .mouse
+                    }
+                }
+            }
+            Divider()
+            Button("Set custom name…") {
+                renameDraft = joystick.customName ?? ""
+                renamePopoverOpen = true
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(resolvedHeaderName)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(joystick.customName == nil ? .secondary : .primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Choose a detected device or set a custom name for this slot.")
+        .spotlightAnchor(SpotlightID.slotChip)
+        .popover(isPresented: $renamePopoverOpen, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Slot name")
+                    .font(.headline)
+                TextField("e.g. Player 1 - Steve", text: $renameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                HStack {
+                    Button("Cancel") { renamePopoverOpen = false }
+                    Spacer()
+                    Button("Save") {
+                        let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        joystick.customName = trimmed.isEmpty ? nil : trimmed
+                        renamePopoverOpen = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(12)
+        }
     }
 
     private func bindingAt(_ index: Int) -> SwiftUI.Binding<BindingModel> {

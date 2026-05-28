@@ -23,16 +23,16 @@ let sonyVID: Int32 = 0x054C
 let dualSensePIDs: Set<Int32> = [0x0CE6, 0x0DF2]
 let ds4PIDs: Set<Int32> = [0x05C4, 0x09CC]
 
-// MARK: - Kill the user-level game controller agent
-
-let kill = Process()
-kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-kill.arguments = ["gamecontrolleragentd"]
-kill.standardOutput = FileHandle.nullDevice
-kill.standardError = FileHandle.nullDevice
-try? kill.run()
-kill.waitUntilExit()
-Thread.sleep(forTimeInterval: 0.5)
+// We previously spawned `killall gamecontrolleragentd` here to free
+// the controller's HID interface before opening it with seize mode.
+// That approach is incompatible with the App Store sandbox policy
+// (modifying / terminating system daemons is explicitly prohibited
+// by Apple's Mac App Store Review Guidelines) and was a real
+// rejection risk. The seize-mode open below at IOHIDDeviceOpen with
+// kIOHIDOptionsTypeSeizeDevice is sufficient on its own; macOS will
+// hand the device to us instead of the system agent. If a future
+// controller refuses to release without the kill, address it with a
+// reconnect prompt to the user rather than killing a daemon.
 
 // MARK: - Find and write to the controller
 

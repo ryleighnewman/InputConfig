@@ -12,6 +12,24 @@ extension Notification.Name {
     static let joystickConfigOpenMotionCalibration   = Notification.Name("JoystickConfig.OpenMotionCal")
     static let joystickConfigStartTutorial          = Notification.Name("JoystickConfig.StartTutorial")
     static let joystickConfigScrollToPreset         = Notification.Name("JoystickConfig.ScrollToPreset")
+    /// Fired by the Quick Tour when it needs the PresetDetailView's
+    /// internal ScrollView to scroll down to the Live Visualizer
+    /// section. The detail view listens and expands the disclosure
+    /// before scrolling.
+    static let joystickConfigScrollToVisualizer     = Notification.Name("JoystickConfig.ScrollToVisualizer")
+    /// Tour scrolls the preset-detail back up to the top (header /
+    /// Activate button area).
+    static let joystickConfigScrollToTop            = Notification.Name("JoystickConfig.ScrollToTop")
+    /// Tour scrolls the preset editor's binding list to its
+    /// Automation panel at the bottom.
+    static let joystickConfigScrollToAutomation     = Notification.Name("JoystickConfig.ScrollToAutomation")
+    /// Tour scrolls the editor's binding list back to the top so the
+    /// first binding row + its Options disclosure are visible.
+    static let joystickConfigScrollToFirstBinding   = Notification.Name("JoystickConfig.ScrollToFirstBinding")
+    /// Tour fires this with a binding UUID; the matching
+    /// BindingRowView flips its showAdvanced flag so the user sees
+    /// the Options disclosure expand on its own.
+    static let joystickConfigExpandBindingOptions   = Notification.Name("JoystickConfig.ExpandBindingOptions")
 }
 
 struct ContentView: View {
@@ -54,6 +72,10 @@ struct ContentView: View {
     /// Shared tutorial controller - drives both the spotlight overlay
     /// (here in the main window) and the floating tutorial card panel.
     @StateObject private var tutorialState = TutorialState.shared
+    /// Observed so the "Update available" alert presents itself when the
+    /// service publishes a new version number, and dismisses when the
+    /// user opts out or installs.
+    @ObservedObject private var updateCheck = UpdateCheckService.shared
     /// Index of the welcome-page feature card currently being showcased
     /// by the tutorial. Drives a pulsing highlight + auto-opens its demo
     /// sheet during the "example presets" tutorial step.
@@ -81,6 +103,8 @@ struct ContentView: View {
                 }
                 .help("Return to the welcome screen")
                 .spotlightAnchor(SpotlightID.homeButton)
+                .accessibilityLabel("Home")
+                .accessibilityHint("Returns to the welcome screen")
             }
             // Stats button sits next to Home (leading edge) so it never
             // pushes content like Activate / Edit toward the right side
@@ -95,6 +119,8 @@ struct ContentView: View {
                 }
                 .help("Show statistics")
                 .spotlightAnchor(SpotlightID.statsButton)
+                .accessibilityLabel("Statistics")
+                .accessibilityHint("Opens the lifetime statistics dashboard")
             }
 
             // Trailing - settings shortcut only. Active-preset chip and
@@ -110,6 +136,8 @@ struct ContentView: View {
                 }
                 .help("Settings")
                 .spotlightAnchor(SpotlightID.settingsButton)
+                .accessibilityLabel("Settings")
+                .accessibilityHint("Opens app settings")
             }
         }
         .sheet(isPresented: $showingStats) {
@@ -131,7 +159,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingTouchpadCalibrationFromMenu) {
             TouchpadCalibrationView()
+                .environmentObject(presetStore)
         }
+        .modifier(UpdateAvailableAlertModifier(updateCheck: updateCheck))
         .sheet(isPresented: $showingMotionCalibrationFromMenu) {
             MotionCalibrationView()
                 .environmentObject(controllerService)
@@ -224,6 +254,14 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .joystickConfigStartTutorial)) { _ in
             startTutorial()
         }
+        .onChange(of: tutorialState.isActive) { _, active in
+            // When the tutorial ends (Finish, Skip, or natural end),
+            // restore the controller list so the synthetic Edge entry
+            // disappears alongside the tutorial.
+            if !active && controllerService.tutorialFakeControllerActive {
+                controllerService.disableTutorialFakeController()
+            }
+        }
         .onChange(of: editingPreset?.id) { _, newID in
             // Pause outputs (but keep the engine polling) so an active
             // preset's bindings don't fling the cursor / fire keystrokes /
@@ -237,20 +275,7 @@ struct ContentView: View {
                 mappingEngine.outputsPaused = false
             }
         }
-        .sheet(item: $editingPreset, onDismiss: {
-            // If the user cancelled a newly created preset, delete it
-            if let newId = newlyCreatedPresetId {
-                presetStore.deletePreset(presetStore.presets.first(where: { $0.id == newId })!)
-                if selectedPresetId == newId { selectedPresetId = nil }
-                newlyCreatedPresetId = nil
-            }
-            // Resume outputs when the editor closes.
-            mappingEngine.outputsPaused = false
-            engineWasRunningBeforeEdit = false
-            // Clear any pending jump so re-opening the editor doesn't reuse
-            // a stale target.
-            pendingEditorJump = nil
-        }) { preset in
+        .sheet(item: $editingPreset, onDismiss: handleEditorDismiss) { preset in
             PresetEditorView(preset: preset,
                              enginePausedNotice: engineWasRunningBeforeEdit,
                              pendingJump: pendingEditorJump) { updated in
@@ -260,7 +285,8 @@ struct ContentView: View {
             }
             .environmentObject(controllerService)
             .environmentObject(mappingEngine)
-            .frame(minWidth: 1050, idealWidth: 1300, minHeight: 700, idealHeight: 800)
+            .environmentObject(presetStore)
+            .frame(minWidth: 1150, idealWidth: 1300, minHeight: 700, idealHeight: 800)
         }
         .onAppear {
             presetStore.reseedExamplePresets()
@@ -315,6 +341,13 @@ struct ContentView: View {
                                 .animation(.easeOut(duration: 0.9),
                                            value: flashingGroupID)
                         )
+                        // Pull the row's leading edge left so List's default
+                        // sidebar indent doesn't leave a fat empty gap to the
+                        // left of the disclosure chevron. With this inset the
+                        // chevron sits visually centered between the sidebar's
+                        // left edge and the start of the colored folder chip.
+                        .listRowInsets(EdgeInsets(top: 2, leading: -6,
+                                                  bottom: 2, trailing: 6))
                 }
                 .onMove { source, destination in
                     withAnimation(.spring(response: 0.35)) {
@@ -371,6 +404,23 @@ struct ContentView: View {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .joystickConfigImportedPreset)) { note in
+                // Newly imported preset hint: select, scroll, flash.
+                // The flash uses the same flashingPresetID state the
+                // FeatureDemo "jump to preset" flow already uses, so
+                // the visual treatment matches across the app.
+                guard let id = note.object as? UUID else { return }
+                selectedPresetId = id
+                flashingPresetID = id
+                withAnimation(.easeOut(duration: 0.35)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    if flashingPresetID == id {
+                        flashingPresetID = nil
+                    }
+                }
+            }
             } // ScrollViewReader
 
             bottomToolbar
@@ -400,19 +450,61 @@ struct ContentView: View {
                     .padding(.vertical, 4)
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "folder")
+            let tint = groupTintColor(for: group)
+            HStack(spacing: 6) {
+                Image(systemName: tint == nil ? "folder" : "folder.fill")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(tint ?? .secondary)
                 Text(group.name)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
                 Spacer()
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill((tint ?? .clear).opacity(tint == nil ? 0 : 0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke((tint ?? .clear).opacity(tint == nil ? 0 : 0.12), lineWidth: 0.5)
+            )
+            // Push the chip away from the disclosure chevron so there's
+            // an even gap between [sidebar edge ↔ chevron ↔ chip]. This
+            // padding sits OUTSIDE the background so it creates empty
+            // space rather than expanding the colored area.
+            .padding(.leading, 12)
+            .contentShape(Rectangle())
             .contextMenu {
                 Button("Rename Group...") {
                     renameGroupName = group.name
                     renamingGroup = group
                 }
+                Menu("Color") {
+                    Button {
+                        presetStore.setGroupColor(group.id, color: nil)
+                    } label: {
+                        Label("None", systemImage: group.color == nil ? "checkmark" : "")
+                    }
+                    if ExamplePresets.groupDefaultColors[group.name] != nil {
+                        Button("Restore Default") {
+                            presetStore.applyDefaultGroupColor(group.id)
+                        }
+                    }
+                    Divider()
+                    ForEach(PresetGroup.colorOptions, id: \.self) { colorName in
+                        Button {
+                            presetStore.setGroupColor(group.id, color: colorName)
+                        } label: {
+                            Label(colorName.capitalized,
+                                  systemImage: group.color == colorName
+                                  ? "checkmark"
+                                  : "circle.fill")
+                        }
+                    }
+                }
+                Divider()
                 Button("Delete Group", role: .destructive) {
                     presetStore.deleteGroup(group.id)
                 }
@@ -426,6 +518,26 @@ struct ContentView: View {
                 }
             }
             return true
+        }
+    }
+
+    /// Map a `PresetGroup.color` name to the matching SwiftUI Color, or
+    /// nil if the group has no tint. Kept here in the view layer so the
+    /// model stays AppKit / Color agnostic.
+    private func groupTintColor(for group: PresetGroup) -> Color? {
+        guard let name = group.color else { return nil }
+        switch name {
+        case "blue":   return .blue
+        case "purple": return .purple
+        case "pink":   return .pink
+        case "red":    return .red
+        case "orange": return .orange
+        case "yellow": return .yellow
+        case "green":  return .green
+        case "teal":   return .teal
+        case "indigo": return .indigo
+        case "brown":  return .brown
+        default:       return nil
         }
     }
 
@@ -493,6 +605,17 @@ struct ContentView: View {
         )
         .tag(preset.id)
         .id(preset.id) // For ScrollViewReader.scrollTo
+        // List(.sidebar) default row insets give the row a fat
+        // leading gutter (~16pt) which pushes the active-indicator
+        // dot well away from the left edge. The DisclosureGroup
+        // wrapping the group additionally indents children by the
+        // disclosure-triangle width. Push hard with a generous
+        // negative leading inset so the active dot sits flush with
+        // the group disclosure column, and zero out the trailing
+        // inset so the ellipsis sits flush with the right edge of
+        // the sidebar.
+        .listRowInsets(EdgeInsets(top: 2, leading: -18,
+                                  bottom: 2, trailing: 2))
         .listRowBackground(
             // Brief flash when the user jumps here from a feature demo.
             RoundedRectangle(cornerRadius: 6)
@@ -634,7 +757,8 @@ struct ContentView: View {
                 eightBitDoWarningBanner(warning)
             }
 
-            if controllerService.connectedControllers.isEmpty {
+            if controllerService.connectedControllers.isEmpty
+                && controllerService.rawHIDGamepadSlots.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "gamecontroller")
                         .foregroundStyle(.secondary)
@@ -668,70 +792,128 @@ struct ContentView: View {
                         }
                     )
                 }
+
+                // Raw HID gamepads (8BitDo XInput, Xbox 360 wired,
+                // Logitech F310/F710, generic descriptor-parsed pads).
+                // They don't fit the MFi GCController chip (no battery,
+                // no light bar), so render a simpler chip per slot.
+                ForEach(rawHIDSortedSlots, id: \.slot) { entry in
+                    rawHIDChip(slot: entry.slot, gamepad: entry.gamepad)
+                }
             }
 
-            if mappingEngine.isRunning {
-                HStack(spacing: 6) {
-                    Spacer()
-                    Menu {
-                        Button("Deactivate") {
-                            if let active = presetStore.presets.first(where: { $0.isActive }) {
-                                togglePreset(active)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 6, height: 6)
-                            Text("Active")
-                                .font(.caption2)
-                                .foregroundStyle(Color.green)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.green.opacity(0.1))
-                        .clipShape(Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
-            }
+            // The "● Active" status pill that used to live here was
+            // redundant: the same state is already shown by the green
+            // dot next to the active preset in the sidebar, by the
+            // Deactivate button in the preset detail header, AND by
+            // the menu bar icon's dropdown. Three indicators for the
+            // same fact was visual noise.
         }
         .background(.bar)
     }
 
-    @ViewBuilder
-    private func eightBitDoWarningBanner(_ device: EightBitDoDevice) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.orange)
-                .padding(.top, 1)
+    /// Sorted (slot index, gamepad) pairs for the raw HID controllers
+    /// rendered in the status bar. Stable ordering keeps the chip
+    /// layout from jittering when the dictionary's hash order changes.
+    private var rawHIDSortedSlots: [(slot: Int, gamepad: RawHIDGamepad)] {
+        return controllerService.rawHIDGamepadSlots
+            .map { (slot: $0.key, gamepad: $0.value) }
+            .sorted { $0.slot < $1.slot }
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("8BitDo controller detected in \(device.mode.rawValue) mode")
+    @ViewBuilder
+    private func rawHIDChip(slot: Int, gamepad: RawHIDGamepad) -> some View {
+        let color = Self.controllerColors[slot % Self.controllerColors.count]
+        HStack(spacing: 8) {
+            Image(systemName: "gamecontroller.fill")
+                .font(.caption)
+                .foregroundStyle(color)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(gamepad.displayName)
                     .font(.caption)
                     .foregroundStyle(.primary)
-                Text("Switch to Apple mode (A on the back of the controller) for full Mac support.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("Slot \(slot + 1)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    Text("·")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    Text("Raw HID")
+                        .font(.system(size: 9))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.purple.opacity(0.15))
+                        .foregroundStyle(.purple)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
             }
 
             Spacer()
 
-            Button("Help") {
-                HelpGuideWindowController.shared.show()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
+            Text(gamepad.transport)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .padding(.trailing, 4)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.orange.opacity(0.08))
+    }
+
+    @ViewBuilder
+    private func eightBitDoWarningBanner(_ device: EightBitDoDevice) -> some View {
+        // If JoystickConfig's raw-HID layer is already reading this
+        // controller directly, the warning is misleading - the device
+        // is fully usable in its current mode. Suppress the banner.
+        let isHandledByRawHID = controllerService.rawHIDGamepadSlots.values
+            .contains { $0.vendorID == EightBitDoDetector.vendorID
+                && $0.productID == device.productID }
+
+        if !isHandledByRawHID {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("8BitDo controller detected in \(device.mode.rawValue) mode")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                    Text(eightBitDoGuidance(for: device))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Help") {
+                    HelpGuideWindowController.shared.show()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.08))
+        }
+    }
+
+    /// Tailored mode-switch guidance per model. Some 8BitDo controllers
+    /// have no physical mode switch and a few (e.g. Ultimate 2C wired)
+    /// have no Apple mode at all, so the generic "flip to A on the back"
+    /// instruction was misleading users into thinking the app was broken.
+    private func eightBitDoGuidance(for device: EightBitDoDevice) -> String {
+        let name = device.productName.lowercased()
+        if name.contains("ultimate 2c") || name.contains("ultimate2c") {
+            return "The Ultimate 2C wired model has no Apple mode. Hold Y while plugging in USB to switch to Switch mode (macOS reads this natively), or update JoystickConfig - the latest build reads this controller directly in any mode."
+        }
+        if name.contains("ultimate") {
+            return "Set the back switch to A for Apple mode. If your model has no slider, hold B while turning on for Apple mode. Switch mode (S) also works on macOS Ventura+."
+        }
+        return "Switch to Apple mode (A on the back of the controller) for full Mac support. If your model has no slider, hold B while turning on."
     }
 
     private var bottomToolbar: some View {
@@ -756,6 +938,8 @@ struct ContentView: View {
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .accessibilityLabel("Add")
+            .accessibilityHint("Add a new preset or group")
 
             Spacer()
 
@@ -771,6 +955,8 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Help")
+            .accessibilityHint("Opens the in-app help guide")
 
             Link(destination: URL(string: "https://github.com/ryleighnewman/JoystickConfig")!) {
                 Text("GitHub")
@@ -778,6 +964,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .underline(color: .secondary.opacity(0.5))
             }
+            .accessibilityLabel("GitHub")
+            .accessibilityHint("Opens the project's GitHub repository in your browser")
 
             Button {
                 TipJarWindowController.shared.show()
@@ -791,6 +979,8 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Support development")
+            .accessibilityHint("Opens the tip jar")
 
             Spacer()
 
@@ -802,6 +992,9 @@ struct ContentView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.borderless)
+            .spotlightAnchor(SpotlightID.importButton)
+            .accessibilityLabel("Import preset")
+            .accessibilityHint("Pick a preset JSON file to add to the library")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -811,11 +1004,20 @@ struct ContentView: View {
             allowedContentTypes: [.json, .plainText],
             allowsMultipleSelection: true
         ) { result in
+            // Hand the URLs to the review sheet instead of importing
+            // silently. The user gets a chance to rename or skip each
+            // entry, and broken files are surfaced with a specific
+            // error message instead of vanishing.
             if case .success(let urls) = result {
-                for url in urls {
-                    _ = presetStore.importLegacyPreset(from: url)
-                }
+                presetStore.previewImports(from: urls)
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { !presetStore.importReviewQueue.isEmpty },
+            set: { if !$0 { presetStore.cancelImportReview() } }
+        )) {
+            ImportReviewSheet()
+                .environmentObject(presetStore)
         }
     }
 
@@ -868,7 +1070,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                     Text("Welcome to JoystickConfig")
                         .font(.title2.weight(.semibold))
-                    Text("Map any game controller to keyboard, mouse, and MIDI on macOS.")
+                    Text("Map any input device like controllers, keyboards, and mice to keyboard, mouse, MIDI, and more on macOS.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -877,18 +1079,20 @@ struct ContentView: View {
 
                 // Quick actions
                 HStack(spacing: 10) {
-                    Button {
+                    Button("Quick Start Guide") {
                         startTutorial()
-                    } label: {
-                        Label("Start Quick Tour", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.teal)
-                    .help("Guided ~1 minute walkthrough of the major features")
+                    .help("Guided walkthrough of every major feature with click animations")
 
                     Button {
                         let preset = presetStore.createPreset()
                         selectedPresetId = preset.id
+                        // Mark this as freshly-created so an editor
+                        // Cancel deletes the empty draft instead of
+                        // leaving it lingering in the sidebar.
+                        newlyCreatedPresetId = preset.id
                         editingPreset = preset
                     } label: {
                         Label("Create New Preset", systemImage: "plus")
@@ -906,9 +1110,10 @@ struct ContentView: View {
 
                 // Feature grid - each card opens an animated demo sheet
                 // explaining the feature, with a button to jump to a matching
-                // example preset.
+                // example preset. Fixed 4-column layout so the 12 tutorials
+                // form exactly 3 rows on any reasonable window width.
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4),
                     spacing: 12
                 ) {
                     demoCard(kind: .keyboardMouse,
@@ -955,6 +1160,26 @@ struct ContentView: View {
                              icon: "gyroscope",
                              detail: "Tilt-to-aim with the controller's gyroscope. Works on DualSense, DualSense Edge, DualShock 4, Switch Pro, and Joy-Con.",
                              tint: .teal)
+                    demoCard(kind: .stats,
+                             icon: "chart.bar.fill",
+                             detail: "Lifetime counts of presses, motion, scrolls, and MIDI events with most-used inputs and presets. All local, no telemetry.",
+                             tint: .brown)
+                    demoCard(kind: .toggleMode,
+                             icon: "switch.2",
+                             detail: "Press once to latch on, press again to release. Sticky modifiers, push-to-talk, auto-run.",
+                             tint: .orange)
+                    demoCard(kind: .stackedOutputs,
+                             icon: "square.stack.3d.up.fill",
+                             detail: "One press fires key + click + MIDI + speech in parallel. Different from a macro - all at once, not in sequence.",
+                             tint: .blue)
+                    demoCard(kind: .autoLaunch,
+                             icon: "app.badge.fill",
+                             detail: "Per-preset Automation: open an app on activate, confine the cursor, hide the system pointer.",
+                             tint: .green)
+                    demoCard(kind: .midiCC,
+                             icon: "dial.high.fill",
+                             detail: "Sticks and triggers send continuous MIDI Control Change values. Soft knobs for your DAW.",
+                             tint: .purple)
                 }
                 .padding(.horizontal, 28)
 
@@ -972,11 +1197,82 @@ struct ContentView: View {
     /// Clickable feature card that opens the matching animated demo sheet.
     @ViewBuilder
     private func demoCard(kind: FeatureDemoKind, icon: String, detail: String, tint: Color) -> some View {
-        let isHighlighted = tutorialFeatureSpotlight == kind
-        return Button {
+        FeatureCardButton(kind: kind, icon: icon, detail: detail, tint: tint,
+                          isHighlighted: tutorialFeatureSpotlight == kind) {
             presentedDemoKind = kind
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
+        }
+        .modifier(ConditionalSpotlightAnchor(
+            active: tutorialFeatureSpotlight == kind,
+            id: SpotlightID.welcomeCard))
+    }
+
+    /// Stand-alone home-screen feature card with the same hover lift /
+    /// tint / scale treatment the Statistics dashboard uses on its
+    /// tiles. Lifted out of `demoCard` because tracking a hover state
+    /// requires its own `@State`, and embedding @State inside a
+    /// `@ViewBuilder func` doesn't compose well.
+    private struct FeatureCardButton: View {
+        let kind: FeatureDemoKind
+        let icon: String
+        let detail: String
+        let tint: Color
+        let isHighlighted: Bool
+        let onTap: () -> Void
+        @State private var hovering: Bool = false
+
+        var body: some View {
+            // TimelineView gives us a continuous time stream so the
+            // spotlight pulse actually loops while `isHighlighted` is
+            // true. (`.animation(...repeatForever..., value:)` keyed
+            // on a Bool only fires on the transition and doesn't
+            // actually animate - SwiftUI sees no value change to
+            // interpolate against, so the card just sat there.)
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                    paused: !isHighlighted)) { context in
+                let pulse = isHighlighted
+                    ? (sin(context.date.timeIntervalSinceReferenceDate * 2.4) + 1) / 2
+                    : 0
+                Button(action: onTap) {
+                    cardLabel(pulse: pulse)
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .onHover { hovering = $0 }
+            }
+        }
+
+        @ViewBuilder
+        private func cardLabel(pulse: Double) -> some View {
+            // Pre-compute everything that depends on `pulse` so the
+            // modifier chain sees plain Color / CGFloat / Double
+            // values. Inline ternary arithmetic was timing out the
+            // type-checker.
+            let fillColor: Color = {
+                if isHighlighted { return tint.opacity(0.18 + 0.18 * pulse) }
+                if hovering { return tint.opacity(0.16) }
+                return Color.secondary.opacity(0.06)
+            }()
+            let strokeColor: Color = {
+                if isHighlighted { return tint.opacity(0.7 + 0.3 * pulse) }
+                if hovering { return tint.opacity(0.55) }
+                return Color.clear
+            }()
+            let strokeWidth: CGFloat = isHighlighted
+                ? CGFloat(1.5 + pulse)
+                : 1
+            let shadowColor: Color = isHighlighted
+                ? tint.opacity(0.3 + 0.5 * pulse)
+                : Color.clear
+            let shadowRadius: CGFloat = isHighlighted
+                ? CGFloat(8.0 + 8.0 * pulse)
+                : 0
+            let scale: CGFloat = {
+                if isHighlighted { return CGFloat(1.0 + 0.05 * pulse) }
+                if hovering { return 1.02 }
+                return 1.0
+            }()
+            let chevronTint: Color = tint.opacity(hovering ? 1 : 0.7)
+            return HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon)
                     .font(.system(size: 18))
                     .foregroundStyle(tint)
@@ -989,7 +1285,7 @@ struct ContentView: View {
                             .foregroundStyle(.primary)
                         Image(systemName: "play.circle.fill")
                             .font(.caption2)
-                            .foregroundStyle(tint.opacity(0.7))
+                            .foregroundStyle(chevronTint)
                     }
                     Text(detail)
                         .font(.caption)
@@ -1003,26 +1299,17 @@ struct ContentView: View {
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isHighlighted
-                          ? tint.opacity(0.22)
-                          : Color.secondary.opacity(0.06))
+                RoundedRectangle(cornerRadius: 10).fill(fillColor)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(isHighlighted ? tint : Color.clear, lineWidth: 2)
+                    .stroke(strokeColor, lineWidth: strokeWidth)
             )
-            .shadow(color: isHighlighted ? tint.opacity(0.5) : .clear,
-                    radius: isHighlighted ? 12 : 0)
-            .scaleEffect(isHighlighted ? 1.04 : 1.0)
-            .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true),
-                       value: isHighlighted)
+            .shadow(color: shadowColor, radius: shadowRadius)
+            .scaleEffect(scale)
+            .animation(.easeOut(duration: 0.12), value: hovering)
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
-        .buttonStyle(.plain)
-        // Only the spotlighted card claims the anchor so the tutorial
-        // spotlight ring lands on the right card.
-        .modifier(ConditionalSpotlightAnchor(active: isHighlighted, id: SpotlightID.welcomeCard))
     }
 
     /// Helper because `.spotlightAnchor(...)` can't be conditionally
@@ -1072,6 +1359,33 @@ struct ContentView: View {
 
     /// Kick off the guided tour. The first step's action fires immediately
     /// so the app responds the moment the user clicks "Start Tutorial".
+    /// Pulled out of the `.sheet(onDismiss:)` closure inline because
+    /// stacking too many `.onChange` / `.onReceive` modifiers on the
+    /// same view plus an inline multi-statement dismiss handler made
+    /// SwiftUI's type-checker time out. As a plain method the body
+    /// resolves instantly.
+    private func handleEditorDismiss() {
+        // If the user cancelled a newly created preset, delete it.
+        // The hardDelete path skips trash so a "create + cancel"
+        // cycle doesn't litter the Recently Deleted buffer with
+        // empty drafts. The lookup is forgiving - if for any reason
+        // the row is already gone we silently no-op instead of
+        // crashing on a force-unwrap.
+        if let newId = newlyCreatedPresetId {
+            if let draft = presetStore.presets.first(where: { $0.id == newId }) {
+                presetStore.hardDeletePreset(draft)
+            }
+            if selectedPresetId == newId { selectedPresetId = nil }
+            newlyCreatedPresetId = nil
+        }
+        // Resume outputs when the editor closes.
+        mappingEngine.outputsPaused = false
+        engineWasRunningBeforeEdit = false
+        // Clear any pending jump so re-opening the editor doesn't reuse
+        // a stale target.
+        pendingEditorJump = nil
+    }
+
     private func startTutorial() {
         // Make sure the welcome page is showing so the demo cards are
         // visible to spotlight.
@@ -1080,6 +1394,16 @@ struct ContentView: View {
         editingPreset = nil
         showingMotionCalibrationFromMenu = false
         showingTouchpadCalibrationFromMenu = false
+        // Collapse the debug log so the welcome feature grid + Quick
+        // Tour have full vertical room. The DebugLogView reads the
+        // same @AppStorage key so this takes effect immediately.
+        UserDefaults.standard.set(false, forKey: "JoystickConfig.debugLogExpanded")
+        // Inject a synthetic DualSense Edge so all the visualizer
+        // widgets (sticks / triggers / gyro / touchpad / paddles /
+        // light bar) render during the tour even with no real
+        // hardware plugged in. Cleaned up when the user finishes or
+        // skips.
+        controllerService.enableTutorialFakeController()
         tutorialState.start(steps: tutorialSteps)
     }
 
@@ -1089,6 +1413,42 @@ struct ContentView: View {
     private func tutorialDemoPreset() -> Preset? {
         return presetStore.presets.first(where: { !$0.joysticks.isEmpty })
             ?? presetStore.presets.first
+    }
+
+    /// Pull the Minecraft seeded preset so the interactive walkthrough
+    /// at the end of the tour has a concrete target. Falls back to any
+    /// preset that mentions "Minecraft" in its name, then to the first
+    /// non-empty preset, so the tour never dead-ends on a missing
+    /// seed.
+    private func tutorialMinecraftPreset() -> Preset? {
+        if let p = presetStore.presets.first(where: { $0.name == "Minecraft" }) {
+            return p
+        }
+        if let p = presetStore.presets.first(where: {
+            $0.name.lowercased().contains("minecraft")
+        }) {
+            return p
+        }
+        return tutorialDemoPreset()
+    }
+
+    /// Tutorial helper: set the given preset's slot's inputKind via
+    /// the store. Used by the Live Visualizer step to flip the demo
+    /// preset's first slot into controller mode so the visualizer
+    /// shows controller widgets even when no controller is connected.
+    /// Idempotent - calling with the same kind a second time is a
+    /// no-op write (still touches modifiedAt but harmless).
+    fileprivate func tutorialSetSlotKind(presetID: UUID,
+                                         slot: Int,
+                                         kind: SlotInputKind) {
+        guard var updated = presetStore.presets.first(where: { $0.id == presetID })
+            else { return }
+        while updated.joysticks.count <= slot {
+            updated.joysticks.append(JoystickMapping(tag: ""))
+        }
+        updated.joysticks[slot].inputKind = kind
+        updated.modifiedAt = Date()
+        presetStore.savePreset(updated)
     }
 
     /// Sequence of guided steps. Each action mutates ContentView state so
@@ -1130,185 +1490,506 @@ struct ContentView: View {
                 icon: "books.vertical.fill",
                 tint: .orange,
                 title: "Example presets to learn from",
-                body: "The welcome page has a grid of feature-demo cards (Keyboard + Mouse, MIDI, Gyro Aim, Macros, and more). The pulsing card below is a live animated demo - clicking any card opens a full animation; the linked preset gives you a working setup to copy.",
+                body: "Below the toolbar is a grid of feature cards. Each opens a live animated demo and links to a working example preset. Watch the cursor land on the pulsing one.",
                 spotlight: SpotlightID.welcomeCard,
                 tip: "Click the highlighted card to open its full animated demo + jump to the matching example preset.",
                 action: {
                     selectedPresetId = nil
+                    editingPreset = nil
+                    // Pulse the gyro card first, then send the
+                    // simulated cursor to land on it so the user sees
+                    // exactly which tile we mean.
                     tutorialFeatureSpotlight = .gyro
-                }
-            ),
-            TutorialStep(
-                icon: "plus.rectangle.on.rectangle",
-                tint: .green,
-                title: "Create a preset",
-                body: "Use the + button at the bottom of the sidebar to create a fresh preset, or the Create New Preset button on this welcome page. Each new preset starts with one empty joystick mapping you can add bindings to.",
-                spotlight: SpotlightID.createNew,
-                action: { selectedPresetId = nil }
-            ),
-            TutorialStep(
-                icon: "rectangle.fill.on.rectangle.fill",
-                tint: .teal,
-                title: "Preset detail view",
-                body: "Selecting a preset opens its detail page with usage stats, controller capabilities, storage location, version history, and a Live Visualizer.",
-                spotlight: SpotlightID.detailHeader,
-                action: {
-                    if let p = tutorialDemoPreset() {
-                        selectedPresetId = p.id
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        TutorialState.shared.simulateClickThen(
+                            at: SpotlightID.welcomeCard
+                        ) {
+                            // Don't actually open the demo sheet -
+                            // we're just visually pointing the user at
+                            // the right card.
+                        }
                     }
                 }
             ),
+
+            // ─── Open a preset and walk through the editor first ───
+
             TutorialStep(
-                icon: "play.fill",
-                tint: .green,
-                title: "Activate and Edit",
-                body: "The green Activate button starts the mapping engine using this preset. Edit Bindings & Mappings opens the full editor where you wire inputs to outputs.",
-                spotlight: SpotlightID.activateButton,
-                tip: "Click the green dot in the sidebar next to a preset to toggle it without opening the detail page."
-            ),
-            TutorialStep(
-                icon: "gamecontroller.fill",
+                icon: "rectangle.fill.on.rectangle.fill",
                 tint: .teal,
-                title: "Live Visualizer",
-                body: "The Live Visualizer mirrors your physical controller in real time. Press a button, move a stick, tilt the gyro - everything shows up here. Click any widget to inspect what it's bound to.",
-                spotlight: SpotlightID.visualizer,
-                demo: .buttonMapping,
-                tip: "Use the +/- zoom slider in the visualizer header to resize the panel."
-            ),
-            TutorialStep(
-                icon: "dot.circle.and.hand.point.up.left.fill",
-                tint: .blue,
-                title: "Analog sticks - smooth values",
-                body: "Sticks aren't binary. Bindings to a stick axis read continuous values from -1 to +1, perfect for cursor speed, scroll speed, or any output that benefits from being proportional to how far you push.",
-                demo: .analogStick,
-                tip: "Pick from Linear, Smooth, or Aggressive curves in the editor's Advanced section."
-            ),
-            TutorialStep(
-                icon: "arrow.up.and.down.text.horizontal",
-                tint: .orange,
-                title: "Pressure-sensitive triggers",
-                body: "Triggers report analog magnitude too. Use Variable Sensitivity to scale output speed by how hard you press, or set custom deadzones so light touches don't register.",
-                demo: .pressureTrigger,
-                tip: "The orange tick on every trigger widget marks its current deadzone threshold."
-            ),
-            TutorialStep(
-                icon: "gyroscope",
-                tint: .purple,
-                title: "Gyroscope motion",
-                body: "Controllers with motion sensors (DualSense, DualShock 4, Switch Pro, Joy-Con) expose gyro and accelerometer data. Bind any motion channel to mouse motion for true 'gyro aim' across every app.",
-                demo: .gyro,
-                tip: "Run Controller \u{2192} Calibrate Motion once per controller so drift is corrected."
-            ),
-            TutorialStep(
-                icon: "pencil.and.outline",
-                tint: .blue,
-                title: "Customize Layout",
-                body: "In the visualizer's header, Customize Layout flips the panel into 'blueprint mode' with a faint grid. Drag any widget to rearrange it. The layout saves per controller model.",
-                spotlight: SpotlightID.customizeButton,
-                tip: "Click Reset (in edit mode) to put every widget back where it started."
-            ),
-            TutorialStep(
-                icon: "light.beacon.max.fill",
-                tint: .pink,
-                title: "Per-preset light bar",
-                body: "DualSense and DualShock 4 controllers have a built-in light bar. The strip on top of the visualizer lets you pick a color that's applied automatically whenever this preset activates.",
-                spotlight: SpotlightID.lightBarStrip,
-                demo: .lightBar,
-                tip: "Deactivating the preset reverts the light to its general color."
-            ),
-            TutorialStep(
-                icon: "note.text",
-                tint: .yellow,
-                title: "Per-preset notes",
-                body: "Below the visualizer you'll find a free-form notes field. Use it to remember which game this preset is for, gotchas, control schemes, or anything else.",
-                spotlight: SpotlightID.notesSection
+                title: "Preset detail page",
+                body: "Watch the cursor glide to the sidebar and click a real preset. The detail page shows usage stats, controller capabilities, storage location, version history, an Activate button, and the Live Visualizer at the bottom.",
+                spotlight: SpotlightID.sidebar,
+                action: {
+                    tutorialFeatureSpotlight = nil
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.sidebar
+                    ) {
+                        if let p = tutorialDemoPreset() {
+                            selectedPresetId = p.id
+                        }
+                    }
+                }
             ),
             TutorialStep(
                 icon: "slider.horizontal.3",
                 tint: .indigo,
                 title: "Edit Bindings & Mappings",
-                body: "We just opened the editor for you. The card now floats above it. Each row is one binding - Scan to record an input, then pick what it should output: key, mouse, MIDI, macro chain, spoken text, and more. Look around, then click Next.",
-                tip: "Numbered rows match the numbers in Live Visualizer popups.",
+                body: "Watch the cursor click the Edit button. The editor opens. Each row is one binding: Scan an input, then pick what it outputs (key, mouse, MIDI, macro, speech, more).",
+                spotlight: SpotlightID.editButton,
+                tip: "The engine pauses while the editor is open so scanning a key never fires it.",
                 action: {
-                    tutorialFeatureSpotlight = nil
                     if let p = tutorialDemoPreset() {
                         selectedPresetId = p.id
-                        editingPreset = p
+                        TutorialState.shared.simulateClickThen(
+                            at: SpotlightID.editButton
+                        ) {
+                            editingPreset = p
+                        }
                     }
                 }
             ),
             TutorialStep(
                 icon: "bolt.fill",
                 tint: .yellow,
-                title: "Macros and turbo",
-                body: "Any binding can fire a macro: a sequence of keystrokes, mouse events, or MIDI notes with custom delays. Inside a row in the editor, expand Advanced and toggle Macro to chain steps together.",
+                title: "Macros, turbo, and other Options",
+                body: "Auto-expanding the first row's Options for you. Deadzone, Sensitivity, Variable Sensitivity, Toggle, Turbo, Macro chain, Spoken text, plus per-binding light and haptic overrides all live here.",
                 demo: .macroChain,
-                tip: "Hold the button to repeat the macro - turbo at any frequency."
+                tip: "The same row supports stacked outputs. Click the + on the right to fire a key, click, and MIDI note from one press.",
+                action: {
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToFirstBinding, object: nil)
+                    // After a brief pause for the scroll to land, ask
+                    // the first row to expand its Options disclosure.
+                    // It uses its own internal @State so this is the
+                    // only way to drive it from outside.
+                    if let firstID = tutorialDemoPreset()?
+                        .joysticks.first?.bindings.first?.id {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            NotificationCenter.default.post(
+                                name: .joystickConfigExpandBindingOptions,
+                                object: firstID)
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "tray.and.arrow.down.fill",
+                tint: .blue,
+                title: "Save, then close",
+                body: "The Save and Cancel buttons sit at the bottom right of the editor sheet. Watch the cursor land on Save. The Modified timestamp updates the moment it fires. Then the cursor moves to Cancel.",
+                spotlight: SpotlightID.editorSave,
+                tip: "Cancel on a freshly-created preset hard-deletes it, with no Recently Deleted entry.",
+                action: {
+                    // Sequence: cursor to Save → 1.4s pause → cursor
+                    // to Cancel → 0.6s pause → actually dismiss the
+                    // editor. The user sees three discrete beats so
+                    // each "click" registers.
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.editorSave
+                    ) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            TutorialState.shared.simulateClickThen(
+                                at: SpotlightID.editorCancel
+                            ) {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                    withAnimation { editingPreset = nil }
+                                }
+                            }
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "play.fill",
+                tint: .green,
+                title: "Activate the preset",
+                body: "Watch the cursor click the green Activate button. The engine starts. The light bar switches to this preset's color. Cursor utilities (confine, auto-recenter, hide) and the auto-launch app from Automation all kick in. Click again to stop.",
+                spotlight: SpotlightID.activateButton,
+                tip: "Click the green dot in the sidebar next to a preset to toggle activation without opening the detail page.",
+                action: {
+                    editingPreset = nil
+                    // Brief beat after the editor closes (previous step
+                    // may have just dismissed it) before the cursor
+                    // flies over.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        TutorialState.shared.simulateClickThen(
+                            at: SpotlightID.activateButton
+                        ) {
+                            // Don't actually toggle - just point the
+                            // user at the button. They activate when
+                            // ready themselves.
+                        }
+                    }
+                }
+            ),
+
+            // ─── Now show the Live Visualizer and its features ─────
+
+            TutorialStep(
+                icon: "gamecontroller.fill",
+                tint: .teal,
+                title: "Live Visualizer",
+                body: "Scrolling you down to the Live Visualizer. It mirrors your physical controller in real time. Press a button, move a stick, or tilt the gyro and everything shows up here. Click any widget to inspect what it's bound to.",
+                spotlight: SpotlightID.visualizer,
+                demo: .buttonMapping,
+                tip: "Use the +/- zoom slider in the visualizer header to resize the panel.",
+                action: {
+                    editingPreset = nil
+                    // Auto-scroll the detail panel to the visualizer
+                    // section. PresetDetailView listens for this and
+                    // also expands the DisclosureGroup.
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToVisualizer, object: nil)
+                }
+            ),
+            TutorialStep(
+                icon: "rectangle.3.group",
+                tint: .blue,
+                title: "Template picker, controller mode",
+                body: "The visualizer can swap between controller widgets, a full macOS keyboard map, or a mouse diagram. I'm temporarily forcing the controller template here so you can see all the gamepad-specific widgets even without one connected.",
+                spotlight: SpotlightID.templatePicker,
+                tip: "Set per-slot from the editor too; the picker is a quick-switch at the visualizer level.",
+                action: {
+                    // Force controller layout on the demo preset's
+                    // first slot so the next several steps have widgets
+                    // to point at.
+                    if let p = tutorialDemoPreset() {
+                        tutorialSetSlotKind(presetID: p.id, slot: 0, kind: .controller)
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "dot.circle.and.hand.point.up.left.fill",
+                tint: .blue,
+                title: "Analog sticks, click them in the visualizer",
+                body: "The two stick widgets in the controller layout you can see now report continuous -1 to +1 values per axis, perfect for cursor speed, scroll speed, or anything proportional. Click a stick widget in the visualizer for the bound bindings + a jump-to-editor button.",
+                demo: .analogStick,
+                tip: "Pick from Linear, Smooth, or Aggressive curves in the editor's Advanced section."
+            ),
+            TutorialStep(
+                icon: "arrow.up.and.down.text.horizontal",
+                tint: .orange,
+                title: "Triggers, pressure sensitive",
+                body: "Trigger widgets show analog magnitude with the orange tick marking the binding's deadzone threshold. Click a trigger widget for its bindings popover. Use Variable Sensitivity in the editor to scale output speed by how hard you press.",
+                demo: .pressureTrigger
+            ),
+            TutorialStep(
+                icon: "gyroscope",
+                tint: .purple,
+                title: "Gyroscope motion",
+                body: "Controllers with motion sensors (DualSense, DualShock 4, Switch Pro, Joy-Con) expose gyro + accelerometer data. The motion widget shows the controller orientation; clicking it offers Reset gyroscope to re-zero drift without leaving the visualizer.",
+                demo: .gyro,
+                tip: "Run Calibrate Motion once per controller so drift is corrected from the start."
+            ),
+            TutorialStep(
+                icon: "pencil.and.outline",
+                tint: .blue,
+                title: "Customize Layout",
+                body: "Watch the cursor click Customize Layout. The visualizer flips into 'blueprint mode' with a faint grid and a dashed yellow outline around every widget. Drag any widget to rearrange it.",
+                spotlight: SpotlightID.customizeButton,
+                tip: "Click Reset (in edit mode) to put every widget back where it started.",
+                action: {
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.customizeButton
+                    ) {
+                        // No-op - the user can toggle it themselves
+                        // when they want to actually drag widgets.
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "light.beacon.max.fill",
+                tint: .pink,
+                title: "Per-preset light bar",
+                body: "DualSense and DualShock 4 have a light bar. The strip across the top of the visualizer lets you pick a color that's applied automatically while this preset is active. Click it to open the color picker. Deactivating the preset reverts the light.",
+                spotlight: SpotlightID.lightBarStrip,
+                demo: .lightBar
+            ),
+            TutorialStep(
+                icon: "note.text",
+                tint: .yellow,
+                title: "Per-preset notes",
+                body: "Below the visualizer is a free-form notes field. Use it to remember which game this preset is for, gotchas, control schemes, anything. Markdown isn't supported; plain text only.",
+                spotlight: SpotlightID.notesSection
             ),
             TutorialStep(
                 icon: "gyroscope",
                 tint: .purple,
                 title: "Calibrate Motion / Gyro",
-                body: "We just opened motion calibration for you. Place the controller flat, then click Start Calibration. The how-to scrolls into view; click the green Start button to confirm and capture for 2 seconds.",
-                tip: "Run once per controller. The recorded zero is per-device-identity.",
+                body: "Reach Calibrate Motion from the Controller menu (top of the screen). Place the controller flat, click Start Calibration, hold still for 2 s. Run once per controller; the recorded zero is per-device.",
                 action: {
                     editingPreset = nil
                     showingTouchpadCalibrationFromMenu = false
-                    showingMotionCalibrationFromMenu = true
+                    // Brief beat so a previously-open sheet has time to
+                    // dismiss before we present the next one - otherwise
+                    // SwiftUI quietly skips the second presentation.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showingMotionCalibrationFromMenu = true
+                    }
                 }
             ),
             TutorialStep(
                 icon: "rectangle.and.hand.point.up.left.fill",
                 tint: .mint,
                 title: "Calibrate Touchpad",
-                body: "Touchpad calibration is next. Drag your finger across the entire surface so we learn the bounds, then save. You can also define named tap-zones for region-based bindings.",
-                tip: "Calibrate motion AND touchpad once when you first plug in a new DualSense.",
+                body: "Touchpad Setup opens with a device picker at the top: DualSense, DualShock 4, or Mac Trackpad. Pick one, then sweep the surface to calibrate, or jump to Regions to define tap zones bound to keys.",
                 action: {
                     showingMotionCalibrationFromMenu = false
-                    showingTouchpadCalibrationFromMenu = true
+                    // Brief delay so the previous sheet visibly closes
+                    // before we open the next one - otherwise it looks
+                    // like the same sheet just changed contents.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showingTouchpadCalibrationFromMenu = true
+                    }
                 }
             ),
             TutorialStep(
                 icon: "chart.line.uptrend.xyaxis",
                 tint: .purple,
                 title: "Lifetime statistics",
-                body: "The Statistics dashboard tracks lifetime usage - time connected, button presses, mouse pixels, top presets, and more. Click any tile to drill into a detailed breakdown with charts.",
+                body: "The chart icon at the top of the window opens Statistics: lifetime usage, time connected, button presses, mouse pixels, top presets, and more. Click any tile for a detailed breakdown.",
                 spotlight: SpotlightID.statsButton,
                 spotlightShape: .circle,
                 tip: "All stats are stored locally. Nothing leaves your Mac.",
                 action: {
-                    // Make sure prior sheets are closed before the next step
-                    // highlights toolbar buttons.
                     showingMotionCalibrationFromMenu = false
                     showingTouchpadCalibrationFromMenu = false
                     editingPreset = nil
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.statsButton
+                    ) {
+                        showingStats = true
+                    }
                 }
             ),
             TutorialStep(
                 icon: "gear",
                 tint: .gray,
                 title: "Settings & backup",
-                body: "The gear icon opens Settings with Launch-at-Login, controller diagnostics, About, and a full Export Backup / Restore from Backup pair so you can move your config between Macs.",
+                body: "The gear icon opens Settings with Launch-at-Login, controller diagnostics, About, a Gaming Utilities panel, full Export Backup / Restore from Backup, and the App Store / open-source links. Cursor flies to the gear so you see where it is.",
                 spotlight: SpotlightID.settingsButton,
                 spotlightShape: .circle,
                 action: {
                     showingMotionCalibrationFromMenu = false
                     showingTouchpadCalibrationFromMenu = false
                     editingPreset = nil
+                    showingStats = false
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.settingsButton
+                    ) {
+                        showingSettingsSheet = true
+                    }
                 }
             ),
             TutorialStep(
                 icon: "questionmark.circle.fill",
                 tint: .cyan,
                 title: "Help guides",
-                body: "The Help menu (\u{2318}?) opens an in-app guide with deeper docs on every feature, plus a separate Test Bench for diagnosing weird input behavior. The Quick Start Tour - this thing - is in there too if you ever want to repeat it."
+                body: "Dismissing Settings for you. The Help menu (\u{2318}?) opens an in-app guide with deeper docs on every feature, plus a separate Test Bench. The Quick Start Tour itself is in there too if you ever want to repeat it.",
+                action: {
+                    showingMotionCalibrationFromMenu = false
+                    showingTouchpadCalibrationFromMenu = false
+                    editingPreset = nil
+                    // The previous Settings step left the sheet open;
+                    // close it before the Help menu reference makes
+                    // sense to the user.
+                    showingSettingsSheet = false
+                    showingStats = false
+                }
+            ),
+            TutorialStep(
+                icon: "tray.and.arrow.down",
+                tint: .blue,
+                title: "Importing other presets",
+                body: "Use the download icon at the bottom right of the sidebar to import preset JSON files. The Import Review sheet previews each file with a rename field, parse-error messages, and per-row skip. Nothing lands without confirmation.",
+                spotlight: SpotlightID.importButton,
+                tip: "Drag preset JSONs straight onto the icon to import them too.",
+                action: {
+                    showingSettingsSheet = false
+                    showingStats = false
+                }
+            ),
+
+            // ─── Interactive Minecraft walkthrough ─────────────────
+            // From here on the tour stops *explaining* the app in
+            // abstract terms and starts driving it. Each action()
+            // closure mutates ContentView's @State so the user sees
+            // the real UI respond - sidebar selection, editor sheet
+            // opening, scrolling to specific binding rows, expanding
+            // their Options disclosure - exactly what they would do
+            // themselves when building a Minecraft preset from scratch.
+
+            TutorialStep(
+                icon: "cube.fill",
+                tint: .green,
+                title: "Hands-on: build a Minecraft preset",
+                body: "Now the focused part. Instead of repeating things you already saw, we'll dig into the two trickiest parts of any preset: SCANNING a binding (recording a controller input) and BUILDING a MACRO (chaining keystrokes off one button). Both happen inside the editor for the Minecraft preset.",
+                action: {
+                    selectedPresetId = nil
+                    editingPreset = nil
+                    showingSettingsSheet = false
+                    showingStats = false
+                }
+            ),
+            TutorialStep(
+                icon: "list.bullet.rectangle.portrait",
+                tint: .teal,
+                title: "Select the Minecraft preset",
+                body: "Cursor goes to the sidebar, clicks Minecraft. The detail page loads with its 24 bindings, the DualSense Edge in the slot (synthetic for this tour), and the Minecraft automation rules already wired up.",
+                spotlight: SpotlightID.sidebar,
+                action: {
+                    editingPreset = nil
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.sidebar
+                    ) {
+                        if let mc = tutorialMinecraftPreset() {
+                            selectedPresetId = mc.id
+                            NotificationCenter.default.post(
+                                name: .joystickConfigScrollToPreset,
+                                object: mc.id)
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "slider.horizontal.3",
+                tint: .orange,
+                title: "Open the editor",
+                body: "Cursor clicks Edit Bindings & Mappings. The sheet slides up over the detail page. The engine outputs pause automatically, so scanning a key here records it as a binding instead of firing a real keystroke.",
+                spotlight: SpotlightID.editButton,
+                action: {
+                    if let mc = tutorialMinecraftPreset() {
+                        selectedPresetId = mc.id
+                        TutorialState.shared.simulateClickThen(
+                            at: SpotlightID.editButton
+                        ) {
+                            editingPreset = mc
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "rectangle.dashed",
+                tint: .indigo,
+                title: "Anatomy of a binding row",
+                body: "Each row is one binding. Left to right: drag handle, Scan, Input Type, Input Index, Direction, then the arrow, then Output Type and Value, plus the add, duplicate, and delete cluster.",
+                action: {
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToFirstBinding, object: nil)
+                }
+            ),
+            TutorialStep(
+                icon: "dot.scope",
+                tint: .red,
+                title: "Scanning: record a binding from your controller",
+                body: "Click Scan on a row. It glows for 5 seconds. Press the button, move the stick, or tilt the gyro you want to bind. The row fills in. Same scan works with external keyboards and mice.",
+                tip: "Hold Shift or Cmd while scanning to add that modifier to the recorded input."
+            ),
+            TutorialStep(
+                icon: "bolt.fill",
+                tint: .yellow,
+                title: "Macros: chain keystrokes off one button",
+                body: "Auto-expanding the first row's Options again. Toggle Macro on to reveal a steps editor. Each step is one event plus an optional delay. The whole chain fires on press.",
+                tip: "Combine Macro with a Toggle binding to flip a series on or off with one button.",
+                action: {
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToFirstBinding, object: nil)
+                    if let firstID = tutorialMinecraftPreset()?
+                        .joysticks.first?.bindings.first?.id {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            NotificationCenter.default.post(
+                                name: .joystickConfigExpandBindingOptions,
+                                object: firstID)
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "plus.circle.fill",
+                tint: .green,
+                title: "Stacked outputs: one press, many actions",
+                body: "The small + at the right of every binding row adds another output to the same input. One press can fire a key, a click, a MIDI note, and a spoken phrase together with independent per-output settings.",
+                tip: "Use the X next to each output to delete it without touching the rest of the stack."
+            ),
+            TutorialStep(
+                icon: "wand.and.stars",
+                tint: .purple,
+                title: "Automation panel: per-preset side effects",
+                body: "Scrolling down to Automation. Fill in a launch path to auto-open the app on activate. Confine, auto-recenter, and Hide cursor toggles apply only while this preset is active.",
+                action: {
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToAutomation, object: nil)
+                }
+            ),
+            TutorialStep(
+                icon: "tray.and.arrow.down.fill",
+                tint: .blue,
+                title: "Save the Minecraft preset",
+                body: "Cursor flies to Save (bottom right of the editor toolbar), then to Cancel, then the editor slides closed. Modified time updates, and the new bindings are on disk.",
+                spotlight: SpotlightID.editorSave,
+                action: {
+                    TutorialState.shared.simulateClickThen(
+                        at: SpotlightID.editorSave
+                    ) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                            TutorialState.shared.simulateClickThen(
+                                at: SpotlightID.editorCancel
+                            ) {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                    withAnimation { editingPreset = nil }
+                                }
+                            }
+                        }
+                    }
+                }
+            ),
+            TutorialStep(
+                icon: "play.circle.fill",
+                tint: .green,
+                title: "Activate Minecraft mode",
+                body: "Scrolling back up to the Activate button. Click it for real to start the engine, launch Minecraft, hide the cursor, and turn the lightbar green.",
+                spotlight: SpotlightID.activateButton,
+                tip: "Cmd-click the green dot in the sidebar to toggle activation without leaving the home screen.",
+                action: {
+                    NotificationCenter.default.post(
+                        name: .joystickConfigScrollToTop, object: nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        TutorialState.shared.simulateClickThen(
+                            at: SpotlightID.activateButton
+                        ) {
+                            // No-op - user activates when they're ready
+                            // to launch Minecraft.
+                        }
+                    }
+                }
+            ),
+
+            // ─── Wrap-up ───────────────────────────────────────────
+
+            TutorialStep(
+                icon: "books.vertical.fill",
+                tint: .orange,
+                title: "Browse the example library",
+                body: "Back on the home screen. The feature card grid is also a library. Every card opens an animated demo and links to a working example preset you can copy.",
+                tip: "Each example preset is editable. Duplicate one as a starting point for your own.",
+                action: {
+                    selectedPresetId = nil
+                    editingPreset = nil
+                    showingStats = false
+                    showingSettingsSheet = false
+                    tutorialFeatureSpotlight = nil
+                }
             ),
             TutorialStep(
                 icon: "checkmark.circle.fill",
                 tint: .green,
                 title: "You're all set",
-                body: "That's the full tour. Build a preset, calibrate your controller, and have fun. If anything feels confusing, the Help menu has a guide for it.",
-                action: { selectedPresetId = nil }
+                body: "That's the full tour. You can now scan a binding, chain a macro, stack outputs, and set automation. Re-run any time from the Quick Start Guide button.",
+                action: {
+                    selectedPresetId = nil
+                    editingPreset = nil
+                }
             )
         ]
     }
@@ -1319,6 +2000,14 @@ struct ContentView: View {
     private func performPendingDelete() {
         guard let preset = presetPendingDelete else { return }
         if selectedPresetId == preset.id { selectedPresetId = nil }
+        // Stop the mapping engine BEFORE removing the preset. Earlier
+        // versions called deletePreset → deactivateAll, which only
+        // cleared the active flag but left the engine polling the now-
+        // deleted preset, firing ghost outputs until the user stopped
+        // it manually.
+        if preset.isActive {
+            mappingEngine.stop()
+        }
         presetStore.deletePreset(preset)
         presetPendingDelete = nil
     }
@@ -1838,20 +2527,14 @@ struct PresetRowView: View {
     }
 
     var body: some View {
-        // Two-tier layout: the main row stays a stable height; the
-        // expanded description / notes appear in a separate block UNDER
-        // the row. This way the row's name + circle + menu can never
-        // drift upward when expansion happens - the new block just adds
-        // height below them.
-        VStack(alignment: .leading, spacing: 4) {
-            mainRow
-            if descriptionExpanded {
-                expandedDetail
-                    .padding(.leading, 34) // align with text column
-                    .padding(.trailing, 8)
-                    .transition(.opacity)
-            }
-        }
+        // Single-line row: name on top, optional chevron beside the
+        // truncated tag. Clicking the chevron pops up the full
+        // description as a popover floating below the row. We use a
+        // popover instead of inline expansion because List(.sidebar)
+        // enforces a fixed row height that silently clips any
+        // multi-line text - the popover floats outside the row
+        // entirely and is guaranteed to show the full text.
+        mainRow
     }
 
     /// Top half of the row: activation circle, name, single-line
@@ -1859,57 +2542,71 @@ struct PresetRowView: View {
     /// options Menu. Always the same height regardless of expansion.
     @ViewBuilder
     private var mainRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             ZStack {
                 if preset.isActive {
                     Circle()
                         .fill(Color.green.opacity(0.25))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 20, height: 20)
                         .blur(radius: 4)
                     Circle()
                         .fill(Color.green)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 12, height: 12)
                         .shadow(color: Color.green.opacity(0.6), radius: 6, x: 0, y: 0)
                 } else {
                     Circle()
                         .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 1.5)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 12, height: 12)
                 }
             }
-            .frame(width: 24, height: 24)
+            .frame(width: 14, height: 18)
+            .accessibilityLabel(preset.isActive ? "Active" : "Inactive")
+            .accessibilityValue(preset.name)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(preset.name)
                     .font(.body)
                     .lineLimit(1)
 
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(preset.tag)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                // Single-line tag preview. The truncation toggle that
+                // used to sit inline next to the tag now lives outside
+                // the VStack so it aligns at a consistent x position
+                // across all rows, right next to the options menu.
+                Text(preset.tag)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
-                    if descriptionTruncates {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                descriptionExpanded.toggle()
-                            }
-                        } label: {
-                            Image(systemName: descriptionExpanded
-                                  ? "chevron.up.circle.fill"
-                                  : "ellipsis.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(descriptionExpanded
-                              ? "Collapse description"
-                              : "Show full description")
+            Spacer(minLength: 4)
+
+            // Description-expand chevron, pinned to the row's right
+            // side so every row's chevron lines up vertically. Same
+            // 18pt slot whether or not the chevron is showing, so the
+            // ellipsis below doesn't shift between truncated and
+            // untruncated rows.
+            ZStack {
+                if descriptionTruncates {
+                    Button {
+                        descriptionExpanded.toggle()
+                    } label: {
+                        Image(systemName: descriptionExpanded
+                              ? "chevron.up"
+                              : "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(descriptionExpanded
+                          ? "Collapse description"
+                          : "Show full description")
+                    .popover(isPresented: $descriptionExpanded,
+                             arrowEdge: .bottom) {
+                        descriptionPopover
                     }
                 }
             }
-
-            Spacer()
+            .frame(width: 18, alignment: .center)
 
             // Options menu
             Menu {
@@ -1964,16 +2661,16 @@ struct PresetRowView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color.gray.opacity(0.5))
-                    .frame(width: 22, height: 22)
-                    .background(Color.secondary.opacity(0.08))
-                    .clipShape(Circle())
-                    .contentShape(Circle())
+                    .font(.system(size: 12))
+                    .foregroundColor(Color.gray.opacity(0.55))
+                    .frame(width: 16, height: 22, alignment: .trailing)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
-            .frame(width: 22)
+            .frame(width: 16, alignment: .trailing)
+            .accessibilityLabel("\(preset.name) options")
+            .accessibilityHint("Activate, edit, duplicate, convert, share, or delete this preset")
         }
         .padding(.vertical, 4)
         .contextMenu {
@@ -2017,26 +2714,40 @@ struct PresetRowView: View {
         }
     }
 
-    /// Bottom block shown when descriptionExpanded is true: the full
-    /// tag (multi-line) plus the preset's notes (if any). Indented to
-    /// align with the description column in the main row.
+    /// Floating popover anchored to the chevron button. Renders OUTSIDE
+    /// the List row container so the sidebar's fixed-row-height
+    /// enforcement can't clip multi-line text. The popover has its
+    /// own fixed width (280pt) and grows vertically with the content.
     @ViewBuilder
-    private var expandedDetail: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if preset.tag.count >= 16 {
+    private var descriptionPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(preset.name)
+                .font(.headline)
+            if !preset.tag.isEmpty {
                 Text(preset.tag)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
             if !preset.notes.isEmpty {
+                Divider()
+                Text("Notes")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
                 Text(preset.notes)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(8)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
         }
+        .padding(14)
+        .frame(width: 320, alignment: .leading)
     }
 }
 
@@ -2057,171 +2768,356 @@ struct PresetDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            ScrollViewReader { detailProxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Header
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            TextField("Preset Name", text: $preset.name)
-                                .font(.title2)
-                                .fontWeight(.regular)
-                                .textFieldStyle(.plain)
+                VStack(alignment: .leading, spacing: 14) {
+                    // Anchor for the Quick Tour's scroll-to-top.
+                    Color.clear.frame(height: 0).id("detail-top")
 
-                            TextField("Tag / Description", text: $preset.tag)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .textFieldStyle(.plain)
-                        }
-
-                        Spacer()
-
-                        HStack(spacing: 8) {
-                            Button(action: onToggle) {
-                                Label(
-                                    preset.isActive ? "Deactivate" : "Activate",
-                                    systemImage: preset.isActive ? "stop.fill" : "play.fill"
-                                )
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(preset.isActive ? .red : .green)
-                            .controlSize(.regular)
-                            .spotlightAnchor(SpotlightID.activateButton)
-
-                            Button("Edit Bindings & Mappings", action: onEdit)
-                                .buttonStyle(.bordered)
-                                .controlSize(.regular)
-                                .spotlightAnchor(SpotlightID.editButton)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .spotlightAnchor(SpotlightID.detailHeader)
-
-                    Divider()
+                    // 1. Header (name, tag, Activate, Edit).
+                    headerSection
                         .padding(.horizontal)
+                        .padding(.top, 8)
 
-                    detailsSection
+                    // 2. Live Visualizer card.
+                    // Tagged so the tour can scrollTo("visualizer-section")
+                    // without having to fish through nested SwiftUI views.
+                    Color.clear.frame(height: 0).id("visualizer-section")
+                    visualizerCard
                         .padding(.horizontal)
+                        .spotlightAnchor(SpotlightID.visualizer)
 
-                    Divider()
-                        .padding(.horizontal)
-
-                    DisclosureGroup(isExpanded: $showVisualizer) {
-                        // One visualizer per JOYSTICK in the preset. The
-                        // preset model can target multiple controllers
-                        // (one Joystick group per slot), so each joystick
-                        // gets its own visualizer pinned to its slot.
-                        // Falls back to "one per connected slot" when the
-                        // preset has no joystick groups yet, so brand-new
-                        // presets still surface something useful.
-                        let connectedSlots = Array(controllerService.controllerDetails.keys).sorted()
-                        let presetJoystickCount = preset.joysticks.count
-                        let totalVisualizers = max(presetJoystickCount, connectedSlots.count)
-                        if connectedSlots.isEmpty && presetJoystickCount == 0 {
-                            Text("Connect a controller to see its live state here.")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, 8)
-                        } else {
-                            VStack(alignment: .leading, spacing: 14) {
-                                ForEach(0..<totalVisualizers, id: \.self) { idx in
-                                    // Joystick #idx is associated with
-                                    // connected slot #idx by convention.
-                                    let slot = idx < connectedSlots.count
-                                        ? connectedSlots[idx]
-                                        : idx
-                                    HStack(spacing: 8) {
-                                        Text("Joystick #\(idx)")
-                                            .font(.caption2.weight(.semibold).monospaced())
-                                            .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(
-                                                Capsule().fill(Color.secondary.opacity(0.12))
-                                            )
-                                        Spacer()
-                                    }
-                                    VirtualControllerView(
-                                        preset: preset,
-                                        onJump: { target in
-                                            onJumpToBinding(target)
-                                        },
-                                        fixedSlot: slot,
-                                        trailing: {
-                                            // Pops up from the on-controller
-                                            // light-bar widget when clicked.
-                                            if hasLightCapableController
-                                                && slot == firstLightControllerIndex {
-                                                presetLightBarSection
-                                                    .frame(width: 280)
-                                            }
-                                        },
-                                        lightBarTint: presetLightBarSwiftUIColor
-                                    )
-                                    .environmentObject(controllerService)
-                                }
-                            }
-                            .padding(.top, 8)
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "gamecontroller")
-                                .foregroundStyle(.teal)
-                            Text("Live Visualizer")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    }
-                    .padding(.horizontal)
-                    .spotlightAnchor(SpotlightID.visualizer)
-
-                    Divider()
-                        .padding(.horizontal)
-
-                    presetNotesSection
-                        .padding(.horizontal)
-                        .spotlightAnchor(SpotlightID.notesSection)
-
-                    // Joystick summary cards
-                    ForEach(Array(preset.joysticks.enumerated()), id: \.element.id) { index, joystick in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text("Joystick #\(index)")
-                                    .font(.subheadline)
-                                Spacer()
-                                Text("\(joystick.bindings.count) bindings")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                            }
-
-                            if !joystick.tag.isEmpty && joystick.tag != "<write comments here>" {
-                                Text(joystick.tag)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.4))
-                        )
-                        .padding(.horizontal)
-                    }
-
-                    if preset.joysticks.isEmpty {
+                    // 3. Joystick Slots card (mapping count + comment per
+                    //    joystick group in the preset).
+                    if !preset.joysticks.isEmpty {
+                        joystickSlotsCard
+                            .padding(.horizontal)
+                    } else {
                         ContentUnavailableView {
                             Label("No Joystick Mappings", systemImage: "gamecontroller")
                         } description: {
                             Text("Edit this preset to add joystick mappings.")
                         }
                     }
+
+                    // 4. Details card (Usage, Inputs, Outputs, Controllers,
+                    //    Storage, version history).
+                    detailsCard
+                        .padding(.horizontal)
+
+                    // 5. Notes card. Last so the user can write context for
+                    //    a preset they've already taken in.
+                    notesCard
+                        .padding(.horizontal)
+                        .spotlightAnchor(SpotlightID.notesSection)
                 }
-                .padding(.vertical)
+                .padding(.vertical, 14)
             }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .joystickConfigScrollToVisualizer)) { _ in
+                showVisualizer = true
+                withAnimation(.easeOut(duration: 0.45)) {
+                    detailProxy.scrollTo("visualizer-section", anchor: .top)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: .joystickConfigScrollToTop)) { _ in
+                withAnimation(.easeOut(duration: 0.45)) {
+                    detailProxy.scrollTo("detail-top", anchor: .top)
+                }
+            }
+            } // ScrollViewReader
 
         }
         .navigationTitle(preset.name)
+    }
+
+    // MARK: - Section card helpers
+
+    /// Wraps a section in a uniform card: subtle background, rounded
+    /// corners, soft border. Used by every major section of the detail
+    /// panel so they read as a related set rather than a scrap pile.
+    @ViewBuilder
+    private func sectionCard<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            content()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+        )
+    }
+
+    /// Standard header row for a section card: tinted SF Symbol, title,
+    /// optional trailing content (e.g. a chevron or status pill).
+    @ViewBuilder
+    private func sectionHeader<Trailing: View>(
+        icon: String,
+        title: String,
+        tint: Color = .secondary,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() }
+    ) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+                .font(.subheadline)
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 4)
+            trailing()
+        }
+    }
+
+    // MARK: - Section: Header
+
+    @ViewBuilder
+    private var headerSection: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Preset Name", text: $preset.name)
+                    .font(.title2)
+                    .fontWeight(.regular)
+                    .textFieldStyle(.plain)
+                TextField("Tag / Description", text: $preset.tag)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .textFieldStyle(.plain)
+            }
+            Spacer()
+            HStack(spacing: 8) {
+                Button(action: onToggle) {
+                    Label(
+                        preset.isActive ? "Deactivate" : "Activate",
+                        systemImage: preset.isActive ? "stop.fill" : "play.fill"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(preset.isActive ? .red : .green)
+                .controlSize(.regular)
+                .spotlightAnchor(SpotlightID.activateButton)
+                .accessibilityLabel(preset.isActive
+                                    ? "Deactivate \(preset.name)"
+                                    : "Activate \(preset.name)")
+                .accessibilityHint(preset.isActive
+                                   ? "Stops the mapping engine for this preset"
+                                   : "Starts the mapping engine and applies this preset")
+
+                Button("Edit Bindings & Mappings", action: onEdit)
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .spotlightAnchor(SpotlightID.editButton)
+                    .accessibilityLabel("Edit bindings and mappings")
+                    .accessibilityHint("Opens the binding editor for this preset")
+            }
+        }
+        .spotlightAnchor(SpotlightID.detailHeader)
+    }
+
+    // MARK: - Section: Live Visualizer card
+
+    @ViewBuilder
+    private var visualizerCard: some View {
+        sectionCard {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { showVisualizer.toggle() }
+            } label: {
+                sectionHeader(icon: "gamecontroller", title: "Live Visualizer",
+                              tint: .teal) {
+                    Image(systemName: showVisualizer ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showVisualizer
+                                ? "Collapse Live Visualizer"
+                                : "Expand Live Visualizer")
+
+            if showVisualizer {
+                visualizerContent
+            }
+        }
+    }
+
+    /// The visualizer body extracted so it can be embedded directly in a
+    /// section card (with our own collapse chevron) instead of a
+    /// DisclosureGroup whose chevron sat awkwardly next to the card.
+    @ViewBuilder
+    private var visualizerContent: some View {
+        let connectedSlots = Array(controllerService.controllerDetails.keys).sorted()
+        let presetJoystickCount = preset.joysticks.count
+        let totalVisualizers = max(presetJoystickCount, connectedSlots.count)
+        if connectedSlots.isEmpty && presetJoystickCount == 0 {
+            Text("Connect a controller to see its live state here.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(0..<totalVisualizers, id: \.self) { idx in
+                    let slot = idx < connectedSlots.count
+                        ? connectedSlots[idx]
+                        : idx
+                    HStack(spacing: 8) {
+                        Text("Joystick #\(idx)")
+                            .font(.caption2.weight(.semibold).monospaced())
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule().fill(Color.secondary.opacity(0.12))
+                            )
+                        Spacer()
+                    }
+                    VirtualControllerView(
+                        preset: preset,
+                        onJump: { target in
+                            onJumpToBinding(target)
+                        },
+                        fixedSlot: slot,
+                        trailing: {
+                            if hasLightCapableController
+                                && slot == firstLightControllerIndex {
+                                presetLightBarSection
+                                    .frame(width: 280)
+                            }
+                        },
+                        lightBarTint: presetLightBarSwiftUIColor,
+                        onChangeInputKind: { changedSlot, newKind in
+                            updateSlotInputKind(
+                                presetID: preset.id,
+                                slot: changedSlot,
+                                kind: newKind)
+                        }
+                    )
+                    .environmentObject(controllerService)
+                }
+            }
+        }
+    }
+
+    // MARK: - Section: Joystick Slots card
+
+    /// Compact summary of every joystick mapping in the preset, grouped
+    /// into a single card instead of the loose stack of mini cards we
+    /// used to render under the visualizer.
+    @ViewBuilder
+    private var joystickSlotsCard: some View {
+        sectionCard {
+            sectionHeader(icon: "rectangle.stack.fill",
+                          title: "Joystick Slots",
+                          tint: .indigo) {
+                Text("\(preset.joysticks.count) \(preset.joysticks.count == 1 ? "slot" : "slots")")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+
+            VStack(spacing: 6) {
+                ForEach(Array(preset.joysticks.enumerated()), id: \.element.id) { index, joystick in
+                    joystickSlotRow(index: index, joystick: joystick)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func joystickSlotRow(index: Int, joystick: JoystickMapping) -> some View {
+        let bindingCount = joystick.bindings.count
+        let hasComment = !joystick.tag.isEmpty && joystick.tag != "<write comments here>"
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(resolvedJoystickName(joystick: joystick, slot: index))
+                    .font(.subheadline)
+                if joystick.customName == nil {
+                    Text("#\(index)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Text("\(bindingCount) \(bindingCount == 1 ? "binding" : "bindings")")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            if hasComment {
+                Text(joystick.tag)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.06))
+        )
+    }
+
+    // MARK: - Section: Details card
+
+    @ViewBuilder
+    private var detailsCard: some View {
+        sectionCard {
+            sectionHeader(icon: "info.circle.fill",
+                          title: "Details",
+                          tint: .blue)
+            detailsSection
+        }
+    }
+
+    // MARK: - Section: Notes card
+
+    /// Notes section card. The internal `presetNotesSection` still
+    /// renders the icon, label, and TextEditor; the surrounding
+    /// sectionCard provides the consistent frame.
+    @ViewBuilder
+    private var notesCard: some View {
+        sectionCard {
+            presetNotesSection
+        }
+    }
+
+    /// Resolve the display name for a joystick mapping slot. Priority:
+    ///   1. The user's `customName` if they renamed it.
+    ///   2. The currently-connected controller's product name for that
+    ///      slot (e.g. "DualSense Wireless Controller").
+    ///   3. The fallback "Joystick #N".
+    private func resolvedJoystickName(joystick: JoystickMapping, slot: Int) -> String {
+        if let custom = joystick.customName, !custom.isEmpty {
+            return custom
+        }
+        if let info = controllerService.controllerDetails[slot] {
+            let trimmed = info.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return "Joystick #\(slot)"
+    }
+
+    /// Apply the visualizer picker's choice back to the preset model
+    /// and persist via the store. Auto-creates the joystick mapping
+    /// for the slot if one doesn't exist yet (so the picker works on
+    /// brand-new presets with no joysticks defined).
+    fileprivate func updateSlotInputKind(presetID: UUID, slot: Int, kind: SlotInputKind) {
+        guard preset.id == presetID else { return }
+        var updated = preset
+        while updated.joysticks.count <= slot {
+            updated.joysticks.append(JoystickMapping(tag: ""))
+        }
+        updated.joysticks[slot].inputKind = kind
+        updated.modifiedAt = Date()
+        preset = updated
+        presetStore.savePreset(updated)
     }
 
     // MARK: - Details
@@ -2392,7 +3288,7 @@ struct PresetDetailView: View {
                 )
                 .overlay(alignment: .topLeading) {
                     if preset.notes.isEmpty {
-                        Text("Free-form notes about this preset...")
+                        Text("Start typing...")
                             .font(.callout)
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 13)
@@ -3028,6 +3924,39 @@ fileprivate struct WrappingHStackLayout: Layout {
                        proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// Extracted from `ContentView.body` because inlining the alert pushed
+/// the SwiftUI type-checker past its time budget. Now ContentView just
+/// applies `.modifier(UpdateAvailableAlertModifier(...))` and the
+/// presenter is kept here.
+private struct UpdateAvailableAlertModifier: ViewModifier {
+    @ObservedObject var updateCheck: UpdateCheckService
+
+    func body(content: Content) -> some View {
+        content.alert(
+            "Update available",
+            isPresented: Binding(
+                get: { updateCheck.availableUpdateVersion != nil },
+                set: { newValue in
+                    if newValue == false { updateCheck.dismissAvailableUpdate() }
+                }
+            ),
+            presenting: updateCheck.availableUpdateVersion
+        ) { _ in
+            Button("Open App Store") {
+                updateCheck.openAppStoreForUpdate()
+                updateCheck.dismissAvailableUpdate()
+            }
+            Button("Not now", role: .cancel) {
+                updateCheck.dismissAvailableUpdate()
+            }
+        } message: { newVersion in
+            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"]
+                as? String ?? "an older version"
+            Text("JoystickConfig \(newVersion) is now available on the Mac App Store. You're running \(current).")
         }
     }
 }

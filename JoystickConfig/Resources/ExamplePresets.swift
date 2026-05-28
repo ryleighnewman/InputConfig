@@ -65,6 +65,10 @@ struct ExamplePresets {
         "Showcase: Steam Controller":       GroupName.showcase,
         "Showcase: Gyro Aim":               GroupName.showcase,
         "Showcase: Motion Cursor":          GroupName.showcase,
+        "Showcase: Toggle Mode":            GroupName.showcase,
+        "Showcase: Stacked Outputs":        GroupName.showcase,
+        "Showcase: Auto-Launch + Cursor Confine": GroupName.showcase,
+        "MIDI: CC Dials":                   GroupName.midi,
     ]
 
     /// Ordered group names so the sidebar shows them in the curated order.
@@ -74,6 +78,18 @@ struct ExamplePresets {
         GroupName.gamingGenre,
         GroupName.midi,
         GroupName.showcase,
+    ]
+
+    /// Default sidebar tint for each ship group. Matches the palette
+    /// stored in `PresetGroup.colorOptions`. The user can override these
+    /// from the folder context menu; the values here are the first-launch
+    /// defaults so the sidebar comes out colorful out of the box.
+    static let groupDefaultColors: [String: String] = [
+        GroupName.desktop:     "orange",
+        GroupName.gamingFPS:   "green",
+        GroupName.gamingGenre: "green",
+        GroupName.midi:        "red",
+        GroupName.showcase:    "teal",
     ]
 
     /// Per-feature lookup so the welcome demos can jump to the matching
@@ -126,6 +142,10 @@ struct ExamplePresets {
             showcaseSteamController,
             showcaseGyroAim,
             showcaseMotionCursor,
+            showcaseToggleMode,
+            showcaseStackedOutputs,
+            showcaseAutoLaunch,
+            showcaseMidiCC,
         ]
     }
 
@@ -441,7 +461,7 @@ struct ExamplePresets {
     // MARK: - Gaming - Genre (JSON)
 
     static var minecraft: Preset {
-        parse("""
+        var preset = parse("""
         {
             "name": "Minecraft",
             "tag": "Movement, look, mine, place, hotbar",
@@ -476,6 +496,23 @@ struct ExamplePresets {
             }]
         }
         """)
+        // The legacy JSON parser doesn't carry automation, so we inject
+        // it here. Mirrors what the Minecraft walkthrough teaches: the
+        // launcher app fires on activate, the cursor confines + auto-
+        // recenters + hides so the camera doesn't catch on the screen
+        // edge. Survival-grass green light bar.
+        preset.automation = PresetAutomation(
+            launchAppPath: "/Applications/Minecraft.app",
+            launchURL: "",
+            confineCursor: true,
+            confineBufferPx: 24,
+            autoRecenterCursor: true,
+            autoRecenterIntervalMs: 250,
+            hideCursorWhileActive: true,
+            sensitivityMultiplier: 1.0
+        )
+        preset.lightBarColor = RGBLightColor(r: 60, g: 200, b: 80)
+        return preset
     }
 
     static var fortnite: Preset {
@@ -965,6 +1002,164 @@ struct ExamplePresets {
             name: "Showcase: Motion Cursor",
             tag: "Wave the controller to move the cursor; face buttons click",
             joystickTag: "Wider gyro deadzone and slower speed than Gyro Aim; perfect for couch desktop use on Switch Pro / DualSense",
+            bindings: bindings)
+    }
+
+    /// Showcase: Toggle Mode. Demonstrates the per-binding "toggle"
+    /// flag - press once to latch on, press again to latch off.
+    /// Perfect for sticky-keys patterns (caps lock-style modifier
+    /// without a real caps lock), push-to-talk that you can park, or
+    /// any "hold" output you'd rather flip.
+    static var showcaseToggleMode: Preset {
+        let bindings: [BindingModel] = [
+            // A (button 0) toggles L-Shift: press once = Shift latched
+            // until you press A again. Useful as a sticky modifier.
+            BindingModel(input: .button(0),
+                         outputs: [OutputAction(type: .key, keyCode: 225)],
+                         toggleMode: true,
+                         hapticEnabled: true, hapticIntensity: 0.4),
+            // B (button 1) toggles L-Cmd same way.
+            BindingModel(input: .button(1),
+                         outputs: [OutputAction(type: .key, keyCode: 227)],
+                         toggleMode: true,
+                         hapticEnabled: true, hapticIntensity: 0.4),
+            // X (button 2) toggles mute via F10 (depends on macOS
+            // shortcut config; many keyboards map this to mute).
+            BindingModel(input: .button(2),
+                         outputs: [OutputAction(type: .key, keyCode: 67)],
+                         toggleMode: true),
+            // Y (button 3) toggles caps-lock style autohold of W key
+            // (good for "auto-run" in games that need W held).
+            BindingModel(input: .button(3),
+                         outputs: [OutputAction(type: .key, keyCode: 26)],
+                         toggleMode: true,
+                         hapticEnabled: true, hapticIntensity: 0.6),
+        ]
+        return makePreset(
+            name: "Showcase: Toggle Mode",
+            tag: "Press once to latch on, press again to release",
+            joystickTag: "Each face button toggles a key instead of holding while pressed. A = sticky Shift, B = sticky Cmd, X = mute toggle, Y = auto-run W",
+            bindings: bindings)
+    }
+
+    /// Showcase: Stacked Outputs. One physical input fires multiple
+    /// independent outputs at the same time. Different from a macro -
+    /// these aren't a sequence with delays; they're parallel events
+    /// per press.
+    static var showcaseStackedOutputs: Preset {
+        let bindings: [BindingModel] = [
+            // A button fires four things at once: a keystroke (Space),
+            // a mouse click, a MIDI note, and speech. Speech rides
+            // alongside the outputs as a per-binding flag, not its
+            // own OutputAction.
+            BindingModel(input: .button(0),
+                         outputs: [
+                            OutputAction(type: .key, keyCode: 44),
+                            OutputAction(type: .mouseButton, mouseButtonIndex: 1),
+                            OutputAction(type: .midiNote, midiNote: 60, midiVelocity: 100)
+                         ],
+                         hapticEnabled: true, hapticIntensity: 0.7,
+                         speechEnabled: true,
+                         speechText: "Hello"),
+            // B fires two parallel keystrokes: Cmd+Shift+4 (screenshot)
+            // approximated by Cmd then 4 (real chord recording uses
+            // a different path).
+            BindingModel(input: .button(1),
+                         outputs: [
+                            OutputAction(type: .key, keyCode: 227),
+                            OutputAction(type: .key, keyCode: 33),
+                         ]),
+        ]
+        return makePreset(
+            name: "Showcase: Stacked Outputs",
+            tag: "One press fires keystroke + mouse + MIDI + speech together",
+            joystickTag: "A = parallel output stack (key + click + MIDI + speech). B = parallel keystroke pair. Different from a macro - no delays, no sequence; these fire simultaneously.",
+            bindings: bindings)
+    }
+
+    /// Showcase: Per-Preset Automation. Demonstrates the editor's
+    /// Automation panel - auto-launch an app on activation, plus
+    /// scoped cursor utilities (confine / auto-recenter / hide).
+    /// The preset itself only has a handful of bindings so the
+    /// automation panel is the star of the show.
+    static var showcaseAutoLaunch: Preset {
+        let bindings: [BindingModel] = [
+            BindingModel(input: .button(0),
+                         outputs: [OutputAction(type: .key, keyCode: 44)]),  // A → Space
+            BindingModel(input: .button(9),
+                         outputs: [OutputAction(type: .key, keyCode: 41)]),  // Menu → Esc
+        ]
+        var preset = makePreset(
+            name: "Showcase: Auto-Launch + Cursor Confine",
+            tag: "Activate this preset to launch TextEdit and confine the cursor",
+            joystickTag: "Two bindings (A = Space, Menu = Esc). The interesting bit is the Automation panel - activating this preset opens TextEdit AND turns on cursor confine + auto-recenter so you can see the per-preset side effects without a real game.",
+            bindings: bindings)
+        preset.automation = PresetAutomation(
+            launchAppPath: "/System/Applications/TextEdit.app",
+            launchURL: "",
+            confineCursor: true,
+            confineBufferPx: 40,
+            autoRecenterCursor: false,
+            autoRecenterIntervalMs: 500,
+            hideCursorWhileActive: false,
+            sensitivityMultiplier: 1.0
+        )
+        return preset
+    }
+
+    /// Showcase: MIDI CC Dials. Bind axes (sticks, triggers) to
+    /// continuous MIDI CC values so the controller becomes a soft
+    /// modulation surface for any DAW. Different from MIDI Notes -
+    /// CC sends a 0-127 value every poll, perfect for filter cutoff,
+    /// expression, channel volume, pan.
+    static var showcaseMidiCC: Preset {
+        let bindings: [BindingModel] = [
+            // Left stick X → CC 1 (Modulation).
+            BindingModel(input: .axis(0, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 1,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            BindingModel(input: .axis(0, direction: .negative),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 1,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            // Left stick Y → CC 11 (Expression).
+            BindingModel(input: .axis(1, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 11,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            // Right stick X → CC 74 (Filter cutoff).
+            BindingModel(input: .axis(2, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 74,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            // Right stick Y → CC 71 (Resonance).
+            BindingModel(input: .axis(3, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 71,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            // R2 → CC 7 (Channel volume) - press harder for louder.
+            BindingModel(input: .axis(5, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 7,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+            // L2 → CC 10 (Pan).
+            BindingModel(input: .axis(4, direction: .positive),
+                         outputs: [OutputAction(type: .midiCC,
+                                                midiCCNumber: 10,
+                                                midiChannel: 1)],
+                         deadzone: 0.05, variableSensitivity: true),
+        ]
+        return makePreset(
+            name: "MIDI: CC Dials",
+            tag: "Sticks + triggers become soft MIDI controllers",
+            joystickTag: "Left stick X/Y = CC 1 / CC 11. Right stick X/Y = CC 74 / CC 71. Triggers = CC 7 / CC 10. Channel 1. Plug into any DAW's MIDI Learn for instant macro control.",
             bindings: bindings)
     }
 
