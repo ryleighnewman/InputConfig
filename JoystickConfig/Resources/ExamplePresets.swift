@@ -103,6 +103,10 @@ struct ExamplePresets {
         "touchpad":             "Showcase: Touchpad Mouse",
         "midi":                 "MIDI: DAW Performance",
         "gyro":                 "Showcase: Gyro Aim",
+        "toggle_mode":          "Showcase: Toggle Mode",
+        "stacked_outputs":      "Showcase: Stacked Outputs",
+        "auto_launch":          "Showcase: Auto-Launch + Cursor Confine",
+        "midi_cc":              "MIDI: CC Dials",
     ]
 
     // MARK: - The seed list
