@@ -423,6 +423,31 @@ class GameControllerService: ObservableObject {
                 self.refreshControllers()
             }
         }
+
+        // macOS (gamecontrolleragentd) repaints the DualSense light to the
+        // player-index color whenever this app stops/starts being the
+        // active app. Re-assert our color on those transitions so the
+        // user's / preset's color persists while they're in a game (app
+        // backgrounded). On resign we wait a beat so our write lands
+        // AFTER the system's repaint; a couple of staggered re-asserts
+        // cover any follow-up repaint without a continuous input-stealing
+        // timer.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            for delay in [0.35, 1.0, 2.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.reassertLights()
+                }
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reassertLights()
+        }
     }
 
     /// Colors assigned to each controller slot
@@ -713,6 +738,21 @@ class GameControllerService: ObservableObject {
         }
     }
 
+    /// Last RGB (already brightness-scaled, 0-255) written per slot. macOS
+    /// repaints the DualSense light to the player color when the app loses
+    /// focus, so we re-assert this on focus changes (see the observers in
+    /// init) to keep the user's / preset's color showing while gaming.
+    private var lastAppliedColor: [Int: (r: UInt8, g: UInt8, b: UInt8)] = [:]
+
+    /// Re-send the last color to every connected controller, bypassing the
+    /// dedupe. Called shortly after the app resigns/active so our color
+    /// wins over gamecontrolleragentd's player-color repaint.
+    func reassertLights() {
+        for (index, c) in lastAppliedColor where index < connectedControllers.count {
+            HIDLightController.shared.setLightColor(red: c.r, green: c.g, blue: c.b, force: true)
+        }
+    }
+
     /// RGB cycle mode
     @Published var rgbCycleActive: [Int: Bool] = [:]
     private var rgbHue: Float = 0
@@ -782,6 +822,7 @@ class GameControllerService: ObservableObject {
         let r = UInt8(min(max(red * scale * 255, 0), 255))
         let g = UInt8(min(max(green * scale * 255, 0), 255))
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
+        lastAppliedColor[index] = (r, g, b)
         HIDLightController.shared.setLightColor(red: r, green: g, blue: b)
     }
 
@@ -796,6 +837,7 @@ class GameControllerService: ObservableObject {
         let r = UInt8(min(max(red * scale * 255, 0), 255))
         let g = UInt8(min(max(green * scale * 255, 0), 255))
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
+        lastAppliedColor[index] = (r, g, b)
         HIDLightController.shared.setLightColor(red: r, green: g, blue: b)
     }
 

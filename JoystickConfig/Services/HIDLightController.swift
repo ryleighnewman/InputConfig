@@ -19,16 +19,28 @@ final class HIDLightController: @unchecked Sendable {
     private init() {}
 
     /// Set light color with brightness. Brightness: 0=off, 1=dim, 2=bright.
-    func setLightColor(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8 = 2) {
+    ///
+    /// Pass `force: true` to bypass the dedupe and re-send even if the
+    /// color is unchanged. Used when macOS has reset the light behind our
+    /// back (e.g. gamecontrolleragentd repaints the player color when the
+    /// app loses focus), so we need to re-assert the same color.
+    func setLightColor(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8 = 2, force: Bool = false) {
         // Skip the spawn entirely when the requested state matches the
         // last successful write. Saves three subprocess spawns per
         // controller-connect retry burst.
-        lastWrittenLock.lock()
-        let same = lastWritten.map {
-            $0.r == red && $0.g == green && $0.b == blue && $0.br == brightness
-        } ?? false
-        lastWrittenLock.unlock()
-        guard !same else { return }
+        if !force {
+            lastWrittenLock.lock()
+            let same = lastWritten.map {
+                $0.r == red && $0.g == green && $0.b == blue && $0.br == brightness
+            } ?? false
+            lastWrittenLock.unlock()
+            guard !same else { return }
+        } else {
+            // Clear the cache so the dedupe doesn't suppress this write.
+            lastWrittenLock.lock()
+            lastWritten = nil
+            lastWrittenLock.unlock()
+        }
 
         queue.async { [weak self] in
             self?.runHelper(red: red, green: green, blue: blue, brightness: brightness)
