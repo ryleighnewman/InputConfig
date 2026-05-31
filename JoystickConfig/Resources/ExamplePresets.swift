@@ -67,7 +67,6 @@ struct ExamplePresets {
         "Showcase: Motion Cursor":          GroupName.showcase,
         "Showcase: Toggle Mode":            GroupName.showcase,
         "Showcase: Stacked Outputs":        GroupName.showcase,
-        "Showcase: Auto-Launch + Cursor Confine": GroupName.showcase,
         "MIDI: CC Dials":                   GroupName.midi,
     ]
 
@@ -105,9 +104,28 @@ struct ExamplePresets {
         "gyro":                 "Showcase: Gyro Aim",
         "toggle_mode":          "Showcase: Toggle Mode",
         "stacked_outputs":      "Showcase: Stacked Outputs",
-        "auto_launch":          "Showcase: Auto-Launch + Cursor Confine",
+        "auto_launch":          "Minecraft",
         "midi_cc":              "MIDI: CC Dials",
     ]
+
+    /// Map a connected controller's brand to the best built-in example
+    /// preset to jump to from the controller info popover. Brands we don't
+    /// ship a tailored layout for - generic MFi pads, unrecognized brands
+    /// (e.g. Lightfire), Steam, Stadia - fall back to the DualSense FPS
+    /// layout, which uses the standard extended-gamepad axis/button indices
+    /// and therefore works on any controller. This guarantees every
+    /// connected controller has a "Take me to an example" destination.
+    static func exampleName(for brand: ControllerBrand) -> String {
+        switch brand {
+        case .xbox:                       return "FPS (Xbox)"
+        case .switchPro, .joyConLeft,
+             .joyConRight, .joyConPair:   return "FPS (Switch Pro)"
+        case .eightBitDo:                 return "FPS (8BitDo)"
+        case .dualSense, .dualShock4,
+             .stadia, .steamController,
+             .mfiGeneric, .unknown:       return "FPS (PS5 DualSense)"
+        }
+    }
 
     // MARK: - The seed list
 
@@ -148,7 +166,6 @@ struct ExamplePresets {
             showcaseMotionCursor,
             showcaseToggleMode,
             showcaseStackedOutputs,
-            showcaseAutoLaunch,
             showcaseMidiCC,
         ]
     }
@@ -468,9 +485,9 @@ struct ExamplePresets {
         var preset = parse("""
         {
             "name": "Minecraft",
-            "tag": "Movement, look, mine, place, hotbar",
+            "tag": "Full Minecraft controls - works with any controller",
             "joysticks": [{
-                "tag": "WASD + mouse look, triggers attack/place, RB/LB cycle hotbar",
+                "tag": "WASD + mouse look, triggers mine/place, bumpers cycle hotbar, D-pad hotbar 1-4. Uses standard gamepad indices so the same layout drives DualSense, Xbox, Switch Pro, 8BitDo and any other connected controller.",
                 "binds": {
                     "axi 0 -": ["key 4"],
                     "axi 0 +": ["key 7"],
@@ -1079,36 +1096,6 @@ struct ExamplePresets {
             tag: "One press fires keystroke + mouse + MIDI + speech together",
             joystickTag: "A = parallel output stack (key + click + MIDI + speech). B = parallel keystroke pair. Different from a macro - no delays, no sequence; these fire simultaneously.",
             bindings: bindings)
-    }
-
-    /// Showcase: Per-Preset Automation. Demonstrates the editor's
-    /// Automation panel - auto-launch an app on activation, plus
-    /// scoped cursor utilities (confine / auto-recenter / hide).
-    /// The preset itself only has a handful of bindings so the
-    /// automation panel is the star of the show.
-    static var showcaseAutoLaunch: Preset {
-        let bindings: [BindingModel] = [
-            BindingModel(input: .button(0),
-                         outputs: [OutputAction(type: .key, keyCode: 44)]),  // A → Space
-            BindingModel(input: .button(9),
-                         outputs: [OutputAction(type: .key, keyCode: 41)]),  // Menu → Esc
-        ]
-        var preset = makePreset(
-            name: "Showcase: Auto-Launch + Cursor Confine",
-            tag: "Activate this preset to launch TextEdit and confine the cursor",
-            joystickTag: "Two bindings (A = Space, Menu = Esc). The interesting bit is the Automation panel - activating this preset opens TextEdit AND turns on cursor confine + auto-recenter so you can see the per-preset side effects without a real game.",
-            bindings: bindings)
-        preset.automation = PresetAutomation(
-            launchAppPath: "/System/Applications/TextEdit.app",
-            launchURL: "",
-            confineCursor: true,
-            confineBufferPx: 40,
-            autoRecenterCursor: false,
-            autoRecenterIntervalMs: 500,
-            hideCursorWhileActive: false,
-            sensitivityMultiplier: 1.0
-        )
-        return preset
     }
 
     /// Showcase: MIDI CC Dials. Bind axes (sticks, triggers) to

@@ -49,6 +49,7 @@
 		FB10010105CURSORREGIONSVIEW /* CursorRegionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */; };
 		FBF0HELPER001STEAMCTRL /* SteamControllerHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER001STEAMCTRL /* SteamControllerHelper */; };
 		FBF0HELPER002TOUCHPAD /* TouchpadHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER002TOUCHPAD /* TouchpadHelper */; };
+		FBF0HELPER003LIGHT /* LightHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER003LIGHT /* LightHelper */; };
 		3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1008D4FE7819632F4C378FD /* HIDLightController.swift */; };
 		35903CFFA9BFF5EB883BA3E8 /* JoystickGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */; };
 		400237FA664F7DF515A5036A /* MappingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5119FD097588A76BA1AD62 /* MappingEngine.swift */; };
@@ -108,6 +109,7 @@
 		FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorRegionsView.swift; sourceTree = "<group>"; };
 		FBF1HELPER001STEAMCTRL /* SteamControllerHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = SteamControllerHelper; path = SteamControllerHelper/SteamControllerHelper; sourceTree = "<group>"; };
 		FBF1HELPER002TOUCHPAD /* TouchpadHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = TouchpadHelper; path = TouchpadHelper/TouchpadHelper; sourceTree = "<group>"; };
+		FBF1HELPER003LIGHT /* LightHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = LightHelper; path = LightHelper/LightHelper; sourceTree = "<group>"; };
 		FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationView.swift; sourceTree = "<group>"; };
 		FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualControllerView.swift; sourceTree = "<group>"; };
 		FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EightBitDoDetector.swift; sourceTree = "<group>"; };
@@ -403,6 +405,7 @@
 			files = (
 				FBF0HELPER001STEAMCTRL /* SteamControllerHelper in CopyFiles */,
 				FBF0HELPER002TOUCHPAD /* TouchpadHelper in CopyFiles */,
+				FBF0HELPER003LIGHT /* LightHelper in CopyFiles */,
 			);
 			name = "Copy Helpers";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -519,7 +522,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JoystickConfig/Info.plist;
@@ -609,7 +612,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = JoystickConfig/JoystickConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 14;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JoystickConfig/Info.plist;

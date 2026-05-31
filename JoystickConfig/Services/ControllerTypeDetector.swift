@@ -36,6 +36,24 @@ enum ControllerBrand: String, CaseIterable {
         }
     }
 
+    /// The hardware manufacturer (who makes the device), as opposed to
+    /// `displayName` which is the product/model line. Shown in the
+    /// controller info popover's "Brand" row - a DualSense's brand is
+    /// Sony, not "DualSense".
+    var manufacturer: String {
+        switch self {
+        case .dualSense, .dualShock4:               return "Sony"
+        case .xbox:                                 return "Microsoft"
+        case .switchPro, .joyConLeft,
+             .joyConRight, .joyConPair:             return "Nintendo"
+        case .stadia:                               return "Google"
+        case .eightBitDo:                           return "8BitDo"
+        case .steamController:                      return "Valve"
+        case .mfiGeneric:                           return "MFi"
+        case .unknown:                              return "Unknown"
+        }
+    }
+
     /// Whether the four face buttons use Nintendo naming (B/A/Y/X) instead
     /// of the PlayStation/Xbox style (A/B/X/Y).
     var usesNintendoLayout: Bool {

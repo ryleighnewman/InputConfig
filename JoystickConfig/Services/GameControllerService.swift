@@ -1,6 +1,7 @@
 import Foundation
 import GameController
 import Combine
+import AppKit
 
 /// Readable info about a connected controller.
 ///
@@ -353,6 +354,12 @@ class GameControllerService: ObservableObject {
         // matching slot's ControllerState below.
         DualSenseSupplementService.shared.start()
 
+        // Open the in-process LED writer up front so focus-change
+        // re-asserts and the RGB cycle can write instantly, without
+        // spawning the helper subprocess. It's re-enumerated on each
+        // controller connect/disconnect via refreshControllers().
+        InProcessLightWriter.shared.open()
+
         // If a previous run force-quit during the Quick Tour, the
         // synthetic DualSense Edge entry could still be sitting at
         // slot 0 in memory we just initialized. Clean it up before
@@ -424,29 +431,24 @@ class GameControllerService: ObservableObject {
             }
         }
 
-        // macOS (gamecontrolleragentd) repaints the DualSense light to the
-        // player-index color whenever this app stops/starts being the
-        // active app. Re-assert our color on those transitions so the
-        // user's / preset's color persists while they're in a game (app
-        // backgrounded). On resign we wait a beat so our write lands
-        // AFTER the system's repaint; a couple of staggered re-asserts
-        // cover any follow-up repaint without a continuous input-stealing
-        // timer.
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
+        // gamecontrolleragentd repaints the DualSense LED to the player
+        // color on EVERY system focus change - not just when our own app's
+        // active state flips. The app-level didResignActive/didBecomeActive
+        // only fire on our own transitions, so once we're backgrounded,
+        // switching between two OTHER apps let the daemon repaint and our
+        // color never came back until our app was reactivated (exactly the
+        // "switching windows again reverts it" behavior).
+        //
+        // NSWorkspace.didActivateApplicationNotification is posted to every
+        // running app whenever ANY app becomes active, so a backgrounded
+        // JoystickConfig still receives it. We re-assert on each activation
+        // (including our own), which covers every case the app-local
+        // notifications missed.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            for delay in [0.35, 1.0, 2.0] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    self?.reassertLights()
-                }
-            }
-        }
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.reassertLights()
+            Task { @MainActor in self?.handleFocusChange() }
         }
     }
 
@@ -504,6 +506,11 @@ class GameControllerService: ObservableObject {
             controllerNames[index] = controller.vendorName ?? "Controller \(index)"
             controllerDetails[index] = buildControllerInfo(controller)
 
+            // Clear the player index up front so macOS doesn't assign a
+            // player-number LED color it would later repaint over ours on
+            // focus changes. See handleFocusChange() for the full rationale.
+            controller.playerIndex = .indexUnset
+
             // Set light immediately
             setControllerLight(at: index)
 
@@ -520,6 +527,9 @@ class GameControllerService: ObservableObject {
                 }
             }
         }
+        // Re-enumerate the in-process LED writer so it picks up the new
+        // controller set (handles hot-plug/unplug).
+        InProcessLightWriter.shared.open()
     }
 
     private func buildControllerInfo(_ controller: GCController) -> ControllerInfo {
@@ -739,23 +749,84 @@ class GameControllerService: ObservableObject {
     }
 
     /// Last RGB (already brightness-scaled, 0-255) written per slot. macOS
-    /// repaints the DualSense light to the player color when the app loses
-    /// focus, so we re-assert this on focus changes (see the observers in
-    /// init) to keep the user's / preset's color showing while gaming.
+    /// repaints the DualSense light to its default on focus changes, so we
+    /// re-assert this on every system app activation (see the NSWorkspace
+    /// observer in init) to keep the user's / preset's color showing.
     private var lastAppliedColor: [Int: (r: UInt8, g: UInt8, b: UInt8)] = [:]
 
-    /// Re-send the last color to every connected controller, bypassing the
-    /// dedupe. Called shortly after the app resigns/active so our color
-    /// wins over gamecontrolleragentd's player-color repaint.
+    /// Last color the RGB rainbow wrote (brightness-scaled, 0-255). When a
+    /// focus change interrupts the cycle we snap straight back to THIS color
+    /// so the rainbow stays visually continuous across an app switch instead
+    /// of flashing the system default.
+    private var lastRGBColor: (r: UInt8, g: UInt8, b: UInt8)?
+
+    /// Re-assert the current color via the in-process writer - instant, no
+    /// subprocess spawn, no daemon kill - so an app switch snaps back to our
+    /// color as fast as possible. During the RGB cycle we re-send the exact
+    /// last rainbow color; otherwise each slot's last applied color.
     func reassertLights() {
-        for (index, c) in lastAppliedColor where index < connectedControllers.count {
-            HIDLightController.shared.setLightColor(red: c.r, green: c.g, blue: c.b, force: true)
+        if rgbCycleActive.values.contains(true) {
+            if let c = lastRGBColor {
+                InProcessLightWriter.shared.write(red: c.r, green: c.g, blue: c.b)
+            }
+            return
+        }
+        for (_, c) in lastAppliedColor {
+            InProcessLightWriter.shared.write(red: c.r, green: c.g, blue: c.b)
+        }
+    }
+
+    /// Defense against the focus-change LED repaint. gamecontrolleragentd
+    /// repaints the LED on every system focus change; we (1) clear the
+    /// player index so it has no player color to repaint TO, and (2)
+    /// re-assert our color via the in-process writer on a tight burst of
+    /// delays so our write wins the instant the daemon repaints. In-process
+    /// writes are essentially free, so we fire several inside the first
+    /// ~400 ms to make the correction as fast and smooth as possible.
+    private func handleFocusChange() {
+        clearPlayerIndices()
+        reassertLights()
+        for delay in [0.02, 0.05, 0.1, 0.2, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.clearPlayerIndices()
+                self?.reassertLights()
+            }
+        }
+    }
+
+    /// Set every connected controller's player index to "unset" so macOS
+    /// shows no player-number LED color. Cheap and idempotent; safe to
+    /// call repeatedly. Nothing else in the app keys off `playerIndex`
+    /// (slot numbering is by array index), so clearing it has no side
+    /// effects beyond suppressing the system LED color.
+    private func clearPlayerIndices() {
+        for c in connectedControllers {
+            c.playerIndex = .indexUnset
         }
     }
 
     /// RGB cycle mode
     @Published var rgbCycleActive: [Int: Bool] = [:]
     private var rgbHue: Float = 0
+    /// Drives the live RGB rainbow. A single shared timer services every
+    /// slot with the cycle enabled (the LED write targets all Sony
+    /// controllers, matching the rest of the light path).
+    private var rgbTimer: Timer?
+    /// Base loop length and LED update rate. 40 Hz makes the rainbow
+    /// seamless; the user-facing speed slider scales the per-tick hue
+    /// advance via `rgbCycleSpeed`.
+    private let rgbFullLoopSeconds: Double = 3.0
+    private let rgbUpdateHz: Double = 40.0
+    /// User-adjustable cycle speed (the slider in every RGB menu). 1.0 = one
+    /// full rainbow every `rgbFullLoopSeconds`; higher = faster. Persisted so
+    /// the choice sticks across launches.
+    @Published var rgbCycleSpeed: Double =
+        (UserDefaults.standard.object(forKey: "JoystickConfig.rgbCycleSpeed") as? Double) ?? 1.0 {
+        didSet { UserDefaults.standard.set(rgbCycleSpeed, forKey: "JoystickConfig.rgbCycleSpeed") }
+    }
+    /// Throttle so we publish to `lightColors` (the UI swatch) at ~10 Hz
+    /// instead of the full LED rate, avoiding a 40 Hz SwiftUI re-render storm.
+    private var rgbTickCount: Int = 0
 
     func toggleRGBCycle(at index: Int) {
         if rgbCycleActive[index] == true {
@@ -767,27 +838,75 @@ class GameControllerService: ObservableObject {
 
     private func startRGBCycle(at index: Int) {
         rgbCycleActive[index] = true
+        // Re-enumerate + open the controller(s) for fast, subprocess-free
+        // writes (kept open afterwards for the focus-change re-assert).
+        InProcessLightWriter.shared.open()
+        guard rgbTimer == nil else { return }   // shared timer already running
         rgbHue = 0
-        cycleNextColor(at: index)
+        rgbTickCount = 0
+        let timer = Timer(timeInterval: 1.0 / rgbUpdateHz, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.rgbTick() }
+        }
+        rgbTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func cycleNextColor(at index: Int) {
-        guard rgbCycleActive[index] == true else { return }
+    /// One frame of the rainbow: advance the hue (scaled by the speed
+    /// slider), write it straight to the LED via the in-process writer, and
+    /// (throttled) update the UI swatch.
+    private func rgbTick() {
+        // Stop once no slot wants the cycle anymore. We leave the in-process
+        // writer open so the focus-change re-assert stays instant.
+        guard rgbCycleActive.values.contains(true) else {
+            rgbTimer?.invalidate(); rgbTimer = nil
+            return
+        }
 
         let (r, g, b) = Self.hsbToRGB(h: rgbHue, s: 1.0, b: 1.0)
-        lightColors[index] = (r: r, g: g, b: b)
-        applyLight(at: index, red: r, green: g, blue: b)
-        rgbHue += 0.08
-        if rgbHue > 1.0 { rgbHue -= 1.0 }
+        // Honor the brightness of the first active slot the same way
+        // applyLight() does - pre-scale the RGB; the report's brightness
+        // byte stays at its default.
+        let bri = rgbCycleActive.first(where: { $0.value })
+            .flatMap { lightBrightness[$0.key] } ?? 2
+        let scale: Float = switch bri { case 0: 0.0; case 1: 0.25; default: 1.0 }
+        let r8 = UInt8(min(max(r * scale * 255, 0), 255))
+        let g8 = UInt8(min(max(g * scale * 255, 0), 255))
+        let b8 = UInt8(min(max(b * scale * 255, 0), 255))
+        InProcessLightWriter.shared.write(red: r8, green: g8, blue: b8)
+        lastRGBColor = (r8, g8, b8)   // snap-back target for app switches
 
-        // Schedule next color after the helper finishes (~1.2s accounts for agent kill + restart)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.cycleNextColor(at: index)
+        // Publish to the UI swatch at ~10 Hz, not the full 40 Hz LED rate.
+        rgbTickCount += 1
+        if rgbTickCount % 4 == 0 {
+            for (slot, on) in rgbCycleActive where on { lightColors[slot] = (r, g, b) }
         }
+
+        // Hue advance per tick scaled by the speed slider (clamped so the
+        // cycle can't stall or run away).
+        let speed = min(max(rgbCycleSpeed, 0.1), 8.0)
+        rgbHue += Float(speed / (rgbFullLoopSeconds * rgbUpdateHz))
+        if rgbHue > 1.0 { rgbHue -= 1.0 }
     }
 
     func stopRGBCycle(at index: Int) {
         rgbCycleActive[index] = false
+        // Tear down the shared timer only when no slot is still cycling.
+        guard !rgbCycleActive.values.contains(true) else { return }
+        rgbTimer?.invalidate(); rgbTimer = nil
+        lastRGBColor = nil
+        // Freeze on the current color and route it through the normal path
+        // so the focus-change re-assert keeps showing it.
+        setControllerLight(at: index)
+    }
+
+    /// Stop the rainbow on every slot at once. Called when a preset with a
+    /// light-bar color activates so the preset's color overrides the cycle
+    /// instead of being overwritten by the next rainbow frame.
+    func stopAllRGBCycles() {
+        guard rgbCycleActive.values.contains(true) else { return }
+        for key in rgbCycleActive.keys { rgbCycleActive[key] = false }
+        rgbTimer?.invalidate(); rgbTimer = nil
+        lastRGBColor = nil
     }
 
     private static func hsbToRGB(h: Float, s: Float, b: Float) -> (Float, Float, Float) {
@@ -826,8 +945,9 @@ class GameControllerService: ObservableObject {
         HIDLightController.shared.setLightColor(red: r, green: g, blue: b)
     }
 
-    /// Apply the light color via the LightHelper subprocess, scaling by brightness
+    /// Apply the light color via the LightHelper subprocess, scaling by brightness.
     private func applyLight(at index: Int, red: Float, green: Float, blue: Float) {
+        guard index < connectedControllers.count else { return }
         let brightness = lightBrightness[index] ?? 2
         let scale: Float = switch brightness {
         case 0: 0.0

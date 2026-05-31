@@ -293,21 +293,24 @@ struct ContentView: View {
         }
         .sheet(item: $presentedDemoKind) { kind in
             FeatureDemoView(kind: kind) { presetName in
-                // Jump-to-preset: select it, then ask the sidebar to
-                // scroll into view + briefly flash green so the user
-                // sees where it landed.
-                if let preset = presetStore.presets.first(where: { $0.name == presetName }) {
-                    selectedPresetId = preset.id
-                    flashingPresetID = preset.id
-                    NotificationCenter.default.post(
-                        name: .joystickConfigScrollToPreset,
-                        object: preset.id)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        if flashingPresetID == preset.id {
-                            flashingPresetID = nil
-                        }
-                    }
-                }
+                jumpToPreset(named: presetName)
+            }
+        }
+    }
+
+    /// Select a preset by name, scroll it into view, and briefly flash it
+    /// green so the user sees where it landed. Shared by the feature-demo
+    /// "Take me to an example" button and the per-controller example jump.
+    private func jumpToPreset(named presetName: String) {
+        guard let preset = presetStore.presets.first(where: { $0.name == presetName }) else { return }
+        selectedPresetId = preset.id
+        flashingPresetID = preset.id
+        NotificationCenter.default.post(
+            name: .joystickConfigScrollToPreset,
+            object: preset.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if flashingPresetID == preset.id {
+                flashingPresetID = nil
             }
         }
     }
@@ -318,6 +321,11 @@ struct ContentView: View {
     @State private var newGroupName: String = ""
     @State private var renamingGroup: PresetGroup?
     @State private var renameGroupName: String = ""
+    /// The group whose color popover is open (nil = none). Drives a per-row
+    /// popover with tinted swatches + the macOS color picker.
+    @State private var colorEditingGroup: PresetGroup?
+    /// Working color for the folder color picker's "Custom" well.
+    @State private var folderPickerColor: Color = .accentColor
     /// The most recently created group ID. Drives a brief green-flash
     /// animation in the sidebar so the user's eye lands on the new entry.
     @State private var flashingGroupID: UUID?
@@ -481,33 +489,19 @@ struct ContentView: View {
                     renameGroupName = group.name
                     renamingGroup = group
                 }
-                Menu("Color") {
-                    Button {
-                        presetStore.setGroupColor(group.id, color: nil)
-                    } label: {
-                        Label("None", systemImage: group.color == nil ? "checkmark" : "")
-                    }
-                    if ExamplePresets.groupDefaultColors[group.name] != nil {
-                        Button("Restore Default") {
-                            presetStore.applyDefaultGroupColor(group.id)
-                        }
-                    }
-                    Divider()
-                    ForEach(PresetGroup.colorOptions, id: \.self) { colorName in
-                        Button {
-                            presetStore.setGroupColor(group.id, color: colorName)
-                        } label: {
-                            Label(colorName.capitalized,
-                                  systemImage: group.color == colorName
-                                  ? "checkmark"
-                                  : "circle.fill")
-                        }
-                    }
+                Button("Folder Color...") {
+                    colorEditingGroup = group
                 }
                 Divider()
                 Button("Delete Group", role: .destructive) {
                     presetStore.deleteGroup(group.id)
                 }
+            }
+            .popover(isPresented: Binding(
+                get: { colorEditingGroup?.id == group.id },
+                set: { if !$0 { colorEditingGroup = nil } }
+            ), arrowEdge: .trailing) {
+                folderColorPopover(for: group)
             }
         }
         // Allow dropping presets onto this group header to add them.
@@ -521,11 +515,18 @@ struct ContentView: View {
         }
     }
 
-    /// Map a `PresetGroup.color` name to the matching SwiftUI Color, or
-    /// nil if the group has no tint. Kept here in the view layer so the
+    /// Map a `PresetGroup.color` value to a SwiftUI Color, or nil for no
+    /// tint. Accepts both a named palette color and a "#RRGGBB" hex string
+    /// (chosen via the macOS color picker). Kept in the view layer so the
     /// model stays AppKit / Color agnostic.
     private func groupTintColor(for group: PresetGroup) -> Color? {
-        guard let name = group.color else { return nil }
+        guard let value = group.color else { return nil }
+        if value.hasPrefix("#") { return Self.color(fromHex: value) }
+        return namedColor(value)
+    }
+
+    /// Palette name -> Color (the fixed `PresetGroup.colorOptions` set).
+    private func namedColor(_ name: String) -> Color? {
         switch name {
         case "blue":   return .blue
         case "purple": return .purple
@@ -538,6 +539,97 @@ struct ContentView: View {
         case "indigo": return .indigo
         case "brown":  return .brown
         default:       return nil
+        }
+    }
+
+    /// Parse "#RRGGBB" into an sRGB Color. nil on malformed input.
+    static func color(fromHex hex: String) -> Color? {
+        var s = Substring(hex)
+        if s.hasPrefix("#") { s = s.dropFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        return Color(.sRGB,
+                     red: Double((v >> 16) & 0xFF) / 255.0,
+                     green: Double((v >> 8) & 0xFF) / 255.0,
+                     blue: Double(v & 0xFF) / 255.0)
+    }
+
+    /// Serialize a Color to "#RRGGBB" (sRGB) for storage in PresetGroup.color.
+    static func hexString(from color: Color) -> String {
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        let r = max(0, min(255, Int(round(ns.redComponent * 255))))
+        let g = max(0, min(255, Int(round(ns.greenComponent * 255))))
+        let b = max(0, min(255, Int(round(ns.blueComponent * 255))))
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    /// Folder-color editor popover: tinted palette swatches (so the colors
+    /// are actually visible) plus a macOS ColorPicker for any custom color
+    /// (stored as hex). Also offers None / Restore Default.
+    @ViewBuilder
+    private func folderColorPopover(for group: PresetGroup) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Folder Color")
+                .font(.subheadline.weight(.semibold))
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 10) {
+                ForEach(PresetGroup.colorOptions, id: \.self) { name in
+                    Button {
+                        presetStore.setGroupColor(group.id, color: name)
+                        colorEditingGroup = nil
+                    } label: {
+                        Circle()
+                            .fill(namedColor(name) ?? .gray)
+                            .frame(width: 24, height: 24)
+                            .overlay(
+                                Circle().strokeBorder(
+                                    Color.primary.opacity(group.color == name ? 0.9 : 0.15),
+                                    lineWidth: group.color == name ? 2 : 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(name.capitalized)
+                }
+            }
+
+            Divider()
+
+            // Any custom color via the native macOS color picker.
+            HStack(spacing: 10) {
+                ColorPicker("", selection: $folderPickerColor, supportsOpacity: false)
+                    .labelsHidden()
+                Text("Custom color")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Apply") {
+                    presetStore.setGroupColor(group.id, color: Self.hexString(from: folderPickerColor))
+                    colorEditingGroup = nil
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            Divider()
+
+            HStack {
+                Button("None") {
+                    presetStore.setGroupColor(group.id, color: nil)
+                    colorEditingGroup = nil
+                }
+                if ExamplePresets.groupDefaultColors[group.name] != nil {
+                    Button("Restore Default") {
+                        presetStore.applyDefaultGroupColor(group.id)
+                        colorEditingGroup = nil
+                    }
+                }
+                Spacer()
+            }
+            .font(.caption)
+        }
+        .padding(14)
+        .frame(width: 250)
+        .onAppear {
+            folderPickerColor = groupTintColor(for: group) ?? .accentColor
         }
     }
 
@@ -789,7 +881,12 @@ struct ContentView: View {
                         isRGBActive: controllerService.rgbCycleActive[index] == true,
                         onRefresh: {
                             controllerService.refreshControllers()
-                        }
+                        },
+                        onOpenExample: {
+                            let brand = controllerService.controllerDetails[index]?.brand ?? .unknown
+                            jumpToPreset(named: ExamplePresets.exampleName(for: brand))
+                        },
+                        rgbSpeed: $controllerService.rgbCycleSpeed
                     )
                 }
 
@@ -2133,6 +2230,10 @@ struct ControllerChipView: View {
     let onToggleRGB: () -> Void
     let isRGBActive: Bool
     let onRefresh: () -> Void
+    /// Jump to the example preset that best matches this controller.
+    let onOpenExample: () -> Void
+    /// Live binding to the shared RGB cycle speed (the slider in the menu).
+    @Binding var rgbSpeed: Double
 
     @State private var showPopover = false
 
@@ -2284,6 +2385,21 @@ struct ControllerChipView: View {
             // Details
             if let info = info {
                 detailGrid(info)
+
+                // Every controller - including ones we don't recognize -
+                // gets a one-tap jump to the example preset that best fits
+                // it (unrecognized pads fall back to the DualSense layout).
+                Button {
+                    showPopover = false
+                    onOpenExample()
+                } label: {
+                    Label("Take me to an example preset", systemImage: "sparkles")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 2)
             }
 
             // Light color picker
@@ -2352,7 +2468,7 @@ struct ControllerChipView: View {
     @ViewBuilder
     private func detailGrid(_ info: ControllerInfo) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            detailRow("Brand", info.brand.displayName)
+            detailRow("Brand", info.brand.manufacturer)
             detailRow("Type", info.productCategory)
             detailRow("Gamepad", info.hasExtendedGamepad ? "Extended" : "Basic")
             detailRow("Buttons", "\(info.buttonCount)")
@@ -2470,6 +2586,22 @@ struct ControllerChipView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(isRGBActive ? .red : .accentColor)
+
+            // RGB cycle speed - shared across every RGB menu.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Cycle Speed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "tortoise")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Slider(value: $rgbSpeed, in: 0.25...6.0)
+                    Image(systemName: "hare")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 }
@@ -3704,6 +3836,8 @@ struct PresetDetailView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(isRGBCycleActive ? .red : .accentColor)
+
+            rgbSpeedSlider
         }
         .padding(12)
         .background(
@@ -3806,12 +3940,14 @@ struct PresetDetailView: View {
                 .tint(cycling ? .red : .accentColor)
 
                 if cycling {
-                    Text("Cycling through the spectrum every 1.5 s")
+                    Text("Seamless rainbow - adjust the speed below")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
+
+            rgbSpeedSlider
         }
     }
 
@@ -3823,6 +3959,27 @@ struct PresetDetailView: View {
     private func toggleRGBCycle() {
         guard let idx = firstLightControllerIndex else { return }
         controllerService.toggleRGBCycle(at: idx)
+    }
+
+    /// Shared RGB cycle speed slider, used by both light-bar panels. Bound
+    /// to the service's persisted `rgbCycleSpeed`, so the rainbow speed and
+    /// the controller-popover slider all stay in sync.
+    @ViewBuilder
+    private var rgbSpeedSlider: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Cycle Speed")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Image(systemName: "tortoise")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Slider(value: $controllerService.rgbCycleSpeed, in: 0.25...6.0)
+                Image(systemName: "hare")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
     }
 
     private var lightBarPresets: [(name: String, color: Color)] {

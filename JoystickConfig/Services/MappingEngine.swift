@@ -275,6 +275,9 @@ class MappingEngine: ObservableObject {
         // active. We apply temporarily - the slot's stored default color is
         // untouched, so revert in stop() simply re-asserts it.
         if let override = preset.lightBarColor {
+            // Stop any running rainbow first, otherwise the 40 Hz cycle would
+            // overwrite the preset color on its next frame.
+            controllerService.stopAllRGBCycles()
             let bri: UInt8? = preset.lightBarBrightness.map { UInt8(max(0, min(2, $0))) }
             for slot in controllerService.controllerDetails.keys
                 where controllerService.controllerDetails[slot]?.hasLight == true {
