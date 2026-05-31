@@ -35,7 +35,6 @@ struct SettingsView: View {
     /// detection toggle and "last freeze" timestamp update in place.
     @ObservedObject private var crashRecovery = CrashRecoveryService.shared
     @ObservedObject private var freezeWatchdog = FreezeWatchdogService.shared
-    @ObservedObject private var externalInput = ExternalInputDeviceService.shared
     @ObservedObject private var updateCheck = UpdateCheckService.shared
     @State private var showingCursorRegions = false
     @State private var showingStickRegions = false
@@ -647,134 +646,9 @@ struct SettingsView: View {
                     }
                 }
 
-                section(title: "Keyboards & Mice") {
-                    Text("External keyboards and mice can act as input sources too. Bind any key or mouse button to keyboard output, mouse output, or MIDI through the binding editor. Apple's HID layer filters out our own synthetic events, so a binding can't echo back into itself.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Toggle("Hide built-in keyboard and trackpad",
-                           isOn: $externalInput.excludeBuiltInDevices)
-
-                    if externalInput.devices.isEmpty {
-                        emptyKeyboardsCard
-                    } else {
-                        keyboardsList
-                    }
-
-                    if !externalInput.receivedAnyKeyboardEvent
-                        && externalInput.devices.contains(where: { $0.kind == .keyboard }) {
-                        inputMonitoringHint
-                    }
-                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var emptyKeyboardsCard: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "keyboard")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-                .frame(width: 40)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("No keyboards or mice detected")
-                    .font(.body)
-                Text("Plug in or pair a USB / Bluetooth device. The built-in keyboard and trackpad show up unless hidden above.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-        }
-        .padding(14)
-        .background(Color.secondary.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// Banner shown when a keyboard is detected but no events arrive - almost
-    /// certainly an Input Monitoring permission issue.
-    private var inputMonitoringHint: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "lock.shield")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Input Monitoring permission required")
-                    .font(.caption.weight(.semibold))
-                Text("macOS hides keystrokes from apps that haven't been granted Input Monitoring. Open System Settings → Privacy & Security → Input Monitoring and turn on JoystickConfig.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Open Privacy Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .controlSize(.small)
-                .padding(.top, 4)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.1),
-                    in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .stroke(Color.orange.opacity(0.3), lineWidth: 0.5))
-    }
-
-    @ViewBuilder
-    private var keyboardsList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(externalInput.devices) { dev in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        Image(systemName: dev.kind == .mouse
-                              ? "computermouse.fill"
-                              : "keyboard.fill")
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(dev.productName)
-                                .font(.body)
-                            HStack(spacing: 6) {
-                                Text(dev.kind.rawValue.capitalized)
-                                Text("·")
-                                Text(dev.bus.rawValue.uppercased())
-                                if !dev.vendorName.isEmpty {
-                                    Text("·")
-                                    Text(dev.vendorName)
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-
-                    if let log = externalInput.recentEvents[dev.id], !log.isEmpty {
-                        DisclosureGroup("Live press log (\(log.count))") {
-                            VStack(alignment: .leading, spacing: 2) {
-                                ForEach(log) { entry in
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 6))
-                                            .foregroundStyle(.green)
-                                        Text(entry.label)
-                                            .font(.caption.monospaced())
-                                        Spacer()
-                                    }
-                                }
-                            }
-                            .padding(.top, 4)
-                        }
-                        .font(.caption)
-                    }
-                }
-                .padding(10)
-                .background(Color.secondary.opacity(0.06),
-                            in: RoundedRectangle(cornerRadius: 8))
-            }
         }
     }
 

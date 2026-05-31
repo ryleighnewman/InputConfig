@@ -49,6 +49,12 @@ struct CursorRegionsView: View {
         }
         .padding(20)
         .frame(width: 760, height: 560)
+        // Drive the live cursor dot. CursorRegionService only samples the
+        // pointer while something is tracking (permission-free
+        // NSEvent.mouseLocation poll), so start it while this editor is
+        // open and stop it on close.
+        .onAppear { CursorRegionService.shared.beginTracking() }
+        .onDisappear { CursorRegionService.shared.endTracking() }
     }
 
     private var header: some View {

@@ -31,12 +31,53 @@ final class CursorRegionService: ObservableObject {
 
     private static let regionsKey = "JoystickConfig.cursorRegions.v1"
 
+    /// Ref-counted poll timer. Cursor position used to be fed by the
+    /// system `CGEventTap` in the old ExternalInputDeviceService, but
+    /// that tap required the Input Monitoring / Accessibility permission
+    /// and was removed for App Store compliance. We now sample
+    /// `NSEvent.mouseLocation` directly, which needs **no permission**
+    /// at all - it just reports the global cursor position. The timer
+    /// only runs while at least one consumer is tracking (the mapping
+    /// engine while a cursor-region preset is active, or the regions
+    /// editor while open), so an idle app does no polling.
+    private var pollTimer: Timer?
+    private var trackingRetainCount = 0
+
     private init() {
         loadRegions()
         // Seed cursor position from the current mouse location so a binding
-        // can fire from the very first poll, before any motion event has
-        // arrived. NSEvent.mouseLocation is screen coords (origin bottom-left).
+        // can fire from the very first poll, before tracking starts.
+        // NSEvent.mouseLocation is screen coords (origin bottom-left).
         updateFromScreenPoint(NSEvent.mouseLocation, originIsBottomLeft: true)
+    }
+
+    // MARK: - Cursor polling (no permission required)
+
+    /// Begin sampling the cursor position. Ref-counted so multiple
+    /// consumers (engine + editor) can request tracking independently.
+    /// Polls at 60 Hz, which is plenty for region hit-testing and far
+    /// cheaper than the old per-motion-event tap.
+    func beginTracking() {
+        trackingRetainCount += 1
+        guard pollTimer == nil else { return }
+        // Sample immediately so a region can fire on the first frame.
+        updateFromScreenPoint(NSEvent.mouseLocation, originIsBottomLeft: true)
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.updateFromScreenPoint(NSEvent.mouseLocation, originIsBottomLeft: true)
+        }
+        // .common so it keeps firing during menu tracking / scrolling.
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+    }
+
+    /// Release one tracking request. Stops polling when the last
+    /// consumer ends tracking.
+    func endTracking() {
+        trackingRetainCount = max(0, trackingRetainCount - 1)
+        guard trackingRetainCount == 0 else { return }
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Region CRUD

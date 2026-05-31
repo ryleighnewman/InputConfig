@@ -55,6 +55,22 @@ struct BindingRowView: View {
     private let actionsWidth: CGFloat = 48
     private let colGap: CGFloat = 8
 
+    /// Input types offered in the picker. The `.extKey` / `.extMouse`
+    /// "keyboard / mouse as an input source" types were removed: reading
+    /// the system keystroke stream needs the Input Monitoring /
+    /// Accessibility permission, which App Store review (2.4.5) forbids
+    /// for this purpose. We still surface whichever type a *legacy*
+    /// preset already has so its picker doesn't render blank, but new
+    /// bindings can't select them.
+    private var bindableInputTypes: [InputType] {
+        InputType.allCases.filter { type in
+            if type == .extKey || type == .extMouse {
+                return binding.input.type == type
+            }
+            return true
+        }
+    }
+
     /// Total width of input columns (for sub-row indentation)
     private var inputColumnsWidth: CGFloat {
         dragWidth + scanColWidth + typeColWidth + indexColWidth + dirColWidth + arrowWidth + colGap * 6
@@ -98,7 +114,7 @@ struct BindingRowView: View {
 
                 // COL 2: Input Type
                 Picker("", selection: $binding.input.type) {
-                    ForEach(InputType.allCases) { type in
+                    ForEach(bindableInputTypes) { type in
                         Text(type.displayName).tag(type)
                     }
                 }

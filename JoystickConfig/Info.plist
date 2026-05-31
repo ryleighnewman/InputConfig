@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.2</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>11</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
@@ -43,22 +43,5 @@
 	<string>JoystickConfig reads input from wireless game controllers paired with your Mac.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>JoystickConfig reads input from wireless game controllers paired with your Mac.</string>
-	<!--
-		Input Monitoring is required for the system-wide CGEventTap that
-		reads the built-in keyboard / trackpad as binding inputs, AND for
-		IOHIDManager to enumerate external USB keyboards / mice. Without
-		this string, macOS Sequoia and later silently deny the request
-		on first launch.
-	-->
-	<key>NSInputMonitoringUsageDescription</key>
-	<string>JoystickConfig watches keyboard and mouse events so they can be used as bindings alongside game controllers.</string>
-	<!--
-		Apple Events permission is requested by NSWorkspace.open() when an
-		Automation rule launches an external app on preset activate. macOS
-		Sonoma+ requires a declared purpose string before showing the
-		consent prompt.
-	-->
-	<key>NSAppleEventsUsageDescription</key>
-	<string>JoystickConfig launches the apps you configure in a preset's Automation rules when you activate that preset.</string>
 </dict>
 </plist>

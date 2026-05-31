@@ -239,44 +239,32 @@ final class InputSimulator: @unchecked Sendable {
         pressedMouseButtons.removeAll()
     }
 
-    // MARK: - Accessibility Check
-
-    /// Check if accessibility permission is granted WITHOUT prompting
-    static var hasAccessibilityPermission: Bool {
-        let options = ["AXTrustedCheckOptionPrompt": false] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
-    }
-
-    /// Request accessibility permission (shows system dialog)
-    static func requestAccessibilityPermission() {
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-    }
-
     // MARK: - Diagnostic Test
 
-    /// Test if event posting actually works. Returns a description of what happened.
+    /// Test that event creation + posting works. Returns a description
+    /// of what happened.
+    ///
+    /// Note: output is synthesized at the HID layer via `.cghidEventTap`
+    /// (see `taggedPost`), which does NOT require the Accessibility
+    /// permission - so there is intentionally no `AXIsProcessTrusted`
+    /// check here. The app never requests Accessibility.
     static func runDiagnostic() -> String {
         var results: [String] = []
 
-        // 1. Check AX trusted
-        let trusted = hasAccessibilityPermission
-        results.append("AX Trusted: \(trusted)")
-
-        // 2. Check if we can create an event source
+        // 1. Check if we can create an event source
         let source = CGEventSource(stateID: .hidSystemState)
         results.append("Event Source: \(source != nil ? "OK" : "FAILED")")
 
-        // 3. Check if we can create a keyboard event
+        // 2. Check if we can create a keyboard event
         let keyEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
         results.append("Key Event Create: \(keyEvent != nil ? "OK" : "FAILED")")
 
-        // 4. Check if we can create a mouse move event
+        // 3. Check if we can create a mouse move event
         let mouseEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
                                   mouseCursorPosition: .zero, mouseButton: .left)
         results.append("Mouse Event Create: \(mouseEvent != nil ? "OK" : "FAILED")")
 
-        // 5. Try posting a harmless mouse move with zero delta
+        // 4. Try posting a harmless mouse move with zero delta
         if let event = mouseEvent {
             event.setIntegerValueField(.mouseEventDeltaX, value: 0)
             event.setIntegerValueField(.mouseEventDeltaY, value: 0)
@@ -287,7 +275,7 @@ final class InputSimulator: @unchecked Sendable {
             results.append("Event Post: SKIPPED (no event)")
         }
 
-        // 6. App path
+        // 5. App path
         results.append("App Path: \(Bundle.main.bundlePath)")
 
         return results.joined(separator: "\n")
@@ -309,8 +297,6 @@ final class InputSimulator: @unchecked Sendable {
     func scrollWheelStep(axis: MouseAxis, direction: MouseDirection) {}
     func releaseAll() {}
 
-    static var hasAccessibilityPermission: Bool { false }
-    static func requestAccessibilityPermission() {}
     static func runDiagnostic() -> String { "iOS: Not supported" }
 }
 

@@ -99,6 +99,10 @@ class MappingEngine: ObservableObject {
     /// True while the active preset retains TouchpadService. Tracked
     /// separately so stop() only releases when start() retained.
     private var usesTouchpadInput = false
+    /// Mirrors usesTouchpadInput for cursor-region presets: tracks
+    /// whether we asked CursorRegionService to poll the cursor, so
+    /// stop() balances the beginTracking() call exactly once.
+    private var usesCursorRegionInput = false
 
     /// When true, the engine keeps polling and updating `activeInputs` so the
     /// editor's row highlights and the touchpad calibration UI keep working,
@@ -167,7 +171,9 @@ class MappingEngine: ObservableObject {
         for slot in activeStates.keys where slot >= validSlotCount {
             activeStates[slot] = nil
         }
-        let prefixes = (validSlotCount..<32).map { "\($0):" }
+        // Clamp the lower bound so an (unrealistic) >32 controller count
+        // can't form an inverted Range, which would trap at runtime.
+        let prefixes = (min(validSlotCount, 32)..<32).map { "\($0):" }
         for prefix in prefixes {
             toggleStates = toggleStates.filter { !$0.key.hasPrefix(prefix) }
             turboTimestamps = turboTimestamps.filter { !$0.key.hasPrefix(prefix) }
@@ -242,6 +248,22 @@ class MappingEngine: ObservableObject {
             log("Touchpad input enabled (started TouchpadHelper)")
         } else {
             usesTouchpadInput = false
+        }
+
+        // Cursor-region bindings read the live cursor position. That used
+        // to arrive via the system event tap; it now comes from a
+        // permission-free NSEvent.mouseLocation poll owned by
+        // CursorRegionService. Only start it when the preset actually
+        // uses a cursor region, and balance it in stop().
+        let usesCursorRegion = preset.joysticks.contains { joystick in
+            joystick.bindings.contains { $0.input.type == .cursorRegion }
+        }
+        if usesCursorRegion {
+            CursorRegionService.shared.beginTracking()
+            usesCursorRegionInput = true
+            log("Cursor region tracking enabled")
+        } else {
+            usesCursorRegionInput = false
         }
 
         for (i, ctrl) in controllerService.connectedControllers.enumerated() {
@@ -449,6 +471,10 @@ class MappingEngine: ObservableObject {
         if usesTouchpadInput {
             TouchpadService.shared.release()
             usesTouchpadInput = false
+        }
+        if usesCursorRegionInput {
+            CursorRegionService.shared.endTracking()
+            usesCursorRegionInput = false
         }
 
         // Cursor-guard goes idle: re-show the cursor if we hid it,
