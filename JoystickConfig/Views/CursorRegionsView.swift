@@ -61,7 +61,7 @@ struct CursorRegionsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Cursor Regions")
                 .font(.title2.weight(.semibold))
-            Text("Define rectangles on your screen. A Cursor Region binding fires while the cursor is inside that rectangle. Coordinates are normalized so regions follow the primary display even if you change resolution.")
+            Text("Draw rectangles on screen. A binding fires while the cursor is inside one. Regions scale with your display.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

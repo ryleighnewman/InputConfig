@@ -49,7 +49,7 @@ struct StickRegionsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Stick Regions")
                 .font(.title2.weight(.semibold))
-            Text("Define rectangular zones on a joystick stick's X/Y plane. A Stick Region binding fires while the stick is deflected into that rectangle. Useful for binding diagonal pushes (e.g. upper-right corner) as single bindings instead of stitching together two separate axis half-bindings.")
+            Text("Draw zones on a stick's X/Y plane. A binding fires while the stick is pushed into the zone. Good for binding diagonals as one input.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

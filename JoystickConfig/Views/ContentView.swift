@@ -1040,6 +1040,13 @@ struct ContentView: View {
                 .environmentObject(mappingEngine)
                 .environmentObject(controllerService)
                 .environmentObject(presetStore)
+                // Key the detail view to the preset identity. Without this,
+                // switching presets reuses the same view instance and the
+                // editable title TextField animates/morphs from the old
+                // name to the new one - with .title2 that mid-flight
+                // reflow renders as a "downward distortion" of the title.
+                // A stable id gives each preset a fresh header instead.
+                .id(presetId)
             } else {
                 welcomeView
             }
@@ -1271,11 +1278,16 @@ struct ContentView: View {
                 if hovering { return 1.02 }
                 return 1.0
             }()
-            let chevronTint: Color = tint.opacity(hovering ? 1 : 0.7)
+            // Tint only lights up on hover or while the tour highlights
+            // the card. At rest every tile's icon is neutral grey, so the
+            // grid reads as one calm surface instead of a wall of colour.
+            let active: Bool = hovering || isHighlighted
+            let iconColor: Color = active ? tint : Color.secondary.opacity(0.55)
+            let chevronTint: Color = active ? tint : Color.secondary.opacity(0.45)
             return HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon)
                     .font(.system(size: 18))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(iconColor)
                     .frame(width: 24, height: 24)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
@@ -2886,10 +2898,12 @@ struct PresetDetailView: View {
                     .font(.title2)
                     .fontWeight(.regular)
                     .textFieldStyle(.plain)
+                    .lineLimit(1)
                 TextField("Tag / Description", text: $preset.tag)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .textFieldStyle(.plain)
+                    .lineLimit(1)
             }
             Spacer()
             HStack(spacing: 8) {

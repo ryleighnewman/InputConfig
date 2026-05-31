@@ -613,7 +613,7 @@ struct SettingsView: View {
                 }
 
                 section(title: "Cursor Regions") {
-                    Text("Define rectangular zones on your screen, then bind to them as Cursor Region inputs in the binding editor. Same workflow as the DualSense touchpad regions, but using the Mac cursor position so you can use it with any pointing device including the built-in trackpad. No private APIs, no extra permissions.")
+                    Text("Draw zones on screen and bind them as Cursor Region inputs. Works with any pointer, including the built-in trackpad.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -629,7 +629,7 @@ struct SettingsView: View {
                 }
 
                 section(title: "Stick Regions") {
-                    Text("Define rectangular zones on a joystick stick's X/Y plane. Lets you bind diagonals and quadrants (like the upper-right corner of the right stick) as single bindings instead of stitching together separate axis + and axis - half-bindings. Each stick has its own region set.")
+                    Text("Bind diagonals and quadrants on a stick as one input, instead of combining two axis half-bindings. Each stick has its own set.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
