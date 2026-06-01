@@ -72,10 +72,6 @@ struct ContentView: View {
     /// Shared tutorial controller - drives both the spotlight overlay
     /// (here in the main window) and the floating tutorial card panel.
     @StateObject private var tutorialState = TutorialState.shared
-    /// Observed so the "Update available" alert presents itself when the
-    /// service publishes a new version number, and dismisses when the
-    /// user opts out or installs.
-    @ObservedObject private var updateCheck = UpdateCheckService.shared
     /// Index of the welcome-page feature card currently being showcased
     /// by the tutorial. Drives a pulsing highlight + auto-opens its demo
     /// sheet during the "example presets" tutorial step.
@@ -161,7 +157,6 @@ struct ContentView: View {
             TouchpadCalibrationView()
                 .environmentObject(presetStore)
         }
-        .modifier(UpdateAvailableAlertModifier(updateCheck: updateCheck))
         .sheet(isPresented: $showingMotionCalibrationFromMenu) {
             MotionCalibrationView()
                 .environmentObject(controllerService)
@@ -4099,35 +4094,6 @@ fileprivate struct WrappingHStackLayout: Layout {
     }
 }
 
-/// Extracted from `ContentView.body` because inlining the alert pushed
-/// the SwiftUI type-checker past its time budget. Now ContentView just
-/// applies `.modifier(UpdateAvailableAlertModifier(...))` and the
-/// presenter is kept here.
-private struct UpdateAvailableAlertModifier: ViewModifier {
-    @ObservedObject var updateCheck: UpdateCheckService
-
-    func body(content: Content) -> some View {
-        content.alert(
-            "Update available",
-            isPresented: Binding(
-                get: { updateCheck.availableUpdateVersion != nil },
-                set: { newValue in
-                    if newValue == false { updateCheck.dismissAvailableUpdate() }
-                }
-            ),
-            presenting: updateCheck.availableUpdateVersion
-        ) { _ in
-            Button("Open App Store") {
-                updateCheck.openAppStoreForUpdate()
-                updateCheck.dismissAvailableUpdate()
-            }
-            Button("Not now", role: .cancel) {
-                updateCheck.dismissAvailableUpdate()
-            }
-        } message: { newVersion in
-            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"]
-                as? String ?? "an older version"
-            Text("JoystickConfig \(newVersion) is now available on the Mac App Store. You're running \(current).")
-        }
-    }
-}
+// The in-app "Update available" alert and its UpdateCheckService were
+// removed: the Mac App Store delivers update notifications itself, and
+// App Review guideline 2.4.5(vii) prohibits in-app update checks.

@@ -35,7 +35,6 @@ struct SettingsView: View {
     /// detection toggle and "last freeze" timestamp update in place.
     @ObservedObject private var crashRecovery = CrashRecoveryService.shared
     @ObservedObject private var freezeWatchdog = FreezeWatchdogService.shared
-    @ObservedObject private var updateCheck = UpdateCheckService.shared
     @State private var showingCursorRegions = false
     @State private var showingStickRegions = false
 
@@ -142,51 +141,6 @@ struct SettingsView: View {
                             Text("Last freeze detected: never")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-
-                section(title: "Updates") {
-                    Toggle("Automatically check for App Store updates",
-                           isOn: $updateCheck.automaticCheckEnabled)
-                    Text("On launch, JoystickConfig quietly checks Apple's App Store metadata once per day to see if a newer version has been released. If one is, a single alert offers to open the Mac App Store. No telemetry is sent - only your app's numeric Apple ID is included in the request.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 8) {
-                        Button {
-                            Task { await updateCheck.checkNow(userInitiated: true) }
-                        } label: {
-                            if updateCheck.isChecking {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Text("Check Now")
-                            }
-                        }
-                        .disabled(updateCheck.isChecking)
-
-                        if let when = updateCheck.lastCheckedAt {
-                            Text("Last checked: \(when.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Never checked")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-
-                    if let err = updateCheck.lastErrorMessage {
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                            Text(err)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }

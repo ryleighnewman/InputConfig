@@ -9,7 +9,6 @@ final class AppState: ObservableObject {
     let crashRecovery = CrashRecoveryService.shared
     let freezeWatchdog = FreezeWatchdogService.shared
     let externalInput = ExternalInputDeviceService.shared
-    let updateCheck = UpdateCheckService.shared
 
     init() {
         // Boot the freeze watchdog before any heavy work runs - this is the
@@ -20,12 +19,6 @@ final class AppState: ObservableObject {
         // already detected by the time the user opens Settings → Devices
         // or the binding editor's external-source picker.
         _ = externalInput
-        // Fire an automatic App Store version check (subject to the 24h
-        // throttle and the user's opt-out toggle). Runs entirely in the
-        // background; the alert is presented from ContentView when the
-        // service's `availableUpdateVersion` publishes a non-nil value.
-        updateCheck.runAutomaticCheckIfNeeded()
-
         // If the previous session ended abnormally and the user hasn't
         // opted out of session restore, re-activate whichever preset
         // was active at the time of the crash. Deferred to the next
