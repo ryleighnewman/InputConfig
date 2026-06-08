@@ -26,3 +26,14 @@ xcuserdata/
 
 # Compiled helper binary (rebuilt by build_and_archive.sh)
 LightHelper/LightHelper
+
+# Claude Code workspace
+.claude/
+# Personal setup notes (not part of the app)
+IAP_SETUP.md
+IAP_APPSTORE_TUTORIAL.md
+# Compiled helper binaries (rebuilt by build_and_archive.sh)
+TouchpadHelper/TouchpadHelper
+SteamControllerHelper/SteamControllerHelper
+# Logs
+*.log

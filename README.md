@@ -1,14 +1,10 @@
-# JoystickConfig
+# InputConfig
 
 Map any game controller to keyboard and mouse on macOS.
 
-## Available on the Mac App Store
-
-[<img src="https://tools.applemediaservices.com/api/badges/download-on-the-mac-app-store/black/en-us?size=250x83" alt="Download on the Mac App Store" height="60">](https://apps.apple.com/us/app/joystickconfig/id6761875440?mt=12)
-
 ## Overview
 
-JoystickConfig lets you use any game controller as a keyboard and mouse on your Mac. Plug in your controller, pick a preset, and go. Or build your own from scratch.
+InputConfig lets you use any game controller as a keyboard and mouse on your Mac. Plug in your controller, pick a preset, and go. Or build your own from scratch.
 
 Works with DualSense (PS5), DualSense Edge, DualShock 4 (PS4), Xbox Wireless, and any MFi or HID-compatible gamepad. No drivers needed.
 
@@ -62,7 +58,7 @@ The binding editor is where you set up your mappings. Hit Scan to detect a butto
 
 ## Building
 
-1. Open `JoystickConfig.xcodeproj` in Xcode 16+
+1. Open `InputConfig.xcodeproj` in Xcode 16+
 2. Select your team in Signing & Capabilities
 3. Build and run
 
@@ -72,7 +68,7 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## Privacy
 
-JoystickConfig does not collect any data. See [PRIVACY.md](PRIVACY.md).
+InputConfig does not collect any data. See [PRIVACY.md](PRIVACY.md).
 
 ## Contact
 

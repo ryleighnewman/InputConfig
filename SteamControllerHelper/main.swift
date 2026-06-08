@@ -97,12 +97,12 @@ func leUInt32(_ p: UnsafePointer<UInt8>, _ off: Int) -> UInt32 {
 
 /// Parse a Steam Controller input report. The buffer here is the IOHID
 /// callback's `report` argument, which does NOT include the leading report
-/// ID byte — the report ID is the separate `reportID` parameter.
+/// ID byte. The report ID is the separate `reportID` parameter.
 ///
 /// Layout (offsets in the data buffer):
 ///   0       reportType  (0x01 when valid)
 ///   1       unused
-///   2-3     sequence (UInt16 LE) — already mirrored to ctx.seq externally
+///   2-3     sequence (UInt16 LE), already mirrored to ctx.seq externally
 ///   4-7     buttons (UInt32 LE, bitfield)
 ///   8       leftTrigger (UInt8 0-255)
 ///   9       rightTrigger (UInt8 0-255)
@@ -171,8 +171,8 @@ let inputCallback: IOHIDReportCallback = { context, _, _, reportType, reportID, 
 /// keyboard+mouse and never sends the 0x42 raw input reports we want.
 func sendDisableLizardMode(_ device: IOHIDDevice) {
     // Two SET_FEATURE reports per Linux kernel hid-steam.c:
-    //   0x81 — disable keyboard emulation
-    //   0x87 0x03 0x08 0x07 — also disable mouse emulation
+    //   0x81: disable keyboard emulation
+    //   0x87 0x03 0x08 0x07: also disable mouse emulation
     // The report ID is 0x00 on the wire (vendor-specific), with the actual
     // command byte at index 0 of the data payload.
 

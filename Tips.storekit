@@ -1,0 +1,200 @@
+{
+  "identifier" : "C38DACCA-28A7-458D-8A2F-8A0281CDE9F3",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "0.99",
+      "familyShareable" : false,
+      "internalID" : "38B482AC-BF9D-4AE3-BDFE-59D85127B3EE",
+      "localizations" : [
+        {
+          "description" : "A small thank-you that supports continued development.",
+          "displayName" : "Small Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.small",
+      "referenceName" : "Small Tip",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "2.99",
+      "familyShareable" : false,
+      "internalID" : "3512BAF2-2939-4D73-94C5-FF1CC96112E2",
+      "localizations" : [
+        {
+          "description" : "A nice tip toward continued development.",
+          "displayName" : "Medium Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.med",
+      "referenceName" : "Medium Tip",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "BD4AF11B-0AD6-41A4-A493-37521B1E287F",
+      "localizations" : [
+        {
+          "description" : "A generous tip that helps fund new features.",
+          "displayName" : "Large Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.large",
+      "referenceName" : "Large Tip",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "9.99",
+      "familyShareable" : false,
+      "internalID" : "9768E668-05C6-4C44-BE7E-8B83D8E5E3B0",
+      "localizations" : [
+        {
+          "description" : "A very generous tip. Thank you for the support!",
+          "displayName" : "Generous Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.generous",
+      "referenceName" : "Generous Tip",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA"
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+      "localizations" : [
+
+      ],
+      "name" : "Recurring Tips",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "60754E05-BCCC-4B04-A28C-E5EFF95D02D8",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Provide generous monthly support. Thank you!",
+              "displayName" : "Generous Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.generous.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Generous Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "3C3513D8-35ED-4805-8E13-FFF9E2FBF3C0",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Generously support development each month.",
+              "displayName" : "Large Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.large.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Large Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "2.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "B81A30E4-9173-42AF-941D-743718911199",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Support development with a monthly tip.",
+              "displayName" : "Medium Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.medium.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Medium Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "0.99",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "7523FE72-3B68-4FD9-8F29-3ECEE9C6ED02",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Support development with a small tip every month.",
+              "displayName" : "Small Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.small.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Small Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
