@@ -47,6 +47,54 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let visible = UserDefaults.standard.object(forKey: Self.defaultsKey) as? Bool ?? true
         item.isVisible = visible
+
+        // Live icon: filled glyph while a preset is running so the menu bar
+        // shows at a glance whether mappings are on.
+        mappingEngine.$isRunning
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] running in
+                guard let button = self?.statusItem?.button else { return }
+                let name = running ? "gamecontroller.fill" : "gamecontroller"
+                let image = NSImage(systemSymbolName: name,
+                                    accessibilityDescription: "InputConfig")
+                image?.isTemplate = true
+                button.image = image
+            }
+            .store(in: &cancellables)
+
+        // Keep the global hotkey working when the main window is closed.
+        // ContentView owns the toggle while a main-capable window exists
+        // (its path applies calibration gating); with every window closed,
+        // nothing received the notification and the Settings promise
+        // ("works anywhere, even while another app is in front") broke in
+        // exactly the headless scenario it exists for.
+        NotificationCenter.default.publisher(for: GlobalHotKeyService.toggleNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      let presetStore = self.presetStore,
+                      let mappingEngine = self.mappingEngine else { return }
+                let windowAlive = NSApp.windows.contains {
+                    $0.canBecomeMain && !($0 is NSPanel) && ($0.isVisible || $0.isMiniaturized)
+                }
+                if windowAlive { return }
+                if presetStore.presets.contains(where: { $0.isActive }) {
+                    mappingEngine.stop()
+                    presetStore.deactivateAll()
+                } else {
+                    let target = presetStore.lastActivatedPresetId
+                        .flatMap { id in presetStore.presets.first(where: { $0.id == id }) }
+                        ?? presetStore.presets.first(where: { p in
+                            p.joysticks.contains { !$0.bindings.isEmpty }
+                        })
+                    if let target {
+                        mappingEngine.stop()
+                        presetStore.activatePreset(target)
+                        mappingEngine.start(with: target)
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// Show or hide the status item without removing it. Safe to call from
@@ -85,14 +133,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             summary.isEnabled = false
             menu.addItem(summary)
 
-            let deactivate = NSMenuItem(title: "Deactivate",
+            let deactivate = NSMenuItem(title: String(localized: "Deactivate"),
                                         action: #selector(deactivateActive),
                                         keyEquivalent: "")
             deactivate.target = self
             menu.addItem(deactivate)
         } else {
-            let none = NSMenuItem(title: "No preset active", action: nil, keyEquivalent: "")
-            none.attributedTitle = subtitleString("No preset active")
+            let noneTitle = String(localized: "No preset active")
+            let none = NSMenuItem(title: noneTitle, action: nil, keyEquivalent: "")
+            none.attributedTitle = subtitleString(noneTitle)
             none.isEnabled = false
             menu.addItem(none)
         }
@@ -110,25 +159,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         appendPresetList(to: menu, presetStore: presetStore)
 
         // ── Section 5: App actions ────────────────────────────────
-        let open = NSMenuItem(title: "Open InputConfig",
+        let open = NSMenuItem(title: String(localized: "Open InputConfig"),
                               action: #selector(openMainWindow),
                               keyEquivalent: "o")
         open.target = self
         menu.addItem(open)
 
-        let help = NSMenuItem(title: "Help Guides",
+        let help = NSMenuItem(title: String(localized: "Help Guides"),
                               action: #selector(openHelpGuides),
                               keyEquivalent: "")
         help.target = self
         menu.addItem(help)
 
-        let testBench = NSMenuItem(title: "Test Bench",
+        let testBench = NSMenuItem(title: String(localized: "Test Bench"),
                                    action: #selector(openTestBench),
                                    keyEquivalent: "")
         testBench.target = self
         menu.addItem(testBench)
 
-        let tip = NSMenuItem(title: "Support InputConfig...",
+        let tip = NSMenuItem(title: String(localized: "Support InputConfig..."),
                              action: #selector(openTipJar),
                              keyEquivalent: "")
         tip.target = self
@@ -136,7 +185,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit InputConfig",
+        let quit = NSMenuItem(title: String(localized: "Quit InputConfig"),
                               action: #selector(quitApp),
                               keyEquivalent: "q")
         quit.target = self
@@ -150,14 +199,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// which is the natural cadence here - no extra timer needed.
     private func appendStatusSection(to menu: NSMenu) {
         let running = (mappingEngine?.isRunning ?? false)
+        let paused = (mappingEngine?.outputsPaused ?? false)
         let pollHz = mappingEngine?.currentPollHz ?? 0
 
         let engineLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         engineLine.attributedTitle = statusDotString(
-            running ? .systemGreen : .secondaryLabelColor,
+            running ? (paused ? .systemOrange : .systemGreen) : .secondaryLabelColor,
             text: running
-                ? "Engine running \u{00B7} \(pollHz) Hz"
-                : "Engine idle")
+                ? (paused ? String(localized: "Outputs paused (editor open)")
+                          : String(localized: "Engine running \(pollHz) Hz"))
+                : String(localized: "Engine idle"))
         engineLine.isEnabled = false
         menu.addItem(engineLine)
 
@@ -176,16 +227,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Shows "No controllers connected" when the slot dictionary is
     /// empty - keeps the menu non-confusing on launch.
     private func appendControllerSection(to menu: NSMenu) {
-        let header = NSMenuItem(title: "Controllers", action: nil, keyEquivalent: "")
-        header.attributedTitle = sectionHeaderString("Controllers")
+        let headerTitle = String(localized: "Controllers")
+        let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
+        header.attributedTitle = sectionHeaderString(headerTitle)
         header.isEnabled = false
         menu.addItem(header)
 
         guard let svc = controllerService,
               !svc.controllerDetails.isEmpty else {
-            let none = NSMenuItem(title: "    None connected",
+            let noneTitle = "    " + String(localized: "None connected")
+            let none = NSMenuItem(title: noneTitle,
                                   action: nil, keyEquivalent: "")
-            none.attributedTitle = subtitleString("    None connected")
+            none.attributedTitle = subtitleString(noneTitle)
             none.isEnabled = false
             menu.addItem(none)
             menu.addItem(.separator())
@@ -263,6 +316,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if preset.isActive {
             item.state = .on
             item.attributedTitle = activePresetHeader(preset.name)
+        } else if !preset.joysticks.contains(where: { !$0.bindings.isEmpty }) {
+            // Clicking an empty preset silently did nothing (activation
+            // early-returns); disable the row and say why instead.
+            item.action = nil
+            item.toolTip = String(localized: "No bindings yet. Open InputConfig to add some.")
         }
         return item
     }
@@ -283,21 +341,75 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    // MARK: - App actions (controller-triggered runtime control)
+
+    /// Perform an internal app action fired by a binding's App Action output.
+    /// Lives here because this controller already holds app-lifetime
+    /// references to the store and engine and performs the same activation
+    /// work for menu clicks, so the feature works with the window closed.
+    func performAppAction(_ kind: AppActionKind, targetPresetID: UUID?) {
+        guard let store = presetStore, let engine = mappingEngine else { return }
+        switch kind {
+        case .activatePreset:
+            guard let id = targetPresetID,
+                  let preset = store.presets.first(where: { $0.id == id }),
+                  preset.joysticks.contains(where: { !$0.bindings.isEmpty }),
+                  store.activePresetId != preset.id else { return }
+            engine.stop()
+            store.activatePreset(preset)
+            engine.start(with: preset)
+        case .nextPreset, .previousPreset:
+            let usable = store.presets.filter { p in
+                p.joysticks.contains { !$0.bindings.isEmpty }
+            }
+            guard !usable.isEmpty else { return }
+            let step = (kind == .nextPreset) ? 1 : -1
+            let nextIndex: Int
+            if let current = usable.firstIndex(where: { $0.id == store.activePresetId }) {
+                nextIndex = (current + step + usable.count) % usable.count
+            } else {
+                nextIndex = (kind == .nextPreset) ? 0 : usable.count - 1
+            }
+            let preset = usable[nextIndex]
+            engine.stop()
+            store.activatePreset(preset)
+            engine.start(with: preset)
+        case .deactivate:
+            engine.stop()
+            store.deactivateAll()
+        case .togglePauseOutputs:
+            engine.outputsPaused.toggle()
+        }
+    }
+
     @objc private func deactivateActive() {
-        guard let active = presetStore?.presets.first(where: { $0.isActive }),
+        guard presetStore?.presets.contains(where: { $0.isActive }) == true,
               let mappingEngine else { return }
         mappingEngine.stop()
         presetStore?.deactivateAll()
-        _ = active
     }
 
     @objc private func openMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        for window in NSApp.windows where window.title == "InputConfig"
-            || window.contentView != nil {
-            window.makeKeyAndOrderFront(nil)
-            break
+        // Prefer a real main-capable window. The old predicate
+        // (title match OR non-nil contentView) was true for nearly every
+        // window, including panels and the status item's own window, so
+        // it raised an arbitrary first match; and with every window
+        // closed (normal for a menu bar app) it silently did nothing.
+        if let visible = NSApp.windows.first(where: {
+            $0.canBecomeMain && !($0 is NSPanel) && ($0.isVisible || $0.isMiniaturized)
+        }) {
+            if visible.isMiniaturized { visible.deminiaturize(nil) }
+            visible.makeKeyAndOrderFront(nil)
+            return
         }
+        if let hidden = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+            hidden.makeKeyAndOrderFront(nil)
+            return
+        }
+        // No main window exists anymore: drive the same reopen path a
+        // Dock-icon click uses so SwiftUI recreates the WindowGroup window.
+        _ = NSApp.delegate?.applicationShouldHandleReopen?(NSApp, hasVisibleWindows: false)
     }
 
     @objc private func openHelpGuides() {

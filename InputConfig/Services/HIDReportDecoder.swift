@@ -118,10 +118,16 @@ enum HIDReportDecoder {
     /// pressure-sensitive buttons in bytes 14-25, sticks in bytes 6-9.
     static func decodeDualShock3(report: Data, into state: inout ControllerState) {
         let bytes = Array(report)
-        guard bytes.count >= 27 else { return }
+        guard bytes.count >= 26 else { return }
 
-        // DS3 prefixes with a report ID byte. Skip if present.
-        let base = bytes[0] == 0x01 ? 1 : 0
+        // The canonical DS3 offsets (buttons in bytes 2-3, PS at 4,
+        // sticks 6-9, trigger pressures 18-19) already count the leading
+        // 0x01 report ID as byte 0, and IOKit includes that ID byte in
+        // the delivered buffer. base = 0 when the ID is present; if a
+        // transport strips it, every offset shifts down one. The old
+        // base = 1 double-counted the ID and read every control from
+        // the wrong byte.
+        let base = bytes[0] == 0x01 ? 0 : -1
         guard bytes.count >= base + 26 else { return }
 
         let b2 = bytes[base + 2]
@@ -175,7 +181,16 @@ enum HIDReportDecoder {
                               layout: ControllerProfile.GenericLayout,
                               into state: inout ControllerState) {
         let bytes = Array(report)
-        let offset = layout.hasReportID ? 1 : 0
+        var offset = 0
+        if layout.hasReportID {
+            guard !bytes.isEmpty else { return }
+            // Decode only the input report this layout was built from.
+            // Multi-report devices interleave battery / sensor / vendor
+            // reports on other IDs; decoding those with the gamepad
+            // layout produced phantom input.
+            if let expected = layout.reportID, Int(bytes[0]) != expected { return }
+            offset = 1
+        }
         guard bytes.count >= offset + layout.reportSize else { return }
 
         let payload = Array(bytes.suffix(from: offset))
@@ -228,20 +243,30 @@ enum HIDReportDecoder {
             state.buttons[6 + i] = value > 0.12 ? 1.0 : 0.0
         }
 
-        // Hat switch (4-bit direction)
-        if let hatByte = layout.hatByteOffset, hatByte < payload.count {
-            let hat = payload[hatByte] & 0x0F
-            // Standard 8-direction hat encoding (0=N, 1=NE, 2=E, ..., 7=NW, 8 or F=center)
-            switch hat {
-            case 0: setHat(&state, x: 0, y: -1)              // N
-            case 1: setHat(&state, x: 0.707, y: -0.707)      // NE
-            case 2: setHat(&state, x: 1, y: 0)               // E
-            case 3: setHat(&state, x: 0.707, y: 0.707)       // SE
-            case 4: setHat(&state, x: 0, y: 1)               // S
-            case 5: setHat(&state, x: -0.707, y: 0.707)      // SW
-            case 6: setHat(&state, x: -1, y: 0)              // W
-            case 7: setHat(&state, x: -0.707, y: -0.707)     // NW
-            default: setHat(&state, x: 0, y: 0)
+        // Hat switch (4-bit direction). Use the exact bit offset when the
+        // parser recorded one (hats often sit in the high nibble after 12
+        // buttons), and honor the declared logical minimum: pads that use
+        // 1..8 with 0 as null would otherwise read rotated 45 degrees with
+        // the resting value decoding as a held North.
+        let hatBitOffset = layout.hatBitOffset ?? layout.hatByteOffset.map { $0 * 8 }
+        if let hatBit = hatBitOffset {
+            let hatByte = hatBit / 8
+            if hatByte < payload.count {
+                let raw = Int((payload[hatByte] >> (hatBit % 8)) & 0x0F)
+                let direction = raw - layout.hatLogicalMin
+                // Standard 8-direction encoding after normalization
+                // (0=N, 1=NE, ..., 7=NW; anything else = center).
+                switch direction {
+                case 0: setHat(&state, x: 0, y: -1)              // N
+                case 1: setHat(&state, x: 0.707, y: -0.707)      // NE
+                case 2: setHat(&state, x: 1, y: 0)               // E
+                case 3: setHat(&state, x: 0.707, y: 0.707)       // SE
+                case 4: setHat(&state, x: 0, y: 1)               // S
+                case 5: setHat(&state, x: -0.707, y: 0.707)      // SW
+                case 6: setHat(&state, x: -1, y: 0)              // W
+                case 7: setHat(&state, x: -0.707, y: -0.707)     // NW
+                default: setHat(&state, x: 0, y: 0)
+                }
             }
         }
     }

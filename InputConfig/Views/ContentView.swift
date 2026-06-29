@@ -305,6 +305,12 @@ struct ContentView: View {
                              pendingJump: pendingEditorJump) { updated in
                 newlyCreatedPresetId = nil // Saved successfully, don't delete
                 presetStore.savePreset(updated)
+                // If the edited preset is the one currently running, restart the
+                // engine with the new value so it rebuilds its binding caches;
+                // otherwise edits would not take effect until the next activation.
+                if mappingEngine.isRunning && presetStore.activePresetId == updated.id {
+                    mappingEngine.start(with: updated)
+                }
                 editingPreset = nil
             }
             .environmentObject(controllerService)
@@ -694,6 +700,8 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .help(name.capitalized)
+                    .accessibilityLabel(name.capitalized)
+                    .accessibilityAddTraits(group.color == name ? [.isSelected] : [])
                 }
             }
 
@@ -1280,7 +1288,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                     Text("Welcome to InputConfig")
                         .font(.title2.weight(.semibold))
-                    Text("Map any input device like controllers, keyboards, and mice to keyboard, mouse, MIDI, and more on macOS.")
+                    Text("Control your Mac with a game controller or any input device. An accessible way to map controllers, keyboards, and mice to keyboard, mouse, MIDI, and more.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -1379,7 +1387,7 @@ struct ContentView: View {
                              tint: .mint)
                     demoCard(kind: .gyro,
                              icon: "gyroscope",
-                             detail: "Tilt-to-aim with the controller's gyroscope. Works on DualSense, DualSense Edge, DualShock 4, Switch Pro, and Joy-Con.",
+                             detail: "Tilt-to-aim with the controller's gyroscope. Works on DualSense, DualSense Edge, and DualShock 4.",
                              tint: .teal)
                     demoCard(kind: .haptic,
                              icon: "waveform",
@@ -1607,9 +1615,17 @@ struct ContentView: View {
         // crashing on a force-unwrap.
         if let newId = newlyCreatedPresetId {
             if let draft = presetStore.presets.first(where: { $0.id == newId }) {
-                presetStore.hardDeletePreset(draft)
+                // Only discard PRISTINE drafts. If the user scanned or added
+                // any bindings before pressing Escape, keep the preset;
+                // hard-deleting it threw away real setup work.
+                let isPristine = draft.joysticks.allSatisfy { $0.bindings.isEmpty }
+                if isPristine {
+                    presetStore.hardDeletePreset(draft)
+                    if selectedPresetId == newId { selectedPresetId = nil }
+                }
+            } else if selectedPresetId == newId {
+                selectedPresetId = nil
             }
-            if selectedPresetId == newId { selectedPresetId = nil }
             newlyCreatedPresetId = nil
         }
         // Resume outputs when the editor closes.
@@ -2265,6 +2281,9 @@ struct ContentView: View {
     }
 
     private func startEngine(with preset: Preset) {
+        // An empty preset cannot do anything; activating it would show the
+        // green active state over an engine with nothing to run.
+        guard preset.joysticks.contains(where: { !$0.bindings.isEmpty }) else { return }
         mappingEngine.stop()
         presetStore.activatePreset(preset)
         mappingEngine.start(with: preset)
@@ -2336,10 +2355,14 @@ struct ContentView: View {
 
             VStack(spacing: 10) {
                 Button {
-                    accessibility.openSystemSettings()
+                    // requestAccess registers the app's row in the
+                    // Accessibility pane and shows the system prompt.
+                    // Only opening the pane landed users in a list with
+                    // no InputConfig row to turn on.
+                    accessibility.requestAccess()
                     showingAccessibilityIntro = false
                 } label: {
-                    Text("Open Accessibility Settings")
+                    Text("Turn On Accessibility")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -3152,7 +3175,10 @@ struct PresetDetailView: View {
     /// the user taps a row inside any widget popover.
     var onJumpToBinding: (EditorJumpTarget) -> Void = { _ in }
 
-    @EnvironmentObject var mappingEngine: MappingEngine
+    // PresetDetailView does not read the mapping engine directly (the
+    // visualizer it embeds gets the engine from a higher injection), so it
+    // must NOT subscribe to it here: doing so rebuilt this whole detail body
+    // at the engine's 10-30 Hz publish rate while a preset was active.
     @EnvironmentObject var controllerService: GameControllerService
     @EnvironmentObject var presetStore: PresetStore
 
@@ -3342,12 +3368,27 @@ struct PresetDetailView: View {
 
     /// The visualizer body extracted so it can be embedded directly in a
     /// section card (with our own collapse chevron) instead of a
+    /// Stable identity for each visualizer row so a VirtualControllerView's
+    /// @State (gyro integrator, etc.) tracks its controller, not its position.
+    /// Keying the ForEach by array index let that state bleed onto a different
+    /// controller when one connected or disconnected and shifted the slots.
+    private struct VisualizerSlot: Identifiable {
+        let id: String
+        let idx: Int
+        let slot: Int
+    }
+
     /// DisclosureGroup whose chevron sat awkwardly next to the card.
     @ViewBuilder
     private var visualizerContent: some View {
         let connectedSlots = Array(controllerService.controllerDetails.keys).sorted()
         let presetJoystickCount = preset.joysticks.count
         let totalVisualizers = max(presetJoystickCount, connectedSlots.count)
+        let resolvedVisualizerSlots: [VisualizerSlot] = (0..<totalVisualizers).map { idx in
+            let connected = idx < connectedSlots.count
+            let slot = connected ? connectedSlots[idx] : idx
+            return VisualizerSlot(id: connected ? "slot-\(slot)" : "empty-\(idx)", idx: idx, slot: slot)
+        }
         if connectedSlots.isEmpty && presetJoystickCount == 0 {
             Text("Connect a controller to see its live state here.")
                 .font(.caption)
@@ -3355,10 +3396,9 @@ struct PresetDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(0..<totalVisualizers, id: \.self) { idx in
-                    let slot = idx < connectedSlots.count
-                        ? connectedSlots[idx]
-                        : idx
+                ForEach(resolvedVisualizerSlots) { viz in
+                    let idx = viz.idx
+                    let slot = viz.slot
                     HStack(spacing: 8) {
                         Text("Joystick #\(idx)")
                             .font(.caption2.weight(.semibold).monospaced())
@@ -3532,7 +3572,8 @@ struct PresetDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 14) {
-                if controllerService.connectedControllers.isEmpty {
+                if controllerService.connectedControllers.isEmpty
+                    && controllerService.rawHIDGamepadSlots.isEmpty {
                     detailsRow(title: "Controllers", icon: "antenna.radiowaves.left.and.right.slash",
                                items: ["No controllers currently connected."])
                 } else {
@@ -3636,7 +3677,10 @@ struct PresetDetailView: View {
         }
         .onAppear { reloadVersions() }
         .onChange(of: preset.id) { _, _ in reloadVersions() }
-        .onChange(of: preset.modifiedAt) { _, _ in reloadVersions() }
+        // Intentionally NOT keyed on preset.modifiedAt: that fired a synchronous
+        // versions(for:) disk read on EVERY keystroke while editing the name,
+        // tag, or notes. The list reloads on preset switch and on appear, which
+        // is when this collapsed "Previous versions" group is actually viewed.
     }
 
     private func reloadVersions() {

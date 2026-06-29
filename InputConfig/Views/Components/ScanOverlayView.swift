@@ -10,7 +10,7 @@ struct ScanOverlayView: View {
     let onInputDetected: (InputEvent) -> Void
     let onCancel: () -> Void
 
-    @State private var timeRemaining: Int = 10
+    @State private var timeRemaining: Int = 20
     @State private var detectedInput: InputEvent?
     @State private var timer: Timer?
     @State private var didCompleteScan = false
@@ -80,6 +80,9 @@ struct ScanOverlayView: View {
                     .fill(.ultraThinMaterial)
                     .shadow(radius: 20)
             )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Scan for input. Press a control on your controller, or a key, click, or scroll on your Mac, to map it.")
+            .accessibilityHint("Press Escape to cancel.")
         }
         .onAppear {
             startTimer()
@@ -87,6 +90,7 @@ struct ScanOverlayView: View {
                 completeScan(with: event)
             }
             installInputMonitor()
+            announce("Scanning for input. Press a control on your controller, or a key, click, or scroll on your Mac, to map it. Press Escape to cancel.")
         }
         .onDisappear {
             cleanup()
@@ -102,7 +106,7 @@ struct ScanOverlayView: View {
         guard inputMonitor == nil else { return }
         inputMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown,
-                       .otherMouseDown, .scrollWheel]
+                       .otherMouseDown, .scrollWheel, .pressure]
         ) { event in
             handleScanNSEvent(event) ? nil : event
         }
@@ -144,6 +148,17 @@ struct ScanOverlayView: View {
                 extDeviceID: ExternalInputDeviceService.builtInMouseID,
                 extMouseKind: .scrollY))
             return true
+        case .pressure:
+            // A deliberate Force Click (stage 2) scans as a Deep Press
+            // input; the continuous pressure stream is ignored here so an
+            // ordinary click does not get captured as pressure.
+            if event.stage >= 2 {
+                completeScan(with: InputEvent(
+                    type: .extMouse, index: 0,
+                    extDeviceID: ExternalInputDeviceService.builtInMouseID,
+                    extMouseKind: .deepPress))
+            }
+            return true
         default:
             return false
         }
@@ -155,6 +170,7 @@ struct ScanOverlayView: View {
         guard !didCompleteScan else { return }
         didCompleteScan = true
         detectedInput = event
+        announce("Detected \(event.displayName).")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             cleanup()
             onInputDetected(event)
@@ -162,7 +178,7 @@ struct ScanOverlayView: View {
     }
 
     private func startTimer() {
-        timeRemaining = 10
+        timeRemaining = 20
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             if timeRemaining > 0 {
                 timeRemaining -= 1
@@ -171,6 +187,23 @@ struct ScanOverlayView: View {
                 onCancel()
             }
         }
+    }
+
+    /// Speak a message to VoiceOver. The scan overlay is otherwise silent, so a
+    /// VoiceOver user gets no feedback that scanning started or that an input
+    /// was detected; these announcements provide it.
+    private func announce(_ message: String) {
+        #if canImport(AppKit)
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        NSAccessibility.post(
+            element: window,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue
+            ]
+        )
+        #endif
     }
 
     private func cleanup() {

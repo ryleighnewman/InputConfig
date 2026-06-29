@@ -113,6 +113,15 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
         let now = Date().timeIntervalSince1970
         let stallSeconds = now - lastHeartbeat
 
+        // A stall far longer than any UI freeze worth reporting is almost
+        // certainly the machine having been asleep (or the process suspended),
+        // not a hang. Reset the heartbeat instead of logging a bogus freeze on
+        // every wake from sleep.
+        if stallSeconds > 90 {
+            lastHeartbeat = now
+            return
+        }
+
         if stallSeconds >= freezeThreshold,
            (now - lastReportedFreeze) > freezeCooldown {
             // Real freeze. Persist via the recovery service (which is
@@ -121,6 +130,10 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
             lastReportedFreeze = now
             let seconds = Int(stallSeconds)
             NSLog("FreezeWatchdog: main thread stalled \(seconds)s")
+            // Stamp the freeze durably from THIS (watchdog) queue right now:
+            // main is hung, so the hop below won't run until the freeze ends,
+            // so a hard kill during the freeze would otherwise lose the record.
+            CrashRecoveryService.stampFreezeFromWatchdog()
             DispatchQueue.main.async {
                 CrashRecoveryService.shared.recordFreezeDetected()
             }

@@ -17,6 +17,13 @@ struct ControllerProfile: Equatable {
     let layout: ReportLayout
     let physicalButtonNames: [String]
 
+    /// When set, the profile only matches devices whose IOKit transport
+    /// string contains this value (case-insensitive), e.g. "USB". Used to
+    /// keep wired-only layouts (8BitDo XInput) from claiming the same
+    /// VID/PID block when it shows up over Bluetooth with a different,
+    /// shorter report format that the wired decoder would silently drop.
+    var requiredTransport: String? = nil
+
     /// How to match a device's product ID against this profile.
     enum ProductMatch: Equatable {
         case exact(Int32)
@@ -54,14 +61,17 @@ struct ControllerProfile: Equatable {
     /// Output of `HIDDescriptorParser`. Encodes where buttons and axes
     /// live in the report for an arbitrary HID gamepad.
     struct GenericLayout: Equatable {
-        var buttonBitOffsets: [Int]      // Bit index of each button in the report
-        var axisByteOffsets: [Int]       // Byte offset of each axis
+        var buttonBitOffsets: [Int]      // Bit index of each button, relative to the payload (after any report ID byte)
+        var axisByteOffsets: [Int]       // Byte offset of each axis, payload-relative
         var axisByteWidths: [Int]        // Per-axis: 1 (8-bit) or 2 (16-bit); parallel to axisByteOffsets
         var axisIsSignedFlags: [Bool]    // Per-axis: signed-centred-at-0 vs unsigned-centred-at-midpoint
-        var hatByteOffset: Int?          // Byte that holds the 4-bit hat direction (8-direction or no-press = 0x0F)
-        var triggerByteOffsets: [Int]    // Byte offsets of analogue triggers (0-255)
-        var reportSize: Int              // Expected total bytes (excluding leading report ID if present)
-        var hasReportID: Bool            // True if first byte is a report ID we should skip
+        var hatByteOffset: Int?          // Byte that holds the 4-bit hat direction (kept for display/tests; hatBitOffset is authoritative)
+        var triggerByteOffsets: [Int]    // Byte offsets of analogue triggers (0-255), payload-relative
+        var reportSize: Int              // Expected payload bytes (excluding the leading report ID byte if present)
+        var hasReportID: Bool            // True if first byte of each report is a report ID we should skip
+        var hatBitOffset: Int? = nil     // Absolute payload-relative bit offset of the 4-bit hat (handles high-nibble hats)
+        var hatLogicalMin: Int = 0       // Hat's declared logical minimum (0 or 1); values map north = logicalMin
+        var reportID: Int? = nil         // Which input report ID this layout decodes, for multi-report devices
     }
 }
 

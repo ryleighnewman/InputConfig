@@ -35,6 +35,10 @@ struct MotionCalibrationView: View {
     @State private var integratedRoll: Float = 0
     @State private var integratedPitch: Float = 0
     @State private var integratedYaw: Float = 0
+    /// The active capture timer, retained so it can be invalidated if the view
+    /// is dismissed mid-capture (otherwise it kept ticking and persisted an
+    /// abandoned calibration).
+    @State private var captureTimer: Timer?
 
     private struct SampleVector {
         var gx: Float; var gy: Float; var gz: Float
@@ -110,9 +114,19 @@ struct MotionCalibrationView: View {
                   let motion = entry.controller.motion,
                   motion.hasRotationRate else { return }
             let dt: Float = 1.0 / 30.0
-            integratedPitch += Float(motion.rotationRate.x) * dt
-            integratedYaw   += Float(motion.rotationRate.y) * dt
-            integratedRoll  += Float(motion.rotationRate.z) * dt
+            // Use drift-corrected rates so a resting controller's gyro bias
+            // doesn't ramp the model to the +/-90 degree clamp, and apply a
+            // small per-tick leak toward zero so any residual bias decays
+            // instead of accumulating.
+            let key = MotionCalibrationService.identityKey(for: entry.controller)
+            let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
+                x: Float(motion.rotationRate.x),
+                y: Float(motion.rotationRate.y),
+                z: Float(motion.rotationRate.z),
+                forKey: key)
+            integratedPitch = (integratedPitch + gx * dt) * 0.98
+            integratedYaw   = (integratedYaw + gy * dt) * 0.98
+            integratedRoll  = (integratedRoll + gz * dt) * 0.98
             integratedPitch = max(-(.pi / 2), min(.pi / 2, integratedPitch))
             integratedYaw   = max(-(.pi / 2), min(.pi / 2, integratedYaw))
             integratedRoll  = max(-(.pi / 2), min(.pi / 2, integratedRoll))
@@ -430,6 +444,13 @@ struct MotionCalibrationView: View {
                     selectedKey = MotionCalibrationService.identityKey(for: first.controller)
                 }
             }
+            .onDisappear {
+                // Stop and discard any in-flight capture so a calibration the
+                // user walked away from is never finished or persisted.
+                captureTimer?.invalidate()
+                captureTimer = nil
+                captureInProgress = false
+            }
         }
     }
 
@@ -587,9 +608,11 @@ struct MotionCalibrationView: View {
             captureRemaining = max(0, captureDuration - Date().timeIntervalSince(start))
             if captureRemaining <= 0 {
                 t.invalidate()
+                captureTimer = nil
                 finishCapture(key: key)
             }
         }
+        captureTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 

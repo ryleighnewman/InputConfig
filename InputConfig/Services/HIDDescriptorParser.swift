@@ -32,12 +32,21 @@ enum HIDDescriptorParser {
     /// Returns nil when the descriptor doesn't yield a useful layout
     /// (no buttons or no axes), in which case the caller should fall
     /// back to logging the device as unidentified.
+    ///
+    /// Multi-report-ID devices are supported: fields and bit cursors are
+    /// tracked per input report ID, and the layout is built from the
+    /// input report with the richest control set (most modern licensed
+    /// pads declare extra IDs for battery, sensors, LEDs, and rumble;
+    /// bailing on those gutted the "unknown gamepads work" promise).
+    /// All recorded offsets are PAYLOAD-relative: for devices with
+    /// report IDs they count from the byte after the leading ID byte,
+    /// matching how `decodeGeneric` strips it before indexing.
     static func parse(_ descriptor: Data) -> ControllerProfile.GenericLayout? {
         var state = ParseState()
-        var fields: [Field] = []
-        var bitCursor = 0
-        var hasReportID = false
-        var encounteredReportID: Int? = nil
+        // Key nil = device without REPORT_ID items.
+        var fieldsByReport: [Int?: [Field]] = [:]
+        var cursorByReport: [Int?: Int] = [:]
+        var currentReportID: Int? = nil
 
         let bytes = Array(descriptor)
         var i = 0
@@ -129,10 +138,11 @@ enum HIDDescriptorParser {
                         // If we have explicit usages they map 1:1; if
                         // we have a usage range (min/max), each entry
                         // gets a usage from the range.
+                        let base = cursorByReport[currentReportID, default: 0]
                         for n in 0..<state.reportCount {
                             let usage = state.usage(forIndex: n)
-                            fields.append(Field(
-                                bitOffset: bitCursor + n * bitsPerEntry,
+                            fieldsByReport[currentReportID, default: []].append(Field(
+                                bitOffset: base + n * bitsPerEntry,
                                 bitSize: bitsPerEntry,
                                 usagePage: state.usagePage,
                                 usage: usage,
@@ -142,12 +152,17 @@ enum HIDDescriptorParser {
                         }
                     }
 
-                    bitCursor += totalBits
+                    cursorByReport[currentReportID, default: 0] += totalBits
                     state.clearLocals()
 
-                case 0x9, 0xB: // OUTPUT / FEATURE - advance cursor
-                    let totalBits = state.reportSize * state.reportCount
-                    bitCursor += totalBits
+                case 0x9, 0xB: // OUTPUT / FEATURE
+                    // Output and feature reports occupy their own bit
+                    // spaces. Advancing the INPUT cursor here shifted
+                    // every later input field on devices with rumble or
+                    // LED output items and inflated reportSize, so the
+                    // decoder's size guard rejected every real report.
+                    // (The old advance also multiplied unguarded, which
+                    // a hostile descriptor could overflow.)
                     state.clearLocals()
 
                 case 0xA: // COLLECTION
@@ -166,44 +181,25 @@ enum HIDDescriptorParser {
                 case 0x2: state.logicalMax = signedData
                 case 0x7: state.reportSize = Int(rawData)
                 case 0x8:
-                    // REPORT_ID - if present, the first byte of every
-                    // report is the ID. We only support single-report-
-                    // ID devices for now; if we see a second ID we
-                    // bail and let the caller treat the device as
-                    // unidentified.
+                    // REPORT_ID - the first byte of every report is the
+                    // ID. Switch the active per-report bookkeeping; each
+                    // report ID gets its own payload-relative cursor.
                     let id = Int(rawData)
-                    if let prior = encounteredReportID, prior != id {
-                        // Multi-report-ID device. Skip parsing the
-                        // remaining items so we don't mis-assign bits.
-                        return nil
-                    }
-                    let firstTimeSeeingID = (encounteredReportID == nil)
-                    encounteredReportID = id
-                    hasReportID = true
-                    // Skip the report ID byte at the start of every
-                    // report by rebasing the bit cursor past byte 0.
-                    // Earlier this only fired when bitCursor==0, which
-                    // meant a REPORT_ID emitted AFTER some GLOBAL/LOCAL
-                    // state pollution left the cursor wrong by 8 bits
-                    // and offset every subsequent INPUT field. Now we
-                    // rebase the first time we see an ID regardless of
-                    // where the cursor sits.
-                    if firstTimeSeeingID {
-                        // Shift any already-recorded fields right by 8
-                        // bits to make room for the report ID. In
-                        // practice we shouldn't have any since INPUT
-                        // before REPORT_ID is malformed, but defensive.
-                        for idx in fields.indices {
-                            fields[idx] = Field(
-                                bitOffset: fields[idx].bitOffset + 8,
-                                bitSize: fields[idx].bitSize,
-                                usagePage: fields[idx].usagePage,
-                                usage: fields[idx].usage,
-                                logicalMin: fields[idx].logicalMin,
-                                logicalMax: fields[idx].logicalMax)
+                    // Fields recorded before the first REPORT_ID item
+                    // (malformed but seen in the wild) belong to that
+                    // first report; migrate them. Their offsets are
+                    // already payload-relative so no shift is needed.
+                    if currentReportID == nil {
+                        if let orphans = fieldsByReport[Int?.none], !orphans.isEmpty {
+                            fieldsByReport[id, default: []].append(contentsOf: orphans)
+                            fieldsByReport[Int?.none] = nil
                         }
-                        bitCursor = max(bitCursor + 8, 8)
+                        if let orphanCursor = cursorByReport[Int?.none] {
+                            cursorByReport[id, default: 0] += orphanCursor
+                            cursorByReport[Int?.none] = nil
+                        }
                     }
+                    currentReportID = id
                 case 0x9: state.reportCount = Int(rawData)
                 default: break
                 }
@@ -220,9 +216,26 @@ enum HIDDescriptorParser {
             }
         }
 
-        return buildLayout(from: fields,
-                           hasReportID: hasReportID,
-                           totalBits: bitCursor)
+        // Build a candidate layout per input report and keep the one
+        // with the richest control set, so a pad whose descriptor also
+        // declares battery / sensor / vendor input reports decodes the
+        // gamepad report and ignores the rest.
+        var best: ControllerProfile.GenericLayout? = nil
+        var bestScore = -1
+        for (key, flds) in fieldsByReport {
+            guard let layout = buildLayout(from: flds,
+                                           reportID: key,
+                                           totalBits: cursorByReport[key] ?? 0) else { continue }
+            let score = layout.buttonBitOffsets.count
+                + layout.axisByteOffsets.count * 2
+                + layout.triggerByteOffsets.count
+                + (layout.hatByteOffset != nil ? 2 : 0)
+            if score > bestScore {
+                bestScore = score
+                best = layout
+            }
+        }
+        return best
     }
 
     // MARK: - Field aggregation
@@ -237,7 +250,7 @@ enum HIDDescriptorParser {
     }
 
     private static func buildLayout(from fields: [Field],
-                                    hasReportID: Bool,
+                                    reportID: Int?,
                                     totalBits: Int) -> ControllerProfile.GenericLayout? {
         var buttons: [Int] = []
         // Triples kept together so per-axis width / signedness survive
@@ -245,7 +258,8 @@ enum HIDDescriptorParser {
         // and the LAST axis won, which scrambled mixed 8/16-bit pads.
         var axesAggregated: [(byte: Int, width: Int, signed: Bool)] = []
         var triggers: [Int] = []
-        var hat: Int? = nil
+        var hatBit: Int? = nil
+        var hatMin: Int = 0
 
         for field in fields {
             switch field.usagePage {
@@ -259,10 +273,16 @@ enum HIDDescriptorParser {
                 switch field.usage {
                 case 0x30, 0x31, 0x32, 0x33, 0x34, 0x35: // X, Y, Z, Rx, Ry, Rz
                     if field.bitOffset % 8 == 0 && field.bitSize % 8 == 0 {
+                        // Trust logicalMin only when the declared range is
+                        // sane. Cheap encoder boards (DragonRise and kin)
+                        // ship inverted or degenerate min/max; treating
+                        // those as signed produced garbage axes, so they
+                        // degrade to unsigned-centred instead.
+                        let saneRange = field.logicalMin < field.logicalMax
                         axesAggregated.append((
                             byte: field.bitOffset / 8,
                             width: field.bitSize / 8,
-                            signed: field.logicalMin < 0
+                            signed: saneRange && field.logicalMin < 0
                         ))
                     }
                 case 0x36, 0x37: // Slider, Dial - treat as trigger
@@ -271,9 +291,14 @@ enum HIDDescriptorParser {
                     }
                 case 0x39: // Hat switch
                     if field.bitSize == 4 {
-                        // Round bit offset down to byte boundary; we'll
-                        // mask off the low nibble at decode time.
-                        hat = field.bitOffset / 8
+                        // Keep the absolute bit offset (hats often sit in
+                        // the high nibble after 12 buttons) plus the
+                        // declared logical minimum: many pads use 1..8
+                        // with 0 as null, and assuming 0 = North both
+                        // rotated every direction 45 degrees and decoded
+                        // the resting state as a held North.
+                        hatBit = field.bitOffset
+                        hatMin = (0...1).contains(field.logicalMin) ? field.logicalMin : 0
                     }
                 default: break
                 }
@@ -294,10 +319,13 @@ enum HIDDescriptorParser {
             axisByteOffsets: axisOffsets,
             axisByteWidths: axisWidths,
             axisIsSignedFlags: axisSigned,
-            hatByteOffset: hat,
+            hatByteOffset: hatBit.map { $0 / 8 },
             triggerByteOffsets: triggers.sorted(),
             reportSize: (totalBits + 7) / 8,
-            hasReportID: hasReportID
+            hasReportID: reportID != nil,
+            hatBitOffset: hatBit,
+            hatLogicalMin: hatMin,
+            reportID: reportID
         )
     }
 

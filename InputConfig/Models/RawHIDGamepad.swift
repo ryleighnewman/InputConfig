@@ -9,9 +9,10 @@ import IOKit.hid
 /// PowerA/Hori/MadCatz Xbox-compatibles, Logitech F310/F710, etc.
 ///
 /// The instance owns the underlying `IOHIDDevice` for the duration of
-/// its lifetime. Lock-protected access to `state` so the input report
-/// callback (which fires on a background queue) and the mapping
-/// engine (which reads from the main thread) don't race.
+/// its lifetime. `state` is lock-protected: the input report callback is
+/// serviced on the main runloop (where the IOHIDManager is scheduled), the
+/// same context the mapping engine reads from, and the lock keeps it safe if
+/// the device is ever scheduled on a background queue instead.
 final class RawHIDGamepad: Identifiable, @unchecked Sendable {
 
     let id: UInt64                  // IOKit location ID; stable per physical attachment

@@ -235,6 +235,14 @@ struct KeyCodeMap {
         67: 0x6D,  // F10
         68: 0x67,  // F11
         69: 0x6F,  // F12
+        104: 0x69, // F13
+        105: 0x6B, // F14
+        106: 0x71, // F15
+        107: 0x6A, // F16
+        108: 0x40, // F17
+        109: 0x4F, // F18
+        110: 0x50, // F19
+        111: 0x5A, // F20
         74: 0x73,  // Home
         75: 0x74,  // PageUp
         76: 0x75,  // Delete (forward)
@@ -244,6 +252,25 @@ struct KeyCodeMap {
         80: 0x7B,  // Left
         81: 0x7D,  // Down
         82: 0x7E,  // Up
+        73: 0x72,  // Insert (the Help key, its position on a Mac keyboard)
+        83: 0x47,  // Keypad Clear (Num Lock position on Mac)
+        84: 0x4B,  // Keypad /
+        85: 0x43,  // Keypad *
+        86: 0x4E,  // Keypad -
+        87: 0x45,  // Keypad +
+        88: 0x4C,  // Keypad Enter
+        89: 0x53,  // Keypad 1
+        90: 0x54,  // Keypad 2
+        91: 0x55,  // Keypad 3
+        92: 0x56,  // Keypad 4
+        93: 0x57,  // Keypad 5
+        94: 0x58,  // Keypad 6
+        95: 0x59,  // Keypad 7
+        96: 0x5B,  // Keypad 8
+        97: 0x5C,  // Keypad 9
+        98: 0x52,  // Keypad 0
+        99: 0x41,  // Keypad .
+        103: 0x51, // Keypad =
         224: 0x3B, // Ctrl Left
         225: 0x38, // Shift Left
         226: 0x3A, // Option Left

@@ -108,7 +108,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         markDirty()
     }
 
-    func enginStarted(presetName: String) {
+    func engineStarted(presetName: String) {
         engineRunningSince = Date()
         activePresetName = presetName
         activePresetStartedAt = Date()
@@ -141,6 +141,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         if stats.inputPressCounts.count > Self.inputPressCountsHardCap {
             pruneInputPressCounts()
         }
+        markDirty()
     }
 
     /// Upper bound on distinct input keys we'll track. ~99% of users
@@ -161,13 +162,13 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func recordKeyPress() { stats.totalKeyPresses += 1 }
-    func recordMouseClick() { stats.totalMouseClicks += 1 }
-    func recordMidiEvent() { stats.totalMidiEvents += 1 }
-    func recordMouseMotion(pixels: Int) { stats.totalMouseMotionPixels += abs(pixels) }
-    func recordScroll(ticks: Int) { stats.totalScrollTicks += abs(ticks) }
-    func recordTouchpadEvent() { stats.totalTouchpadFingerEvents += 1 }
-    func recordMacroExecution() { stats.totalMacroExecutions += 1 }
+    func recordKeyPress() { stats.totalKeyPresses += 1; markDirty() }
+    func recordMouseClick() { stats.totalMouseClicks += 1; markDirty() }
+    func recordMidiEvent() { stats.totalMidiEvents += 1; markDirty() }
+    func recordMouseMotion(pixels: Int) { stats.totalMouseMotionPixels += abs(pixels); markDirty() }
+    func recordScroll(ticks: Int) { stats.totalScrollTicks += abs(ticks); markDirty() }
+    func recordTouchpadEvent() { stats.totalTouchpadFingerEvents += 1; markDirty() }
+    func recordMacroExecution() { stats.totalMacroExecutions += 1; markDirty() }
 
     // MARK: - Derived
 
@@ -258,9 +259,13 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     private func flushIfDirty() {
         guard dirty else { return }
         // Roll up any in-flight time so a crash before disconnect doesn't
-        // throw away the session.
+        // throw away the session. The same delta has to land in the daily
+        // bucket too, otherwise connected time that is flushed before the
+        // controller disconnects never reaches the 14-day usage chart.
         if let since = connectedSince {
-            stats.totalConnectedTime += Date().timeIntervalSince(since)
+            let delta = Date().timeIntervalSince(since)
+            stats.totalConnectedTime += delta
+            recordDailyConnection(delta: delta)
             connectedSince = Date()
         }
         if let s = engineRunningSince {
@@ -285,6 +290,36 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         dirty = false
     }
 
+    /// Synchronous flush for app termination. Rolls up in-flight session time
+    /// and writes on the calling thread (persistQueue.sync) so the data reaches
+    /// disk before the process exits. The periodic flush uses persistQueue.async,
+    /// which is not guaranteed to finish at Cmd+Q, so the last session's counts
+    /// and time would otherwise be lost.
+    func flushSynchronously() {
+        if let since = connectedSince {
+            let delta = Date().timeIntervalSince(since)
+            stats.totalConnectedTime += delta
+            recordDailyConnection(delta: delta)
+            connectedSince = Date()
+        }
+        if let s = engineRunningSince {
+            stats.totalEngineRunningTime += Date().timeIntervalSince(s)
+            engineRunningSince = Date()
+        }
+        if let name = activePresetName, let s = activePresetStartedAt {
+            stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
+            activePresetStartedAt = Date()
+        }
+        let snapshot = stats
+        let url = fileURL
+        persistQueue.sync {
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
+        dirty = false
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode(PersistentStats.self, from: data) else {
@@ -296,5 +331,11 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     private func recordDailyConnection(delta: TimeInterval) {
         let key = Self.dailyKeyFormatter.string(from: Date())
         stats.dailyConnectedSeconds[key, default: 0] += delta
+        // Keep a trailing window so the map can't grow one key per day forever;
+        // readers use at most the last 14 days.
+        if stats.dailyConnectedSeconds.count > 90 {
+            let cutoff = Self.dailyKeyFormatter.string(from: Date().addingTimeInterval(-90 * 86_400))
+            stats.dailyConnectedSeconds = stats.dailyConnectedSeconds.filter { $0.key >= cutoff }
+        }
     }
 }

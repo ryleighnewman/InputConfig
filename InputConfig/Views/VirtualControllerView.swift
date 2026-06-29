@@ -548,6 +548,10 @@ struct VirtualControllerView<Trailing: View>: View {
                 } else {
                     out.insert("scrollUp")
                 }
+            case .pressure, .deepPress:
+                // Force Touch presses highlight the primary button zone;
+                // the diagram has no dedicated pressure pad.
+                out.insert("btn0")
             }
         }
         return out

@@ -19,37 +19,18 @@ guard CommandLine.arguments.count >= 4,
 
 let brightness: UInt8 = CommandLine.arguments.count > 4 ? UInt8(CommandLine.arguments[4]) ?? 2 : 2
 
-// Optional 6th arg "shared": write the LED report WITHOUT killing
-// gamecontrolleragentd and WITHOUT seizing the device. Used for the
-// focus-change re-assert, where killing the daemon would cause a
-// visible flicker and a brief controller-input drop. Shared mode opens
-// the device non-exclusively (same as the supplement reader does) and
-// sends the output report alongside the live daemon; the last write
-// wins. The default (no flag) keeps the proven killall + seize path
-// for explicit color sets, which must reliably take the LED.
+// The "shared" 6th arg (always passed by the app now) writes the LED report
+// non-exclusively, alongside the live gamecontrollerd: last write wins. An
+// earlier path killed gamecontrolleragentd and seized the device; that
+// daemon-kill has been removed because the in-process writer plus shared mode
+// cover every live use, and spawning killall on a system daemon from a
+// sandboxed bundle is not acceptable for the App Store. The open below stays
+// non-exclusive in shared mode.
 let shared = CommandLine.arguments.count > 5 && CommandLine.arguments[5] == "shared"
 
 let sonyVID: Int32 = 0x054C
 let dualSensePIDs: Set<Int32> = [0x0CE6, 0x0DF2]
 let ds4PIDs: Set<Int32> = [0x05C4, 0x09CC]
-
-if !shared {
-    // Kill gamecontrolleragentd so it releases the HID device before we
-    // open it. macOS restarts the daemon automatically after we exit.
-    // The seize-mode open below is kept as a belt-and-suspender against
-    // the race where the daemon restarts before we finish writing.
-    let kill = Process()
-    kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-    kill.arguments = ["gamecontrolleragentd"]
-    kill.standardOutput = FileHandle.nullDevice
-    kill.standardError = FileHandle.nullDevice
-    try? kill.run()
-    kill.waitUntilExit()
-    // Pause to let the daemon fully release the HID interface before we
-    // seize it. 1.1 shipped with 0.5s; shorter delays race the daemon's
-    // teardown and the seize intermittently fails.
-    Thread.sleep(forTimeInterval: 0.5)
-}
 
 // MARK: - Find and write to the controller
 
@@ -67,7 +48,7 @@ while entry != 0 {
     defer { IOObjectRelease(entry); entry = IOIteratorNext(iterator) }
 
     guard let pidRef = IORegistryEntryCreateCFProperty(entry, kIOHIDProductIDKey as CFString, kCFAllocatorDefault, 0) else { continue }
-    let devPID = (pidRef.takeUnretainedValue() as! NSNumber).int32Value
+    guard let devPID = (pidRef.takeUnretainedValue() as? NSNumber)?.int32Value else { continue }
     guard dualSensePIDs.contains(devPID) || ds4PIDs.contains(devPID) else { continue }
 
     guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) else { continue }

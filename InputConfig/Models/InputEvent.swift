@@ -88,6 +88,12 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
     case moveY
     case scrollX
     case scrollY
+    /// Force Touch trackpad pressure as a threshold input: fires while the
+    /// press force is past the threshold. Mac trackpads report continuous
+    /// pressure through NSEvent while pressed.
+    case pressure
+    /// Force Click (pressure stage 2): the deliberate deep press.
+    case deepPress
 
     var id: String { rawValue }
 
@@ -98,6 +104,8 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
         case .moveY:   return "Move Y"
         case .scrollX: return "Scroll X"
         case .scrollY: return "Scroll Y"
+        case .pressure: return "Pressure (Force Touch)"
+        case .deepPress: return "Deep Press"
         }
     }
 }
@@ -271,6 +279,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
             case .moveX, .moveY, .scrollX, .scrollY:
                 let dir = axisDirection?.displayName ?? "+"
                 return "Mouse \(kind) \(dir)"
+            case .pressure:
+                return "Trackpad Pressure"
+            case .deepPress:
+                return "Trackpad Deep Press"
             }
         case .cursorRegion:
             // Like `.touchpadRegion`, the human name lives in the

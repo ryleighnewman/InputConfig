@@ -85,8 +85,8 @@ final class HIDLightController: @unchecked Sendable {
         // Confirmed to reach the DualSense LED with no flicker and no
         // controller-input interruption, so we use it for every write -
         // initial sets, preset flashes, and focus-change re-asserts alike.
-        // The helper's legacy killall+seize path stays in place as a
-        // fallback but is no longer invoked from here.
+        // The helper's earlier daemon-kill path has been removed; shared mode
+        // and the in-process writer cover every case.
         task.arguments = [String(red), String(green), String(blue), String(brightness), "shared"]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
@@ -177,6 +177,18 @@ final class InProcessLightWriter: @unchecked Sendable {
     private var holdColor: (r: UInt8, g: UInt8, b: UInt8)?
     private var holdTimer: DispatchSourceTimer?
 
+    /// Reusable output-report buffers, one per controller report layout.
+    /// The hold timer calls writeLocked at 200 Hz; allocating a fresh
+    /// [UInt8] on every tick was 200 array allocations per second per
+    /// connected controller. These are mutated and sent only on `queue`
+    /// (writeLocked is serial), so reuse is race-free. Every write rewrites
+    /// the same byte positions, and the zero padding between fields is never
+    /// touched, so a reused buffer stays byte-identical to a fresh one.
+    private var bufDualSenseUSB = [UInt8](repeating: 0, count: 48)
+    private var bufDualSenseBT = [UInt8](repeating: 0, count: 79)
+    private var bufDS4USB = [UInt8](repeating: 0, count: 32)
+    private var bufDS4BT = [UInt8](repeating: 0, count: 79)
+
     private static let sonyVID: Int32 = 0x054C
     private static let dualSensePIDs: Set<Int32> = [0x0CE6, 0x0DF2]
     private static let ds4PIDs: Set<Int32> = [0x05C4, 0x09CC]
@@ -247,7 +259,12 @@ final class InProcessLightWriter: @unchecked Sendable {
         while entry != 0 {
             defer { IOObjectRelease(entry); entry = IOIteratorNext(iterator) }
             guard let pidRef = IORegistryEntryCreateCFProperty(entry, kIOHIDProductIDKey as CFString, kCFAllocatorDefault, 0) else { continue }
-            let pid = (pidRef.takeUnretainedValue() as! NSNumber).int32Value
+            // Read the ProductID defensively. IORegistry properties are
+            // device-reported, so a forced cast would crash the app if any
+            // Sony-VID device ever reported this as something other than a
+            // number. This mirrors the safe as? handling used for the
+            // transport key just below.
+            guard let pid = (pidRef.takeUnretainedValue() as? NSNumber)?.int32Value else { continue }
             guard Self.dualSensePIDs.contains(pid) || Self.ds4PIDs.contains(pid) else { continue }
             guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) else { continue }
             // Shared (non-exclusive) open: coexists with gamecontrolleragentd.
@@ -269,33 +286,29 @@ final class InProcessLightWriter: @unchecked Sendable {
         for d in devices {
             let isDS = Self.dualSensePIDs.contains(d.pid)
             if isDS && !d.isBT {
-                var data = [UInt8](repeating: 0, count: 48)
-                data[0] = 0x02; data[2] = 0x04; data[39] = 0x06; data[42] = 0x02
-                data[43] = brightness; data[45] = red; data[46] = green; data[47] = blue
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x02, data, data.count)
+                bufDualSenseUSB[0] = 0x02; bufDualSenseUSB[2] = 0x04; bufDualSenseUSB[39] = 0x06; bufDualSenseUSB[42] = 0x02
+                bufDualSenseUSB[43] = brightness; bufDualSenseUSB[45] = red; bufDualSenseUSB[46] = green; bufDualSenseUSB[47] = blue
+                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x02, bufDualSenseUSB, bufDualSenseUSB.count)
             } else if isDS && d.isBT {
-                var data = [UInt8](repeating: 0, count: 79)
-                data[0] = 0x31
+                bufDualSenseBT[0] = 0x31
                 sequenceTag = (sequenceTag &+ 1) & 0x0F
-                data[1] = (sequenceTag << 4) | 0x02
-                data[2] = 0x00; data[3] = 0x04; data[40] = 0x06; data[43] = 0x02
-                data[44] = brightness; data[46] = red; data[47] = green; data[48] = blue
-                let crc = Self.crc32([0xA2, 0x31] + Array(data[1..<75]))
-                data[75] = UInt8(crc & 0xFF); data[76] = UInt8((crc >> 8) & 0xFF)
-                data[77] = UInt8((crc >> 16) & 0xFF); data[78] = UInt8((crc >> 24) & 0xFF)
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x31, data, data.count)
+                bufDualSenseBT[1] = (sequenceTag << 4) | 0x02
+                bufDualSenseBT[2] = 0x00; bufDualSenseBT[3] = 0x04; bufDualSenseBT[40] = 0x06; bufDualSenseBT[43] = 0x02
+                bufDualSenseBT[44] = brightness; bufDualSenseBT[46] = red; bufDualSenseBT[47] = green; bufDualSenseBT[48] = blue
+                let crc = Self.crc32([0xA2, 0x31] + Array(bufDualSenseBT[1..<75]))
+                bufDualSenseBT[75] = UInt8(crc & 0xFF); bufDualSenseBT[76] = UInt8((crc >> 8) & 0xFF)
+                bufDualSenseBT[77] = UInt8((crc >> 16) & 0xFF); bufDualSenseBT[78] = UInt8((crc >> 24) & 0xFF)
+                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x31, bufDualSenseBT, bufDualSenseBT.count)
             } else if Self.ds4PIDs.contains(d.pid) && !d.isBT {
-                var data = [UInt8](repeating: 0, count: 32)
-                data[0] = 0x05; data[1] = 0x07; data[6] = red; data[7] = green; data[8] = blue
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x05, data, data.count)
+                bufDS4USB[0] = 0x05; bufDS4USB[1] = 0x07; bufDS4USB[6] = red; bufDS4USB[7] = green; bufDS4USB[8] = blue
+                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x05, bufDS4USB, bufDS4USB.count)
             } else if Self.ds4PIDs.contains(d.pid) && d.isBT {
-                var data = [UInt8](repeating: 0, count: 79)
-                data[0] = 0x11; data[1] = 0xC0; data[2] = 0x20; data[3] = 0xF3; data[4] = 0x04
-                data[7] = red; data[8] = green; data[9] = blue
-                let crc = Self.crc32([0xA2, 0x11] + Array(data[1..<75]))
-                data[75] = UInt8(crc & 0xFF); data[76] = UInt8((crc >> 8) & 0xFF)
-                data[77] = UInt8((crc >> 16) & 0xFF); data[78] = UInt8((crc >> 24) & 0xFF)
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x11, data, data.count)
+                bufDS4BT[0] = 0x11; bufDS4BT[1] = 0xC0; bufDS4BT[2] = 0x20; bufDS4BT[3] = 0xF3; bufDS4BT[4] = 0x04
+                bufDS4BT[7] = red; bufDS4BT[8] = green; bufDS4BT[9] = blue
+                let crc = Self.crc32([0xA2, 0x11] + Array(bufDS4BT[1..<75]))
+                bufDS4BT[75] = UInt8(crc & 0xFF); bufDS4BT[76] = UInt8((crc >> 8) & 0xFF)
+                bufDS4BT[77] = UInt8((crc >> 16) & 0xFF); bufDS4BT[78] = UInt8((crc >> 24) & 0xFF)
+                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x11, bufDS4BT, bufDS4BT.count)
             }
         }
     }

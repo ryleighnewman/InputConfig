@@ -222,6 +222,26 @@ final class SteamControllerService: @unchecked Sendable {
             pipeOut = outPipe
             pipeIn = inPipe
             helperRunning = true
+            // Detect the helper dying on its own (sandbox kill, crash, or its
+            // own exit on a device-open miss). Without this, helperRunning
+            // stayed true forever and start()'s `guard !helperRunning` blocked
+            // any relaunch until a full release-to-zero then retain cycle.
+            p.terminationHandler = { [weak self] proc in
+                guard let self = self else { return }
+                self.lock.lock()
+                // Only clear state if this is still the current helper, so a
+                // fast restart can't have the old helper's handler clobber a
+                // newer live one.
+                let isCurrent = (self.process === proc)
+                if isCurrent {
+                    self.helperRunning = false
+                    self.process = nil
+                    self.pipeOut = nil
+                    self.pipeIn = nil
+                }
+                self.lock.unlock()
+                if isCurrent { self.markHelperDisconnected() }
+            }
             lock.lock()
             _diagnostics.helperLaunched = true
             _diagnostics.helperPID = p.processIdentifier

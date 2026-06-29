@@ -30,7 +30,10 @@ struct PresetEditorView: View {
     let onSave: (Preset) -> Void
 
     @EnvironmentObject var controllerService: GameControllerService
-    @EnvironmentObject var mappingEngine: MappingEngine
+    // PresetEditorView itself never reads the mapping engine; only the child
+    // JoystickGroupView rows do, and they inherit it from the sheet-level
+    // injection in ContentView. Subscribing here rebuilt the ENTIRE editor body
+    // on every 10-30 Hz engine publish while a preset was active.
     @EnvironmentObject var presetStore: PresetStore
     @Environment(\.dismiss) private var dismiss
 
@@ -135,10 +138,13 @@ struct PresetEditorView: View {
                             onSortBindings: { sortBindings(in: index) },
                             onDuplicate: { duplicateJoystick(at: index) },
                             onRemoveJoystick: { removeJoystick(at: index) },
-                            pulsingBindingID: pulsingBindingID
+                            pulsingBindingID: pulsingBindingID,
+                            // Plain values so the row views stay free of
+                            // store subscriptions; used by the App Action
+                            // output's target-preset picker.
+                            availablePresets: presetStore.presets.map { (id: $0.id, name: $0.name) }
                         )
                         .id(joystick.id)
-                        .environmentObject(mappingEngine)
                     }
 
                     Button {
@@ -435,16 +441,20 @@ struct PresetEditorView: View {
     private func quickZeroGyro() {
         var count = 0
         for controller in controllerService.connectedControllers {
-            guard let motion = controller.motion else { continue }
+            // Only zero controllers that actually report rotation; a controller
+            // that exposes a motion object but no live gyro would otherwise
+            // persist a baseline from undefined values. Gate accel separately.
+            guard let motion = controller.motion, motion.hasRotationRate else { continue }
             let key = MotionCalibrationService.identityKey(for: controller)
+            let hasAccel = motion.hasGravityAndUserAcceleration
             MotionCalibrationService.shared.quickZero(
                 forKey: key,
                 gyroX: Float(motion.rotationRate.x),
                 gyroY: Float(motion.rotationRate.y),
                 gyroZ: Float(motion.rotationRate.z),
-                accelX: Float(motion.userAcceleration.x),
-                accelY: Float(motion.userAcceleration.y),
-                accelZ: Float(motion.userAcceleration.z)
+                accelX: hasAccel ? Float(motion.userAcceleration.x) : 0,
+                accelY: hasAccel ? Float(motion.userAcceleration.y) : 0,
+                accelZ: hasAccel ? Float(motion.userAcceleration.z) : 0
             )
             count += 1
         }
@@ -561,6 +571,11 @@ struct PresetEditorView: View {
         guard !isApplyingHistory else { return }
         if let previous = lastSnapshot, previous != preset {
             undoStack.append(previous)
+            // Bound the history so a long editing session can't grow an
+            // unbounded stack of whole-preset deep copies.
+            if undoStack.count > 100 {
+                undoStack.removeFirst(undoStack.count - 100)
+            }
             redoStack.removeAll()
         }
         lastSnapshot = preset
@@ -612,7 +627,9 @@ struct PresetEditorView: View {
     private func duplicateBinding(at bindingIndex: Int, in joystickIndex: Int) {
         withAnimation {
             let original = preset.joysticks[joystickIndex].bindings[bindingIndex]
-            let clone = BindingModel(input: original.input, outputs: original.outputs)
+            // duplicated() carries every advanced field; the bare
+            // initializer silently dropped turbo, macros, deadzone, etc.
+            let clone = original.duplicated()
             preset.joysticks[joystickIndex].bindings.insert(clone, at: bindingIndex + 1)
         }
     }
@@ -653,9 +670,7 @@ struct PresetEditorView: View {
             var clone = preset.joysticks[index]
             clone = JoystickMapping(
                 tag: clone.tag,
-                bindings: clone.bindings.map { b in
-                    BindingModel(input: b.input, outputs: b.outputs)
-                }
+                bindings: clone.bindings.map { $0.duplicated() }
             )
             preset.joysticks.insert(clone, after: index)
         }

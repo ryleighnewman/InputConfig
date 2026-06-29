@@ -20,6 +20,8 @@ struct SettingsView: View {
     /// AppState reads at launch to decide whether to register the chord.
     @AppStorage(GlobalHotKeyService.enabledDefaultsKey) private var globalHotkeyEnabled = false
 
+    @AppStorage(FrontmostAppWatcher.enabledDefaultsKey) private var autoSwitchEnabled = false
+
     /// Controller poll rate in Hz. Mirrors the `pollHz` UserDefaults key
     /// that `MappingEngine.start(with:)` reads when scheduling its poll
     /// timer. Stored as Int (60/120/180/240). Changes take effect on the
@@ -39,6 +41,9 @@ struct SettingsView: View {
     @ObservedObject private var crashRecovery = CrashRecoveryService.shared
     @ObservedObject private var freezeWatchdog = FreezeWatchdogService.shared
     @ObservedObject private var accessibility = AccessibilityPermissionService.shared
+    /// The live press log, observed here (not via the controller service) so
+    /// its per-press updates re-render only this sheet, never the root window.
+    @ObservedObject private var pressLog = PhysicalPressLogStore.shared
     @State private var showingCursorRegions = false
     @State private var showingStickRegions = false
 
@@ -109,13 +114,14 @@ struct SettingsView: View {
                         Image(systemName: accessibility.isTrusted ? "circle.fill" : "exclamationmark.triangle.fill")
                             .font(accessibility.isTrusted ? .system(size: 9) : .body)
                             .foregroundStyle(accessibility.isTrusted ? .green : .orange)
+                            .accessibilityHidden(true)
                         Text(accessibility.isTrusted ? "Accessibility access granted" : "Accessibility access not granted")
                             .font(.callout.weight(.medium))
                         Spacer()
                     }
                     .onAppear { accessibility.refresh() }
 
-                    Text("InputConfig uses macOS Accessibility to send the keyboard and mouse actions you map to your controller. That is what lets a game controller operate macOS and your apps. It is used only to perform the mappings you set up; it does not read or monitor your keyboard or mouse, and nothing is logged or sent anywhere.")
+                    Text("InputConfig uses macOS Accessibility to send the keyboard and mouse actions you map to your controller. That is what lets a game controller operate macOS and your apps. It is used only to perform the mappings you set up. If you bind your Mac keyboard or mouse as an input source, the app reads those events solely to trigger your mappings; nothing is ever logged or sent anywhere.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -156,12 +162,26 @@ struct SettingsView: View {
                            isOn: $globalHotkeyEnabled)
                         .onChange(of: globalHotkeyEnabled) { _, on in
                             if on {
-                                GlobalHotKeyService.shared.enable()
+                                // Registration can fail when another app owns
+                                // the chord; snap the switch back so Settings
+                                // never shows a hotkey that is not live.
+                                if !GlobalHotKeyService.shared.enable() {
+                                    globalHotkeyEnabled = false
+                                }
                             } else {
                                 GlobalHotKeyService.shared.disable()
                             }
                         }
-                    Text("Press \(GlobalHotKeyService.shared.shortcutDescription) anywhere to turn your most recently used preset on or off, even while another app is in front. Works system-wide and needs no extra permission.")
+                    Text("Press \(GlobalHotKeyService.shared.shortcutDescription) anywhere to turn your most recently used preset on or off, even while another app is in front. Works system-wide and needs no extra permission. If another app already uses this shortcut, the switch turns itself back off.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section(title: "Automatic Preset Switching") {
+                    Toggle("Switch presets when the front app changes",
+                           isOn: $autoSwitchEnabled)
+                    Text("Presets can list apps in their Advanced Options; when one of those apps comes to the front, its preset activates by itself, and your previous preset comes back when you leave. Nothing switches unless a preset opts in.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -525,11 +545,22 @@ struct SettingsView: View {
             return
         }
 
-        // Presets
+        // Presets: match existing presets by UUID and skip any that already
+        // exist locally, mirroring the Groups path below. Without this, a
+        // restore silently overwrote a local preset and its edits whenever the
+        // two shared a UUID (e.g. restoring onto a Mac that already has the
+        // same preset). Skipping preserves the local copy.
         if let presetsArray = envelope["presets"] as? [[String: Any]] {
+            let existingIDs = Set(presetStore.presets.map { $0.id })
             for dict in presetsArray {
                 if let data = try? JSONSerialization.data(withJSONObject: dict),
-                   let preset = try? JSONDecoder().decode(Preset.self, from: data) {
+                   var preset = try? JSONDecoder().decode(Preset.self, from: data) {
+                    if existingIDs.contains(preset.id) { continue }
+                    // Force a safe, app-generated on-disk filename. The decoded
+                    // filename comes from an untrusted backup file and could
+                    // contain path components (e.g. "../../") that savePreset
+                    // would otherwise resolve outside the presets directory.
+                    preset.filename = Preset.generateFilename()
                     presetStore.savePreset(preset)
                 }
             }
@@ -565,7 +596,11 @@ struct SettingsView: View {
             for dict in trashArray {
                 if let data = try? JSONSerialization.data(withJSONObject: dict),
                    let snap = try? JSONDecoder().decode(PresetStore.TrashSnapshot.self, from: data) {
-                    presetStore.restoreTrashFromBackup(preset: snap.preset, deletedAt: snap.deletedAt)
+                    // Untrusted backup: force a safe on-disk filename before it
+                    // reaches the trash directory write (path-traversal guard).
+                    var p = snap.preset
+                    p.filename = Preset.generateFilename()
+                    presetStore.restoreTrashFromBackup(preset: p, deletedAt: snap.deletedAt)
                 }
             }
         }
@@ -603,16 +638,26 @@ struct SettingsView: View {
                     }
                     .padding(.bottom, -4)
 
-                    if controllerService.connectedControllers.isEmpty {
+                    if !hasAnyController {
                         // Compact empty state that sits flush under the
                         // header rather than centering itself in dead space.
                         emptyControllersCard
                     } else {
-                        controllersList
+                        if !controllerService.connectedControllers.isEmpty {
+                            controllersList
+                        }
+                        // Controllers macOS does not expose through the game
+                        // controller framework (e.g. an 8BitDo in a non-MFi
+                        // mode) are read over raw HID and were previously
+                        // invisible here, which made it look like nothing was
+                        // detected. List them too.
+                        if !controllerService.rawHIDGamepadSlots.isEmpty {
+                            rawHIDControllersList
+                        }
                     }
                 }
 
-                if controllerService.connectedControllers.isEmpty {
+                if !hasAnyController {
                     section(title: "How to Connect") {
                         connectionTipsView
                     }
@@ -655,6 +700,50 @@ struct SettingsView: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// True when any controller is present through any path: a GameController
+    /// framework device, the Steam virtual slot, or a raw-HID gamepad. The
+    /// "Connected Controllers" section and the "How to Connect" hint key off
+    /// this so a raw-HID-only controller no longer reads as "none detected".
+    private var hasAnyController: Bool {
+        !controllerService.connectedControllers.isEmpty
+            || !controllerService.rawHIDGamepadSlots.isEmpty
+            || controllerService.steamControllerSlot != nil
+    }
+
+    /// Cards for controllers read directly over raw HID (anything macOS does
+    /// not surface through the GameController framework, such as an 8BitDo in
+    /// a non-MFi mode or a wired Xbox 360 pad). They map exactly like any
+    /// other controller; this list just makes them visible in Settings.
+    private var rawHIDControllersList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(controllerService.rawHIDGamepadSlots.keys.sorted(), id: \.self) { slot in
+                if let gamepad = controllerService.rawHIDGamepadSlots[slot] {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "gamecontroller.fill")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading) {
+                                Text(gamepad.displayName)
+                                    .font(.body)
+                                Text("Slot #\(slot) · detected over raw HID")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        Text("macOS does not expose this controller through its game controller framework, so InputConfig reads it directly over HID. It still works for mapping. If it does not respond inside a preset, try switching it to a mode macOS reads natively - see the Help menu for your model.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.secondary.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
         }
     }
 
@@ -721,10 +810,10 @@ struct SettingsView: View {
                 // exact name Apple's framework reports appears here. Lets
                 // us extend `knownButtonMap` to match whatever Sony's
                 // newest firmware names the button.
-                if !controllerService.recentPhysicalPresses.isEmpty {
+                if !pressLog.recent.isEmpty {
                     GroupBox("Live press log") {
                         VStack(alignment: .leading, spacing: 2) {
-                            ForEach(controllerService.recentPhysicalPresses.prefix(10)) { entry in
+                            ForEach(pressLog.recent.prefix(10)) { entry in
                                 HStack(spacing: 6) {
                                     Image(systemName: "circle.fill")
                                         .font(.system(size: 6))
@@ -841,7 +930,7 @@ struct SettingsView: View {
                     Text("Version \(bundleShortVersion) · Build \(bundleBuildNumber)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Text("Map controllers, keyboards, and mice to keyboard, mouse, MIDI, and more, anywhere on macOS.")
+                    Text("An accessible way to control your Mac, mapping controllers, keyboards, and mice to keyboard, mouse, MIDI, and more, anywhere on macOS.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

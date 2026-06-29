@@ -167,7 +167,8 @@ struct DeadzoneCalibrationView: View {
             }
             .padding(.top, 4)
 
-            if controllerService.connectedControllers.isEmpty {
+            if controllerService.connectedControllers.isEmpty
+                && controllerService.rawHIDGamepadSlots.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)

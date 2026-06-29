@@ -17,6 +17,10 @@ struct JoystickGroupView: View {
     /// nil when no pulse is active.
     var pulsingBindingID: UUID? = nil
 
+    /// Preset list for the App Action target picker, passed as plain values
+    /// so the row views stay store-subscription free.
+    var availablePresets: [(id: UUID, name: String)] = []
+
     @EnvironmentObject var mappingEngine: MappingEngine
     @EnvironmentObject var controllerService: GameControllerService
     @ObservedObject private var rawHIDService = RawHIDGamepadService.shared
@@ -31,11 +35,29 @@ struct JoystickGroupView: View {
             headerView
 
             if joystick.isExpanded {
+                // Compute the per-slot extras snapshot ONCE per render and reuse
+                // it for every row. extraButtonsSnapshot maps + sorts cached data
+                // under a lock, so calling it once per binding row turned the
+                // editor render into an O(rows) hot path (the biggest UI-lag
+                // contributor while a preset with many binds is open).
+                let extras = controllerService.extraButtonsSnapshot(for: joystickIndex)
+                // Rows never display press state, but `pressed` participates
+                // in ExtraButton's Equatable, so passing the live snapshot
+                // re-rendered every picker-heavy row each time any extra
+                // button changed state. Strip it so the rows diff stably;
+                // this was the main scroll-lag source while a controller
+                // was connected.
+                let rowExtras = extras.map {
+                    GameControllerService.ExtraButton(label: $0.label, index: $0.index, pressed: false)
+                }
                 // Use `bindings.indices` instead of `Array(...).enumerated()`
                 // to avoid allocating a new array on every render.
                 LazyVStack(spacing: 2) {
                     ForEach(joystick.bindings.indices, id: \.self) { index in
                         let binding = joystick.bindings[index]
+                        // Serialize the input once and reuse it across the three
+                        // highlight membership checks (was rebuilt 3x per row).
+                        let inputKey = binding.input.serialized
                         BindingRowView(
                             binding: bindingAt(index),
                             onScan: { onScanInput(index) },
@@ -45,16 +67,17 @@ struct JoystickGroupView: View {
                             // engine's preset-aware set, whichever is firing.
                             // This works even with no preset active.
                             isHighlighted:
-                                mappingEngine.activeInputsPublished.contains(binding.input.serialized)
-                                || controllerService.rawActiveInputs.contains(binding.input.serialized)
-                                || externalInput.rawActiveInputs.contains(binding.input.serialized),
+                                mappingEngine.activeInputsPublished.contains(inputKey)
+                                || controllerService.rawActiveInputs.contains(inputKey)
+                                || externalInput.rawActiveInputs.contains(inputKey),
                             displayNumber: index + 1,
                             isPulsing: pulsingBindingID == binding.id,
                             // Named extras (paddles/FN/mute/Home) for the
                             // slot's connected controller, passed by value so
                             // BindingRowView doesn't need to subscribe to
                             // the service itself.
-                            extraButtons: controllerService.extraButtonsSnapshot(for: joystickIndex)
+                            extraButtons: rowExtras,
+                            availablePresets: availablePresets
                         )
                         .id(binding.id)
                     }

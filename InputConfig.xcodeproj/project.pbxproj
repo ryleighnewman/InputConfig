@@ -39,7 +39,6 @@
 		FB1001000ATESTBENCHSVC0001 /* TestBenchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */; };
 		FB1001000BTESTBENCHVIEW001 /* TestBenchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */; };
 		FB1001000CTHROTTLED000001 /* ThrottledSlider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000CTHROTTLED000001 /* ThrottledSlider.swift */; };
-		FB1001000DMENUBARVIEW00001 /* MenuBarContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */; };
 		FB1001000ELOGINITEM0000001 /* LoginItemService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001000ELOGINITEM0000001 /* LoginItemService.swift */; };
 		FB10010100CRASHRECOVERY00 /* CrashRecoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */; };
 		FB10010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */; };
@@ -162,7 +161,6 @@
 		FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBenchService.swift; sourceTree = "<group>"; };
 		FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestBenchView.swift; sourceTree = "<group>"; };
 		FB2001000CTHROTTLED000001 /* ThrottledSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThrottledSlider.swift; sourceTree = "<group>"; };
-		FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
 		FB2001000ELOGINITEM0000001 /* LoginItemService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemService.swift; sourceTree = "<group>"; };
 		D9AFC638DF7D9B649E63CD4D /* KeyCodeMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCodeMap.swift; sourceTree = "<group>"; };
 		F1008D4FE7819632F4C378FD /* HIDLightController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDLightController.swift; sourceTree = "<group>"; };
@@ -325,7 +323,6 @@
 				FB20010015STATSVIEW000001 /* StatsView.swift */,
 				FB2001001EIMPORTREVIEW001 /* ImportReviewSheet.swift */,
 				FB20010003HELPVIEW0000001 /* HelpGuideView.swift */,
-				FB2001000DMENUBARVIEW00001 /* MenuBarContentView.swift */,
 				F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */,
 				726EEF6CFAA7F842D5D0B903 /* SettingsView.swift */,
 				FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */,
@@ -446,7 +443,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Sign embedded helpers with their own sandbox entitlements.\n# The Copy Helpers phase brings in pre-built helper binaries that Xcode\n# signs without entitlements by default, which fails App Store validation\n# (\"App sandbox not enabled\"). This phase re-signs each helper with its\n# entitlements file. Xcode's implicit outer-bundle sign that runs after\n# this phase preserves these nested signatures.\n\nset -e\n\nAPP=\"${CODESIGNING_FOLDER_PATH}\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n\nif [ -z \"$IDENTITY\" ] || [ \"$IDENTITY\" = \"-\" ]; then\n  echo \"warning: No code signing identity, skipping helper signing.\"\n  exit 0\nfi\n\nsign_helper() {\n  local name=\"$1\"\n  local ents=\"$2\"\n  local target=\"$APP/Contents/MacOS/$name\"\n  if [ ! -f \"$target\" ]; then\n    echo \"warning: $name not found at $target\"\n    return\n  fi\n  if [ ! -f \"$ents\" ]; then\n    echo \"error: entitlements file not found: $ents\"\n    exit 1\n  fi\n  xattr -cr \"$target\" || true\n  /usr/bin/codesign --force --options runtime \\\n    --sign \"$IDENTITY\" \\\n    --entitlements \"$ents\" \\\n    \"$target\"\n  echo \"Signed $name with entitlements\"\n}\n\nsign_helper SteamControllerHelper \"${SRCROOT}/SteamControllerHelper/SteamControllerHelper.entitlements\"\nsign_helper TouchpadHelper \"${SRCROOT}/TouchpadHelper/TouchpadHelper.entitlements\"\n";
+			shellScript = "# Sign embedded helpers with their own sandbox entitlements.\n# The Copy Helpers phase brings in pre-built helper binaries that Xcode\n# signs without entitlements by default, which fails App Store validation\n# (\"App sandbox not enabled\"). This phase re-signs each helper with its\n# entitlements file. Xcode's implicit outer-bundle sign that runs after\n# this phase preserves these nested signatures.\n\nset -e\n\nAPP=\"${CODESIGNING_FOLDER_PATH}\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n\nif [ -z \"$IDENTITY\" ] || [ \"$IDENTITY\" = \"-\" ]; then\n  echo \"warning: No code signing identity, skipping helper signing.\"\n  exit 0\nfi\n\nsign_helper() {\n  local name=\"$1\"\n  local ents=\"$2\"\n  local target=\"$APP/Contents/MacOS/$name\"\n  if [ ! -f \"$target\" ]; then\n    echo \"warning: $name not found at $target\"\n    return\n  fi\n  if [ ! -f \"$ents\" ]; then\n    echo \"error: entitlements file not found: $ents\"\n    exit 1\n  fi\n  xattr -cr \"$target\" || true\n  /usr/bin/codesign --force --options runtime \\\n    --sign \"$IDENTITY\" \\\n    --entitlements \"$ents\" \\\n    \"$target\"\n  echo \"Signed $name with entitlements\"\n}\n\nsign_helper SteamControllerHelper \"${SRCROOT}/SteamControllerHelper/SteamControllerHelper.entitlements\"\nsign_helper TouchpadHelper \"${SRCROOT}/TouchpadHelper/TouchpadHelper.entitlements\"\nsign_helper LightHelper \"${SRCROOT}/LightHelper/LightHelper.entitlements\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -514,7 +511,6 @@
 				FB1001000ATESTBENCHSVC0001 /* TestBenchService.swift in Sources */,
 				FB1001000BTESTBENCHVIEW001 /* TestBenchView.swift in Sources */,
 				FB1001000CTHROTTLED000001 /* ThrottledSlider.swift in Sources */,
-				FB1001000DMENUBARVIEW00001 /* MenuBarContentView.swift in Sources */,
 				FB1001000ELOGINITEM0000001 /* LoginItemService.swift in Sources */,
 				FB10010006TIPJARSVC0000001 /* TipJarService.swift in Sources */,
 				FB10010007TIPJARVIEW000001 /* TipJarView.swift in Sources */,
@@ -538,7 +534,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -628,7 +624,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -637,6 +633,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				ENABLE_HARDENED_RUNTIME = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;

@@ -136,13 +136,22 @@ final class TipJarService: ObservableObject {
     /// surface the Manage Subscription button.
     private func refreshActiveSubscription() async {
         var found: Product?
+        var entitledID: String?
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result else { continue }
             guard transaction.productType == .autoRenewable else { continue }
+            entitledID = transaction.productID
             if let match = subscriptionProducts.first(where: { $0.id == transaction.productID }) {
                 found = match
                 break
             }
+        }
+        // If a verified subscription entitlement exists but the product list
+        // hasn't loaded yet (e.g. the renewal listener fired before
+        // loadProducts ran), lazily fetch just that product instead of clearing
+        // the active subscription, which would briefly hide the user's plan.
+        if found == nil, let entitledID = entitledID {
+            found = try? await Product.products(for: [entitledID]).first
         }
         activeSubscription = found
     }
@@ -158,8 +167,15 @@ final class TipJarService: ObservableObject {
                 guard let self = self else { return }
                 if case .verified(let transaction) = result {
                     await transaction.finish()
-                    await MainActor.run {
-                        self.incrementTipCount()
+                    // Do NOT count subscription auto-renewals as new tips: they
+                    // arrive here every billing period and would inflate the
+                    // lifetime count. The initial subscription purchase is
+                    // counted in purchase(); only out-of-band one-time
+                    // (consumable) tips need crediting from the listener.
+                    if transaction.productType != .autoRenewable {
+                        await MainActor.run {
+                            self.incrementTipCount()
+                        }
                     }
                     await self.refreshActiveSubscription()
                 }

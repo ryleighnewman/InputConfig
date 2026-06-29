@@ -57,6 +57,46 @@ struct ControllerState {
     /// Joy-Con). nil otherwise. Channel-keyed Float so MappingEngine can
     /// treat them like axis values.
     var motion: [MotionChannel: Float] = [:]
+
+    /// Pre-size the backing dictionaries so the per-frame population in the
+    /// 120 Hz poll loop (and the 30 Hz raw-input refresh) does not repeatedly
+    /// rehash as it inserts. A controller reports up to ~21 buttons and 6
+    /// axes; reserving once per fresh state removes that steady-state growth
+    /// churn on the main actor without changing any read logic or output.
+    init() {
+        buttons.reserveCapacity(24)
+        axes.reserveCapacity(8)
+        hats.reserveCapacity(4)
+        motion.reserveCapacity(8)
+    }
+}
+
+/// One observed press from a physical input profile button.
+struct PhysicalPressLog: Identifiable {
+    let id = UUID()
+    let slot: Int
+    let name: String
+    let mappedIndex: Int?
+    let at: Date
+}
+
+/// Diagnostic log of recent physical button presses, shown only in the
+/// Settings "Live press log". Kept OUT of GameControllerService so its
+/// high-frequency, per-press updates don't invalidate the root ContentView,
+/// which observes the controller service.
+@MainActor
+final class PhysicalPressLogStore: ObservableObject {
+    static let shared = PhysicalPressLogStore()
+    private init() {}
+
+    @Published var recent: [PhysicalPressLog] = []
+
+    func log(slot: Int, name: String, mappedIndex: Int?) {
+        recent.insert(PhysicalPressLog(slot: slot, name: name, mappedIndex: mappedIndex, at: Date()), at: 0)
+        if recent.count > 30 {
+            recent.removeLast(recent.count - 30)
+        }
+    }
 }
 
 /// Manages game controller detection and input reading
@@ -166,16 +206,11 @@ class GameControllerService: ObservableObject {
     /// so the user can see whether a press registers and under what name -
     /// useful when a controller's button (e.g. DualSense Edge paddle) has
     /// a name our mapping table doesn't recognize. Capped at 30 entries.
-    @Published var recentPhysicalPresses: [PhysicalPressLog] = []
-
-    /// One observed press from a physical input profile button.
-    struct PhysicalPressLog: Identifiable {
-        let id = UUID()
-        let slot: Int
-        let name: String
-        let mappedIndex: Int?
-        let at: Date
-    }
+    // The live physical-press diagnostic log lives in PhysicalPressLogStore
+    // (defined just above this class), NOT here. It updates on every button
+    // press, and on this @Published-heavy service that invalidated the root
+    // ContentView (which observes the service) on every press. Only the
+    // Settings "Live press log" observes the store now.
 
     /// Cached mapping of physical profile button name -> button index for each controller slot.
     /// Built once on connection, used every poll frame to avoid re-sorting/re-matching at 120Hz.
@@ -501,6 +536,11 @@ class GameControllerService: ObservableObject {
         controllerNames.removeAll()
         controllerDetails.removeAll()
         cachedExtraButtons.removeAll()
+        dualSenseSlots.removeAll()
+        // Drop press-logger bookkeeping for controllers that are gone, so the
+        // wired set cannot grow across plug / unplug cycles.
+        let liveControllerIDs = Set(connectedControllers.map(ObjectIdentifier.init))
+        pressLoggerWired.formIntersection(liveControllerIDs)
         lightColors.removeAll()
         lightBrightness.removeAll()
         rgbCycleActive.removeAll()
@@ -539,6 +579,15 @@ class GameControllerService: ObservableObject {
                 }
             }
         }
+        // Re-base the Steam and raw-HID virtual slots onto the new MFi slot
+        // count and re-publish their metadata on this same main-actor turn.
+        // refreshControllers just wiped controllerNames/controllerDetails and
+        // only repopulated the MFi slots, and the base index (derived from
+        // connectedControllers.count) has just shifted, so without this the
+        // virtual slots would overlap or lose their metadata until the next
+        // 0.5s sync tick.
+        syncSteamControllerSlot()
+        syncRawHIDGamepadSlots()
         // Re-enumerate the in-process LED writer so it picks up the new
         // controller set (handles hot-plug/unplug).
         InProcessLightWriter.shared.open()
@@ -612,6 +661,13 @@ class GameControllerService: ObservableObject {
     /// Pre-compute the mapping of extra physical profile buttons for a controller.
     /// This runs once on connection so readControllerState doesn't rebuild it every frame.
     private func cacheExtraButtons(for controller: GCController, at index: Int) {
+        // Cache the DualSense check here, once per connection. It is a
+        // connection-lifetime constant, and recomputing it per poll frame
+        // cost two String.lowercased() allocations per slot.
+        let nameBlob = ((controller.vendorName ?? "") + " " + controller.productCategory).lowercased()
+        if nameBlob.contains("dualsense") {
+            dualSenseSlots.insert(index)
+        }
         guard let gamepad = controller.extendedGamepad else {
             cachedExtraButtons[index] = []
             return
@@ -1391,13 +1447,18 @@ class GameControllerService: ObservableObject {
         if let steamIndex = steamControllerSlot, index == steamIndex {
             return SteamControllerService.shared.makeControllerState()
         }
-        // Raw HID gamepads sit past Steam in the slot range. We pull
-        // their state via the lock-protected snapshot the HID report
-        // callback wrote on the background queue.
-        if let gamepad = rawHIDGamepadSlots[index] {
-            return gamepad.state
+        // A real MFi controller at this slot always takes precedence over a
+        // raw-HID entry at the same index, so a hot-plugged MFi controller can
+        // never be shadowed by a raw-HID pad that was assigned a low slot while
+        // no MFi controller was present. Slots at or past the MFi count belong
+        // to Steam (handled above) or to raw-HID gamepads, whose state comes
+        // from the lock-protected snapshot the HID report callback wrote.
+        guard index < connectedControllers.count else {
+            if let gamepad = rawHIDGamepadSlots[index] {
+                return gamepad.state
+            }
+            return nil
         }
-        guard index < connectedControllers.count else { return nil }
         let controller = connectedControllers[index]
 
         var state = ControllerState()
@@ -1436,9 +1497,7 @@ class GameControllerService: ObservableObject {
             // light up the same way native MFi buttons do. Skipped
             // for non-DualSense slots (the dictionary is empty for
             // those, so the loop is a no-op).
-            let isDualSenseSlot = (controller.vendorName ?? "").lowercased().contains("dualsense")
-                || (controller.productCategory.lowercased().contains("dualsense"))
-            if isDualSenseSlot {
+            if dualSenseSlots.contains(index) {
                 let supplement = DualSenseSupplementService.shared.anySupplementalButtons()
                 for (btnIndex, value) in supplement where value > 0.5 {
                     state.buttons[btnIndex] = value
@@ -1464,14 +1523,20 @@ class GameControllerService: ObservableObject {
             // reads exactly 0 on every motion channel.
             if let motion = controller.motion {
                 let key = MotionCalibrationService.identityKey(for: controller)
-                let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(
-                    x: Float(motion.userAcceleration.x),
-                    y: Float(motion.userAcceleration.y),
-                    z: Float(motion.userAcceleration.z),
-                    forKey: key)
-                state.motion[.accelX] = ax
-                state.motion[.accelY] = ay
-                state.motion[.accelZ] = az
+                // Guard the accel read like the gyro block below: a controller
+                // that exposes motion but not gravity/user-acceleration returns
+                // undefined values here, which would feed NaN/garbage into the
+                // calibration and motion bindings.
+                if motion.hasGravityAndUserAcceleration {
+                    let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(
+                        x: Float(motion.userAcceleration.x),
+                        y: Float(motion.userAcceleration.y),
+                        z: Float(motion.userAcceleration.z),
+                        forKey: key)
+                    state.motion[.accelX] = ax
+                    state.motion[.accelY] = ay
+                    state.motion[.accelZ] = az
+                }
                 if motion.hasRotationRate {
                     let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
                         x: Float(motion.rotationRate.x),
@@ -1517,6 +1582,17 @@ class GameControllerService: ObservableObject {
 
     // MARK: - Helpers
 
+    /// Slots whose controller is a DualSense / DualSense Edge, computed once
+    /// per connection in `cacheExtraButtons`. Read every poll frame by
+    /// `readControllerState` for the supplement merge.
+    private var dualSenseSlots: Set<Int> = []
+
+    /// Controllers whose press logger is already installed. Without this,
+    /// every `refreshControllers()` (one per hotplug event) re-wrapped each
+    /// button's handler in one more pass-through closure, growing the handler
+    /// chain without bound.
+    private var pressLoggerWired: Set<ObjectIdentifier> = []
+
     // MARK: - Physical press diagnostic log
 
     /// Install a pass-through press logger on every button in the
@@ -1525,6 +1601,14 @@ class GameControllerService: ObservableObject {
     /// Apple's framework reports for the button they just pressed. The
     /// Settings > Controllers diagnostic surfaces this list.
     private func installPhysicalPressLogger(for controller: GCController, slot: Int) {
+        // Idempotent: refreshControllers runs on every hotplug, and wiring a
+        // second time would re-wrap each prior handler in another pass-through
+        // closure, growing the chain (and per-press cost) without bound. The
+        // closure resolves the slot at fire time so the log stays correct when
+        // slots reshuffle after another controller disconnects.
+        let identity = ObjectIdentifier(controller)
+        guard !pressLoggerWired.contains(identity) else { return }
+        pressLoggerWired.insert(identity)
         let profile = controller.physicalInputProfile
         for (name, button) in profile.buttons {
             // Skip the composite "Direction Pad", thumbsticks, etc.
@@ -1534,10 +1618,14 @@ class GameControllerService: ObservableObject {
             let prior = button.pressedChangedHandler
             let mappedIndex = Self.knownButtonMap[name]
                 ?? (cachedExtraButtons[slot]?.first(where: { ObjectIdentifier($0.0) == ObjectIdentifier(button) })?.1)
-            button.pressedChangedHandler = { [weak self] btn, value, pressed in
+            button.pressedChangedHandler = { [weak self, weak controller] btn, value, pressed in
                 if pressed {
                     Task { @MainActor in
-                        self?.logPhysicalPress(name: name, slot: slot, mappedIndex: mappedIndex)
+                        guard let self else { return }
+                        let liveSlot = controller.flatMap { c in
+                            self.connectedControllers.firstIndex(where: { $0 === c })
+                        } ?? slot
+                        self.logPhysicalPress(name: name, slot: liveSlot, mappedIndex: mappedIndex)
                     }
                 }
                 prior?(btn, value, pressed)
@@ -1546,11 +1634,7 @@ class GameControllerService: ObservableObject {
     }
 
     private func logPhysicalPress(name: String, slot: Int, mappedIndex: Int?) {
-        let entry = PhysicalPressLog(slot: slot, name: name, mappedIndex: mappedIndex, at: Date())
-        recentPhysicalPresses.insert(entry, at: 0)
-        if recentPhysicalPresses.count > 30 {
-            recentPhysicalPresses.removeLast(recentPhysicalPresses.count - 30)
-        }
+        PhysicalPressLogStore.shared.log(slot: slot, name: name, mappedIndex: mappedIndex)
     }
 
     // MARK: - Raw active inputs (drives editor highlight without a running preset)
@@ -1586,6 +1670,24 @@ class GameControllerService: ObservableObject {
     /// the editor uses to match binding rows. Each detected input gets a
     /// 200 ms expiry so quick taps remain visible.
     private func refreshRawActiveInputs() {
+        // Fast path: when no input source is connected and there is no
+        // lingering highlight state or visualizer snapshot left to clear,
+        // there is nothing to read or update. Skipping the whole body means
+        // the 30 Hz timer costs effectively nothing on the welcome screen or
+        // any time every controller is unplugged. The guard is conservative:
+        // it only returns when a scan is not running and every piece of
+        // derived state is already empty, so no stale highlight or snapshot
+        // can be left behind.
+        if connectedControllers.isEmpty,
+           steamControllerSlot == nil,
+           rawHIDGamepadSlots.isEmpty,
+           !isScanning,
+           rawActiveExpiry.isEmpty,
+           rawActiveInputs.isEmpty,
+           currentStates.isEmpty {
+            return
+        }
+
         // Reuse mutable scratch containers across ticks. Previously this
         // method allocated fresh Set<String> and [Int: ControllerState]
         // every 30 Hz frame, generating ~60 collection allocations per
@@ -1782,30 +1884,61 @@ class GameControllerService: ObservableObject {
         )
     }
 
+    // Memoized serialized input keys. accumulate() runs at 30 Hz for each
+    // currently-active input; without these caches it rebuilt an InputEvent and
+    // an interpolated String every tick. The key for a given (kind, index,
+    // direction) never changes, so cache it on first use. Touched only on the
+    // main actor (this is a @MainActor class), so plain dictionaries are safe.
+    private var btnKeyCache: [Int: String] = [:]
+    private var axisPosKeyCache: [Int: String] = [:]
+    private var axisNegKeyCache: [Int: String] = [:]
+    private var hatKeyCache: [Int: (u: String, d: String, l: String, r: String)] = [:]
+
+    private func btnKey(_ i: Int) -> String {
+        if let k = btnKeyCache[i] { return k }
+        let k = InputEvent.button(i).serialized
+        btnKeyCache[i] = k
+        return k
+    }
+    private func axisKey(_ i: Int, positive: Bool) -> String {
+        if positive {
+            if let k = axisPosKeyCache[i] { return k }
+            let k = InputEvent.axis(i, direction: .positive).serialized
+            axisPosKeyCache[i] = k
+            return k
+        }
+        if let k = axisNegKeyCache[i] { return k }
+        let k = InputEvent.axis(i, direction: .negative).serialized
+        axisNegKeyCache[i] = k
+        return k
+    }
+    private func hatKeys(_ i: Int) -> (u: String, d: String, l: String, r: String) {
+        if let k = hatKeyCache[i] { return k }
+        let k = (InputEvent.hat(i, direction: .up).serialized,
+                 InputEvent.hat(i, direction: .down).serialized,
+                 InputEvent.hat(i, direction: .left).serialized,
+                 InputEvent.hat(i, direction: .right).serialized)
+        hatKeyCache[i] = k
+        return k
+    }
+
     private func accumulate(into set: inout Set<String>, state: ControllerState) {
         for (index, value) in state.buttons where value > 0.5 {
-            set.insert(InputEvent.button(index).serialized)
+            set.insert(btnKey(index))
         }
         for (index, value) in state.axes {
             if value > rawActiveAxisThreshold {
-                set.insert(InputEvent.axis(index, direction: .positive).serialized)
+                set.insert(axisKey(index, positive: true))
             } else if value < -rawActiveAxisThreshold {
-                set.insert(InputEvent.axis(index, direction: .negative).serialized)
+                set.insert(axisKey(index, positive: false))
             }
         }
         for (index, hat) in state.hats {
-            if hat.y > rawActiveHatThreshold {
-                set.insert(InputEvent.hat(index, direction: .up).serialized)
-            }
-            if hat.y < -rawActiveHatThreshold {
-                set.insert(InputEvent.hat(index, direction: .down).serialized)
-            }
-            if hat.x < -rawActiveHatThreshold {
-                set.insert(InputEvent.hat(index, direction: .left).serialized)
-            }
-            if hat.x > rawActiveHatThreshold {
-                set.insert(InputEvent.hat(index, direction: .right).serialized)
-            }
+            let keys = hatKeys(index)
+            if hat.y > rawActiveHatThreshold { set.insert(keys.u) }
+            if hat.y < -rawActiveHatThreshold { set.insert(keys.d) }
+            if hat.x < -rawActiveHatThreshold { set.insert(keys.l) }
+            if hat.x > rawActiveHatThreshold { set.insert(keys.r) }
         }
     }
 
@@ -1892,18 +2025,26 @@ class GameControllerService: ObservableObject {
         var desired: [Int: RawHIDGamepad] = [:]
         let previouslyMappedIDs = Set(rawHIDGamepadSlots.values.map { $0.id })
 
-        // First pass: preserve existing slot for gamepads still here.
+        // First pass: preserve an existing slot only when it is still valid,
+        // i.e. at or above the current base index. A slot assigned while no
+        // MFi controller was present can fall below baseIndex once one
+        // connects; keeping it there would let the raw-HID pad shadow the real
+        // MFi controller, so such pads fall through to the second pass and get
+        // re-based onto a free slot above the MFi range.
         var nextSlot = baseIndex
         var reservedSlots: Set<Int> = []
         for gamepad in attached where previouslyMappedIDs.contains(gamepad.id) {
-            if let (oldSlot, _) = rawHIDGamepadSlots.first(where: { $0.value.id == gamepad.id }) {
+            if let (oldSlot, _) = rawHIDGamepadSlots.first(where: { $0.value.id == gamepad.id }),
+               oldSlot >= baseIndex {
                 desired[oldSlot] = gamepad
                 reservedSlots.insert(oldSlot)
             }
         }
 
-        // Second pass: assign new gamepads to the lowest available slot.
-        for gamepad in attached where !previouslyMappedIDs.contains(gamepad.id) {
+        // Second pass: assign every gamepad not yet placed (newcomers and any
+        // re-based from a now-invalid low slot) to the lowest free slot at or
+        // above baseIndex.
+        for gamepad in attached where !desired.values.contains(where: { $0.id == gamepad.id }) {
             while reservedSlots.contains(nextSlot) { nextSlot += 1 }
             desired[nextSlot] = gamepad
             reservedSlots.insert(nextSlot)
@@ -1920,33 +2061,38 @@ class GameControllerService: ObservableObject {
                 controllerDetails.removeValue(forKey: slot)
                 controllerNames.removeValue(forKey: slot)
             }
-
             rawHIDGamepadSlots = desired
+        }
 
-            // Publish controller info for each active slot so the rest
-            // of the app sees these gamepads like any other controller.
-            for (slot, gamepad) in desired {
-                let names = gamepad.profile?.physicalButtonNames
-                    ?? ControllerProfileDatabase.xinputButtonNames
-                controllerNames[slot] = gamepad.displayName
-                controllerDetails[slot] = ControllerInfo(
-                    name: gamepad.displayName,
-                    productCategory: "Raw HID",
-                    hasExtendedGamepad: true,
-                    hasLight: false,
-                    hasBattery: false,
-                    batteryLevel: nil,
-                    batteryState: nil,
-                    buttonCount: names.count,
-                    axisCount: 6,
-                    supportsMotion: false,
-                    hasTouchpad: false,
-                    hasMicroGamepad: false,
-                    hasAdaptiveTriggers: false,
-                    physicalButtonNames: names,
-                    brand: .unknown
-                )
-            }
+        // Publish controller info for each active slot so the rest of the app
+        // sees these gamepads like any other controller. This also runs when
+        // the slot map did NOT change but the metadata is missing, because
+        // refreshControllers wipes controllerNames/controllerDetails on every
+        // MFi hot-plug and only repopulates the MFi slots; republishing here
+        // keeps an unrelated MFi change from stranding the raw-HID slots without
+        // metadata. The per-slot guard skips the writes in steady state (already
+        // published, unchanged) so there is no spurious @Published churn.
+        for (slot, gamepad) in rawHIDGamepadSlots where changed || controllerDetails[slot] == nil {
+            let names = gamepad.profile?.physicalButtonNames
+                ?? ControllerProfileDatabase.xinputButtonNames
+            controllerNames[slot] = gamepad.displayName
+            controllerDetails[slot] = ControllerInfo(
+                name: gamepad.displayName,
+                productCategory: "Raw HID",
+                hasExtendedGamepad: true,
+                hasLight: false,
+                hasBattery: false,
+                batteryLevel: nil,
+                batteryState: nil,
+                buttonCount: names.count,
+                axisCount: 6,
+                supportsMotion: false,
+                hasTouchpad: false,
+                hasMicroGamepad: false,
+                hasAdaptiveTriggers: false,
+                physicalButtonNames: names,
+                brand: .unknown
+            )
         }
     }
 

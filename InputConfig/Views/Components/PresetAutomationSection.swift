@@ -17,12 +17,17 @@ struct PresetAutomationSection: View {
     @SwiftUI.Binding var automation: PresetAutomation
     @State private var expanded: Bool = false
     @State private var showingAppPicker: Bool = false
+    @State private var showingAutoSwitchAppPicker: Bool = false
+    @AppStorage(FrontmostAppWatcher.enabledDefaultsKey)
+    private var autoSwitchGloballyEnabled: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 14) {
                     autoLaunchBlock
+                    Divider()
+                    autoSwitchBlock
                     Divider()
                     cursorBlock
                 }
@@ -62,6 +67,9 @@ struct PresetAutomationSection: View {
             let path = automation.launchAppPath
             let last = (path as NSString).lastPathComponent
             parts.append("launches \(last.isEmpty ? path : last)")
+        }
+        if let apps = automation.autoActivateBundleIDs, !apps.isEmpty {
+            parts.append("auto for \(apps.count) \(apps.count == 1 ? "app" : "apps")")
         }
         if automation.confineCursor { parts.append("confine cursor") }
         if automation.autoRecenterCursor { parts.append("auto-recenter") }
@@ -121,6 +129,90 @@ struct PresetAutomationSection: View {
                 automation.launchAppPath = url.path
             }
         }
+    }
+
+    // MARK: - Auto switch by frontmost app
+
+    @ViewBuilder
+    private var autoSwitchBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.left.arrow.right.square")
+                    .foregroundStyle(.secondary)
+                Text("Activate when these apps are in front")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    showingAutoSwitchAppPicker = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .help("Add an application")
+            }
+
+            let apps = automation.autoActivateBundleIDs ?? []
+            if apps.isEmpty {
+                Text("Empty. Add an app and this preset activates by itself whenever that app comes to the front, then steps aside when you leave.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(apps, id: \.self) { bundleID in
+                    HStack(spacing: 6) {
+                        Image(systemName: "app.badge.checkmark")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        Text(displayName(forBundleID: bundleID))
+                            .font(.caption)
+                        Text(bundleID)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            var list = automation.autoActivateBundleIDs ?? []
+                            list.removeAll { $0 == bundleID }
+                            automation.autoActivateBundleIDs = list.isEmpty ? nil : list
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove")
+                    }
+                }
+            }
+
+            if !autoSwitchGloballyEnabled {
+                Toggle(isOn: $autoSwitchGloballyEnabled) {
+                    Text("Automatic switching is off globally. Turn it on for these lists to take effect.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .controlSize(.small)
+            }
+        }
+        .fileImporter(isPresented: $showingAutoSwitchAppPicker,
+                      allowedContentTypes: [UTType.application],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first,
+               let bundleID = Bundle(url: url)?.bundleIdentifier {
+                var list = automation.autoActivateBundleIDs ?? []
+                if !list.contains(bundleID) {
+                    list.append(bundleID)
+                    automation.autoActivateBundleIDs = list
+                }
+            }
+        }
+    }
+
+    private func displayName(forBundleID bundleID: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return FileManager.default.displayName(atPath: url.path)
+        }
+        return bundleID
     }
 
     // MARK: - Cursor controls

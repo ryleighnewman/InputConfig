@@ -325,11 +325,16 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// attached DualSenses. Acceptable when there's only one (the
     /// common case).
     func anySupplementalButtons() -> [Int: Float] {
+        // Build the union directly under the lock instead of first copying the
+        // entire per-device dictionary. This is called for every DualSense slot
+        // on every poll frame (120 Hz engine + 30 Hz UI), so the extra
+        // whole-dictionary copy was pure per-frame allocation churn. The state
+        // is tiny (a couple of entries per device) so holding the lock for the
+        // merge is negligible.
         lock.lock()
-        let snapshot = supplementalState
-        lock.unlock()
+        defer { lock.unlock() }
         var merged: [Int: Float] = [:]
-        for (_, buttons) in snapshot {
+        for (_, buttons) in supplementalState {
             for (idx, val) in buttons where val > 0.5 {
                 merged[idx] = val
             }

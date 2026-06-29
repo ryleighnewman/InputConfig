@@ -103,16 +103,23 @@ final class StickRegionService: ObservableObject {
     ///   stick 0 reads axes[0] (X) and axes[1] (Y)
     ///   stick 1 reads axes[2] (X) and axes[3] (Y)
     func isRegionPressed(_ id: UUID, axes: [Int: Float]) -> Bool {
-        guard let (region, stickIndex) = self.region(with: id) else { return false }
-        guard region.maxX > region.minX && region.maxY > region.minY else { return false }
+        guard let (_, stickIndex) = self.region(with: id) else { return false }
         let xAxis = stickIndex == 1 ? 2 : 0
         let yAxis = stickIndex == 1 ? 3 : 1
-        let rawX = axes[xAxis] ?? 0
-        let rawY = axes[yAxis] ?? 0
+        return isRegionPressed(id, x: axes[xAxis] ?? 0, y: axes[yAxis] ?? 0)
+    }
+
+    /// Same hit test, taking the two already-corrected stick values directly.
+    /// The MappingEngine calls this per poll frame; the dictionary overload
+    /// above forced it to clone the slot's whole axes dict just to override
+    /// the two entries for deadzone / invert correction.
+    func isRegionPressed(_ id: UUID, x: Float, y: Float) -> Bool {
+        guard let (region, _) = self.region(with: id) else { return false }
+        guard region.maxX > region.minX && region.maxY > region.minY else { return false }
         // Map from stick coords (-1...1) to region coords (0...1).
         // Y stays in the same convention as touchpad regions: 0 = top.
-        let normX = (Double(rawX) + 1.0) / 2.0
-        let normY = (Double(rawY) + 1.0) / 2.0
+        let normX = (Double(x) + 1.0) / 2.0
+        let normY = (Double(y) + 1.0) / 2.0
         return normX >= region.minX && normX <= region.maxX
             && normY >= region.minY && normY <= region.maxY
     }

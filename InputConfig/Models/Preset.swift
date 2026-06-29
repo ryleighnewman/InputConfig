@@ -51,18 +51,39 @@ enum SensitivityCurve: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How a macro step treats its action: a full press-and-release tap (the
+/// default), a press that stays held while later steps run, or the release
+/// of an earlier held step. Hold and release kinds let one macro produce
+/// chords like Cmd+C: Cmd hold down, C tap, Cmd release.
+enum MacroStepKind: String, Codable, CaseIterable, Identifiable {
+    case tap
+    case down
+    case up
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .tap: return "Tap"
+        case .down: return "Hold down"
+        case .up: return "Release"
+        }
+    }
+}
+
 /// A single step in a macro sequence
 struct MacroStep: Identifiable, Codable, Hashable {
     let id: UUID
     var action: OutputAction      // What to do
     var delayMs: Int              // Delay BEFORE this step in milliseconds
     var holdMs: Int               // How long to hold (for press actions)
+    var eventKind: MacroStepKind? // nil decodes as .tap, so old presets are unchanged
 
-    init(action: OutputAction, delayMs: Int = 50, holdMs: Int = 50) {
+    init(action: OutputAction, delayMs: Int = 50, holdMs: Int = 50,
+         eventKind: MacroStepKind? = nil) {
         self.id = UUID()
         self.action = action
         self.delayMs = delayMs
         self.holdMs = holdMs
+        self.eventKind = eventKind
     }
 }
 
@@ -96,7 +117,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
     var turboEnabled: Bool?      // Rapid fire mode
     var turboRate: Int?          // Turbo presses per second (default 10)
     var sensitivityCurve: SensitivityCurve?  // Response curve for analog inputs
-    var repeatCount: Int?        // Number of times to repeat outputs (nil = 1, 0 = infinite while held)
+    var repeatCount: Int?        // Times to repeat outputs (nil or <= 1 fires once; > 1 repeats that many times)
     var repeatDelayMs: Int?      // Delay between repeats in ms (default 100)
 
     // Variable sensitivity: scale output magnitude by axis depth (0 to 1).
@@ -112,6 +133,22 @@ struct BindingModel: Identifiable, Codable, Hashable {
 
     // Macro sequence (overrides outputs when set)
     var macroSteps: [MacroStep]?
+
+    /// When true, releasing the input stops the rest of a running macro
+    /// chain and releases any held steps. nil decodes as false.
+    var macroInterruptOnRelease: Bool?
+
+    // Tap-vs-hold: when set, holding the input past holdThresholdMs fires
+    // these outputs (released when the input releases); letting go sooner
+    // fires `outputs` as a quick tap instead. nil keeps the plain immediate
+    // behavior with zero added latency.
+    var holdOutputs: [OutputAction]?
+    var holdThresholdMs: Int?
+
+    // Double-tap: when set, two presses inside doubleTapWindowMs fire these
+    // outputs; a single tap fires `outputs` once the window lapses.
+    var doubleTapOutputs: [OutputAction]?
+    var doubleTapWindowMs: Int?
 
     /// Short, human-readable note describing what this binding does, shown in
     /// the editor row beneath the mapping (e.g. "Jump", "Sprint / hold to run").
@@ -137,6 +174,11 @@ struct BindingModel: Identifiable, Codable, Hashable {
          speechEnabled: Bool? = nil, speechText: String? = nil,
          speechDestination: SpeechDestination? = nil,
          macroSteps: [MacroStep]? = nil,
+         macroInterruptOnRelease: Bool? = nil,
+         holdOutputs: [OutputAction]? = nil,
+         holdThresholdMs: Int? = nil,
+         doubleTapOutputs: [OutputAction]? = nil,
+         doubleTapWindowMs: Int? = nil,
          note: String? = nil) {
         self.id = id
         self.input = input
@@ -157,7 +199,35 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.speechText = speechText
         self.speechDestination = speechDestination
         self.macroSteps = macroSteps
+        self.macroInterruptOnRelease = macroInterruptOnRelease
+        self.holdOutputs = holdOutputs
+        self.holdThresholdMs = holdThresholdMs
+        self.doubleTapOutputs = doubleTapOutputs
+        self.doubleTapWindowMs = doubleTapWindowMs
         self.note = note
+    }
+
+    /// Full-fidelity copy with a fresh identity. The plain
+    /// `BindingModel(input:outputs:)` initializer zeroes every advanced
+    /// field (deadzone, curve, toggle, turbo, repeat, haptics, speech,
+    /// macro steps, note), which silently downgraded duplicated rows.
+    func duplicated() -> BindingModel {
+        BindingModel(id: UUID(), input: input, outputs: outputs,
+                     deadzone: deadzone, outerDeadzone: outerDeadzone, invertAxis: invertAxis,
+                     toggleMode: toggleMode, turboEnabled: turboEnabled, turboRate: turboRate,
+                     sensitivityCurve: sensitivityCurve,
+                     repeatCount: repeatCount, repeatDelayMs: repeatDelayMs,
+                     variableSensitivity: variableSensitivity,
+                     hapticEnabled: hapticEnabled, hapticIntensity: hapticIntensity,
+                     speechEnabled: speechEnabled, speechText: speechText,
+                     speechDestination: speechDestination,
+                     macroSteps: macroSteps,
+                     macroInterruptOnRelease: macroInterruptOnRelease,
+                     holdOutputs: holdOutputs,
+                     holdThresholdMs: holdThresholdMs,
+                     doubleTapOutputs: doubleTapOutputs,
+                     doubleTapWindowMs: doubleTapWindowMs,
+                     note: note)
     }
 }
 
@@ -248,6 +318,12 @@ struct PresetAutomation: Codable, Hashable {
     /// Cursor sensitivity multiplier applied to mouse-move outputs the
     /// preset fires (independent of macOS pointer-speed slider).
     var sensitivityMultiplier: Double = 1.0
+
+    /// Bundle identifiers of apps that automatically activate this preset
+    /// when one of them comes to the front (gated by the global toggle in
+    /// Settings). Optional, not defaulted, so preset files saved before
+    /// this field existed decode unchanged.
+    var autoActivateBundleIDs: [String]?
 }
 
 /// A complete preset containing name, tag, and joystick mappings

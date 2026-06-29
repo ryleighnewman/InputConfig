@@ -282,7 +282,10 @@ final class TouchpadService: @unchecked Sendable {
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            // EOF: the helper closed its stdout. Detach so this handler doesn't
+            // spin at 100% CPU re-firing on the closed descriptor (the same
+            // pattern SteamControllerService guards against).
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             self?.consumeStdout(data)
         }
         errPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -302,7 +305,12 @@ final class TouchpadService: @unchecked Sendable {
             let status = proc.terminationStatus
             let reason: String = (proc.terminationReason == .uncaughtSignal) ? "uncaughtSignal" : "exit"
             NSLog("[TouchpadService] Helper terminated (reason=%@ status=%d)", reason, status)
-            self?.helperRunning = false
+            // Only clear state if this is still the current helper, so a fast
+            // restart can't have the old helper's late termination handler
+            // clobber a newer live one.
+            guard let self = self, self.process === proc else { return }
+            self.helperRunning = false
+            self.process = nil
         }
 
         do {
@@ -348,6 +356,16 @@ final class TouchpadService: @unchecked Sendable {
         finger1Delta = FingerDelta()
         lastF0Pos = nil
         lastF1Pos = nil
+        // Also clear gesture + region runtime state so a half-formed two-finger
+        // tap or a still-pressed region can't carry over and fire under the next
+        // preset after a stop / preset switch.
+        currentF0 = nil
+        currentF1 = nil
+        pendingGesture = nil
+        gestureFiredAt = nil
+        twoFingerStartedAt = nil
+        twoFingerMotionMagnitude = 0
+        pressedRegions.removeAll()
         lock.unlock()
     }
 
@@ -390,6 +408,20 @@ final class TouchpadService: @unchecked Sendable {
         case .x: return d.dx / Float(calibration.spanX)
         case .y: return d.dy / Float(calibration.spanY)
         }
+    }
+
+    /// Drain the accumulated per-frame deltas after the mapping engine has read
+    /// them via peekDelta. Called once at the end of every poll frame. Unlike
+    /// consumeDelta, this lets multiple bindings on the same finger+axis read
+    /// the same value within the frame, then clears the motion exactly once.
+    /// Only dx/dy is cleared; finger-contact state is left intact.
+    func endFrame() {
+        lock.lock()
+        finger0Delta.dx = 0
+        finger0Delta.dy = 0
+        finger1Delta.dx = 0
+        finger1Delta.dy = 0
+        lock.unlock()
     }
 
     /// True while the given finger is in contact with the touchpad.
@@ -506,11 +538,20 @@ final class TouchpadService: @unchecked Sendable {
         #endif
     }
 
+    /// A calibration is usable only when both axes have a positive span. A
+    /// persisted inverted or degenerate range (maxX <= minX, from a corrupt
+    /// file or a half-finished sweep) would otherwise collapse the divisor and
+    /// make the axis wildly oversensitive.
+    private static func isValidCalibration(_ c: TouchpadCalibration) -> Bool {
+        return c.maxX > c.minX && c.maxY > c.minY
+    }
+
     private func loadCalibration() {
         // Prefer the on-disk file (more reliable across container migrations),
         // fall back to UserDefaults for older installs.
         if let data = try? Data(contentsOf: Self.calibrationFileURL),
-           let decoded = try? JSONDecoder().decode(TouchpadCalibration.self, from: data) {
+           let decoded = try? JSONDecoder().decode(TouchpadCalibration.self, from: data),
+           Self.isValidCalibration(decoded) {
             calibration = decoded
             #if DEBUG
             print("[TouchpadService] loaded calibration from file: X \(decoded.minX)-\(decoded.maxX) Y \(decoded.minY)-\(decoded.maxY)")
@@ -518,7 +559,8 @@ final class TouchpadService: @unchecked Sendable {
             return
         }
         if let data = UserDefaults.standard.data(forKey: Self.calibrationKey),
-           let decoded = try? JSONDecoder().decode(TouchpadCalibration.self, from: data) {
+           let decoded = try? JSONDecoder().decode(TouchpadCalibration.self, from: data),
+           Self.isValidCalibration(decoded) {
             calibration = decoded
             // Promote to the file store so future reads use the canonical path.
             try? data.write(to: Self.calibrationFileURL, options: .atomic)
@@ -544,10 +586,17 @@ final class TouchpadService: @unchecked Sendable {
 
     // MARK: - Quick Zero
 
-    /// Snap the current finger position to the new origin. Subsequent
-    /// region matching and delta accumulation start counting from here.
-    /// Returns true if a finger was actually in contact (so the UI can
-    /// show a "needs finger on touchpad" hint when it wasn't).
+    /// Re-zero the per-finger motion baseline at the current finger position:
+    /// the next delta is measured from here, so a relative touchpad-as-pointer
+    /// preset continues smoothly without a jump when the user re-centers.
+    ///
+    /// NOTE: this intentionally does NOT shift region matching. Regions are
+    /// matched against the absolute, normalized touchpad position (see
+    /// recomputePressedRegions), so offsetting coordinates by a quick-zero
+    /// origin would misalign every saved region. The origin is recorded only
+    /// for diagnostics (quickZeroInfo); it is deliberately not applied to live
+    /// coordinates. Returns true if a finger was actually in contact (so the UI
+    /// can show a "needs finger on touchpad" hint when it wasn't).
     @discardableResult
     func quickZero() -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -725,23 +774,41 @@ final class TouchpadService: @unchecked Sendable {
         }
     }
 
+    /// Minimum time a region stays "pressed" after a finger touches it. A
+    /// light tap can land and lift between two engine poll frames; without
+    /// the latch the press was overwritten before the poll loop ever saw it,
+    /// so quick regional taps silently did nothing.
+    private let regionPressLatch: TimeInterval = 0.04
+    private var regionPressExpiry: [UUID: TimeInterval] = [:]
+
     /// Recompute which regions are currently pressed based on the latest
     /// finger positions. Called from `updateCurrentPositions`.
     private func recomputePressedRegions(f0Active: Bool, f0X: Int, f0Y: Int,
                                          f1Active: Bool, f1X: Int, f1Y: Int) {
         guard !regions.isEmpty else {
             pressedRegions.removeAll()
+            regionPressExpiry.removeAll()
             return
         }
         var pressed = Set<UUID>()
         let w = Double(surfaceWidth), h = Double(surfaceHeight)
+        let now = ProcessInfo.processInfo.systemUptime
         for region in regions {
             if f0Active && region.contains(normalizedX: Double(f0X) / w, y: Double(f0Y) / h) {
                 pressed.insert(region.id)
+                regionPressExpiry[region.id] = now + regionPressLatch
             } else if f1Active && region.contains(normalizedX: Double(f1X) / w, y: Double(f1Y) / h) {
                 pressed.insert(region.id)
+                regionPressExpiry[region.id] = now + regionPressLatch
             }
         }
+        // Keep recently tapped regions pressed until their latch expires so
+        // every tap stays observable for at least one poll frame, then prune
+        // expired entries so the dictionary cannot grow.
+        for (id, expiry) in regionPressExpiry where expiry > now {
+            pressed.insert(id)
+        }
+        regionPressExpiry = regionPressExpiry.filter { $0.value > now }
         pressedRegions = pressed
     }
 
@@ -757,6 +824,11 @@ final class TouchpadService: @unchecked Sendable {
             if let line = String(data: lineData, encoding: .utf8) {
                 handleLine(line)
             }
+        }
+        // Guard against a malformed helper flooding a newline-less stream: cap
+        // the unparsed buffer so it can't grow without bound.
+        if stdoutBuffer.count > 65_536 {
+            stdoutBuffer.removeAll(keepingCapacity: false)
         }
     }
 

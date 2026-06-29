@@ -23,12 +23,11 @@ xcuserdata/
 # Editor / tooling
 .cursor/
 .vscode/
+.claude/
 
 # Compiled helper binary (rebuilt by build_and_archive.sh)
 LightHelper/LightHelper
 
-# Claude Code workspace
-.claude/
 # Personal setup notes (not part of the app)
 IAP_SETUP.md
 IAP_APPSTORE_TUTORIAL.md

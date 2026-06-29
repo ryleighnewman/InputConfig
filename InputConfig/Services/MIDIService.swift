@@ -24,9 +24,12 @@ final class MIDIService: @unchecked Sendable {
     private var virtualSource: MIDIEndpointRef = 0
     private var isSetup = false
 
-    /// Active notes per channel keyed by note number. Used so that when a
-    /// binding releases and we need to send a note-off, we know exactly what
-    /// to silence even if the user changed the note value mid-press.
+    /// Active notes per channel keyed by note number. releaseAllNotes() uses
+    /// this to silence every tracked note when the engine stops or a preset
+    /// deactivates. Per-note sendNoteOff silences only the note it is handed (it
+    /// does not consult this set), so a binding that changes its note value
+    /// mid-press should rely on releaseAllNotes, not a paired note-off, to
+    /// avoid leaving the previous note stuck on.
     private var activeNotes: [Int: Set<Int>] = [:] // channel -> notes
     private let activeNotesLock = NSLock()
 
@@ -68,9 +71,21 @@ final class MIDIService: @unchecked Sendable {
             return
         }
 
-        // Make the virtual source persist across sessions so DAWs can
-        // reconnect automatically.
-        let uniqueID: Int32 = Int32(truncatingIfNeeded: abs(Self.portName.hashValue))
+        // Make the virtual source persist across sessions so DAWs can reconnect
+        // automatically. Earlier this derived the id from String.hashValue,
+        // which since Swift 4.2 is randomly seeded PER PROCESS, so the id
+        // changed every launch and DAWs lost their saved connection; abs() on
+        // it could also trap on Int.min. Generate a stable random id once and
+        // persist it.
+        let uniqueIDKey = "InputConfig.midiSourceUniqueID"
+        let uniqueID: Int32
+        if let saved = UserDefaults.standard.object(forKey: uniqueIDKey) as? Int {
+            uniqueID = Int32(truncatingIfNeeded: saved)
+        } else {
+            let generated = Int32.random(in: 1...Int32.max)
+            UserDefaults.standard.set(Int(generated), forKey: uniqueIDKey)
+            uniqueID = generated
+        }
         MIDIObjectSetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, uniqueID)
 
         isSetup = true
@@ -134,8 +149,31 @@ final class MIDIService: @unchecked Sendable {
             for channel in 0..<16 {
                 send(bytes: [0xB0 | UInt8(channel), 123, 0])
             }
+
+            // Also reset continuous controllers and re-center pitch bend, so a
+            // CC or pitch-bend binding that was mid-send doesn't leave the DAW
+            // with a stuck mod wheel or a detuned pitch after the engine stops.
+            for channel in 0..<16 {
+                send(bytes: [0xB0 | UInt8(channel), 121, 0])     // Reset All Controllers
+                send(bytes: [0xE0 | UInt8(channel), 0x00, 0x40]) // Pitch bend center
+            }
+            // The CC reset above returns the DAW's controllers to default, so
+            // drop the dedup caches; the next CC / pitch-bend send must reach
+            // the DAW even if its value matches what we last sent before stop.
+            lastSentCC.removeAll(keepingCapacity: true)
+            lastSentPitchBend.removeAll(keepingCapacity: true)
         }
     }
+
+    /// Last quantized value sent per (channel, controller), used to drop
+    /// redundant identical CC packets that a variable axis would otherwise
+    /// emit every poll frame. Only touched on `queue`, so it needs no lock.
+    private var lastSentCC: [Int: Int] = [:]
+
+    /// Last pitch-bend value sent per channel, to drop redundant identical
+    /// pitch-bend packets a held stick would otherwise emit every frame. Only
+    /// touched on `queue`.
+    private var lastSentPitchBend: [Int: Int] = [:]
 
     /// Send a Control Change. `value` is 0-127.
     func sendCC(controller: Int, value: Int, channel: Int) {
@@ -145,6 +183,12 @@ final class MIDIService: @unchecked Sendable {
         let safeCh = clamp(channel - 1, 0, 15)
 
         queue.async { [self] in
+            // Skip redundant identical CC packets: a variable axis bound to a
+            // CC can fire the same 0-127 value every poll frame (up to ~120/s),
+            // flooding the DAW. Only send when the value actually changed.
+            let key = (safeCh << 8) | safeCC
+            if lastSentCC[key] == safeVal { return }
+            lastSentCC[key] = safeVal
             send(bytes: [0xB0 | UInt8(safeCh), UInt8(safeCC), UInt8(safeVal)])
         }
     }
@@ -157,6 +201,10 @@ final class MIDIService: @unchecked Sendable {
         let lsb = UInt8(safeVal & 0x7F)
         let msb = UInt8((safeVal >> 7) & 0x7F)
         queue.async { [self] in
+            // Skip redundant identical pitch-bend packets: a held stick would
+            // otherwise flood the DAW every poll frame.
+            if lastSentPitchBend[safeCh] == safeVal { return }
+            lastSentPitchBend[safeCh] = safeVal
             send(bytes: [0xE0 | UInt8(safeCh), lsb, msb])
         }
     }

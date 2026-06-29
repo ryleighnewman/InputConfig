@@ -60,7 +60,7 @@ final class CrashRecoveryService: ObservableObject {
 
     private let fileURL: URL
     private static let sessionRestorePrefKey = "InputConfig.sessionRestore.enabled"
-    private static let lastFreezeKey = "InputConfig.recovery.lastFreezeAt"
+    nonisolated private static let lastFreezeKey = "InputConfig.recovery.lastFreezeAt"
 
     /// Window during which a second crash will NOT trigger another
     /// auto-restore. 90 seconds is long enough to weed out the case
@@ -142,6 +142,16 @@ final class CrashRecoveryService: ObservableObject {
         lastFreezeAt = now
         UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.lastFreezeKey)
         writeSentinel()
+    }
+
+    /// Durably stamp a freeze WITHOUT hopping to the main actor. The freeze
+    /// watchdog runs while the main thread is hung, so a main-actor hop would
+    /// not execute until the freeze ended, exactly when it is no longer useful.
+    /// UserDefaults is thread-safe; the recovery sentinel is already kept
+    /// current by the synchronous activation write, so this records only the
+    /// timestamp, which is what the watchdog needs persisted right away.
+    nonisolated static func stampFreezeFromWatchdog() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastFreezeKey)
     }
 
     // MARK: - Internal

@@ -279,10 +279,33 @@ class PresetStore: ObservableObject {
         // Load native format presets
         if let files = try? FileManager.default.contentsOfDirectory(at: presetsDirectory, includingPropertiesForKeys: nil) {
             for file in files where file.pathExtension == "json" {
-                if let data = try? Data(contentsOf: file),
-                   let preset = try? JSONDecoder().decode(Preset.self, from: data) {
+                do {
+                    let data = try Data(contentsOf: file)
+                    let preset = try JSONDecoder().decode(Preset.self, from: data)
                     loaded.append(preset)
+                } catch {
+                    // Log instead of silently swallowing so a corrupt or
+                    // schema-mismatched file is diagnosable rather than vanishing.
+                    NSLog("PresetStore.loadPresets: skipping \(file.lastPathComponent): \(error)")
                 }
+            }
+        }
+
+        // De-duplicate by preset id. Two on-disk files can end up sharing an
+        // internal id (e.g. importing a preset whose id collides with an
+        // existing one: import keeps the decoded id but writes a new filename).
+        // Without this the sidebar shows two rows for one identity and id-keyed
+        // mutations touch only one of them, diverging memory from disk. Keep the
+        // most recently modified copy.
+        if !loaded.isEmpty {
+            var byID: [UUID: Preset] = [:]
+            for p in loaded {
+                if let existing = byID[p.id], existing.modifiedAt >= p.modifiedAt { continue }
+                byID[p.id] = p
+            }
+            if byID.count != loaded.count {
+                NSLog("PresetStore.loadPresets: collapsed \(loaded.count - byID.count) duplicate-id preset(s)")
+                loaded = Array(byID.values)
             }
         }
 
@@ -388,13 +411,22 @@ class PresetStore: ObservableObject {
             groupIDsByName[group.name] = group.id
         }
 
-        for example in ExamplePresets.all where !existingNames.contains(example.name) {
-            var copy = example
-            if let groupName = ExamplePresets.groupAssignments[example.name],
-               let groupID = groupIDsByName[groupName] {
-                copy.groupID = groupID
+        // Seed the example presets exactly once per install, gated by a flag
+        // like the group and color steps above. The previous unguarded version
+        // deduped by user-editable display NAME, so renaming a built-in example
+        // (or deleting one) made a fresh copy reappear on the next launch and
+        // accumulate duplicates without bound.
+        let exampleSeedKey = "InputConfig.seededExamples.v1"
+        if !defaults.bool(forKey: exampleSeedKey) {
+            for example in ExamplePresets.all where !existingNames.contains(example.name) {
+                var copy = example
+                if let groupName = ExamplePresets.groupAssignments[example.name],
+                   let groupID = groupIDsByName[groupName] {
+                    copy.groupID = groupID
+                }
+                savePreset(copy)
             }
-            savePreset(copy)
+            defaults.set(true, forKey: exampleSeedKey)
         }
 
         // Step 3 (self-heal): make sure every built-in example preset that
@@ -436,7 +468,7 @@ class PresetStore: ObservableObject {
         }
     }
 
-    func savePreset(_ preset: Preset) {
+    func savePreset(_ preset: Preset, forceSnapshot: Bool = false) {
         var mutable = preset
         mutable.modifiedAt = Date()
         let fileURL = presetsDirectory.appendingPathComponent(mutable.filename)
@@ -452,23 +484,40 @@ class PresetStore: ObservableObject {
         // button feels instant.
         Self.ioQueue.async {
             // 1. Snapshot the prior file content alongside its modification
-            //    timestamp (used as the snapshot filename).
+            //    timestamp (used as the snapshot filename). Throttled: typing a
+            //    preset name calls savePreset on every keystroke, which used to
+            //    spam the version history with partial-typing states and evict
+            //    meaningful older versions (the prune keeps only the most recent
+            //    10). Skip the snapshot when the newest existing snapshot is only
+            //    seconds old, so an editing burst leaves at most one checkpoint.
+            //    The new state itself is always written below, so no edit is lost.
             if let priorData = try? Data(contentsOf: priorFile) {
-                try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
-                let snapName = "\(Int(Date().timeIntervalSince1970)).json"
-                let snapURL = snapshotDir.appendingPathComponent(snapName)
-                try? priorData.write(to: snapURL, options: .atomic)
-                // Prune to the most recent 10 snapshots.
-                if let existing = try? FileManager.default.contentsOfDirectory(at: snapshotDir,
-                                                                               includingPropertiesForKeys: [.contentModificationDateKey]) {
-                    let sorted = existing.sorted {
-                        (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast)
-                            ?? .distantPast >
-                        (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast)
-                            ?? .distantPast
-                    }
-                    for url in sorted.dropFirst(10) {
-                        try? FileManager.default.removeItem(at: url)
+                let newestSnapshotAge: TimeInterval = {
+                    guard let existing = try? FileManager.default.contentsOfDirectory(
+                        at: snapshotDir, includingPropertiesForKeys: [.contentModificationDateKey]),
+                        !existing.isEmpty else { return .greatestFiniteMagnitude }
+                    let newest = existing.compactMap {
+                        try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                    }.max() ?? .distantPast
+                    return Date().timeIntervalSince(newest)
+                }()
+                if forceSnapshot || newestSnapshotAge >= 3.0 {
+                    try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+                    let snapName = "\(Int(Date().timeIntervalSince1970)).json"
+                    let snapURL = snapshotDir.appendingPathComponent(snapName)
+                    try? priorData.write(to: snapURL, options: .atomic)
+                    // Prune to the most recent 10 snapshots.
+                    if let existing = try? FileManager.default.contentsOfDirectory(at: snapshotDir,
+                                                                                   includingPropertiesForKeys: [.contentModificationDateKey]) {
+                        let sorted = existing.sorted {
+                            (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast)
+                                ?? .distantPast >
+                            (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? .distantPast)
+                                ?? .distantPast
+                        }
+                        for url in sorted.dropFirst(10) {
+                            try? FileManager.default.removeItem(at: url)
+                        }
                     }
                 }
             }
@@ -526,14 +575,12 @@ class PresetStore: ObservableObject {
     /// is reversible. We preserve the existing preset's UUID / filename so
     /// the sidebar selection and on-disk identity stay stable.
     func revertPreset(_ preset: Preset, to version: PresetVersion) {
-        var restored = Preset(
-            name: version.preset.name,
-            tag: version.preset.tag,
-            joysticks: version.preset.joysticks,
-            filename: preset.filename,
-            isActive: preset.isActive,
-            groupID: version.preset.groupID
-        )
+        // Restore the FULL snapshot (light, notes, automation, cursor flags,
+        // every field) instead of a lossy memberwise init, keeping the live
+        // preset's identity so it stays the same sidebar entry.
+        var restored = version.preset
+        restored.filename = preset.filename
+        restored.isActive = preset.isActive
         // savePreset will set modifiedAt; preserve createdAt from the live
         // preset since the snapshot represented an older save.
         restored.createdAt = preset.createdAt
@@ -544,13 +591,13 @@ class PresetStore: ObservableObject {
             dict["id"] = preset.id.uuidString
             if let patched = try? JSONSerialization.data(withJSONObject: dict),
                let final = try? JSONDecoder().decode(Preset.self, from: patched) {
-                savePreset(final)
+                savePreset(final, forceSnapshot: true)
                 return
             }
         }
         // Fallback: save with whatever the snapshot's id was (which will
         // appear as a "new" preset in the sidebar).
-        savePreset(restored)
+        savePreset(restored, forceSnapshot: true)
     }
 
     /// Public URL of the preset's JSON file on disk. Used by the "Open in
@@ -607,6 +654,23 @@ class PresetStore: ObservableObject {
         try? FileManager.default.moveItem(at: source, to: dest)
 
         recentlyDeleted.insert(DeletedPreset(preset: preset, deletedAt: Date()), at: 0)
+        pruneTrash()
+    }
+
+    /// Cap on how many deleted presets stay in Recently Deleted. Older entries
+    /// are pruned (and their on-disk trash file removed) so heavy create/delete
+    /// or import churn can't grow the trash folder or this @Published list
+    /// without bound. Mirrors the 10-snapshot cap on per-preset version history.
+    private static let trashCap = 60
+
+    private func pruneTrash() {
+        guard recentlyDeleted.count > Self.trashCap else { return }
+        // recentlyDeleted is newest-first, so the overflow to drop is the tail.
+        for entry in recentlyDeleted[Self.trashCap...] {
+            let file = trashDirectory.appendingPathComponent(entry.preset.filename)
+            try? FileManager.default.removeItem(at: file)
+        }
+        recentlyDeleted.removeLast(recentlyDeleted.count - Self.trashCap)
     }
 
     /// Permanent delete: skip the trash + Recently Deleted buffer.
@@ -681,9 +745,10 @@ class PresetStore: ObservableObject {
         if recentlyDeleted.contains(where: { $0.preset.id == preset.id }) { return }
         let target = trashDirectory.appendingPathComponent(preset.filename)
         if let data = try? JSONEncoder().encode(preset) {
-            try? data.write(to: target)
+            try? data.write(to: target, options: .atomic)
         }
         recentlyDeleted.insert(DeletedPreset(preset: preset, deletedAt: deletedAt), at: 0)
+        pruneTrash()
     }
 
     /// Codable snapshot of one trash entry for backup export / restore.
@@ -716,19 +781,33 @@ class PresetStore: ObservableObject {
             loaded.append(DeletedPreset(preset: preset, deletedAt: date))
         }
         recentlyDeleted = loaded.sorted { $0.deletedAt > $1.deletedAt }
+        pruneTrash()
     }
 
     func duplicatePreset(_ preset: Preset) -> Preset {
-        var clone = preset
-        clone = Preset(
-            name: "\(preset.name) (Copy)",
-            tag: preset.tag,
-            joysticks: preset.joysticks,
-            filename: Preset.generateFilename(),
-            isActive: false
-        )
-        savePreset(clone)
-        return clone
+        // Copy ALL fields (light, notes, automation, groupID, cursor flags, ...)
+        // and override only what a duplicate must change. id is immutable, so
+        // mint a fresh one via a Codable round-trip, the technique revertPreset
+        // also uses. The old memberwise init dropped every field it did not list.
+        var copy = preset
+        copy.name = "\(preset.name) (Copy)"
+        copy.filename = Preset.generateFilename()
+        copy.isActive = false
+        if let data = try? JSONEncoder().encode(copy),
+           var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            dict["id"] = UUID().uuidString
+            if let patched = try? JSONSerialization.data(withJSONObject: dict),
+               let final = try? JSONDecoder().decode(Preset.self, from: patched) {
+                savePreset(final)
+                return final
+            }
+        }
+        // Fallback (round-trip failed): the init mints a fresh id, but cannot
+        // carry the fields it does not list.
+        let fallback = Preset(name: copy.name, tag: copy.tag, joysticks: copy.joysticks,
+                              filename: copy.filename, isActive: false, groupID: copy.groupID)
+        savePreset(fallback)
+        return fallback
     }
 
     // MARK: - Reordering
@@ -746,21 +825,23 @@ class PresetStore: ObservableObject {
         if let index = presets.firstIndex(where: { $0.id == preset.id }) {
             presets[index].isActive = true
         }
-        // Persist active preset to the recovery sentinel so a crash
-        // here doesn't lose the user's place.
-        Task { @MainActor in
-            CrashRecoveryService.shared.recordActivePreset(preset.id)
-        }
+        // Persist active preset to the recovery sentinel so a crash here
+        // doesn't lose the user's place. Called synchronously (not in a
+        // detached Task) so deactivateAll's nil above and this preset.id record
+        // in deterministic order; two unstructured Tasks could reorder and
+        // leave the sentinel stuck at nil while a preset is actually active.
+        CrashRecoveryService.shared.recordActivePreset(preset.id)
     }
 
     func deactivateAll() {
         activePresetId = nil
-        for i in presets.indices {
+        // Only rewrite presets that are actually active. Writing isActive=false
+        // on every preset copy-on-write-copied the whole library on each switch;
+        // in practice at most one preset is active.
+        for i in presets.indices where presets[i].isActive {
             presets[i].isActive = false
         }
-        Task { @MainActor in
-            CrashRecoveryService.shared.recordActivePreset(nil)
-        }
+        CrashRecoveryService.shared.recordActivePreset(nil)
     }
 
     func togglePreset(_ preset: Preset) {
@@ -971,7 +1052,7 @@ class PresetStore: ObservableObject {
                 if isSyntaxError {
                     msg = "Invalid JSON. Open the file in a text editor and check for missing braces, quotes, or commas."
                 } else {
-                    msg = "JSON doesn't match the preset schema (\(describe(decodeError)). The file may be from an unsupported app version."
+                    msg = "JSON doesn't match the preset schema (\(describe(decodeError))). The file may be from an unsupported app version."
                 }
                 previews.append(ImportPreview(
                     url: url,
@@ -996,7 +1077,25 @@ class PresetStore: ObservableObject {
             guard var preset = preview.preset else { continue }
             let trimmed = preview.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { preset.name = trimmed }
+            // Mint a fresh identity (preserving every other field via an
+            // encode/patch/decode round-trip) so an imported preset can never
+            // overwrite, and then lose on next launch, an existing local preset
+            // that happens to share the decoded UUID.
+            if let data = try? JSONEncoder().encode(preset),
+               var dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                dict["id"] = UUID().uuidString
+                if let patched = try? JSONSerialization.data(withJSONObject: dict),
+                   let fresh = try? JSONDecoder().decode(Preset.self, from: patched) {
+                    preset = fresh
+                }
+            }
             preset.filename = Preset.generateFilename()
+            // Strip any embedded auto-launch target on import: a shared preset
+            // file could otherwise silently open an arbitrary app or URL on its
+            // first activation. The user can re-add a launch target deliberately
+            // in the editor after reviewing the import.
+            preset.automation.launchAppPath = ""
+            preset.automation.launchURL = ""
             savePreset(preset)
             saved += 1
         }

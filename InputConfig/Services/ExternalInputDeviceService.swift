@@ -70,12 +70,16 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         case mouseButtonUp(deviceID: String, button: Int)
         case mouseMove(deviceID: String, dx: Int, dy: Int)
         case scroll(deviceID: String, dx: Int, dy: Int)
+        /// Force Touch pressure update from the Mac trackpad. value is the
+        /// 0-1 press force; stage is 0 (no click), 1 (click), 2 (force click).
+        case pressureChanged(deviceID: String, value: Float, stage: Int)
 
         var deviceID: String {
             switch self {
             case .keyDown(let id, _), .keyUp(let id, _),
                  .mouseButtonDown(let id, _), .mouseButtonUp(let id, _),
-                 .mouseMove(let id, _, _), .scroll(let id, _, _):
+                 .mouseMove(let id, _, _), .scroll(let id, _, _),
+                 .pressureChanged(let id, _, _):
                 return id
             }
         }
@@ -87,17 +91,28 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         let label: String
     }
 
-    // MARK: - Published state (all permanently empty)
+    // MARK: - Published state
 
+    /// Synthetic device entries (a Mouse and / or Keyboard row) for whichever
+    /// monitors are currently active. Empty until a running preset that uses an
+    /// external-input binding starts monitoring and Accessibility is granted.
     @Published private(set) var devices: [Device] = []
     @Published private(set) var recentEvents: [String: [LoggedEvent]] = [:]
     @Published private(set) var receivedAnyKeyboardEvent = false
+
+    /// Live Force Touch pressure metrics for UI gauges (0-1 force and the
+    /// click stage). Published only on meaningful change so a slow press
+    /// does not render-storm observers.
+    @Published private(set) var trackpadPressure: Float = 0
+    @Published private(set) var trackpadPressureStage: Int = 0
     @Published private(set) var rawActiveInputs: Set<String> = []
 
-    /// Never fires. Subscribers attach harmlessly and receive nothing.
+    /// Fires mouse events while `startMouseMonitoring()` is active and keyboard
+    /// events while `startKeyboardMonitoring()` is active. Idle until a running
+    /// preset actually uses an external-input binding.
     let events = PassthroughSubject<Event, Never>()
 
-    /// Always false now - we no longer install a system event tap.
+    /// True while the listen-only mouse `CGEventTap` is installed.
     @Published private(set) var cgEventTapInstalled = false
     @Published private(set) var cgEventTapReceivedAnyEvent = false
 
@@ -192,7 +207,50 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                           vendorID: 0, productID: 0,
                           vendorName: "System", productName: "Mouse",
                           serialNumber: nil, bus: .unknown, locationID: 0)]
+
+        // Force Touch pressure rides the same Accessibility grant via
+        // NSEvent monitors (the global one covers presses while a game is
+        // frontmost; the local one covers our own window).
+        ensurePressureMetricsMonitor()
+        if pressureGlobalMonitor == nil {
+            pressureGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.pressure]
+            ) { [weak self] ev in
+                self?.handlePressureNSEvent(ev)
+            }
+        }
     }
+
+    /// Install the LOCAL pressure monitor on demand. Separate from the
+    /// engine-driven monitoring so UI gauges (the Cursor Regions map) can
+    /// show live Force Touch metrics while the user presses over our own
+    /// window, with no Accessibility requirement and no engine running.
+    func ensurePressureMetricsMonitor() {
+        #if canImport(AppKit)
+        guard pressureLocalMonitor == nil else { return }
+        pressureLocalMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.pressure]
+        ) { [weak self] ev in
+            self?.handlePressureNSEvent(ev)
+            return ev
+        }
+        #endif
+    }
+
+    #if canImport(AppKit)
+    private func handlePressureNSEvent(_ ev: NSEvent) {
+        let value = max(0, min(1, Float(ev.pressure)))
+        let stage = ev.stage
+        events.send(.pressureChanged(deviceID: Self.builtInMouseID,
+                                     value: value, stage: stage))
+        // Publish for UI gauges only on meaningful change.
+        let stageFlipped = (stage >= 2) != (trackpadPressureStage >= 2)
+        if abs(value - trackpadPressure) > 0.02 || stageFlipped || (value == 0 && trackpadPressure != 0) {
+            trackpadPressure = value
+            trackpadPressureStage = stage
+        }
+    }
+    #endif
 
     /// Stop listening and release the tap + keyboard monitors.
     func stopMonitoring() {
@@ -206,6 +264,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         #if canImport(AppKit)
         if let m = keyboardGlobalMonitor { NSEvent.removeMonitor(m); keyboardGlobalMonitor = nil }
         if let m = keyboardLocalMonitor { NSEvent.removeMonitor(m); keyboardLocalMonitor = nil }
+        // The global pressure monitor follows the engine lifecycle; the
+        // local one stays so in-window UI gauges keep working.
+        if let m = pressureGlobalMonitor { NSEvent.removeMonitor(m); pressureGlobalMonitor = nil }
         #endif
         devices = []
     }
@@ -253,6 +314,8 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     private var keyboardGlobalMonitor: Any?
     private var keyboardLocalMonitor: Any?
+    private var pressureGlobalMonitor: Any?
+    private var pressureLocalMonitor: Any?
 
     /// Begin listening for Mac keyboard key presses so a `.extKey` binding
     /// can fire. Uses AppKit `NSEvent` monitors (the Accessibility API path),
@@ -317,8 +380,14 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// Returns nil for keys with no standard HID usage. Table covers the full
     /// ANSI block, modifiers, function keys, arrows, and the keypad.
     static func hidUsage(forVirtualKeyCode vk: Int) -> Int? {
+        Self.hidUsageByVirtualKey[vk]
+    }
+
+    /// Virtual-key to HID usage table, stored once. Building this dictionary
+    /// inside the lookup function allocated a ~100-entry dict on every key
+    /// event during typing.
+    private static let hidUsageByVirtualKey: [Int: Int] = [
         // Letters and number row.
-        let map: [Int: Int] = [
             0: 4, 1: 22, 2: 7, 3: 9, 4: 11, 5: 10, 6: 29, 7: 27, 8: 6, 9: 25,
             11: 5, 12: 20, 13: 26, 14: 8, 15: 21, 16: 28, 17: 23,
             18: 30, 19: 31, 20: 32, 21: 33, 22: 35, 23: 34, 24: 46, 25: 38,
@@ -339,9 +408,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             // Navigation cluster.
             114: 73, 115: 74, 116: 75, 117: 76, 118: 61, 119: 77, 120: 59,
             121: 78, 122: 58, 123: 80, 124: 79, 125: 81, 126: 82
-        ]
-        return map[vk]
-    }
+    ]
 
     /// Stop the tap on app termination.
     func teardownForTermination() { stopMonitoring() }

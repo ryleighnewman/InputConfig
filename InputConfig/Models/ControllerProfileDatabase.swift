@@ -29,17 +29,23 @@ enum ControllerProfileDatabase {
             vendorID: 0x2DC8,
             productMatches: [.range(0x3100...0x31FF)],
             layout: .xinput,
-            physicalButtonNames: xinputButtonNames
+            physicalButtonNames: xinputButtonNames,
+            requiredTransport: "USB"
         ),
 
         // Other 8BitDo models in XInput mode share the same wire layout.
+        // Both entries are USB-gated: 8BitDo reuses nearby PIDs for
+        // Bluetooth identities whose short DInput-style reports the
+        // XInput decoder would silently drop; over Bluetooth the device
+        // falls through to the descriptor parser instead.
         ControllerProfile(
             identifier: "8bitdo-generic-xinput",
             displayName: "8BitDo Controller (XInput)",
             vendorID: 0x2DC8,
             productMatches: [.range(0x3000...0x30FF)],
             layout: .xinput,
-            physicalButtonNames: xinputButtonNames
+            physicalButtonNames: xinputButtonNames,
+            requiredTransport: "USB"
         ),
 
         // MARK: Microsoft
@@ -58,15 +64,14 @@ enum ControllerProfileDatabase {
 
         // MARK: Logitech
 
-        ControllerProfile(
-            identifier: "logitech-f310",
-            displayName: "Logitech F310",
-            vendorID: 0x046D,
-            productMatches: [.exact(0xC216), .exact(0xC218), .exact(0xC219)],
-            layout: .xinput,
-            physicalButtonNames: xinputButtonNames
-        ),
-
+        // The F-series X position speaks the vendor-specific XUSB class,
+        // which IOHIDManager never enumerates in a sandboxed app, so only
+        // the D position can reach us. The D-position identities (C216
+        // Dual Action, C218 RumblePad 2, C219 Cordless RumblePad 2) emit
+        // short DInput HID reports; an earlier entry claimed them as
+        // .xinput, which made them connect and stay silent. No entry now:
+        // they fall through to the descriptor parser, which decodes the
+        // DInput report correctly.
         ControllerProfile(
             identifier: "logitech-f710",
             displayName: "Logitech F710",
@@ -112,9 +117,19 @@ enum ControllerProfileDatabase {
         ),
     ]
 
-    /// Look up the best profile for a (vendor, product) pair. Returns
-    /// nil when no hand-coded entry matches; the caller should fall
-    /// back to runtime descriptor parsing.
+    /// Look up the best profile for a (vendor, product) pair, honoring
+    /// each profile's transport constraint. Returns nil when no
+    /// hand-coded entry matches; the caller should fall back to runtime
+    /// descriptor parsing.
+    static func profile(forVendor vid: Int32, product pid: Int32, transport: String) -> ControllerProfile? {
+        return all.first { profile in
+            guard profile.matches(vendorID: vid, productID: pid) else { return false }
+            guard let required = profile.requiredTransport else { return true }
+            return transport.localizedCaseInsensitiveContains(required)
+        }
+    }
+
+    /// Transport-agnostic lookup, used by diagnostics and tests.
     static func profile(forVendor vid: Int32, product pid: Int32) -> ControllerProfile? {
         return all.first { $0.matches(vendorID: vid, productID: pid) }
     }

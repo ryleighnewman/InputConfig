@@ -733,8 +733,14 @@ final class StatsServiceRef: ObservableObject {
         DispatchQueue.main.async { t?.invalidate() }
     }
 
+    private var lastStatsTick: Int = -1
+
     func refresh() {
         let svc = StatsService.shared
+        // Skip the republish when nothing changed since the last tick, so an
+        // idle second does not re-render the whole stats view.
+        guard svc.statsTick != lastStatsTick else { return }
+        lastStatsTick = svc.statsTick
         stats = svc.stats
         topPresets = svc.topPresets
         topInputs = svc.topInputs

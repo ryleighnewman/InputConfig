@@ -17,6 +17,17 @@ import AppKit
 ///   - Region count cap (16 to match touchpad).
 struct CursorRegionsView: View {
     @ObservedObject private var svc = CursorRegionService.shared
+    @ObservedObject private var externalInput = ExternalInputDeviceService.shared
+
+    /// Drives the live cursor dot while this view is visible, since the
+    /// service's continuous tracking only runs for an active preset. Stored
+    /// once so re-renders do not recreate the subscription.
+    private let cursorPollTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+
+    /// Name of the display the cursor is currently on. Regions are
+    /// normalized per screen, so this is the distinction the map needs on
+    /// multi-display setups.
+    @State private var currentScreenName: String = NSScreen.main?.localizedName ?? "Display"
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - State
@@ -171,6 +182,59 @@ struct CursorRegionsView: View {
                             }
                         }
                 }
+
+                // Live cursor dot: shows where the pointer is RIGHT NOW in
+                // the same normalized space the regions hit-test against,
+                // so placing and sizing regions stops being guesswork.
+                Circle()
+                    .fill(Color.white)
+                    .overlay(Circle().stroke(Color.mint, lineWidth: 1.5))
+                    .frame(width: 9, height: 9)
+                    .shadow(radius: 1)
+                    .position(x: svc.cursorNormalized.x * geo.size.width,
+                              y: svc.cursorNormalized.y * geo.size.height)
+                    .allowsHitTesting(false)
+                    .onReceive(cursorPollTimer) { _ in
+                        svc.pollCursorOnce()
+                        ExternalInputDeviceService.shared.ensurePressureMetricsMonitor()
+                        let loc = NSEvent.mouseLocation
+                        currentScreenName = NSScreen.screens.first(where: { $0.frame.contains(loc) })?.localizedName
+                            ?? NSScreen.main?.localizedName ?? "Display"
+                    }
+
+                // Which display the map and dot currently represent.
+                Text(currentScreenName)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.black.opacity(0.4)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(8)
+                    .allowsHitTesting(false)
+
+                // Live Force Touch pressure while pressing the Mac trackpad
+                // over this window: the gauge fills with force, and "Deep"
+                // marks a stage-2 Force Click. Bindable as Pressure and
+                // Deep Press inputs on the Mouse input type.
+                HStack(spacing: 5) {
+                    Image(systemName: "hand.tap.fill")
+                        .font(.caption2)
+                    ProgressView(value: Double(min(max(externalInput.trackpadPressure, 0), 1)))
+                        .frame(width: 64)
+                    Text(externalInput.trackpadPressureStage >= 2
+                         ? "Deep"
+                         : String(format: "%.0f%%", externalInput.trackpadPressure * 100))
+                        .font(.caption2.monospacedDigit())
+                        .frame(width: 34, alignment: .leading)
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.black.opacity(0.4)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(8)
+                .allowsHitTesting(false)
 
                 if drawingNewRegion, let start = dragStart, let current = dragCurrent {
                     let r = CGRect(

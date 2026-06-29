@@ -237,9 +237,9 @@ struct DebugLogView: View {
             .padding(.horizontal, 8)
             .onChange(of: mappingEngine.debugLog.count) { _, _ in
                 if autoScroll, let lastIndex = filteredLog.indices.last {
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        proxy.scrollTo(lastIndex, anchor: .bottom)
-                    }
+                    // Instant scroll: animating a log tail 5x/sec during active
+                    // play was the costly part and reads identically.
+                    proxy.scrollTo(lastIndex, anchor: .bottom)
                 }
             }
         }

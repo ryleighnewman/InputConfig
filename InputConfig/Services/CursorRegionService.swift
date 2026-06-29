@@ -111,6 +111,13 @@ final class CursorRegionService: ObservableObject {
     /// Otherwise the cursor sitting exactly on the line of a 0-area
     /// "region" would flicker the binding on every sub-pixel jitter,
     /// which is confusing UX rather than useful behaviour.
+    /// One-shot cursor sample, for views (the Cursor Regions map) that want
+    /// a live position dot while visible even when no preset is running the
+    /// continuous tracking path.
+    func pollCursorOnce() {
+        updateFromScreenPoint(NSEvent.mouseLocation, originIsBottomLeft: true)
+    }
+
     func isRegionPressed(_ id: UUID) -> Bool {
         guard let r = region(with: id) else { return false }
         guard r.maxX > r.minX && r.maxY > r.minY else { return false }

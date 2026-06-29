@@ -57,11 +57,14 @@ final class InputSimulator: @unchecked Sendable {
         pressedKeys.insert(hidCode)
 
         if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
-            let flags = modifierFlags(for: hidCode)
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: true) {
-                if let flags = flags {
-                    event.flags = flags
-                }
+                // Apply EVERY currently-held modifier, not just the case where
+                // this key is itself a modifier. Without this, a chord like
+                // Cmd+C (Cmd held, then C pressed) fired C as a bare key because
+                // the C event carried no modifier flags, so combo outputs like
+                // Copy, the screenshot shortcuts, and Cmd+Shift+Z did nothing.
+                let flags = currentModifierFlags()
+                if !flags.isEmpty { event.flags = flags }
                 taggedPost(event)
             }
         } else {
@@ -75,10 +78,38 @@ final class InputSimulator: @unchecked Sendable {
 
         if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
+                // Carry the still-held modifiers so releasing the letter of a
+                // chord (e.g. the C of Cmd+C) does not read as a bare key-up.
+                let flags = currentModifierFlags()
+                if !flags.isEmpty { event.flags = flags }
                 taggedPost(event)
             }
         } else {
             postSpecialKey(hidCode, keyDown: false)
+        }
+    }
+
+    /// Type a literal string by posting keyboard events whose characters are
+    /// set with keyboardSetUnicodeString, in 20-UTF-16-unit chunks (the API's
+    /// per-event limit). Goes through the same taggedPost path as every other
+    /// output, so the string cannot loop back as input and no new permission
+    /// surface is involved. Capitals, symbols, and non-Latin text all work
+    /// because the characters bypass keycode translation entirely.
+    func typeString(_ text: String) {
+        guard !text.isEmpty else { return }
+        let units = Array(text.utf16)
+        var index = 0
+        while index < units.count {
+            let chunk = Array(units[index..<min(index + 20, units.count)])
+            if let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true) {
+                down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                taggedPost(down)
+            }
+            if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false) {
+                up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                taggedPost(up)
+            }
+            index += 20
         }
     }
 
@@ -90,6 +121,18 @@ final class InputSimulator: @unchecked Sendable {
         case 227, 231: return .maskCommand
         default: return nil
         }
+    }
+
+    /// Union of the modifier flags for every modifier key currently held in
+    /// `pressedKeys`. Applied to every synthesized key event so chords such as
+    /// Cmd+C, Cmd+Shift+3, and Option+[ register with their modifiers instead
+    /// of firing as bare keys.
+    private func currentModifierFlags() -> CGEventFlags {
+        var flags: CGEventFlags = []
+        for code in pressedKeys {
+            if let f = modifierFlags(for: code) { flags.insert(f) }
+        }
+        return flags
     }
 
     /// HID code → NSEvent.subtype:systemDefined NX key code. Static so
@@ -157,10 +200,14 @@ final class InputSimulator: @unchecked Sendable {
 
     func mouseButtonUp(_ button: Int) {
         guard pressedMouseButtons.contains(button) else { return }
-        guard let screenHeight = NSScreen.main?.frame.height,
-              let cgButton = cgMouseButton(for: button) else { return }
+        guard let cgButton = cgMouseButton(for: button) else { return }
+        // Always release. NSScreen.main can be nil during sleep/wake and fast
+        // user switching; if we bailed on that the button would stay physically
+        // down. Fall back to a zero-height screen so the up event still posts
+        // and our pressed-state stays consistent.
         pressedMouseButtons.remove(button)
 
+        let screenHeight = NSScreen.main?.frame.height ?? 0
         let location = NSEvent.mouseLocation
         let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
 
@@ -231,6 +278,11 @@ final class InputSimulator: @unchecked Sendable {
                 if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
                     taggedPost(event)
                 }
+            } else {
+                // Media / special keys live outside the virtual-key map; route
+                // them through the systemDefined path so they release too and
+                // don't stick down after stop() or pause.
+                postSpecialKey(key, keyDown: false)
             }
         }
         pressedKeys.removeAll()
@@ -247,9 +299,11 @@ final class InputSimulator: @unchecked Sendable {
     /// of what happened.
     ///
     /// Note: output is synthesized at the HID layer via `.cghidEventTap`
-    /// (see `taggedPost`), which does NOT require the Accessibility
-    /// permission - so there is intentionally no `AXIsProcessTrusted`
-    /// check here. The app never requests Accessibility.
+    /// (see `taggedPost`). Delivery to other apps requires the Accessibility
+    /// permission, which `AccessibilityPermissionService.requestAccess()`
+    /// asks for; this diagnostic only verifies that event creation and
+    /// posting do not fail, so it intentionally runs without an
+    /// `AXIsProcessTrusted` check.
     static func runDiagnostic() -> String {
         var results: [String] = []
 
@@ -384,8 +438,11 @@ final class GlobalHotKeyService: @unchecked Sendable {
 
     private init() {}
 
-    func enable() {
-        guard !isEnabled else { return }
+    /// Returns false when registration fails (typically because another app
+    /// owns the chord) so callers can keep their on/off UI truthful.
+    @discardableResult
+    func enable() -> Bool {
+        guard !isEnabled else { return true }
 
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                  eventKind: UInt32(kEventHotKeyPressed))
@@ -398,13 +455,26 @@ final class GlobalHotKeyService: @unchecked Sendable {
             }
             return noErr
         }
-        InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, nil, &handlerRef)
+        let installStatus = InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, nil, &handlerRef)
+        guard installStatus == noErr else {
+            NSLog("GlobalHotKeyService: InstallEventHandler failed (status \(installStatus)); hotkey not enabled")
+            return false
+        }
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x4A4B4350), id: 1) // 'JKCP'
         let mods = UInt32(controlKey | optionKey | cmdKey)
-        RegisterEventHotKey(UInt32(kVK_ANSI_P), mods, hotKeyID,
+        let registerStatus = RegisterEventHotKey(UInt32(kVK_ANSI_P), mods, hotKeyID,
                             GetApplicationEventTarget(), 0, &hotKeyRef)
+        guard registerStatus == noErr else {
+            // The chord is likely already claimed by another app. Don't report
+            // ourselves as enabled when the registration didn't take, and clean
+            // up the handler we just installed.
+            NSLog("GlobalHotKeyService: RegisterEventHotKey failed (status \(registerStatus)); the chord may be taken by another app")
+            if let h = handlerRef { RemoveEventHandler(h); handlerRef = nil }
+            return false
+        }
         isEnabled = true
+        return true
     }
 
     func disable() {

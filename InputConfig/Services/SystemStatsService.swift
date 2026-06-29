@@ -100,6 +100,10 @@ final class SystemStatsService: ObservableObject {
     private var sessionStartedAt: Date = Date()
     /// Number of samples taken this session - used to compute running mean.
     private var sampleCount: UInt64 = 0
+    /// Plain (non-published) controller-poll counter. The 120 Hz poll hook
+    /// bumps this; sample() folds it into the published `cumulative` at 1 Hz
+    /// so the Session Stats panel is not re-rendered at the input poll rate.
+    private var pollCounter: UInt64 = 0
     /// Coarse package-watts estimate used for the energy approximation.
     /// Apple Silicon laptops in light use sit around 3-6 W package power;
     /// 5 W is a fair middle. Not a measurement - tunable constant.
@@ -156,6 +160,12 @@ final class SystemStatsService: ObservableObject {
     /// Read task_info + thread_info to produce one snapshot. Runs on
     /// main actor at 1 Hz; cost per sample is sub-millisecond.
     private func sample() {
+        // Fold the 120 Hz poll counter into the published snapshot at this
+        // 1 Hz cadence so observers of `cumulative` re-render at most once a
+        // second, not at the input poll rate.
+        if cumulative.controllerPollsCounted != pollCounter {
+            cumulative.controllerPollsCounted = pollCounter
+        }
         let now = Date()
         let cpu = readCPUPercent(now: now.timeIntervalSince1970)
         let memInfo = readMemory()
@@ -286,7 +296,8 @@ final class SystemStatsService: ObservableObject {
     /// Session Stats panel can show how many input frames the app
     /// has processed in this session.
     func recordControllerPolls(_ added: Int = 1) {
-        cumulative.controllerPollsCounted &+= UInt64(added)
+        // Plain increment, no @Published mutation. sample() publishes it at 1 Hz.
+        pollCounter &+= UInt64(added)
     }
 
     /// Wipe the session-cumulative + power-delta counters back to
@@ -297,6 +308,7 @@ final class SystemStatsService: ObservableObject {
         sessionStartedAt = Date()
         sampleCount = 0
         cumulative = Cumulative()
+        pollCounter = 0
         power = PowerInfo()  // forces re-baseline of battery delta
         lastPowerSampleAt = 0
     }

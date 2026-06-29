@@ -32,10 +32,14 @@ final class AppState: ObservableObject {
         // opted out of session restore, re-activate whichever preset
         // was active at the time of the crash. Deferred to the next
         // run-loop tick so PresetStore has finished its disk load.
-        DispatchQueue.main.async { [presetStore, crashRecovery] in
+        DispatchQueue.main.async { [presetStore, crashRecovery, mappingEngine] in
             guard let id = crashRecovery.consumeRestoreTarget() else { return }
             if let preset = presetStore.presets.first(where: { $0.id == id }) {
                 presetStore.activatePreset(preset)
+                // Restore must also START the engine, not just mark the preset
+                // active in the UI; otherwise the user's only input device
+                // silently does nothing after a crash-recovery restore.
+                mappingEngine.start(with: preset)
             }
         }
 
@@ -61,6 +65,10 @@ final class AppState: ObservableObject {
     /// the others. Wraps in a fileprivate method so it's available
     /// from the observer closure above.
     fileprivate func gracefulShutdown() {
+        // 0. Flush stats synchronously so the session's counters and time
+        //    rollup are on disk before the process exits. The periodic flush
+        //    writes asynchronously and may not complete at Cmd+Q.
+        StatsService.shared.flushSynchronously()
         // 1. Stop the mapping engine. Releases held keys / mouse
         //    buttons / MIDI notes via the engine's stop() path.
         mappingEngine.stop()
@@ -101,6 +109,10 @@ struct InputConfig: App {
                         presetStore: appState.presetStore,
                         mappingEngine: appState.mappingEngine,
                         controllerService: appState.controllerService
+                    )
+                    FrontmostAppWatcher.shared.install(
+                        presetStore: appState.presetStore,
+                        mappingEngine: appState.mappingEngine
                     )
                 }
         }
@@ -206,6 +218,99 @@ struct InputConfig: App {
                 .environmentObject(appState.presetStore)
                 .environmentObject(appState.controllerService)
                 .environmentObject(appState.mappingEngine)
+        }
+    }
+}
+
+/// Switches presets automatically when the frontmost app changes. A preset
+/// opts in by listing bundle identifiers in
+/// `automation.autoActivateBundleIDs` (the "Auto-activate for apps" list in
+/// the editor's Advanced Options), and the whole feature is gated by a
+/// global Settings toggle so nothing moves without the user asking.
+///
+/// Sandbox-safe: NSWorkspace.didActivateApplicationNotification delivers the
+/// activated app's bundle identifier with no extra entitlement; the same
+/// observer pattern already drives the light-bar re-assert in
+/// GameControllerService.
+///
+/// Restore behavior: the preset that was active before the first auto
+/// switch is remembered, and switching to an app that matches no preset
+/// brings it back (or deactivates, if nothing was active). A manual
+/// activation in between clears the memory, so the watcher never fights
+/// an explicit user choice.
+@MainActor
+final class FrontmostAppWatcher {
+    static let shared = FrontmostAppWatcher()
+
+    static let enabledDefaultsKey = "InputConfig.autoSwitch.enabled"
+
+    private weak var presetStore: PresetStore?
+    private weak var mappingEngine: MappingEngine?
+    private var observer: NSObjectProtocol?
+    /// What was active before the first auto switch, restored on leaving.
+    private var autoSwitchedFromPresetID: UUID?
+    /// The preset the watcher itself activated last; if the active preset
+    /// differs, the user switched manually and the watcher backs off.
+    private var lastAutoActivatedPresetID: UUID?
+
+    private init() {}
+
+    func install(presetStore: PresetStore, mappingEngine: MappingEngine) {
+        guard observer == nil else { return }
+        self.presetStore = presetStore
+        self.mappingEngine = mappingEngine
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                            as? NSRunningApplication)?.bundleIdentifier
+            Task { @MainActor in
+                self?.handleFrontmost(bundleID: bundleID)
+            }
+        }
+    }
+
+    private func handleFrontmost(bundleID: String?) {
+        guard UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey),
+              let bundleID,
+              bundleID != Bundle.main.bundleIdentifier,
+              let store = presetStore,
+              let engine = mappingEngine else { return }
+
+        if let match = store.presets.first(where: { preset in
+            (preset.automation.autoActivateBundleIDs ?? []).contains(bundleID)
+        }) {
+            guard store.activePresetId != match.id else { return }
+            // Remember what to come back to, but only when this is the
+            // FIRST auto switch of a run; hopping between two matched apps
+            // keeps the original restore point.
+            if lastAutoActivatedPresetID == nil || store.activePresetId != lastAutoActivatedPresetID {
+                autoSwitchedFromPresetID = store.activePresetId
+            }
+            engine.stop()
+            store.activatePreset(match)
+            engine.start(with: match)
+            lastAutoActivatedPresetID = match.id
+        } else if let lastAuto = lastAutoActivatedPresetID {
+            // Only unwind an ACTIVE auto switch; if the user changed presets
+            // manually since, leave their choice alone.
+            guard store.activePresetId == lastAuto else {
+                lastAutoActivatedPresetID = nil
+                autoSwitchedFromPresetID = nil
+                return
+            }
+            if let backID = autoSwitchedFromPresetID,
+               let back = store.presets.first(where: { $0.id == backID }) {
+                engine.stop()
+                store.activatePreset(back)
+                engine.start(with: back)
+            } else {
+                engine.stop()
+                store.deactivateAll()
+            }
+            lastAutoActivatedPresetID = nil
+            autoSwitchedFromPresetID = nil
         }
     }
 }

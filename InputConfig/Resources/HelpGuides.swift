@@ -208,12 +208,12 @@ enum HelpGuideLibrary {
                 steps: [
                     "8BitDo controllers: flip the mode switch on the back to A (Apple). See the 8BitDo guide for details.",
                     "Stadia controllers: update the controller using Google's Bluetooth update tool first.",
-                    "Generic USB gamepads: most of these report as raw HID devices, which InputConfig does not currently read."
+                    "Generic USB gamepads: these report as raw HID devices, which InputConfig reads directly. They appear under Connected Controllers in Settings."
                 ]
             ),
             HelpSection(
                 heading: "If a controller is not detected",
-                body: "Open System Settings then Bluetooth or USB and confirm the controller is connected. Then click Refresh Controllers in InputConfig's controller popover. If it still does not appear, the controller is most likely not supported by GameController. Older PS3 controllers, knockoff Xbox controllers, and some racing wheels fall into this category."
+                body: "Open System Settings then Bluetooth or USB and confirm the controller is connected. Then click Refresh Controllers in InputConfig's controller popover. Most pads, fight sticks, and wheels that GameController does not support are still read directly as raw HID devices, including the DualShock 3 over USB and Logitech F-series pads with the switch on D. A controller that still does not appear is most likely in a vendor-specific mode a sandboxed app cannot read, such as the Xbox 360's wired protocol; try a different mode switch position if it has one."
             ),
         ]
     )
@@ -222,7 +222,7 @@ enum HelpGuideLibrary {
         id: "8bitdo-mode",
         title: "Using 8BitDo Controllers",
         category: "Troubleshooting",
-        summary: "8BitDo controllers can run in several different modes. macOS only sees the controller properly when it is in Apple mode, so if buttons are not registering or the controller does not appear in InputConfig, the controller is likely in the wrong mode.",
+        summary: "8BitDo controllers can run in several different modes. Apple mode gives the fullest native support and is the most reliable on a Mac, but InputConfig also reads XInput and DirectInput modes directly over raw HID, so most 8BitDo controllers still work for mapping in any mode and appear under Connected Controllers in Settings. If buttons are not registering, switch to Apple mode using the steps below.",
         sections: [
             HelpSection(
                 heading: "Switching to Apple mode",
@@ -239,8 +239,8 @@ enum HelpGuideLibrary {
                 steps: [
                     "A = Apple mode (use this on Mac)",
                     "S = Nintendo Switch mode (partial Mac support)",
-                    "X = XInput / Xbox mode (Windows, not supported on Mac)",
-                    "D = DirectInput mode (legacy Windows, not supported on Mac)"
+                    "X = XInput / Xbox mode (read directly over raw HID; works for mapping)",
+                    "D = DirectInput mode (read directly over raw HID; works for mapping)"
                 ]
             ),
             HelpSection(

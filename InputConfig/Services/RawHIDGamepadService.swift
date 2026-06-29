@@ -95,7 +95,14 @@ final class RawHIDGamepadService: ObservableObject {
             kIOHIDDeviceUsagePageKey as String: 0x01,
             kIOHIDDeviceUsageKey as String: 0x05,
         ]
-        let matches: [[String: Any]] = [joystickMatch, gamepadMatch]
+        // Multi-axis Controller (0x08): some wheels, yokes, and HOTAS
+        // devices identify with this usage instead of Joystick/Gamepad
+        // and would otherwise never trigger the attach callback.
+        let multiAxisMatch: [String: Any] = [
+            kIOHIDDeviceUsagePageKey as String: 0x01,
+            kIOHIDDeviceUsageKey as String: 0x08,
+        ]
+        let matches: [[String: Any]] = [joystickMatch, gamepadMatch, multiAxisMatch]
         IOHIDManagerSetDeviceMatchingMultiple(mgr, matches as CFArray)
 
         IOHIDManagerScheduleWithRunLoop(mgr,
@@ -173,7 +180,8 @@ final class RawHIDGamepadService: ObservableObject {
         // PowerA, MadCatz, DualShock 3).
         var profile = ControllerProfileDatabase.profile(
             forVendor: info.vendorID,
-            product: info.productID
+            product: info.productID,
+            transport: info.transport
         )
 
         // Second pass: if no hand-coded entry matched, ask the HID
@@ -214,6 +222,19 @@ final class RawHIDGamepadService: ObservableObject {
         // controllers to work alongside system controller agents.
         let openResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
         guard openResult == kIOReturnSuccess else { return }
+
+        // A DualShock 3 on USB stays silent until the host sends the
+        // Sixaxis "operational mode" feature report (ID 0xF4). Without
+        // it the pad enumerates, opens, and never emits a single input
+        // report, so the profile is dead on arrival.
+        if let p = profile, case .dualShock3 = p.layout {
+            var enable: [UInt8] = [0x42, 0x0C, 0x00, 0x00]
+            IOHIDDeviceSetReport(device,
+                                 kIOHIDReportTypeFeature,
+                                 0xF4,
+                                 &enable,
+                                 enable.count)
+        }
 
         let gamepad = RawHIDGamepad(
             device: device,
@@ -263,18 +284,23 @@ final class RawHIDGamepadService: ObservableObject {
     }
 
     private func handleDeviceDetached(_ device: IOHIDDevice) {
-        guard let locRef = IOHIDDeviceGetProperty(device, kIOHIDLocationIDKey as CFString) as? NSNumber else { return }
-        let location = locRef.uint64Value
-
-        // Clear lookup tables FIRST so an in-flight HID callback can't
-        // resolve a gamepad and dereference a soon-to-be-released
-        // IOHIDDevice. `removeValue(forKey:)` returns the prior value
-        // and zeroes the slot atomically under the lock - safer than
-        // subscript-nil, which behaves the same but is less obvious.
+        // Resolve the location from the cached table rather than re-reading it
+        // from the dying device. IOKit frequently fails this property read for
+        // an already-departed USB device, and the old early-return on that
+        // failure leaked the report buffer, device handle, lookup entries, and
+        // the published slot. Clear lookup tables FIRST so an in-flight HID
+        // callback can't resolve a gamepad and dereference a soon-to-be-
+        // released IOHIDDevice.
         deviceLookupLock.lock()
-        deviceToLocation.removeValue(forKey: ObjectIdentifier(device))
-        gamepadsByLocation.removeValue(forKey: location)
+        let cachedLocation = deviceToLocation.removeValue(forKey: ObjectIdentifier(device))
+        let location = cachedLocation
+            ?? (IOHIDDeviceGetProperty(device, kIOHIDLocationIDKey as CFString) as? NSNumber)?.uint64Value
+        if let location = location {
+            gamepadsByLocation.removeValue(forKey: location)
+        }
         deviceLookupLock.unlock()
+
+        guard let location = location else { return }
 
         if let gamepad = openDevices.removeValue(forKey: location) {
             IOHIDDeviceUnscheduleFromRunLoop(gamepad.device,
