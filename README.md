@@ -2,11 +2,15 @@
 
 Map any game controller to keyboard and mouse on macOS.
 
+> InputConfig was previously called JoystickConfig. It is being re-released on the Mac App Store under the new name, so the download link is temporarily unavailable. It will be back as soon as the new version is approved.
+
 ## Overview
 
 InputConfig lets you use any game controller as a keyboard and mouse on your Mac. Plug in your controller, pick a preset, and go. Or build your own from scratch.
 
-Works with DualSense (PS5), DualSense Edge, DualShock 4 (PS4), Xbox Wireless, and any MFi or HID-compatible gamepad. No drivers needed.
+Works with DualSense (PS5), DualSense Edge, DualShock 4 (PS4), Xbox Wireless, Nintendo Switch Pro, 8BitDo, and any MFi or HID-compatible gamepad. No drivers needed.
+
+You can map to more than keys and clicks. Type whole phrases, send MIDI to a DAW, or control InputConfig itself from a button. And it is not just for game controllers: your Mac keyboard, mouse, and trackpad can be inputs too, including Force Touch trackpad pressure.
 
 ![Welcome](screenshots/welcome.png)
 
@@ -31,15 +35,23 @@ The binding editor is where you set up your mappings. Hit Scan to detect a butto
 ## Features
 
 - Map buttons, triggers, joysticks, and D-pad to keyboard keys, mouse movement, mouse buttons, and scroll wheel
-- Built-in presets for adaptive controllers, desktop navigation, web browsing, media control, and popular games
+- Type whole words or phrases from a single button
+- Trigger app actions from your controller: switch presets, jump to a specific preset, or pause and resume output
+- Tap and hold for two actions on one button, a quick tap does one thing and holding does another
+- Double tap a button for a third action
+- Use your Mac keyboard, mouse, and trackpad as inputs too, including Force Touch trackpad pressure and Force Click
+- Switch presets automatically based on the app you are using
+- Hundreds of built-in presets for adaptive controllers, desktop navigation, web browsing, media control, popular games, and Mac apps
 - Live controller visualizer mirrors your input in real time
-- Record macro sequences with custom timing per step
+- Record macro sequences with custom timing, including chord steps that hold one key while tapping others
 - Turbo (rapid fire) and toggle mode on any button
+- Map cursor zones, stick zones, and touchpad regions and gestures
 - Adjustable deadzones, axis inversion, and sensitivity curves with visual calibration
 - Customize controller light bar colors per preset with a full RGB color picker
 - Send MIDI output to your favorite DAW
 - Built-in 3D gyroscope and motion tracking
-- Touchpad surface calibration
+- Spoken and haptic feedback
+- Menu bar available in 12 languages
 - Create unlimited presets and switch instantly
 - Import, export, and share presets between users
 - Convert presets between controller types
@@ -53,7 +65,10 @@ The binding editor is where you set up your mappings. Hit Scan to detect a butto
 - PlayStation DualSense (PS5) and DualSense Edge
 - PlayStation DualShock 4 (PS4)
 - Xbox Wireless Controller
+- Nintendo Switch Pro Controller
+- 8BitDo controllers
 - Any MFi or HID-compatible gamepad
+- Your Mac keyboard, mouse, and trackpad can also be used as inputs
 
 ## Requirements
 
