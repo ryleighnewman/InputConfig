@@ -8,6 +8,10 @@ InputConfig lets you use any game controller as a keyboard and mouse on your Mac
 
 Works with DualSense (PS5), DualSense Edge, DualShock 4 (PS4), Xbox Wireless, and any MFi or HID-compatible gamepad. No drivers needed.
 
+![Welcome](screenshots/welcome.png)
+
+When you open InputConfig it shows you everything it can do up front. Start a preset from scratch, let the Smart Preset Maker build one for you, or open a guide. The cards below are the features you can build with: keyboard and mouse output, MIDI, variable sensitivity, deadzone calibration, macros and turbo, haptic and spoken feedback, light bar control, full controller support, touchpad mouse, gyroscope motion, and lifetime statistics.
+
 ![Main View](screenshots/main_view.png)
 
 The main view shows all your presets on the left with a live status bar for connected controllers. You can see battery level, button count, axis count, and light bar status at a glance. Activate any preset with one click. The bottom panel is a live logger that shows engine activity, connected controllers, and input events in real time at 120Hz.
@@ -16,13 +20,13 @@ The main view shows all your presets on the left with a live status bar for conn
 
 Click any connected controller in the status bar to open the controller panel. From here you can change the light bar color with presets or a custom color picker, adjust brightness, or kick off an RGB cycle. The panel also shows controller type, button and axis counts, motion support, battery level, and the full list of raw button names exposed by the device.
 
-![Active Preset with Live Log](screenshots/active_preset.png)
+![Live Controller Visualizer](screenshots/live_visualizer.png)
 
-When you activate a preset, the engine starts polling at 120Hz and the live log on the right shows everything happening in real time. You can see which bindings are firing, the exact serialized output for each press, raw axis values, and timing information for every event. Useful for diagnosing why a binding is not firing or for confirming a macro is firing in the right order.
+Activate a preset and the live visualizer mirrors your controller on screen in real time. Every button, stick, and trigger lights up as you press it, so you can confirm a mapping is working at a glance. The preset list on the left is organized into folders you can name and color, and the log along the bottom shows every event as it fires at 120Hz.
 
 ![Binding Editor](screenshots/binding_editor.png)
 
-The binding editor is where you set up your mappings. Hit Scan to detect a button press or axis movement from your controller, then assign it to a keyboard key, mouse button, mouse motion, or scroll wheel. Every binding has its own output type picker and value selector. You can add multiple outputs per input, reorder bindings with drag and drop, and duplicate or delete them individually. Each binding has advanced options to set per-axis deadzones, invert axes, pick a sensitivity curve, enable toggle mode, configure turbo rapid fire, set repeat count and delay, or build a macro sequence with custom wait and hold times per step.
+The binding editor is where you set up your mappings. Hit Scan to detect a button press or axis movement from your controller, then assign it to a keyboard key, mouse button, mouse motion, or scroll wheel. Every binding has its own output type picker and value selector. You can add multiple outputs per input, reorder bindings with drag and drop, and duplicate or delete them individually. Each binding has advanced options for per-axis deadzones, axis inversion, sensitivity curves, toggle mode, turbo rapid fire, repeat count and delay, or a full macro sequence with custom wait and hold times per step.
 
 ## Features
 
