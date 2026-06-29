@@ -23,7 +23,6 @@ xcuserdata/
 # Editor / tooling
 .cursor/
 .vscode/
-.claude/
 
 # Compiled helper binary (rebuilt by build_and_archive.sh)
 LightHelper/LightHelper
