@@ -16,17 +16,9 @@ You can map to more than keys and clicks. Type whole phrases, send MIDI to a DAW
 
 When you open InputConfig it shows you everything it can do up front. Start a preset from scratch, let the Smart Preset Maker build one for you, or open a guide. The cards below are the features you can build with: keyboard and mouse output, MIDI, variable sensitivity, deadzone calibration, macros and turbo, haptic and spoken feedback, light bar control, full controller support, touchpad mouse, gyroscope motion, and lifetime statistics.
 
-![Main View](screenshots/main_view.png)
-
-The main view shows all your presets on the left with a live status bar for connected controllers. You can see battery level, button count, axis count, and light bar status at a glance. Activate any preset with one click. The bottom panel is a live logger that shows engine activity, connected controllers, and input events in real time at 120Hz.
-
-![Controller Light Bar Customization](screenshots/controller_popover.png)
-
-Click any connected controller in the status bar to open the controller panel. From here you can change the light bar color with presets or a custom color picker, adjust brightness, or kick off an RGB cycle. The panel also shows controller type, button and axis counts, motion support, battery level, and the full list of raw button names exposed by the device.
-
 ![Live Controller Visualizer](screenshots/live_visualizer.png)
 
-Activate a preset and the live visualizer mirrors your controller on screen in real time. Every button, stick, and trigger lights up as you press it, so you can confirm a mapping is working at a glance. The preset list on the left is organized into folders you can name and color, and the log along the bottom shows every event as it fires at 120Hz.
+Activate a preset and the live visualizer mirrors your controller on screen in real time. Every button, stick, and trigger lights up as you press it, so you can confirm a mapping is working at a glance. The preset list on the left is organized into folders you can name and color, and the log along the bottom shows every event as it fires at 120Hz. The status bar up top shows each connected controller with its battery, button and axis counts, and light bar. Click a controller to change its light bar color, adjust brightness, or start an RGB cycle.
 
 ![Binding Editor](screenshots/binding_editor.png)
 
