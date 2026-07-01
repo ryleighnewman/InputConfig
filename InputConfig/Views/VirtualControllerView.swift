@@ -243,22 +243,28 @@ struct VirtualControllerView<Trailing: View>: View {
                 } label: {
                     Image(systemName: "minus.magnifyingglass")
                         .font(.caption)
+                        .accessibilityHidden(true)
                 }
                 .buttonStyle(.borderless)
                 .help("Shrink visualizer")
+                .accessibilityLabel("Shrink visualizer")
 
                 Slider(value: $visualizerScale, in: 0.3...1.5)
                     .frame(width: 80)
                     .help("Resize the live visualizer content")
+                    .accessibilityLabel("Visualizer size")
+                    .accessibilityValue(String(format: "%.0f percent", visualizerScale * 100))
 
                 Button {
                     visualizerScale = min(1.5, visualizerScale + 0.1)
                 } label: {
                     Image(systemName: "plus.magnifyingglass")
                         .font(.caption)
+                        .accessibilityHidden(true)
                 }
                 .buttonStyle(.borderless)
                 .help("Enlarge visualizer")
+                .accessibilityLabel("Enlarge visualizer")
             }
 
             slotPicker
@@ -350,6 +356,9 @@ struct VirtualControllerView<Trailing: View>: View {
         return Circle()
             .fill(connected ? Color.green : Color.red.opacity(0.7))
             .frame(width: 8, height: 8)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Controller connection")
+            .accessibilityValue(connected ? "Connected" : "Disconnected")
     }
 
     // MARK: - Layout
@@ -580,6 +589,7 @@ struct VirtualControllerView<Trailing: View>: View {
             HStack {
                 Label("Keyboard layout", systemImage: "keyboard")
                     .font(.callout.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(bound.count) key\(bound.count == 1 ? "" : "s") bound")
                     .font(.caption2)
@@ -605,6 +615,7 @@ struct VirtualControllerView<Trailing: View>: View {
             HStack {
                 Label("Mouse layout", systemImage: "computermouse")
                     .font(.callout.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(boundKinds.count) input\(boundKinds.count == 1 ? "" : "s") bound")
                     .font(.caption2)
@@ -635,6 +646,7 @@ struct VirtualControllerView<Trailing: View>: View {
             HStack {
                 Label("Touchpad layout", systemImage: "rectangle.and.hand.point.up.left.fill")
                     .font(.callout.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(touchpadBindings) input\(touchpadBindings == 1 ? "" : "s") bound")
                     .font(.caption2)
@@ -837,6 +849,7 @@ struct VirtualControllerView<Trailing: View>: View {
             Text("Extra axes")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             ForEach(axes) { axis in
                 HStack(spacing: 8) {
                     Text(axis.label)
@@ -862,6 +875,9 @@ struct VirtualControllerView<Trailing: View>: View {
                         .foregroundStyle(.tertiary)
                         .frame(width: 44, alignment: .trailing)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(axis.label)
+                .accessibilityValue(String(format: "%+.2f", axis.value))
             }
         }
         .padding(.top, 4)
@@ -876,6 +892,17 @@ struct VirtualControllerView<Trailing: View>: View {
         if lower.hasPrefix("button ") { return false }
         if lower.hasPrefix("btn ") { return false }
         return true
+    }
+
+    /// Spoken value for the combined "Extra buttons" element. Lists each
+    /// named button and appends "pressed" to the ones currently held, so
+    /// the state is conveyed without relying on the chip's color.
+    private func namedExtrasAccessibilityValue(
+        _ extras: [GameControllerService.ExtraButton]
+    ) -> String {
+        extras.map { extra in
+            extra.pressed ? "\(extra.label) pressed" : extra.label
+        }.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -896,10 +923,18 @@ struct VirtualControllerView<Trailing: View>: View {
                     Text("Extra buttons")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
                     FlowChipRow(chips: named.map { extra in
                         let color: Color = extra.pressed ? .green : .secondary
                         return (extra.label, color)
                     })
+                    // FlowChipRow encodes each chip's press state only as a
+                    // color, which VoiceOver cannot perceive. Collapse the
+                    // row into one element that names each button and speaks
+                    // which are currently pressed as a non-color cue.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Extra buttons")
+                    .accessibilityValue(namedExtrasAccessibilityValue(named))
                 }
             }
             if !unknown.isEmpty {
@@ -907,6 +942,7 @@ struct VirtualControllerView<Trailing: View>: View {
                     Text("Unknown buttons")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
                     HStack(spacing: 8) {
                         ForEach(unknown) { btn in
                             unknownButtonPlaceholder(btn)
@@ -944,6 +980,9 @@ struct VirtualControllerView<Trailing: View>: View {
             }
             .frame(width: 28, height: 28)
             .help("Unknown extra button \(button.index) - drag in 'Customize layout' to reposition")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Extra button \(button.index)")
+            .accessibilityValue(button.pressed ? "pressed" : "released")
         }
     }
 
@@ -1102,6 +1141,11 @@ struct VirtualControllerView<Trailing: View>: View {
             }
             .buttonStyle(.plain)
             .offset(totalOffset)
+            // Fold the widget's own accessibility element (label + live
+            // value) up onto the tappable button, and add a hint so
+            // VoiceOver users know activating it inspects the bindings.
+            .accessibilityElement(children: .combine)
+            .accessibilityHint("Inspects bindings for this input")
             .popover(isPresented: isOpen, arrowEdge: .top) {
                 inspectorContent(label: label, events: events)
             }
@@ -1159,6 +1203,9 @@ struct VirtualControllerView<Trailing: View>: View {
                     Capsule().fill(pressed ? Color.green.opacity(0.20) : Color.secondary.opacity(0.10))
                 )
                 .overlay(Capsule().stroke(pressed ? Color.green : Color.secondary.opacity(0.3), lineWidth: 0.5))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(label) button")
+                .accessibilityValue(pressed ? "pressed" : "released")
         }
     }
 
@@ -1414,6 +1461,18 @@ private struct StickWidget: View {
             .frame(width: 72, height: 72)
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    /// Spoken description of the live analog position and press state, so
+    /// VoiceOver users hear where the stick is instead of a silent circle.
+    private var accessibilityValue: String {
+        let xPart = String(format: "X %.2f", x)
+        let yPart = String(format: "Y %.2f", y)
+        let pressPart = pressed ? ", pressed" : ""
+        return "\(xPart), \(yPart)\(pressPart)"
     }
 }
 
@@ -1444,6 +1503,9 @@ private struct TriggerWidget: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) trigger")
+        .accessibilityValue(String(format: "%.0f percent", min(1, max(0, value)) * 100))
     }
 }
 
@@ -1462,6 +1524,9 @@ private struct ShoulderWidget: View {
                 .foregroundStyle(pressed ? .green : .secondary)
         }
         .frame(width: 56, height: 18)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) shoulder")
+        .accessibilityValue(pressed ? "pressed" : "released")
     }
 }
 
@@ -1482,6 +1547,20 @@ private struct DPadWidget: View {
             }
             arrow(down: true, active: down)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("D-pad")
+        .accessibilityValue(directionValue(up: up, down: down, left: left, right: right))
+    }
+
+    /// Spoken direction the D-pad is currently pressed toward, combining
+    /// the two axes so diagonals read naturally (for example "up right").
+    private func directionValue(up: Bool, down: Bool, left: Bool, right: Bool) -> String {
+        var parts: [String] = []
+        if up { parts.append("up") }
+        if down { parts.append("down") }
+        if left { parts.append("left") }
+        if right { parts.append("right") }
+        return parts.isEmpty ? "centered" : parts.joined(separator: " ")
     }
 
     private func arrow(up: Bool = false, down: Bool = false, left: Bool = false, right: Bool = false, active: Bool) -> some View {
@@ -1517,6 +1596,9 @@ private struct FaceButtonGlyph: View {
                 .foregroundStyle(pressed ? tint : Color.secondary)
         }
         .frame(width: 28, height: 28)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) button")
+        .accessibilityValue(pressed ? "pressed" : "released")
     }
 }
 
@@ -1618,6 +1700,9 @@ private struct TouchpadWidget: View {
         }
         .frame(width: pad.width, height: pad.height)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Touchpad")
+        .accessibilityValue(pressed ? "pressed" : "released")
         // 60 Hz sampling. Higher rates produced visibly worse
         // performance because each tick invalidated @State and forced
         // SwiftUI to rebuild the whole widget body. 60 Hz matches the
@@ -1811,5 +1896,10 @@ private struct MotionWidget: View {
             yawAngle: yaw,
             mode: .compact
         )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Motion")
+        .accessibilityValue(String(
+            format: "Roll %.0f, pitch %.0f, yaw %.0f degrees",
+            roll * 180 / .pi, pitch * 180 / .pi, yaw * 180 / .pi))
     }
 }

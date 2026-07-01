@@ -107,7 +107,7 @@ final class RawHIDGamepadService: ObservableObject {
 
         IOHIDManagerScheduleWithRunLoop(mgr,
                                         CFRunLoopGetMain(),
-                                        CFRunLoopMode.defaultMode.rawValue)
+                                        CFRunLoopMode.commonModes.rawValue)
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
@@ -143,7 +143,7 @@ final class RawHIDGamepadService: ObservableObject {
         for (_, gamepad) in openDevices {
             IOHIDDeviceUnscheduleFromRunLoop(gamepad.device,
                                              CFRunLoopGetMain(),
-                                             CFRunLoopMode.defaultMode.rawValue)
+                                             CFRunLoopMode.commonModes.rawValue)
             IOHIDDeviceClose(gamepad.device, IOOptionBits(kIOHIDOptionsTypeNone))
         }
         for (_, buf) in reportBuffers { buf.deallocate() }
@@ -157,7 +157,7 @@ final class RawHIDGamepadService: ObservableObject {
             IOHIDManagerClose(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
             IOHIDManagerUnscheduleFromRunLoop(mgr,
                                               CFRunLoopGetMain(),
-                                              CFRunLoopMode.defaultMode.rawValue)
+                                              CFRunLoopMode.commonModes.rawValue)
             manager = nil
         }
     }
@@ -210,6 +210,12 @@ final class RawHIDGamepadService: ObservableObject {
                 productID: info.productID,
                 productName: info.productName
             )
+            // Cache the object->location mapping for unidentified devices too,
+            // so detach can resolve the location and remove the published slot.
+            // Without this, unplugged unidentified devices lingered forever.
+            deviceLookupLock.lock()
+            deviceToLocation[ObjectIdentifier(device)] = info.locationID
+            deviceLookupLock.unlock()
             if !unidentifiedDevices.contains(undef) {
                 unidentifiedDevices.append(undef)
             }
@@ -278,7 +284,7 @@ final class RawHIDGamepadService: ObservableObject {
         )
         IOHIDDeviceScheduleWithRunLoop(device,
                                        CFRunLoopGetMain(),
-                                       CFRunLoopMode.defaultMode.rawValue)
+                                       CFRunLoopMode.commonModes.rawValue)
 
         connectedGamepads.append(gamepad)
     }
@@ -305,7 +311,7 @@ final class RawHIDGamepadService: ObservableObject {
         if let gamepad = openDevices.removeValue(forKey: location) {
             IOHIDDeviceUnscheduleFromRunLoop(gamepad.device,
                                              CFRunLoopGetMain(),
-                                             CFRunLoopMode.defaultMode.rawValue)
+                                             CFRunLoopMode.commonModes.rawValue)
             IOHIDDeviceClose(gamepad.device, IOOptionBits(kIOHIDOptionsTypeNone))
         }
         if let buf = reportBuffers.removeValue(forKey: location) {

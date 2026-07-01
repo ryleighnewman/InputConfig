@@ -652,10 +652,21 @@ final class TouchpadService: @unchecked Sendable {
         return regions.first(where: { $0.id == id })
     }
 
+    /// Pressed set with expired tap-latches dropped at read time. A fast tap
+    /// that lands between poll frames stays visible for its latch window, but
+    /// once the latch elapses no future finger event would prune it, so we
+    /// check expiry here. Held fingers keep refreshing their expiry via the
+    /// continuous ingest path, so they are never dropped early. Call locked.
+    private func livePressedRegionsLocked() -> Set<UUID> {
+        let now = ProcessInfo.processInfo.systemUptime
+        return pressedRegions.filter { (regionPressExpiry[$0] ?? .infinity) > now }
+    }
+
     /// True when any finger is currently inside the region.
     func isRegionPressed(_ id: UUID) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return pressedRegions.contains(id)
+        guard pressedRegions.contains(id) else { return false }
+        return (regionPressExpiry[id] ?? .infinity) > ProcessInfo.processInfo.systemUptime
     }
 
     /// Combined regions + pressed-set snapshot under a single lock
@@ -664,7 +675,7 @@ final class TouchpadService: @unchecked Sendable {
     /// polling that needs both pieces of state per frame.
     func snapshotRegions() -> (regions: [TouchpadRegion], pressed: Set<UUID>) {
         lock.lock(); defer { lock.unlock() }
-        return (regions, pressedRegions)
+        return (regions, livePressedRegionsLocked())
     }
 
     // MARK: - Gesture detection

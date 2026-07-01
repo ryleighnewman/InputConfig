@@ -2579,9 +2579,27 @@ struct ControllerChipView: View {
         .onTapGesture {
             showPopover.toggle()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(controller.vendorName ?? "Controller \(index)")
+        .accessibilityValue(chipAccessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens controller light and settings")
         .popover(isPresented: $showPopover, arrowEdge: .trailing) {
             controllerPopover
         }
+    }
+
+    /// Battery and light status summarized for VoiceOver so the chip reads
+    /// its full state without exposing the decorative indicators separately.
+    private var chipAccessibilityValue: String {
+        var parts: [String] = []
+        if let info = info, info.hasBattery, let level = info.batteryLevel {
+            parts.append("Battery \(Int(level * 100)) percent")
+        }
+        if info?.hasLight == true {
+            parts.append("Light on")
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func shortDescription(_ info: ControllerInfo) -> String {
@@ -2797,6 +2815,7 @@ struct ControllerChipView: View {
                 ColorPicker("", selection: $customColor, supportsOpacity: false)
                     .labelsHidden()
                     .frame(width: 28, height: 28)
+                    .accessibilityLabel("Custom light bar color")
 
                 Button("Apply") {
                     let nsColor = NSColor(customColor).usingColorSpace(.sRGB) ?? NSColor(customColor)
@@ -2831,6 +2850,7 @@ struct ControllerChipView: View {
                     .onChange(of: brightness) { _, newValue in
                         onSetBrightness(UInt8(newValue))
                     }
+                    .accessibilityLabel("Light bar brightness")
 
                     Image(systemName: "light.max")
                         .font(.system(size: 10))
@@ -2866,6 +2886,8 @@ struct ControllerChipView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                     Slider(value: $rgbSpeed, in: 0.25...6.0)
+                        .accessibilityLabel("RGB cycle speed")
+                        .accessibilityValue(String(format: "%.2f times normal", rgbSpeed))
                     Image(systemName: "hare")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
@@ -2973,8 +2995,7 @@ struct PresetRowView: View {
                 }
             }
             .frame(width: 14, height: 18)
-            .accessibilityLabel(preset.isActive ? "Active" : "Inactive")
-            .accessibilityValue(preset.name)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(preset.name)
@@ -2990,6 +3011,9 @@ struct PresetRowView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(preset.isActive ? "Active" : "Inactive")
+            .accessibilityAddTraits(preset.isActive ? [.isSelected] : [])
 
             Spacer(minLength: 4)
 
@@ -4449,6 +4473,7 @@ struct SmartPresetMakerView: View {
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
+            .accessibilityLabel("Close")
         }
         .padding(16)
     }

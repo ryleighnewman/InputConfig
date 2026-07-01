@@ -49,6 +49,7 @@ struct StickRegionsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Stick Regions")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("Draw zones on a stick's X/Y plane. A binding fires while the stick is pushed into the zone. Good for binding diagonals as one input.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -65,6 +66,8 @@ struct StickRegionsView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 280)
+                .accessibilityLabel("Stick")
+                .accessibilityValue(selectedStick == 1 ? "Right Stick" : "Left Stick")
 
                 Text(drawingNewRegion
                      ? "Click and drag on the stick preview to draw the new region."
@@ -100,10 +103,14 @@ struct StickRegionsView: View {
                     Text(stickReadout)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Live stick position")
+                        .accessibilityValue(stickAccessibilityValue)
 
                     Text("\(svc.regions(forStick: selectedStick).count) / \(Self.maxRegions) regions")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .accessibilityLabel("Region count")
+                        .accessibilityValue("\(svc.regions(forStick: selectedStick).count) of \(Self.maxRegions) regions defined")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -158,29 +165,13 @@ struct StickRegionsView: View {
                         width: (region.maxX - region.minX) * geo.size.width,
                         height: (region.maxY - region.minY) * geo.size.height)
                     let color = paletteColor(at: region.colorIndex)
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(color.opacity(isSelected ? 0.45 : 0.25))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(color, lineWidth: isSelected ? 2 : 1)
-                        )
-                        .overlay(
-                            Text(region.name)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(color.opacity(0.85))
-                                .clipShape(Capsule()),
-                            alignment: .topLeading
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .onTapGesture {
-                            if !drawingNewRegion {
-                                selectedRegionID = region.id
-                            }
-                        }
+                    regionRect(name: region.name,
+                               extent: regionExtentDescription(region),
+                               isSelected: isSelected,
+                               rect: rect,
+                               color: color) {
+                        if !drawingNewRegion { selectedRegionID = region.id }
+                    }
                 }
 
                 if drawingNewRegion, let start = dragStart, let current = dragCurrent {
@@ -196,6 +187,7 @@ struct StickRegionsView: View {
                         .frame(width: r.width, height: r.height)
                         .position(x: r.midX, y: r.midY)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
 
                 // Live stick position indicator - small filled dot
@@ -210,11 +202,25 @@ struct StickRegionsView: View {
                         .position(x: liveStickPosition.x * geo.size.width,
                                   y: liveStickPosition.y * geo.size.height)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .contentShape(Rectangle())
             .gesture(drawGesture(size: geo.size),
                      including: drawingNewRegion ? .gesture : .none)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Stick region canvas")
+        .accessibilityValue(panelAccessibilityValue)
+        .accessibilityHint("A square coordinate space from left to right and top to bottom. Center is the resting stick position. Contains the defined regions and a live indicator of the connected stick's position.")
+        // Non-drag path so keyboard and switch users can create and
+        // remove regions without a pointer drag. Exposed as VoiceOver
+        // custom actions on the canvas.
+        .accessibilityAction(named: Text("Add region in the center")) {
+            addCenteredRegion()
+        }
+        .accessibilityAction(named: Text("Delete selected region")) {
+            if let id = selectedRegionID { deleteRegion(id) }
         }
     }
 
@@ -225,6 +231,7 @@ struct StickRegionsView: View {
             Text("Defined Regions")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             if svc.regions(forStick: selectedStick).isEmpty {
                 Text("None yet.")
                     .font(.caption)
@@ -271,9 +278,12 @@ struct StickRegionsView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .accessibilityLabel("More actions for \(region.name)")
+            .help("Rename or delete")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -285,6 +295,9 @@ struct StickRegionsView: View {
         .onTapGesture {
             selectedRegionID = region.id
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint("Selects this region")
     }
 
     // MARK: - Drawing
@@ -380,6 +393,99 @@ struct StickRegionsView: View {
         return String(format: "Stick: %+.2f, %+.2f",
                       liveStickPosition.x * 2 - 1,
                       (1 - liveStickPosition.y) * 2 - 1)
+    }
+
+    // MARK: - Accessibility helpers
+
+    /// Human-readable extent of a region in the canvas coordinate space,
+    /// phrased for VoiceOver (e.g. "left 20 percent to 60 percent, up 10
+    /// percent to 50 percent"). Canvas X runs left to right, canvas Y runs
+    /// top (up) to bottom (down).
+    /// One drawn region rectangle, extracted from the canvas ForEach so the
+    /// styling plus accessibility modifier chain stays inside the Swift type
+    /// checker's budget (inline it tips over "unable to type-check in time").
+    private func regionRect(name: String, extent: String, isSelected: Bool,
+                            rect: CGRect, color: Color,
+                            onTap: @escaping () -> Void) -> some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color.opacity(isSelected ? 0.45 : 0.25))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(color, lineWidth: isSelected ? 2 : 1)
+            )
+            .overlay(
+                Text(name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(color.opacity(0.85))
+                    .clipShape(Capsule()),
+                alignment: .topLeading
+            )
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+            .onTapGesture(perform: onTap)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(name)
+            .accessibilityValue(extent)
+            .accessibilityHint("Selects this region")
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func regionExtentDescription(_ region: TouchpadRegion) -> String {
+        let pct: (Double) -> Int = { Int(($0 * 100).rounded()) }
+        return "Horizontal \(pct(region.minX)) to \(pct(region.maxX)) percent, "
+            + "vertical \(pct(region.minY)) to \(pct(region.maxY)) percent, "
+            + "where 0 is left and top."
+    }
+
+    /// Value spoken for the whole canvas: how many regions it holds, plus
+    /// which named region the live stick currently occupies (if any).
+    private var panelAccessibilityValue: String {
+        let regions = svc.regions(forStick: selectedStick)
+        var parts: [String] = []
+        if regions.isEmpty {
+            parts.append("No regions defined")
+        } else {
+            parts.append("\(regions.count) region\(regions.count == 1 ? "" : "s") defined")
+        }
+        parts.append(stickAccessibilityValue)
+        return parts.joined(separator: ". ")
+    }
+
+    /// Value describing the live stick: no controller, at center, or the
+    /// name of the region it is currently inside.
+    private var stickAccessibilityValue: String {
+        guard liveStickActive else { return "No controller connected" }
+        if let occupied = occupiedRegion {
+            return "Stick in region \(occupied.name)"
+        }
+        let dx = liveStickPosition.x - 0.5
+        let dy = liveStickPosition.y - 0.5
+        if abs(dx) < 0.03 && abs(dy) < 0.03 {
+            return "Stick centered"
+        }
+        return "Stick outside all regions"
+    }
+
+    /// The region the live stick position currently falls inside, if any.
+    /// Uses the same 0...1 canvas convention as `liveStickPosition`.
+    private var occupiedRegion: TouchpadRegion? {
+        guard liveStickActive else { return nil }
+        let x = liveStickPosition.x
+        let y = liveStickPosition.y
+        return svc.regions(forStick: selectedStick).first { r in
+            x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY
+        }
+    }
+
+    /// Non-drag region creation for keyboard and switch users. Adds a
+    /// default region centered on the canvas which can then be renamed
+    /// or removed from the regions list.
+    private func addCenteredRegion() {
+        guard svc.regions(forStick: selectedStick).count < Self.maxRegions else { return }
+        addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
     }
 
     // MARK: - Helpers

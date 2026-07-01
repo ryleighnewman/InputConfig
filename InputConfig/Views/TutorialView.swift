@@ -219,6 +219,7 @@ fileprivate struct SimulatedCursor: View {
     let targetCenter: CGPoint
     let pressed: Bool
     @State private var landed: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -229,23 +230,30 @@ fileprivate struct SimulatedCursor: View {
                 .frame(width: pressed ? 64 : 20,
                        height: pressed ? 64 : 20)
                 .opacity(pressed ? 0 : 1)
-                .animation(.easeOut(duration: 0.45), value: pressed)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.45), value: pressed)
             // Cursor arrow icon.
             Image(systemName: "cursorarrow.click.2")
                 .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.6), radius: 3, x: 1, y: 2)
                 .scaleEffect(pressed ? 0.85 : 1.0)
-                .animation(.easeOut(duration: 0.18), value: pressed)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: pressed)
         }
-        .position(landed ? targetCenter
-                          : CGPoint(x: targetCenter.x - 220,
-                                    y: targetCenter.y - 140))
-        .animation(.easeOut(duration: 0.5), value: landed)
+        // Under Reduce Motion the cursor is placed directly on the target
+        // instead of gliding in from off-screen.
+        .position((landed || reduceMotion)
+                    ? targetCenter
+                    : CGPoint(x: targetCenter.x - 220,
+                              y: targetCenter.y - 140))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: landed)
+        .accessibilityHidden(true)
         .onAppear {
             // Start off-screen, then glide to the target on the next
-            // runloop tick so SwiftUI sees the position change.
-            DispatchQueue.main.async { landed = true }
+            // runloop tick so SwiftUI sees the position change. Skipped
+            // when Reduce Motion is on since the cursor is already placed.
+            if !reduceMotion {
+                DispatchQueue.main.async { landed = true }
+            }
         }
     }
 }
@@ -267,6 +275,7 @@ struct TutorialCardView: View {
                         .foregroundStyle(step.tint)
                         .frame(width: 32, height: 32)
                         .background(step.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Quick Start - \(state.stepIndex + 1) of \(state.steps.count)")
                             .font(.caption2.weight(.semibold))
@@ -274,6 +283,8 @@ struct TutorialCardView: View {
                         Text(step.title)
                             .font(.headline)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button {
                         state.stop()
@@ -284,6 +295,8 @@ struct TutorialCardView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Skip tutorial")
+                    .accessibilityLabel("Skip tutorial")
+                    .accessibilityHint("Closes the quick start tour")
                 }
 
                 Text(step.body)
@@ -319,6 +332,10 @@ struct TutorialCardView: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
+                    // The header close button already exposes a single
+                    // "Skip tutorial" action to VoiceOver; hide this
+                    // duplicate so assistive tech surfaces only one.
+                    .accessibilityHidden(true)
 
                     Spacer()
 
@@ -476,6 +493,7 @@ struct SpotlightDimView: View {
     let rect: CGRect
     var shape: SpotlightShape = .roundedRect
     @State private var pulse: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -509,22 +527,30 @@ struct SpotlightDimView: View {
                             .compositingGroup()
                     )
 
+                // When Reduce Motion is on, draw a static highlighted ring
+                // (no repeating pulse) so the target is still clearly marked
+                // without any looping animation.
+                let ringActive = reduceMotion ? true : pulse
                 Group {
                     if isCircle {
                         Circle()
-                            .stroke(Color.accentColor, lineWidth: pulse ? 3 : 1.5)
+                            .stroke(Color.accentColor, lineWidth: ringActive ? 3 : 1.5)
                     } else {
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.accentColor, lineWidth: pulse ? 3 : 1.5)
+                            .stroke(Color.accentColor, lineWidth: ringActive ? 3 : 1.5)
                     }
                 }
                 .frame(width: cutoutWidth, height: cutoutHeight)
                 .position(x: local.midX, y: local.midY)
-                .opacity(pulse ? 0.9 : 0.55)
-                .shadow(color: .accentColor.opacity(0.6), radius: pulse ? 12 : 6)
-                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                .opacity(ringActive ? 0.9 : 0.55)
+                .shadow(color: .accentColor.opacity(0.6), radius: ringActive ? 12 : 6)
+                .animation(reduceMotion
+                           ? nil
+                           : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
                            value: pulse)
-                .onAppear { pulse = true }
+                .onAppear {
+                    if !reduceMotion { pulse = true }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -535,6 +561,20 @@ struct SpotlightDimView: View {
 
 struct TutorialDemoView: View {
     let kind: TutorialDemoKind
+
+    /// Short, stable description of each looping demo so VoiceOver reads
+    /// one meaningful element instead of the constantly-changing numbers
+    /// the animation produces.
+    private var accessibilityDescription: String {
+        switch kind {
+        case .analogStick:     return "Analog stick demonstration, showing smooth analog values"
+        case .pressureTrigger: return "Pressure-sensitive trigger demonstration"
+        case .gyro:            return "3D motion model demonstration, mirroring controller orientation"
+        case .lightBar:        return "Per-preset light bar demonstration, cycling through colors"
+        case .macroChain:      return "Macro chain demonstration, highlighting each key in sequence"
+        case .buttonMapping:   return "Button mapping demonstration, mapping the A button to Space"
+        }
+    }
 
     var body: some View {
         Group {
@@ -550,6 +590,8 @@ struct TutorialDemoView: View {
         .frame(maxWidth: .infinity)
         .padding(10)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityDescription)
     }
 }
 

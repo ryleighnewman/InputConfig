@@ -252,7 +252,12 @@ enum HIDReportDecoder {
         if let hatBit = hatBitOffset {
             let hatByte = hatBit / 8
             if hatByte < payload.count {
-                let raw = Int((payload[hatByte] >> (hatBit % 8)) & 0x0F)
+                // Read a 16-bit window so a 4-bit hat that straddles a byte
+                // boundary keeps its high bits (a single-byte shift would drop
+                // them and read a phantom held direction at rest).
+                let lo = UInt16(payload[hatByte])
+                let hi = hatByte + 1 < payload.count ? UInt16(payload[hatByte + 1]) : 0
+                let raw = Int(((lo | (hi << 8)) >> (hatBit % 8)) & 0x0F)
                 let direction = raw - layout.hatLogicalMin
                 // Standard 8-direction encoding after normalization
                 // (0=N, 1=NE, ..., 7=NW; anything else = center).

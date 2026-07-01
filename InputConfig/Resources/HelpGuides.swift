@@ -44,10 +44,35 @@ enum HelpGuideLibrary {
         touchpadAsMouse,
         steamController,
         gyroscopeAim,
+        oneStickDriving,
         dataPersistence,
     ]
 
     // MARK: - Guides
+
+    static let oneStickDriving = HelpGuide(
+        id: "one-stick-driving",
+        title: "One-Stick Driving",
+        category: "Driving and vehicles",
+        summary: "Drive a vehicle with a single joystick: steer, accelerate, brake, and shift between Drive and Reverse, all from one stick. Built for racing and driving games you can control with the keyboard and mouse.",
+        sections: [
+            HelpSection(heading: "What it does",
+                        body: "One-stick driving turns a single analog stick into a whole vehicle control scheme, the way a power wheelchair drives. Left and right steers; pushing forward accelerates and pulling back brakes. Because the app sends keyboard and mouse, variable throttle works by pulsing the accelerate key quickly, so pushing the stick further holds the key a larger share of each cycle, which most games read as proportional speed. Steering is smooth mouse movement by default."),
+            HelpSection(heading: "Turning it on",
+                        body: "Open a preset, scroll to the One-Stick Driving panel below Advanced Options, and switch it on. The fastest start is the built-in One-Stick Racing preset in the Smart Preset Maker.",
+                        steps: [
+                            "Pick which stick drives: Left, Right, or Custom axes.",
+                            "Move the stick and watch the live readout to confirm the right axes respond.",
+                            "Set the accelerate and brake keys to match your game (W and S by default).",
+                            "Choose mouse or A and D keys for steering."]),
+            HelpSection(heading: "Shifting into Reverse",
+                        body: "Snap the stick fully back to the wall a couple of times quickly to shift into Reverse. While in Reverse, pushing forward drives backward; push the stick fully forward to return to Drive. The tap count, timing window, and wall threshold are all adjustable in the editor."),
+            HelpSection(heading: "Tips",
+                        steps: [
+                            "If the vehicle launches the instant you enable drive, your throttle axis is probably an analog trigger that rests at one end. Turn on the trigger option in the Throttle section.",
+                            "Raise the sensitivity curve for finer low-speed control.",
+                            "This works in any game you can drive with the keyboard and mouse. Games that only accept a gamepad are not supported, because the app does not emulate a controller."]),
+        ])
 
     static let accessControllerProfile = HelpGuide(
         id: "access-controller-profile",

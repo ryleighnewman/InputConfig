@@ -157,14 +157,19 @@ struct BindingRowView: View {
                 .controlSize(.small)
                 .frame(width: typeColWidth, alignment: .leading)
                 .accessibilityLabel("Input type")
+                .accessibilityValue(binding.input.type.displayName)
 
                 // COL 3: Index
                 indexPicker
                     .frame(width: indexColWidth, alignment: .leading)
+                    .accessibilityLabel(indexPickerAccessibilityLabel)
+                    .accessibilityValue(indexPickerAccessibilityValue)
 
                 // COL 4: Direction (or empty spacer for Button type)
                 directionPicker
                     .frame(width: dirColWidth, alignment: .leading)
+                    .accessibilityLabel(directionPickerAccessibilityLabel)
+                    .accessibilityValue(directionPickerAccessibilityValue)
 
                 Spacer(minLength: 0)
                 }
@@ -192,6 +197,7 @@ struct BindingRowView: View {
                         .menuStyle(.borderlessButton)
                         .controlSize(.small)
                         .accessibilityLabel("Output type")
+                        .accessibilityValue(binding.outputs[0].type.displayName)
                     }
                     .frame(width: outTypeColWidth, alignment: .leading)
 
@@ -231,6 +237,7 @@ struct BindingRowView: View {
                     if let onDuplicate {
                         CopyIconButton(action: onDuplicate,
                                        helpText: "Duplicate this binding")
+                            .accessibilityLabel("Duplicate this binding")
                     }
 
                     Button(action: onRemove) {
@@ -377,7 +384,8 @@ struct BindingRowView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Note")
-                .accessibilityHint("Click to edit")
+                .accessibilityValue((binding.note?.isEmpty ?? true) ? "empty" : (binding.note ?? ""))
+                .accessibilityHint("Edit the note for this binding")
             }
         }
         .padding(.leading, dragWidth + colGap)
@@ -758,6 +766,102 @@ struct BindingRowView: View {
         return "Pick stick region"
     }
 
+    // MARK: - Index / Direction Accessibility
+
+    /// Spoken role name for the index picker, matching whatever the closed
+    /// menu is actually choosing for the current input type. VoiceOver reads
+    /// this before the value so the control never announces a bare number.
+    private var indexPickerAccessibilityLabel: String {
+        switch binding.input.type {
+        case .button: return "Button"
+        case .axis: return "Axis"
+        case .hat: return "Hat"
+        case .touchpad: return "Finger"
+        case .motion: return "Motion channel"
+        case .touchpadRegion: return "Touchpad region"
+        case .cursorRegion: return "Cursor region"
+        case .stickRegion: return "Stick region"
+        case .extKey: return "Key"
+        case .extMouse: return "Mouse input"
+        case .touchpadGesture: return "Gesture"
+        }
+    }
+
+    /// Current selection spoken as the index picker's value. Mirrors the
+    /// closed-menu label text for each input type.
+    private var indexPickerAccessibilityValue: String {
+        switch binding.input.type {
+        case .button:
+            return buttonMenuLabel(for: binding.input.index)
+        case .axis:
+            return "Axis \(binding.input.index)"
+        case .hat:
+            return "Hat \(binding.input.index)"
+        case .touchpad:
+            return (binding.input.touchpadFinger ?? binding.input.index) == 1 ? "Finger 2" : "Finger 1"
+        case .motion:
+            return (binding.input.motionChannel ?? .gyroY).displayName
+        case .touchpadRegion:
+            return touchpadRegionDisplayName
+        case .cursorRegion:
+            return cursorRegionDisplayName
+        case .stickRegion:
+            return stickRegionDisplayName
+        case .extKey:
+            return "Key \(binding.input.index)"
+        case .extMouse:
+            return (binding.input.extMouseKind ?? .button).displayName
+        case .touchpadGesture:
+            return binding.input.touchpadGestureKind?.displayName ?? "Two-finger tap"
+        }
+    }
+
+    /// Spoken role name for the direction column. Some input types host a
+    /// device picker or a compound axis picker here instead of a plain
+    /// direction, so the label follows what the column actually controls.
+    private var directionPickerAccessibilityLabel: String {
+        switch binding.input.type {
+        case .extKey:
+            return "Keyboard device"
+        case .extMouse:
+            switch binding.input.extMouseKind ?? .button {
+            case .button: return "Mouse button"
+            case .moveX, .moveY, .scrollX, .scrollY: return "Direction"
+            case .pressure, .deepPress: return "Mouse input"
+            }
+        case .touchpad:
+            return "Axis and direction"
+        default:
+            return "Direction"
+        }
+    }
+
+    /// Current selection spoken as the direction column's value, matching the
+    /// closed-menu label for the active input type.
+    private var directionPickerAccessibilityValue: String {
+        switch binding.input.type {
+        case .button, .touchpadRegion, .cursorRegion, .stickRegion, .touchpadGesture:
+            return "Not applicable"
+        case .axis, .motion:
+            return axisDirectionBinding.wrappedValue.displayName
+        case .hat:
+            return hatDirectionBinding.wrappedValue.displayName
+        case .touchpad:
+            let axisLabel = (binding.input.touchpadAxis ?? .x).rawValue.uppercased()
+            let dirLabel = (binding.input.axisDirection ?? .positive).displayName
+            return "\(axisLabel) \(dirLabel)"
+        case .extKey:
+            return externalDeviceLabel(kind: .keyboard)
+        case .extMouse:
+            switch binding.input.extMouseKind ?? .button {
+            case .button: return "Button \(binding.input.index)"
+            case .moveX, .moveY, .scrollX, .scrollY:
+                return (binding.input.axisDirection ?? .positive).displayName
+            case .pressure, .deepPress: return "Built-in trackpad"
+            }
+        }
+    }
+
     // MARK: - Direction Picker (fixed width, empty for buttons)
 
     @ViewBuilder
@@ -986,6 +1090,18 @@ struct BindingRowView: View {
 
     @ViewBuilder
     private func outputValueControls(at index: Int) -> some View {
+        // During an animated removal SwiftUI briefly retains the outgoing row
+        // with its now-stale index; guard so `binding.outputs[index]` and the
+        // per-control get closures never trap on an out-of-range index.
+        if !binding.outputs.indices.contains(index) {
+            EmptyView()
+        } else {
+            outputValueControlsBody(at: index)
+        }
+    }
+
+    @ViewBuilder
+    private func outputValueControlsBody(at index: Int) -> some View {
         let actionBinding = outputBinding(at: index)
 
         switch binding.outputs[index].type {
@@ -1267,6 +1383,10 @@ struct BindingRowView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
+                .accessibilityLabel("Output type")
+                .accessibilityValue(binding.outputs.indices.contains(index)
+                                    ? binding.outputs[index].type.displayName
+                                    : OutputType.key.displayName)
             }
             .frame(width: outTypeColWidth, alignment: .leading)
 

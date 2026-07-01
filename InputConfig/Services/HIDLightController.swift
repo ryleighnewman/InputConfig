@@ -210,6 +210,10 @@ final class InProcessLightWriter: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self else { return }
             if self.devices.isEmpty { self.reopenLocked() }
+            // If a hold loop is re-asserting a color at 200 Hz, a bare write
+            // would be repainted within milliseconds. Update the held color so
+            // this write sticks; callers restore the previous color afterward.
+            if self.holdTimer != nil { self.holdColor = (red, green, blue) }
             self.writeLocked(red: red, green: green, blue: blue, brightness: brightness)
         }
     }

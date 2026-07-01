@@ -181,6 +181,10 @@ struct CursorRegionsView: View {
                                 selectedRegionID = region.id
                             }
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Region \(region.name)")
+                        .accessibilityValue(canvasRegionValue(region, isPressed: isPressed))
+                        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
                 }
 
                 // Live cursor dot: shows where the pointer is RIGHT NOW in
@@ -220,6 +224,7 @@ struct CursorRegionsView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "hand.tap.fill")
                         .font(.caption2)
+                        .accessibilityHidden(true)
                     ProgressView(value: Double(min(max(externalInput.trackpadPressure, 0), 1)))
                         .frame(width: 64)
                     Text(externalInput.trackpadPressureStage >= 2
@@ -235,6 +240,11 @@ struct CursorRegionsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(8)
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Trackpad pressure")
+                .accessibilityValue(externalInput.trackpadPressureStage >= 2
+                                    ? "Deep press"
+                                    : "\(Int(externalInput.trackpadPressure * 100)) percent")
 
                 if drawingNewRegion, let start = dragStart, let current = dragCurrent {
                     let r = CGRect(
@@ -264,6 +274,7 @@ struct CursorRegionsView: View {
             Text("Defined Regions")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             if regions.isEmpty {
                 Text("None yet.")
                     .font(.caption)
@@ -285,24 +296,29 @@ struct CursorRegionsView: View {
     private func regionRow(_ region: TouchpadRegion) -> some View {
         let isSelected = region.id == selectedRegionID
         let color = paletteColor(at: region.colorIndex)
+        let isPressed = svc.isRegionPressed(region.id)
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 10, height: 10)
+                .accessibilityHidden(true)
             if renamingRegionID == region.id {
                 TextField("Name", text: $renamingText, onCommit: {
                     commitRename(for: region.id)
                 })
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
+                .accessibilityLabel("Rename region")
+                .onExitCommand { cancelRename() }
             } else {
                 Text(region.name)
                     .font(.body)
                     .lineLimit(1)
                 Spacer()
             }
-            if svc.isRegionPressed(region.id) {
+            if isPressed {
                 Image(systemName: "circle.fill")
                     .font(.caption2)
                     .foregroundStyle(.green)
+                    .accessibilityHidden(true)
             }
             Menu {
                 Button("Rename") {
@@ -318,6 +334,7 @@ struct CursorRegionsView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .accessibilityLabel("Region options for \(region.name)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -329,6 +346,8 @@ struct CursorRegionsView: View {
         .onTapGesture {
             selectedRegionID = region.id
         }
+        .accessibilityValue(isPressed ? "Active" : "")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     // MARK: - Drawing
@@ -381,6 +400,28 @@ struct CursorRegionsView: View {
         }
         renamingRegionID = nil
         renamingText = ""
+    }
+
+    /// Discards an in-progress rename without committing. Wired to
+    /// Escape via `.onExitCommand` on the rename text field.
+    private func cancelRename() {
+        renamingRegionID = nil
+        renamingText = ""
+    }
+
+    /// Spoken value for a canvas region: its normalized position and
+    /// size plus whether it is currently pressed, so VoiceOver conveys
+    /// the same information sighted users read off the drawn rectangle.
+    private func canvasRegionValue(_ region: TouchpadRegion, isPressed: Bool) -> String {
+        let x = Int(region.minX * 100)
+        let y = Int(region.minY * 100)
+        let w = Int((region.maxX - region.minX) * 100)
+        let h = Int((region.maxY - region.minY) * 100)
+        var value = "Positioned at \(x) percent across, \(y) percent down, \(w) by \(h) percent of the display"
+        if isPressed {
+            value += ", active"
+        }
+        return value
     }
 
     // MARK: - Helpers

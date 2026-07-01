@@ -172,6 +172,9 @@ struct PresetEditorView: View {
                     // toggles + path picker.
                     PresetAutomationSection(automation: $preset.automation)
                         .id("editor-automation")
+
+                    DriveModeSection(driveConfig: $preset.driveConfig)
+                        .id("editor-drive")
                 }
                 .padding(20)
                 // Transparent tap-anywhere layer that releases keyboard
@@ -200,6 +203,8 @@ struct PresetEditorView: View {
                         .overlay(Capsule().stroke(Color.accentColor.opacity(0.4), lineWidth: 1))
                         .padding(.top, 12)
                         .transition(.move(edge: .top).combined(with: .opacity))
+                        .accessibilityLabel(quickZeroToastMessage)
+                        .accessibilityAddTraits(.isStaticText)
                 }
             }
             .animation(.easeOut(duration: 0.2), value: showQuickZeroToast)
@@ -315,6 +320,9 @@ struct PresetEditorView: View {
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                    .help("More: sort, undo sort, convert controller type")
+                    .accessibilityLabel("More actions")
+                    .accessibilityHint("Sort all bindings, undo sort, or convert controller type")
                 }
             }
             .sheet(isPresented: $showingTouchpadCalibration) {
@@ -462,6 +470,9 @@ struct PresetEditorView: View {
             ? "No motion-capable controller connected"
             : "Gyro zeroed on \(count) controller\(count == 1 ? "" : "s")"
         showQuickZeroToast = true
+        // The toast is a transient overlay VoiceOver would otherwise miss.
+        // Announce the same message so the outcome reaches VoiceOver users.
+        AccessibilityNotification.Announcement(quickZeroToastMessage).post()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             showQuickZeroToast = false
         }

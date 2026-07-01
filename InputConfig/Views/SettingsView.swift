@@ -74,6 +74,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .accessibilityLabel("Settings section")
             .padding(.horizontal, 80)
             .padding(.top, 16)
             .padding(.bottom, 12)
@@ -205,6 +206,7 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "clock.arrow.circlepath")
                             .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                         if let when = crashRecovery.lastFreezeAt {
                             Text("Last freeze detected: \(when.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption)
@@ -231,6 +233,7 @@ struct SettingsView: View {
                             Image(systemName: "powerplug.fill")
                                 .foregroundStyle(.green)
                                 .frame(width: 16)
+                                .accessibilityHidden(true)
                             Picker("On power adapter", selection: $pollHzOnAC) {
                                 Text("60 Hz").tag(60)
                                 Text("120 Hz").tag(120)
@@ -244,6 +247,7 @@ struct SettingsView: View {
                             Image(systemName: "battery.50")
                                 .foregroundStyle(.orange)
                                 .frame(width: 16)
+                                .accessibilityHidden(true)
                             Picker("On battery", selection: $pollHzOnBattery) {
                                 Text("60 Hz").tag(60)
                                 Text("120 Hz").tag(120)
@@ -282,6 +286,7 @@ struct SettingsView: View {
                             Image(systemName: "play.circle.fill")
                                 .foregroundStyle(.green)
                                 .font(.caption)
+                                .accessibilityHidden(true)
                             Text("Engine running at \(mappingEngine.currentPollHz) Hz")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -298,6 +303,7 @@ struct SettingsView: View {
                             Image(systemName: "pause.circle.fill")
                                 .foregroundStyle(.orange)
                                 .font(.caption)
+                                .accessibilityHidden(true)
                             Text("Engine stopped. Rate will be \(pollHz) Hz on next start.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -321,6 +327,7 @@ struct SettingsView: View {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                                 .font(.caption)
+                                .accessibilityHidden(true)
                             Text("Sacrifices battery life and CPU. Higher rates can also cause UI hitches in the binding editor while a preset is active. Drop back to 120 Hz if the app feels sluggish.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -331,6 +338,7 @@ struct SettingsView: View {
                             Image(systemName: "info.circle.fill")
                                 .foregroundStyle(.blue)
                                 .font(.caption)
+                                .accessibilityHidden(true)
                             Text("Lower rate saves battery but may add noticeable latency on fast-twitch inputs like rapid-fire and gyro aim.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -604,11 +612,21 @@ struct SettingsView: View {
                 }
             }
         }
-        // UserDefaults
+        // UserDefaults. Every Data-typed key that export base64-encodes must
+        // be base64-decoded here, or it is restored as a raw base64 string and
+        // silently corrupted. Previously only "InputConfig.touchpad*" keys were
+        // decoded, which dropped cursorRegions.v1 and stickRegions.v1.
+        let dataKeys: Set<String> = [
+            "InputConfig.touchpadCalibration.v1",
+            "InputConfig.touchpadRegions.v1",
+            "InputConfig.touchpadActiveDevice.v2",
+            "InputConfig.cursorRegions.v1",
+            "InputConfig.stickRegions.v1",
+        ]
         if let prefs = envelope["userDefaults"] as? [String: Any] {
             let defaults = UserDefaults.standard
             for (key, value) in prefs {
-                if let str = value as? String, let data = Data(base64Encoded: str), key.hasPrefix("InputConfig.touchpad") {
+                if dataKeys.contains(key), let str = value as? String, let data = Data(base64Encoded: str) {
                     defaults.set(data, forKey: key)
                 } else {
                     defaults.set(value, forKey: key)
@@ -725,6 +743,7 @@ struct SettingsView: View {
                         HStack {
                             Image(systemName: "gamecontroller.fill")
                                 .foregroundStyle(.green)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading) {
                                 Text(gamepad.displayName)
                                     .font(.body)
@@ -818,6 +837,7 @@ struct SettingsView: View {
                                     Image(systemName: "circle.fill")
                                         .font(.system(size: 6))
                                         .foregroundStyle(.green)
+                                        .accessibilityHidden(true)
                                     Text(entry.name)
                                         .font(.caption.monospaced())
                                     Spacer()
@@ -844,6 +864,7 @@ struct SettingsView: View {
                             HStack {
                                 Image(systemName: "gamecontroller.fill")
                                     .foregroundStyle(.blue)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading) {
                                     Text(controller.vendorName ?? "Unknown Controller")
                                         .font(.body)

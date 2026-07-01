@@ -1269,6 +1269,9 @@ struct SmartPresetProfile: Codable, Identifiable, Hashable {
     var hideCursor: Bool
     var bindings: [Binding]
     var tips: [String]
+    /// Optional one-stick driving scheme carried into the built preset.
+    /// Absent on the vast majority of profiles (Optional decodes to nil).
+    var drive: DriveConfig?
 }
 
 /// The library of Smart Preset profiles, decoded once from embedded JSON.
@@ -14342,6 +14345,27 @@ enum SmartPresetLibrary {
           {"input": "btn 9", "outputs": ["key 41"], "note": "Close / Esc"}
         ],
         "tips": ["Left stick moves the pointer; right stick scrolls the chat.", "Face buttons run common chat shortcuts."]
+      },
+      {
+        "id": "one-stick-racing", "category": "game", "displayName": "One-Stick Racing",
+        "subtitle": "Drive, steer, and shift gears from a single stick",
+        "appPath": "", "launchURL": "",
+        "light": {"r": 230, "g": 120, "b": 30},
+        "confineCursor": true, "autoRecenter": false, "hideCursor": true,
+        "bindings": [
+          {"input": "btn 0", "outputs": ["key 44"], "note": "Handbrake (Space)"},
+          {"input": "btn 3", "outputs": ["key 9"], "note": "Look back (F)"},
+          {"input": "btn 8", "outputs": ["key 43"], "note": "Change camera (Tab)"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / menu (Esc)"}
+        ],
+        "tips": ["Push the stick forward to accelerate and back to brake. Snap fully back twice to shift into Reverse, then push fully forward to return to Drive.", "Steering is analog mouse by default; switch to A and D keys in the editor if your game needs them.", "Open the editor and use the live axis readout to confirm the right stick is assigned before you drive."],
+        "drive": {
+          "enabled": true, "slot": 0, "steerAxis": 0, "throttleAxis": 1,
+          "steerMode": "mouse", "steerMouseSpeed": 16,
+          "accelKey": 26, "brakeKey": 22, "reverseKey": 22,
+          "throttleCurve": 1.4, "steerCurve": 1.3,
+          "reverseGestureEnabled": true, "reverseTapCount": 2
+        }
       }
     ]
     """
@@ -14409,6 +14433,7 @@ enum SmartPresetGenerator {
             preset.lightBarBrightness = 2
         }
         preset.notes = buildNotes(for: profile, brand: brand)
+        preset.driveConfig = profile.drive
         return preset
     }
 

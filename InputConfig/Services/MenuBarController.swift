@@ -84,9 +84,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 } else {
                     let target = presetStore.lastActivatedPresetId
                         .flatMap { id in presetStore.presets.first(where: { $0.id == id }) }
-                        ?? presetStore.presets.first(where: { p in
-                            p.joysticks.contains { !$0.bindings.isEmpty }
-                        })
+                        ?? presetStore.presets.first(where: { $0.isRunnable })
                     if let target {
                         mappingEngine.stop()
                         presetStore.activatePreset(target)
@@ -316,7 +314,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if preset.isActive {
             item.state = .on
             item.attributedTitle = activePresetHeader(preset.name)
-        } else if !preset.joysticks.contains(where: { !$0.bindings.isEmpty }) {
+        } else if !preset.isRunnable {
             // Clicking an empty preset silently did nothing (activation
             // early-returns); disable the row and say why instead.
             item.action = nil
@@ -353,15 +351,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .activatePreset:
             guard let id = targetPresetID,
                   let preset = store.presets.first(where: { $0.id == id }),
-                  preset.joysticks.contains(where: { !$0.bindings.isEmpty }),
+                  preset.isRunnable,
                   store.activePresetId != preset.id else { return }
             engine.stop()
             store.activatePreset(preset)
             engine.start(with: preset)
         case .nextPreset, .previousPreset:
-            let usable = store.presets.filter { p in
-                p.joysticks.contains { !$0.bindings.isEmpty }
-            }
+            let usable = store.presets.filter { $0.isRunnable }
             guard !usable.isEmpty else { return }
             let step = (kind == .nextPreset) ? 1 : -1
             let nextIndex: Int

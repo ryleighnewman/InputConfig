@@ -1126,7 +1126,13 @@ class PresetStore: ObservableObject {
     }
 
     func exportPresetToFile(_ preset: Preset, to url: URL) {
-        if let data = preset.toLegacyJSON() {
+        // Lossless native encode (matching Share), NOT the legacy string form.
+        // toLegacyJSON serializes only input->output tokens and silently drops
+        // deadzones, curves, macros, haptics, and the entire driveConfig, so an
+        // exported "backup" quietly lost the user's real configuration. Import
+        // decodes native Preset JSON first (falling back to legacy), so this
+        // round-trips cleanly.
+        if let data = try? JSONEncoder().encode(preset) {
             try? data.write(to: url, options: .atomic)
         }
     }

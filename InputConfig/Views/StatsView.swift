@@ -381,6 +381,7 @@ struct StatsView: View {
             Image(systemName: icon)
                 .foregroundStyle(iconColor)
                 .frame(width: 16)
+                .accessibilityHidden(true)
             Text(label)
                 .font(.callout)
                 .lineLimit(1)
@@ -395,11 +396,15 @@ struct StatsView: View {
                 }
             }
             .frame(height: 8)
+            .accessibilityHidden(true)
             Text("\(count)×")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 48, alignment: .trailing)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue("\(count) times")
     }
 
     @ViewBuilder
@@ -410,13 +415,14 @@ struct StatsView: View {
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(top, id: \.name) { row in
+                    let conns = service.stats.controllerConnectionCount[row.name] ?? 0
                     HStack(spacing: 10) {
                         Image(systemName: "gamecontroller.fill")
                             .foregroundStyle(.blue)
+                            .accessibilityHidden(true)
                         Text(row.name)
                             .font(.callout)
                         Spacer()
-                        let conns = service.stats.controllerConnectionCount[row.name] ?? 0
                         Text("\(conns) connection\(conns == 1 ? "" : "s")")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
@@ -425,6 +431,9 @@ struct StatsView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 80, alignment: .trailing)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(row.name)
+                    .accessibilityValue("\(timeShort(row.time)), \(conns) connection\(conns == 1 ? "" : "s")")
                 }
             }
         }
@@ -433,6 +442,10 @@ struct StatsView: View {
     @ViewBuilder
     private var timelineChart: some View {
         let days = service.last14DaysConnected
+        let secs = days.map(\.seconds)
+        let total = secs.reduce(0, +)
+        let peak = secs.max() ?? 0
+        let activeDays = secs.filter { $0 > 0 }.count
         Chart(days, id: \.date) { day in
             BarMark(
                 x: .value("Day", day.date, unit: .day),
@@ -443,6 +456,9 @@ struct StatsView: View {
                              : Color.secondary.opacity(0.25).gradient)
             .cornerRadius(3)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Controller connection over the last 14 days")
+        .accessibilityValue("\(timeShort(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeShort(peak))")
         .chartXAxis {
             AxisMarks(values: .stride(by: .day, count: 2)) { value in
                 AxisGridLine()
@@ -478,6 +494,7 @@ struct StatsView: View {
         if nonZero.isEmpty {
             emptyHint("Fire some outputs while a preset is running to see your mix.")
         } else {
+            let total = max(1, nonZero.reduce(0) { $0 + $1.count })
             HStack(alignment: .top, spacing: 18) {
                 // Donut chart - sector per output kind.
                 Chart(nonZero, id: \.name) { slice in
@@ -490,13 +507,18 @@ struct StatsView: View {
                     .foregroundStyle(slice.color.gradient)
                 }
                 .frame(width: 140, height: 140)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Output mix")
+                .accessibilityValue(nonZero
+                    .map { "\($0.name) \(Int(Double($0.count) / Double(total) * 100)) percent" }
+                    .joined(separator: ", "))
 
                 // Legend with raw counts.
                 VStack(alignment: .leading, spacing: 6) {
-                    let total = max(1, nonZero.reduce(0) { $0 + $1.count })
                     ForEach(nonZero, id: \.name) { slice in
                         HStack(spacing: 8) {
                             Circle().fill(slice.color).frame(width: 10, height: 10)
+                                .accessibilityHidden(true)
                             Text(slice.name)
                                 .font(.callout)
                             Spacer()
@@ -508,6 +530,9 @@ struct StatsView: View {
                                 .foregroundStyle(.tertiary)
                                 .frame(width: 40, alignment: .trailing)
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(slice.name)
+                        .accessibilityValue("\(slice.count), \(Int(Double(slice.count) / Double(total) * 100)) percent")
                     }
                 }
                 Spacer(minLength: 0)
@@ -670,6 +695,7 @@ struct StatsView: View {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func emptyHint(_ text: String) -> some View {
@@ -765,11 +791,13 @@ struct StatTileView: View {
                     Image(systemName: detail.icon)
                         .font(.title3)
                         .foregroundStyle(detail.tint)
+                        .accessibilityHidden(true)
                     Spacer()
                     Image(systemName: "info.circle")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .opacity(hovering ? 1 : 0)
+                        .accessibilityHidden(true)
                 }
                 Text(detail.value)
                     .font(.title2.weight(.semibold).monospacedDigit())
@@ -807,7 +835,11 @@ struct StatTileView: View {
         // consistent.
         .focusEffectDisabled()
         .onHover { hovering = $0 }
-        .help("Click for more details")
+        .help("Details for \(detail.label)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(detail.label): \(detail.value)")
+        .accessibilityHint("Opens details")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -939,6 +971,7 @@ struct StatDetailSheet: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             VStack(spacing: 4) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     HStack(spacing: 8) {
@@ -956,11 +989,15 @@ struct StatDetailSheet: View {
                             }
                         }
                         .frame(height: 6)
+                        .accessibilityHidden(true)
                         Text(row.value)
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(row.label)
+                    .accessibilityValue(row.value)
                 }
             }
         }
@@ -971,6 +1008,9 @@ struct StatDetailSheet: View {
     /// Compact bar-chart sparkline for the 14-day history.
     private func sparkline(values: [Double], tint: Color) -> some View {
         let maxValue = max(1, values.max() ?? 1)
+        let total = values.reduce(0, +)
+        let peak = values.max() ?? 0
+        let activeDays = values.filter { $0 > 0 }.count
         return HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, v in
                 Capsule()
@@ -980,6 +1020,9 @@ struct StatDetailSheet: View {
         }
         .frame(height: 60)
         .frame(maxWidth: .infinity, alignment: .center)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Last 14 days")
+        .accessibilityValue("\(timeStr(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeStr(peak))")
     }
 
     private func timeStr(_ s: TimeInterval) -> String {

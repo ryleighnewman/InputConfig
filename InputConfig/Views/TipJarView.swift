@@ -17,6 +17,13 @@ struct TipJarView: View {
     /// App Store via NSWorkspace.
     private static let manageSubscriptionsURL = URL(string: "macappstore://apps.apple.com/account/subscriptions")!
 
+    /// Terms of Use (EULA) and Privacy Policy links required in the app for
+    /// auto-renewable subscriptions (Guideline 3.1.2). The Terms link uses the
+    /// standard Apple EULA; the Privacy link must match the Privacy Policy URL
+    /// set in App Store Connect.
+    private static let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+    private static let privacyPolicyURL = URL(string: "https://github.com/ryleighnewman/InputConfig/blob/main/PRIVACY.md")!
+
     var body: some View {
         VStack(spacing: 16) {
             header
@@ -192,12 +199,26 @@ struct TipJarView: View {
     // MARK: - Subscription Disclosure
 
     private var subscriptionDisclosure: some View {
-        Text("Subscription auto-renews monthly at the listed price. Cancel anytime in your App Store account. Payment is charged to your Apple ID at confirmation of purchase.")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Subscription auto-renews monthly at the listed price. Cancel anytime in your App Store account. Payment is charged to your Apple ID at confirmation of purchase.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            legalLinks
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Functional Terms of Use (EULA) and Privacy Policy links. Required in the
+    /// purchase flow for auto-renewable subscriptions; shown in the subscription
+    /// disclosure and the footer so they are always reachable.
+    private var legalLinks: some View {
+        HStack(spacing: 14) {
+            Link("Terms of Use (EULA)", destination: Self.termsOfUseURL)
+            Link("Privacy Policy", destination: Self.privacyPolicyURL)
+        }
+        .font(.caption2)
     }
 
     // MARK: - Footer
@@ -220,6 +241,11 @@ struct TipJarView: View {
                         .foregroundStyle(.tertiary)
                     Spacer()
                 }
+            }
+
+            HStack {
+                legalLinks
+                Spacer()
             }
 
             HStack(spacing: 8) {

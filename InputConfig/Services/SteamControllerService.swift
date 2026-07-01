@@ -171,7 +171,8 @@ final class SteamControllerService: @unchecked Sendable {
     }
 
     private func start() {
-        guard !helperRunning else { return }
+        lock.lock(); let alreadyRunning = helperRunning; lock.unlock()
+        guard !alreadyRunning else { return }
         let resolvedPath = helperPath()
 
         lock.lock()
@@ -218,10 +219,12 @@ final class SteamControllerService: @unchecked Sendable {
         }
         do {
             try p.run()
+            lock.lock()
             process = p
             pipeOut = outPipe
             pipeIn = inPipe
             helperRunning = true
+            lock.unlock()
             // Detect the helper dying on its own (sandbox kill, crash, or its
             // own exit on a device-open miss). Without this, helperRunning
             // stayed true forever and start()'s `guard !helperRunning` blocked
@@ -259,21 +262,26 @@ final class SteamControllerService: @unchecked Sendable {
     }
 
     private func stop() {
-        guard helperRunning else { return }
+        // Snapshot and clear the shared handles under the lock (the
+        // terminationHandler mutates the same fields under the same lock), then
+        // do the blocking close/terminate calls outside the lock.
+        lock.lock()
+        guard helperRunning else { lock.unlock(); return }
         helperRunning = false
-        pipeOut?.fileHandleForReading.readabilityHandler = nil
-        try? pipeIn?.fileHandleForWriting.close()
-        if let p = process, p.isRunning {
+        let po = pipeOut, pi = pipeIn, p = process
+        process = nil
+        pipeOut = nil
+        pipeIn = nil
+        state = SteamControllerState()
+        lock.unlock()
+
+        po?.fileHandleForReading.readabilityHandler = nil
+        try? pi?.fileHandleForWriting.close()
+        if let p = p, p.isRunning {
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
                 if p.isRunning { p.terminate() }
             }
         }
-        process = nil
-        pipeOut = nil
-        pipeIn = nil
-        lock.lock()
-        state = SteamControllerState()
-        lock.unlock()
     }
 
     // MARK: - Consumer API

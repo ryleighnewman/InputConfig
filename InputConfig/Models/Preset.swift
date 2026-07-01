@@ -327,6 +327,125 @@ struct PresetAutomation: Codable, Hashable {
 }
 
 /// A complete preset containing name, tag, and joystick mappings
+/// One-stick "drive" mapping: turns a single analog stick into a full
+/// vehicle control scheme the way a power wheelchair drives from one
+/// joystick. Stick X steers, stick Y is throttle forward and brake back,
+/// and a gesture (snapping the stick to the back wall a few times) shifts
+/// between Drive and Reverse. Output is keyboard + mouse, so variable
+/// throttle on a binary key is produced by fast on/off pulsing (PWM): the
+/// further you push, the larger the share of each pulse cycle the key is
+/// held, which most keyboard-driveable games read as proportional speed.
+///
+/// Every field has a default so older preset files (which have no
+/// `driveConfig` key at all) decode cleanly.
+struct DriveConfig: Codable, Hashable {
+    /// Master switch. When false the engine ignores the whole block.
+    var enabled: Bool = false
+    /// Controller slot (0-3) the drive stick lives on.
+    var slot: Int = 0
+    /// Axis indices on that controller: X steers, Y is throttle/brake.
+    var steerAxis: Int = 0
+    var throttleAxis: Int = 1
+    /// Some sticks report "up" as negative; flip per stick.
+    var invertSteer: Bool = false
+    var invertThrottle: Bool = false
+    /// Center deadzone applied to both axes (0-1).
+    var deadzone: Double = 0.12
+
+    enum SteerMode: String, Codable, CaseIterable, Identifiable {
+        case mouse, keys
+        var id: String { rawValue }
+        var displayName: String { self == .mouse ? "Mouse (analog)" : "Keys (A / D)" }
+    }
+    /// Steering output: analog mouse-X (smooth) or left/right keys (pulsed).
+    var steerMode: SteerMode = .mouse
+    /// Mouse pixels per frame at full lock when steerMode == .mouse.
+    var steerMouseSpeed: Double = 18
+    /// HID usage codes for key steering (default A / D).
+    var steerLeftKey: Int = 4
+    var steerRightKey: Int = 7
+
+    /// HID usage codes for motion. Default W accelerate, S brake.
+    var accelKey: Int = 26
+    var brakeKey: Int = 22
+    /// Key used to move while in Reverse gear. Defaults to the brake key
+    /// (S), which many games treat as reverse once stopped.
+    var reverseKey: Int = 22
+    /// Response curve exponent for throttle (1 = linear, >1 = gentler off
+    /// center for fine low-speed control).
+    var throttleCurve: Double = 1.0
+    /// Response curve exponent for steering (1 = linear, >1 = gentle center,
+    /// progressive lock toward the edges).
+    var steerCurve: Double = 1.0
+    /// When true the throttle axis is a unipolar trigger that rests at one
+    /// end (its whole range maps to forward; there is no backward, so the
+    /// reverse gesture is disabled). When false it is a centered stick.
+    var throttleIsTrigger: Bool = false
+    /// Optional active slow-down: while the stick sits centered in Drive,
+    /// hold the brake lightly so the vehicle decelerates instead of coasting,
+    /// the way a power wheelchair stops when you release the stick. Off by
+    /// default. `coastBrakeStrength` is the held brake duty (0-1).
+    var coastBrake: Bool = false
+    var coastBrakeStrength: Double = 0.5
+    /// PWM cycle length in poll ticks (at 120 Hz, 6 ticks = 20 Hz pulsing).
+    var pwmPeriodTicks: Int = 6
+
+    /// Reverse gesture: snap the stick fully back `reverseTapCount` times
+    /// within `reverseWindowMs` to shift into Reverse; push fully forward to
+    /// shift back to Drive. `gestureThreshold` is the fraction of full
+    /// deflection that counts as hitting the "wall".
+    var reverseGestureEnabled: Bool = true
+    var reverseTapCount: Int = 2
+    var reverseWindowMs: Int = 700
+    var gestureThreshold: Double = 0.85
+}
+
+extension DriveConfig {
+    enum CodingKeys: String, CodingKey {
+        case enabled, slot, steerAxis, throttleAxis, invertSteer, invertThrottle
+        case deadzone, steerMode, steerMouseSpeed, steerLeftKey, steerRightKey
+        case accelKey, brakeKey, reverseKey, throttleCurve, pwmPeriodTicks
+        case reverseGestureEnabled, reverseTapCount, reverseWindowMs, gestureThreshold
+        case steerCurve, throttleIsTrigger, coastBrake, coastBrakeStrength
+    }
+
+    /// Lenient decode: every field falls back to its default when missing.
+    /// Without this, a present-but-partial `driveConfig` object (hand-edited
+    /// file or a forward/backward schema change) would throw and take the
+    /// whole Preset decode down with it, silently dropping the preset. The
+    /// default `init()` (all defaults) and memberwise init stay available
+    /// because this lives in an extension. Matches the rest of the model.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var d = DriveConfig()
+        d.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        d.slot = try c.decodeIfPresent(Int.self, forKey: .slot) ?? d.slot
+        d.steerAxis = try c.decodeIfPresent(Int.self, forKey: .steerAxis) ?? d.steerAxis
+        d.throttleAxis = try c.decodeIfPresent(Int.self, forKey: .throttleAxis) ?? d.throttleAxis
+        d.invertSteer = try c.decodeIfPresent(Bool.self, forKey: .invertSteer) ?? d.invertSteer
+        d.invertThrottle = try c.decodeIfPresent(Bool.self, forKey: .invertThrottle) ?? d.invertThrottle
+        d.deadzone = try c.decodeIfPresent(Double.self, forKey: .deadzone) ?? d.deadzone
+        d.steerMode = try c.decodeIfPresent(SteerMode.self, forKey: .steerMode) ?? d.steerMode
+        d.steerMouseSpeed = try c.decodeIfPresent(Double.self, forKey: .steerMouseSpeed) ?? d.steerMouseSpeed
+        d.steerLeftKey = try c.decodeIfPresent(Int.self, forKey: .steerLeftKey) ?? d.steerLeftKey
+        d.steerRightKey = try c.decodeIfPresent(Int.self, forKey: .steerRightKey) ?? d.steerRightKey
+        d.accelKey = try c.decodeIfPresent(Int.self, forKey: .accelKey) ?? d.accelKey
+        d.brakeKey = try c.decodeIfPresent(Int.self, forKey: .brakeKey) ?? d.brakeKey
+        d.reverseKey = try c.decodeIfPresent(Int.self, forKey: .reverseKey) ?? d.reverseKey
+        d.throttleCurve = try c.decodeIfPresent(Double.self, forKey: .throttleCurve) ?? d.throttleCurve
+        d.pwmPeriodTicks = try c.decodeIfPresent(Int.self, forKey: .pwmPeriodTicks) ?? d.pwmPeriodTicks
+        d.reverseGestureEnabled = try c.decodeIfPresent(Bool.self, forKey: .reverseGestureEnabled) ?? d.reverseGestureEnabled
+        d.reverseTapCount = try c.decodeIfPresent(Int.self, forKey: .reverseTapCount) ?? d.reverseTapCount
+        d.reverseWindowMs = try c.decodeIfPresent(Int.self, forKey: .reverseWindowMs) ?? d.reverseWindowMs
+        d.gestureThreshold = try c.decodeIfPresent(Double.self, forKey: .gestureThreshold) ?? d.gestureThreshold
+        d.steerCurve = try c.decodeIfPresent(Double.self, forKey: .steerCurve) ?? d.steerCurve
+        d.throttleIsTrigger = try c.decodeIfPresent(Bool.self, forKey: .throttleIsTrigger) ?? d.throttleIsTrigger
+        d.coastBrake = try c.decodeIfPresent(Bool.self, forKey: .coastBrake) ?? d.coastBrake
+        d.coastBrakeStrength = try c.decodeIfPresent(Double.self, forKey: .coastBrakeStrength) ?? d.coastBrakeStrength
+        self = d
+    }
+}
+
 struct Preset: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
@@ -361,6 +480,11 @@ struct Preset: Identifiable, Codable, Hashable {
     /// decode cleanly with defaults.
     var automation: PresetAutomation = PresetAutomation()
 
+    /// One-stick driving scheme for this preset. nil / disabled for the
+    /// vast majority of presets; opt-in per game. Optional so older preset
+    /// files decode cleanly.
+    var driveConfig: DriveConfig?
+
     init(name: String = "New Preset", tag: String = "No tag", joysticks: [JoystickMapping] = [],
          filename: String = "", isActive: Bool = false, groupID: UUID? = nil) {
         self.id = UUID()
@@ -376,7 +500,7 @@ struct Preset: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, tag, joysticks, filename, isActive, createdAt, modifiedAt
-        case groupID, notes, lightBarColor, lightBarBrightness, automation
+        case groupID, notes, lightBarColor, lightBarBrightness, automation, driveConfig
     }
 
     /// Custom Codable init so older preset files without `notes`,
@@ -398,6 +522,7 @@ struct Preset: Identifiable, Codable, Hashable {
         self.lightBarBrightness = try c.decodeIfPresent(Int.self, forKey: .lightBarBrightness)
         self.automation = try c.decodeIfPresent(PresetAutomation.self, forKey: .automation)
             ?? PresetAutomation()
+        self.driveConfig = try c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)
     }
 
     static func generateFilename() -> String {
@@ -413,6 +538,13 @@ struct Preset: Identifiable, Codable, Hashable {
     /// type-order table so new input categories (motion, touchpad,
     /// external key/mouse, cursor region, MIDI) don't all silently
     /// collapse to `0` and intermix with buttons in the editor list.
+    /// Whether activating this preset produces any output: it has at least
+    /// one binding, or one-stick driving is enabled. Menu-bar activation and
+    /// the engine both gate on this, so a pure drive preset stays reachable.
+    var isRunnable: Bool {
+        joysticks.contains { !$0.bindings.isEmpty } || driveConfig?.enabled == true
+    }
+
     mutating func sortBindings() {
         for i in joysticks.indices {
             joysticks[i].bindings.sort { a, b in

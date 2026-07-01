@@ -121,6 +121,7 @@ class MappingEngine: ObservableObject {
                 // Release any output state that was currently held so the
                 // user doesn't end up with a stuck key or held mouse button
                 // the moment we pause.
+                driveProcessor.releaseAll()
                 InputSimulator.shared.releaseAll()
                 MIDIService.shared.releaseAllNotes()
                 // Clear the logical toggle bookkeeping too. The physical outputs
@@ -155,6 +156,7 @@ class MappingEngine: ObservableObject {
                            object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                self.driveProcessor.releaseAll()
                 InputSimulator.shared.releaseAll()
                 MIDIService.shared.releaseAllNotes()
                 // Reset edge detection, toggle latches, and deferred
@@ -247,6 +249,7 @@ class MappingEngine: ObservableObject {
         // whatever is genuinely still held; a one-frame blip is far better
         // than a key or mouse button latched down by the controller that left.
         if !staleSlots.isEmpty {
+            driveProcessor.releaseAll()
             InputSimulator.shared.releaseAll()
             MIDIService.shared.releaseAllNotes()
             // releaseAll dropped EVERY synthesized output, including ones held
@@ -270,7 +273,18 @@ class MappingEngine: ObservableObject {
         // controller-shape bindings, so accept anything that has at least
         // one binding anywhere.
         let hasAnyBinding = preset.joysticks.contains { !$0.bindings.isEmpty }
-        guard hasAnyBinding else { return }
+        // A preset can be pure one-stick driving with no normal bindings; it
+        // still needs the poll loop running to produce drive output.
+        let hasDriveMode = preset.driveConfig?.enabled == true
+        guard hasAnyBinding || hasDriveMode else { return }
+
+        // Make start() idempotent. The "edit the currently-active preset"
+        // path re-enters start() with no intervening stop(); without this,
+        // reference-counted services (touchpad helper, cursor-region timer,
+        // system-stats timer, external-input monitors) get retained again
+        // and never balanced, leaking a live subprocess and timers, and
+        // stale deferred-tap/toggle state carries into the reloaded preset.
+        if isRunning { stop() }
 
         activePreset = preset
         isRunning = true
@@ -554,6 +568,7 @@ class MappingEngine: ObservableObject {
         externalMouseDY.removeAll()
         externalScrollDX.removeAll()
         externalScrollDY.removeAll()
+        driveProcessor.releaseAll()
         InputSimulator.shared.releaseAll()
         MIDIService.shared.releaseAllNotes()
         if usesTouchpadInput {
@@ -653,6 +668,16 @@ class MappingEngine: ObservableObject {
     private var pendingMouseDeltaY: Float = 0
     private var mouseCarryX: Float = 0
     private var mouseCarryY: Float = 0
+
+    /// One-stick drive-mode engine (build 18). Holds gear/PWM/gesture state
+    /// across poll frames; fed from the active preset's driveConfig.
+    private let driveProcessor = DriveModeProcessor()
+    /// Per-frame cache of controller states read by the binding loop, reused
+    /// by the drive block so it doesn't re-read (and re-derive) the same slot.
+    private var lastSlotState: [Int: ControllerState] = [:]
+    /// Throttled live mirror of drive telemetry for on-screen feedback.
+    /// nil when drive mode is off / inactive.
+    @Published var driveLiveState: DriveModeProcessor.LiveState?
     private var pendingScrollDeltaX: Int32 = 0
     private var pendingScrollDeltaY: Int32 = 0
 
@@ -677,11 +702,13 @@ class MappingEngine: ObservableObject {
         // build one lazily inside those branches.
         let shouldLogRawState = (pollCount % 120 == 1)
 
+        lastSlotState.removeAll(keepingCapacity: true)
         for (joystickIndex, joystickMapping) in preset.joysticks.enumerated() {
             // External-only bindings can fire even without a controller, so
             // we don't bail out when the slot is empty - we just skip the
             // controller-side checks for that binding.
             let state = controllerService.readControllerState(at: joystickIndex)
+            if let state { lastSlotState[joystickIndex] = state }
 
             // Log raw state once per second for debugging. The .filter +
             // .map + String(format:) chain allocates several arrays per
@@ -876,6 +903,30 @@ class MappingEngine: ObservableObject {
             // Copy out into activeStates (cheap Set copy) so the
             // scratch can be reused next iteration.
             activeStates[joystickIndex] = scratchActiveSet
+        }
+
+        // One-stick drive mode (build 18). Runs after the binding loops so
+        // its analog steering rides the same per-frame mouse flush below.
+        // Releases every held key whenever drive is off or outputs pause.
+        if let drive = preset.driveConfig, drive.enabled, !outputsPaused {
+            // Reuse the slot state already read by the binding loop when the
+            // drive slot is one of the polled joysticks; only read again if the
+            // drive slot sits outside that range.
+            let dstate = (drive.slot < preset.joysticks.count)
+                ? lastSlotState[drive.slot]
+                : controllerService.readControllerState(at: drive.slot)
+            let ax = dstate?.axes[drive.steerAxis] ?? 0
+            let ay = dstate?.axes[drive.throttleAxis] ?? 0
+            pendingMouseDeltaX += driveProcessor.process(drive, axisX: ax, axisY: ay, now: nowMonotonic)
+            // Publish live telemetry at ~15 Hz so the editor's drive readout
+            // can show gear / throttle without churning the UI at 120 Hz.
+            if pollCount % 8 == 0 {
+                let s = driveProcessor.liveState
+                if driveLiveState != s { driveLiveState = s }
+            }
+        } else {
+            driveProcessor.releaseAll()
+            if driveLiveState != nil { driveLiveState = nil }
         }
 
         // Flush accumulated mouse and scroll deltas as a single CGEvent.
@@ -1756,4 +1807,174 @@ class MappingEngine: ObservableObject {
 /// strict concurrency checking cannot see that ordering on a captured var.
 private final class MacroPressOutcome: @unchecked Sendable {
     var didPress = false
+}
+
+/// Runtime engine for `DriveConfig`: converts one analog stick into a full
+/// vehicle control scheme (steering + throttle/brake) with a Drive/Reverse
+/// gear gesture. Holds the per-frame state (gear, PWM phase, pressed keys,
+/// gesture history) so the MappingEngine poll loop stays clean. Throttle
+/// keys are emitted through InputSimulator; steering-by-mouse is returned to
+/// the caller so it can be merged into the engine's mouse-delta accumulator.
+final class DriveModeProcessor {
+    enum Gear { case drive, reverse }
+    private(set) var gear: Gear = .drive
+
+    /// Live telemetry for on-screen feedback, refreshed every process() call.
+    struct LiveState: Equatable {
+        var reverse = false
+        var throttle: Float = 0   // 0-1 forward power being applied
+        var brake: Float = 0      // 0-1 brake / backward
+        var steer: Float = 0      // -1..1 after curve
+    }
+    private(set) var liveState = LiveState()
+
+    private var pressed = Set<Int>()
+    private var pwmTick: [Int: Int] = [:]
+    private var backHits: [Double] = []
+    private var wasAtBackWall = false
+
+    /// Process one poll frame. Returns the steering mouse-X delta (pixels)
+    /// to add to the engine's pending mouse delta; 0 when steering by keys.
+    @discardableResult
+    func process(_ cfg: DriveConfig, axisX: Float, axisY: Float, now: Double) -> Float {
+        var x = axisX; if cfg.invertSteer { x = -x }
+        var y = axisY; if cfg.invertThrottle { y = -y }
+        let dz = Float(cfg.deadzone)
+        let steer = deadzoned(x, dz)
+
+        // Forward / backward throttle components. A trigger-style axis rests
+        // at one end (no center, no backward): map its whole range to forward.
+        let fwd: Float, back: Float
+        if cfg.throttleIsTrigger {
+            fwd = max(0, deadzoned((y + 1) / 2, dz))   // rest(-1)->0, full(+1)->1
+            back = 0
+        } else {
+            fwd = max(0, deadzoned(y, dz))
+            back = max(0, deadzoned(-y, dz))
+        }
+
+        // Gear / reverse gesture: count rising-edge "wall hits" at full back.
+        // Disabled for trigger axes (they have no backward deflection).
+        var shiftedToDriveThisFrame = false
+        if cfg.reverseGestureEnabled && !cfg.throttleIsTrigger {
+            let thr = Float(cfg.gestureThreshold)
+            let atWall = back >= thr
+            if atWall && !wasAtBackWall { backHits.append(now) }
+            wasAtBackWall = atWall
+            let window = Double(cfg.reverseWindowMs) / 1000.0
+            backHits.removeAll { now - $0 > window }
+            if gear == .drive && backHits.count >= max(1, cfg.reverseTapCount) {
+                gear = .reverse; backHits.removeAll()
+            }
+            if gear == .reverse && fwd >= thr {   // full forward returns to Drive
+                gear = .drive; backHits.removeAll()
+                shiftedToDriveThisFrame = true
+            }
+        } else {
+            gear = .drive
+        }
+
+        // Accumulate the desired duty per HID code so a code used by more than
+        // one role (a shared steer/throttle key) is pulsed exactly ONCE with
+        // its max duty, never double-advancing its PWM phase or fighting itself.
+        var want: [Int: Float] = [:]
+        func request(_ code: Int, _ d: Float) { if d > (want[code] ?? 0) { want[code] = d } }
+
+        // Steering (with its own response curve, sign preserved).
+        let steerShaped = signed(curve(abs(steer), Float(cfg.steerCurve)), steer)
+        var steerMouseDX: Float = 0
+        if cfg.steerMode == .mouse {
+            steerMouseDX = steerShaped * Float(cfg.steerMouseSpeed)
+        } else {
+            request(cfg.steerLeftKey, steerShaped < 0 ? abs(steerShaped) : 0)
+            request(cfg.steerRightKey, steerShaped > 0 ? abs(steerShaped) : 0)
+        }
+
+        // Throttle / brake by gear. PWM gives variable speed on a binary key:
+        // duty scales with how far the stick is pushed. Skipped on the exact
+        // frame the full-forward gesture shifts Reverse -> Drive so the stale
+        // full-forward reading doesn't also slam the accelerator (no lurch).
+        let exp = Float(cfg.throttleCurve)
+        let cf = curve(fwd, exp)
+        let cb = curve(back, exp)
+        if !shiftedToDriveThisFrame {
+            switch gear {
+            case .drive:
+                request(cfg.accelKey, cf)
+                request(cfg.brakeKey, cb)
+                // Active slow-down: when the stick is centered (no throttle,
+                // no brake) hold a light brake so the vehicle decelerates
+                // instead of coasting. `request` takes the max, so this never
+                // fights a real throttle or brake input.
+                if cfg.coastBrake && fwd <= 0.001 && back <= 0.001 {
+                    request(cfg.brakeKey, Float(min(max(cfg.coastBrakeStrength, 0), 1)))
+                }
+            case .reverse:
+                request(cfg.reverseKey, cf)
+                request(cfg.brakeKey, cb)
+            }
+        }
+
+        // Apply once per unique HID code this config can touch (unrequested
+        // codes get duty 0 and are released).
+        let codes: Set<Int> = [cfg.accelKey, cfg.brakeKey, cfg.reverseKey,
+                               cfg.steerLeftKey, cfg.steerRightKey]
+        for code in codes { pwm(code, want[code] ?? 0, cfg) }
+
+        liveState = LiveState(reverse: gear == .reverse,
+                              throttle: shiftedToDriveThisFrame ? 0 : cf,
+                              brake: shiftedToDriveThisFrame ? 0 : cb,
+                              steer: steerShaped)
+        return steerMouseDX
+    }
+
+    /// Release every held key and clear gear/gesture state. Call when drive
+    /// turns off, outputs pause, or the preset stops.
+    func releaseAll() {
+        for code in pressed { InputSimulator.shared.keyUp(code) }
+        pressed.removeAll()
+        pwmTick.removeAll()
+        backHits.removeAll()
+        wasAtBackWall = false
+        gear = .drive
+        liveState = LiveState()
+    }
+
+    // MARK: - Helpers
+
+    private func deadzoned(_ v: Float, _ dz: Float) -> Float {
+        let a = abs(v)
+        if a <= dz { return 0 }
+        let scaled = (a - dz) / max(0.0001, 1 - dz)
+        return v < 0 ? -min(scaled, 1) : min(scaled, 1)
+    }
+
+    private func curve(_ v: Float, _ exp: Float) -> Float {
+        guard v > 0 else { return 0 }
+        return exp == 1 ? min(v, 1) : powf(min(v, 1), max(0.1, exp))
+    }
+
+    private func signed(_ mag: Float, _ ref: Float) -> Float { ref < 0 ? -mag : mag }
+
+    private func setKey(_ code: Int, _ down: Bool) {
+        let isDown = pressed.contains(code)
+        if down && !isDown {
+            InputSimulator.shared.keyDown(code); pressed.insert(code)
+        } else if !down && isDown {
+            InputSimulator.shared.keyUp(code); pressed.remove(code)
+        }
+    }
+
+    /// Pulse a key on/off so its average hold time tracks `duty` (0-1).
+    private func pwm(_ code: Int, _ duty: Float, _ cfg: DriveConfig) {
+        if duty <= 0.02 { setKey(code, false); pwmTick[code] = 0; return }
+        if duty >= 0.98 { setKey(code, true); return }
+        let period = max(2, cfg.pwmPeriodTicks)
+        // Clamp on-ticks to period-1 so any duty below the 0.98 cutoff keeps
+        // at least one off-tick (no silent dead-band that reads as full hold).
+        let onTicks = min(period - 1, max(1, Int((duty * Float(period)).rounded())))
+        let t = (pwmTick[code] ?? 0) % period
+        setKey(code, t < onTicks)
+        pwmTick[code] = (t + 1) % period
+    }
 }

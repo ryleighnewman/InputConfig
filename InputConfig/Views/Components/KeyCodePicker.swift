@@ -39,5 +39,9 @@ struct KeyCodePicker: View {
         .menuStyle(.borderlessButton)
         .controlSize(.small)
         .fixedSize()
+        // Expose the selected key as the accessibility VALUE so call sites can
+        // set a role label (for example "Accelerate key") without erasing the
+        // key name for VoiceOver.
+        .accessibilityValue(displayName)
     }
 }
