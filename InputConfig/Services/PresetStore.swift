@@ -121,7 +121,9 @@ class PresetStore: ObservableObject {
     /// groups array and rewrite `sortOrder` so the new order survives a
     /// restart.
     func moveGroups(fromOffsets source: IndexSet, toOffset destination: Int) {
-        groups.move(fromOffsets: source, toOffset: destination)
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < groups.count })
+        guard !valid.isEmpty else { return }
+        groups.move(fromOffsets: valid, toOffset: min(max(destination, 0), groups.count))
         normalizeGroupOrder()
         saveGroups()
     }
@@ -240,13 +242,63 @@ class PresetStore: ObservableObject {
     /// top-level folders; nested folders keep their own ordering.
     func moveTopLevelGroups(fromOffsets source: IndexSet, toOffset destination: Int) {
         var top = topLevelGroups
-        top.move(fromOffsets: source, toOffset: destination)
+        // Each element of the sidebar's ForEach renders as a DisclosureGroup,
+        // so when folders are expanded SwiftUI reports ROW offsets rather than
+        // element offsets (see OutlineListCoordinator.moveCells(fromRows:to:)).
+        // Those can point past the end of this array, and
+        // MutableCollection.move traps rather than failing softly, which
+        // crashed the app on any drag with a folder open.
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < top.count })
+        guard !valid.isEmpty else { return }
+        let target = min(max(destination, 0), top.count)
+        top.move(fromOffsets: valid, toOffset: target)
         for (i, g) in top.enumerated() {
             if let idx = groups.firstIndex(where: { $0.id == g.id }) {
                 groups[idx].sortOrder = i
             }
         }
         saveGroups()
+    }
+
+    /// Drop one preset onto another: put `presetID` at `targetID`'s position.
+    ///
+    /// This is the single gesture behind both reordering inside a folder and
+    /// moving between folders, which is why it takes a target ROW rather than
+    /// an index: the drop tells us exactly where the user aimed. If the two
+    /// live in different containers the dragged preset adopts the target's
+    /// folder on the way. Both affected containers are renumbered so their
+    /// `sortOrder` values stay dense.
+    func movePreset(_ presetID: UUID, toPositionOf targetID: UUID) {
+        guard presetID != targetID,
+              let dragIdx = presets.firstIndex(where: { $0.id == presetID }),
+              let target = presets.first(where: { $0.id == targetID }) else { return }
+
+        let sourceGroup = presets[dragIdx].groupID
+        let destGroup = target.groupID
+
+        var destList = presets(in: destGroup).filter { $0.id != presetID }
+        let insertAt = destList.firstIndex(where: { $0.id == targetID }) ?? destList.count
+        presets[dragIdx].groupID = destGroup
+        destList.insert(presets[dragIdx], at: insertAt)
+
+        renumber(destList)
+        if sourceGroup != destGroup {
+            renumber(presets(in: sourceGroup).filter { $0.id != presetID })
+        }
+        presets = Self.inDisplayOrder(presets)
+    }
+
+    /// Write 0..n-1 into the given presets' sortOrder and persist the ones
+    /// that actually changed. Never goes through `savePreset`, which would
+    /// stamp modifiedAt and make a drag look like an edit.
+    private func renumber(_ ordered: [Preset]) {
+        for (i, m) in ordered.enumerated() {
+            guard let idx = presets.firstIndex(where: { $0.id == m.id }) else { continue }
+            if presets[idx].sortOrder != i || presets[idx].groupID != m.groupID {
+                presets[idx].sortOrder = i
+                savePresetToDisk(presets[idx])
+            }
+        }
     }
 
     /// Move a preset into a group (or remove from group if nil).
@@ -260,15 +312,43 @@ class PresetStore: ObservableObject {
     /// ungrouped presets if groupID is nil). Maintains the sort order of
     /// `presets` so the sidebar stays stable when groups change.
     func presets(in groupID: UUID?) -> [Preset] {
+        let members: [Preset]
         if let groupID = groupID {
-            return presets.filter { $0.groupID == groupID }
+            members = presets.filter { $0.groupID == groupID }
         } else {
             // Ungrouped or referencing a group that no longer exists
             let validIDs = Set(groups.map(\.id))
-            return presets.filter { p in
+            members = presets.filter { p in
                 p.groupID == nil || !validIDs.contains(p.groupID!)
             }
         }
+        return Self.inDisplayOrder(members)
+    }
+
+    /// Reorder presets WITHIN one container: a folder, or the ungrouped list
+    /// when `groupID` is nil.
+    ///
+    /// The offsets SwiftUI hands us index the visible rows of that one
+    /// container, which is why this works on `presets(in:)` rather than the
+    /// global array. Previously there was no preset-level `.onMove` at all, so
+    /// dragging a preset landed on the FOLDER list's handler with row-based
+    /// offsets and rows appeared to vanish. Positions are written back to each
+    /// preset's `sortOrder` so the arrangement survives relaunch.
+    func movePresets(in groupID: UUID?, fromOffsets source: IndexSet, toOffset destination: Int) {
+        var visible = presets(in: groupID)
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < visible.count })
+        guard !valid.isEmpty else { return }
+        visible.move(fromOffsets: valid, toOffset: min(max(destination, 0), visible.count))
+
+        for (i, m) in visible.enumerated() {
+            guard let idx = presets.firstIndex(where: { $0.id == m.id }) else { continue }
+            guard presets[idx].sortOrder != i else { continue }
+            presets[idx].sortOrder = i
+            // Deliberately NOT savePreset(): that stamps modifiedAt, which
+            // would make "I dragged a row" look like "I edited the preset".
+            savePresetToDisk(presets[idx])
+        }
+        presets = Self.inDisplayOrder(presets)
     }
 
     // MARK: - Loading
@@ -318,7 +398,51 @@ class PresetStore: ObservableObject {
         for i in loaded.indices {
             loaded[i].isActive = false
         }
-        presets = loaded.sorted { $0.modifiedAt > $1.modifiedAt }
+        // Order by the user's explicit arrangement. Files written before
+        // sortOrder existed have nil and fall back to newest-modified-first,
+        // which is exactly how the sidebar used to look, so an upgrade does
+        // not visibly reshuffle anyone's library. Those nils are then filled
+        // in and written back once, and after that the order is stable: it no
+        // longer moves just because a preset was edited.
+        presets = Self.inDisplayOrder(loaded)
+        migrateMissingSortOrderIfNeeded()
+    }
+
+    /// Sort by explicit position, then by recency for anything not yet placed.
+    /// Ties break on name so the result is deterministic.
+    static func inDisplayOrder(_ list: [Preset]) -> [Preset] {
+        list.sorted { a, b in
+            switch (a.sortOrder, b.sortOrder) {
+            case let (x?, y?):
+                if x != y { return x < y }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            case (nil, _?):  return false      // unplaced sinks below placed
+            case (_?, nil):  return true
+            default:
+                if a.modifiedAt != b.modifiedAt { return a.modifiedAt > b.modifiedAt }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        }
+    }
+
+    /// One-time fill of sortOrder for presets written before it existed.
+    /// Runs per container so numbering is dense inside each folder.
+    private func migrateMissingSortOrderIfNeeded() {
+        guard presets.contains(where: { $0.sortOrder == nil }) else { return }
+        var containers: [UUID?: [Preset]] = [:]
+        for p in presets { containers[p.groupID, default: []].append(p) }
+        var changed: [Preset] = []
+        for (_, members) in containers {
+            for (i, m) in Self.inDisplayOrder(members).enumerated() {
+                guard let idx = presets.firstIndex(where: { $0.id == m.id }) else { continue }
+                if presets[idx].sortOrder != i {
+                    presets[idx].sortOrder = i
+                    changed.append(presets[idx])
+                }
+            }
+        }
+        presets = Self.inDisplayOrder(presets)
+        for p in changed { savePresetToDisk(p) }
     }
 
     /// Re-seed example presets and (on first install only) the default
@@ -511,9 +635,29 @@ class PresetStore: ObservableObject {
         }
     }
 
+    /// Posted after every preset save, carrying the saved preset. MappingEngine
+    /// listens so an edit to the RUNNING preset takes effect immediately.
+    static let presetSavedNotification = Notification.Name("InputConfig.PresetSaved")
+
     func savePreset(_ preset: Preset, forceSnapshot: Bool = false) {
         var mutable = preset
         mutable.modifiedAt = Date()
+        // A preset that has never been placed (freshly seeded example, or one
+        // the user just created) goes to the end of its own container. Without
+        // this, new presets keep a nil sortOrder and fall back to
+        // newest-modified-first, which is the unstable ordering this replaced.
+        if mutable.sortOrder == nil {
+            let siblings = presets.filter { $0.groupID == mutable.groupID && $0.id != mutable.id }
+            mutable.sortOrder = (siblings.compactMap(\.sortOrder).max()).map { $0 + 1 } ?? siblings.count
+        }
+        // The engine holds a snapshot taken at start(), so without this an edit
+        // to the active preset did nothing until the preset was restarted or
+        // the app quit: deleted bindings kept firing and new ones stayed dead.
+        defer {
+            NotificationCenter.default.post(
+                name: Self.presetSavedNotification, object: nil,
+                userInfo: ["preset": mutable])
+        }
         let fileURL = presetsDirectory.appendingPathComponent(mutable.filename)
 
         // Snapshot the prior contents (if any) before overwriting, so the
@@ -870,7 +1014,9 @@ class PresetStore: ObservableObject {
     // MARK: - Reordering
 
     func movePresets(from source: IndexSet, to destination: Int) {
-        presets.move(fromOffsets: source, toOffset: destination)
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < presets.count })
+        guard !valid.isEmpty else { return }
+        presets.move(fromOffsets: valid, toOffset: min(max(destination, 0), presets.count))
     }
 
     // MARK: - Activation

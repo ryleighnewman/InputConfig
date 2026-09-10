@@ -15,6 +15,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     static let shared = MenuBarController()
 
     static let defaultsKey = "InputConfig.showMenuBarIcon"
+    /// Posted when the user asks for the release notes from the menu bar.
+    static let showWhatsNewNotification = Notification.Name("InputConfig.ShowWhatsNew")
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
@@ -28,6 +30,70 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private override init() {
         super.init()
+    }
+
+    /// Open the main window (the notes live in a sheet on it) and ask for
+    /// the release notes. Gives the popup a permanent home instead of it
+    /// being a one-shot that can never be seen again once dismissed.
+    func showWhatsNew() {
+        openMainWindow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: Self.showWhatsNewNotification, object: nil)
+        }
+    }
+
+    #if DEBUG
+    var debugEngineRunning: Bool { mappingEngine?.isRunning ?? false }
+    var debugActivePresetName: String? {
+        presetStore?.presets.first(where: { $0.isActive })?.name
+    }
+    #endif
+
+    /// Wire the kill switch and the per-preset chords. Lives here rather
+    /// than in a view because it has to work with every window closed.
+    private func installEmergencyStopHandling(presetStore: PresetStore,
+                                              mappingEngine: MappingEngine) {
+        NotificationCenter.default.addObserver(
+            forName: EmergencyStopService.stoppedNotification,
+            object: nil, queue: .main
+        ) { [weak mappingEngine, weak presetStore] _ in
+            MainActor.assumeIsolated {
+                // Stop the engine before EmergencyStopService releases the
+                // held keys, so nothing is re-pressed on the next frame.
+                mappingEngine?.stop()
+                presetStore?.deactivateAll()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: PresetHotKeyService.activateNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let id = note.object as? UUID else { return }
+            MainActor.assumeIsolated { self?.handlePresetHotKey(id) }
+        }
+
+        // Keep the registered chords in step with the library.
+        presetStore.$presets
+            .receive(on: DispatchQueue.main)
+            .sink { presets in PresetHotKeyService.shared.sync(with: presets) }
+            .store(in: &cancellables)
+    }
+
+    /// A preset's own chord: switch to it, or stop it if it is already the
+    /// running one.
+    private func handlePresetHotKey(_ id: UUID) {
+        guard let store = presetStore, let engine = mappingEngine,
+              let preset = store.presets.first(where: { $0.id == id }) else { return }
+        if store.activePresetId == id {
+            engine.stop()
+            store.deactivateAll()
+            return
+        }
+        guard preset.isRunnable else { return }
+        engine.stop()
+        store.activatePreset(preset)
+        engine.start(with: preset)
     }
 
     /// Create the status item and seed visibility from defaults. Called once
@@ -53,6 +119,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         statusItem = item
         refreshMenuBarImage()
+        installEmergencyStopHandling(presetStore: presetStore, mappingEngine: mappingEngine)
 
         let pop = NSPopover()
         pop.behavior = .transient
@@ -272,6 +339,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             store.deactivateAll()
         case .togglePauseOutputs:
             engine.outputsPaused.toggle()
+        case .holdMuteMotion:
+            // Held-only; MappingEngine gates motion per poll frame.
+            break
+        case .emergencyStop:
+            EmergencyStopService.shared.stop(reason: .binding)
         }
     }
 
@@ -308,6 +380,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     @objc private func openHelpGuides() {
         NSApp.activate(ignoringOtherApps: true)
         HelpGuideWindowController.shared.show()
+    }
+
+    /// Bring the main window forward and open Settings on the About tab.
+    /// The Help window is its own NSWindow and cannot reach ContentView's
+    /// sheet state directly, so it routes through here the way the menu bar
+    /// already does for Statistics.
+    func openAboutPage() {
+        openMainWindow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: .inputConfigOpenAbout, object: nil)
+        }
     }
 
     /// Bring the main window forward and open the Statistics sheet.
@@ -524,11 +607,42 @@ private struct MenuBarPopoverView: View {
     // MARK: Quick actions - innerWell square buttons, identical token to YapToText
 
     private var quickActions: some View {
-        HStack(spacing: 8) {
-            squareButton("New Preset", "plus.rectangle.on.rectangle", action: onNewPreset)
-            squareButton("Smart Preset", "wand.and.stars", action: onSmartMaker)
-            squareButton("Statistics", "chart.line.uptrend.xyaxis", action: onStatistics)
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                squareButton("New Preset", "plus.rectangle.on.rectangle", action: onNewPreset)
+                squareButton("Smart Preset", "wand.and.stars", action: onSmartMaker)
+                squareButton("Statistics", "chart.line.uptrend.xyaxis", action: onStatistics)
+            }
+            emergencyStopButton
         }
+    }
+
+    /// Always present, whether or not anything is running, so it is in the
+    /// same place every time someone reaches for it.
+    private var emergencyStopButton: some View {
+        Button {
+            EmergencyStopService.shared.stop(reason: .menu)
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .font(.system(size: 14))
+                Text("Emergency Stop")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 0)
+                Text(EmergencyStopService.shared.isEnabled
+                     ? EmergencyStopService.shared.spec.displayString : "")
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.red)
+            .padding(.horizontal, 11)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .innerWell(radius: 9)
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .help("Stop the engine and release every held key, button, and note.")
     }
 
     private func squareButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
@@ -575,8 +689,11 @@ private struct MenuBarPopoverView: View {
     private var footer: some View {
         HStack(spacing: 16) {
             MenuFooterIcon(symbol: "power", help: "Quit InputConfig", action: onQuit)
-            MenuFooterIcon(symbol: "heart.fill", help: "Support InputConfig", tint: .pink, action: onSupport)
+            MenuFooterIcon(symbol: "heart.fill", help: "Donate to InputConfig", tint: .pink, action: onSupport)
             Spacer()
+            MenuFooterIcon(symbol: "sparkles", help: "What's New in InputConfig") {
+                MenuBarController.shared.showWhatsNew()
+            }
             MenuFooterIcon(symbol: "macwindow", help: "Open InputConfig", action: onOpen)
             MenuFooterIcon(symbol: "gearshape", help: "Settings", action: onSettings)
         }

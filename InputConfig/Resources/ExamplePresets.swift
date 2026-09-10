@@ -43,6 +43,7 @@ struct ExamplePresets {
         "Mouse + Scroll":                GroupName.desktop,
         "Media Controller":              GroupName.desktop,
         "Presentation Remote":           GroupName.desktop,
+        "Anki":                          GroupName.desktop,
 
         "FPS (PS5 DualSense)":           GroupName.firstPerson,
         "FPS (Xbox)":                    GroupName.firstPerson,
@@ -70,6 +71,7 @@ struct ExamplePresets {
         "Motion Cursor":          GroupName.showcase,
         "Toggle Mode":            GroupName.showcase,
         "Stacked Outputs":        GroupName.showcase,
+        "Tap the Mac":            GroupName.showcase,
         "MIDI: CC Dials":                   GroupName.midi,
     ]
 
@@ -110,6 +112,7 @@ struct ExamplePresets {
     /// Per-feature lookup so the welcome demos can jump to the matching
     /// showcase preset. Key is a stable identifier; value is the preset name.
     static let demoPresetNames: [String: String] = [
+        "chassis_tap":          "Tap the Mac",
         "variable_sensitivity": "Variable Sensitivity",
         "deadzone":             "Deadzone Calibration",
         "haptic":               "Haptic Feedback",
@@ -156,6 +159,7 @@ struct ExamplePresets {
             mouseScroll,
             mediaController,
             presentationRemote,
+            anki,
 
             // Gaming - First-Person (one per controller family)
             fpsDualSense,
@@ -188,6 +192,7 @@ struct ExamplePresets {
             showcaseToggleMode,
             showcaseStackedOutputs,
             showcaseMidiCC,
+            showcaseChassisTap,
         ]
     }
 
@@ -343,6 +348,71 @@ struct ExamplePresets {
             }]
         }
         """)
+    }
+
+    /// Anki flashcard review from any controller. Built with BindingModel
+    /// rather than the JSON path so every row carries a note naming its
+    /// Anki action, the way Smart Presets do. Shortcuts checked against the
+    /// Anki 26.8 reviewer: Space shows the answer and then rates Good (the
+    /// "Spacebar (or enter) also answers card" default), 1 / 2 / 4 are
+    /// Again / Hard / Easy, R replays audio, * marks, - buries the card,
+    /// E edits, Cmd+Z undoes, D and S jump to the deck list and study.
+    static var anki: Preset {
+        let bindings: [BindingModel] = [
+            // Face buttons rate the card. Bottom shows the answer, then
+            // rates Good, so one thumb can run a whole session.
+            bind("btn 0",   ["key 44"],            "Show answer / Good (Space)"),
+            bind("btn 2",   ["key 30"],            "Again (1)"),
+            bind("btn 1",   ["key 31"],            "Hard (2)"),
+            bind("btn 3",   ["key 33"],            "Easy (4)"),
+            // Bumpers: take back a mis-rating, hear the audio again.
+            bind("btn 4",   ["key 227", "key 29"], "Undo (Cmd+Z)"),
+            bind("btn 5",   ["key 21"],            "Replay audio (R)"),
+            // Share / Menu: hop between the deck list and studying.
+            bind("btn 8",   ["key 7"],             "Deck list (D)"),
+            bind("btn 9",   ["key 22"],            "Study deck (S)"),
+            // Stick clicks mark and bury. DualSense touchpad click edits.
+            bind("btn 11",  ["key 225", "key 37"], "Mark / unmark (*)"),
+            bind("btn 12",  ["key 45"],            "Bury card (-)"),
+            bind("btn 13",  ["key 8"],             "Edit card (E)"),
+            // Left stick = pointer, right stick = scroll, triggers = click,
+            // the same hands as the other desktop presets.
+            bind("axi 0 -", ["mou 0 - 16"],        "Pointer left"),
+            bind("axi 0 +", ["mou 0 + 16"],        "Pointer right"),
+            bind("axi 1 -", ["mou 1 - 16"],        "Pointer up"),
+            bind("axi 1 +", ["mou 1 + 16"],        "Pointer down"),
+            bind("axi 3 -", ["whe 1 - 5"],         "Scroll up"),
+            bind("axi 3 +", ["whe 1 + 5"],         "Scroll down"),
+            bind("axi 4 +", ["mbt 1"],             "Right click"),
+            bind("axi 5 +", ["mbt 0"],             "Left click"),
+            // D-pad = arrow keys: scroll a long card, move through lists.
+            bind("hat 0 U", ["key 82"],            "Scroll card up (Up arrow)"),
+            bind("hat 0 D", ["key 81"],            "Scroll card down (Down arrow)"),
+            bind("hat 0 L", ["key 80"],            "Left arrow"),
+            bind("hat 0 R", ["key 79"],            "Right arrow"),
+        ].compactMap { $0 }
+        var preset = makePreset(
+            name: "Anki",
+            tag: "Flashcard review: rate, undo, replay audio, mark, bury",
+            joystickTag: "Face buttons rate the card (bottom = show answer / Good, left = Again, right = Hard, top = Easy). Bumpers undo and replay audio, stick clicks mark and bury, D-pad scrolls the card, sticks drive the pointer and scroll, triggers click.",
+            bindings: bindings)
+        preset.notes = """
+        Anki from a controller. The bottom face button shows the answer and then rates Good, so it can run a whole session by itself; the other three are Again, Hard, and Easy. Every row's note names its Anki action.
+
+        These are Anki's default shortcuts. If you changed the answer keys in Anki's Preferences (Review) or turned off "Spacebar (or enter) also answers card", use Scan to remap those rows.
+
+        Activating the preset opens Anki. Turn on automatic preset switching in Settings and it also takes over by itself whenever Anki comes to the front.
+        """
+        var automation = PresetAutomation()
+        automation.launchAppPath = "/Applications/Anki.app"
+        // Current Anki builds identify as net.ankiweb.anki; older releases
+        // used net.ankiweb.dtop. Listing both keeps auto-switch working
+        // whichever one is installed.
+        automation.autoActivateBundleIDs = ["net.ankiweb.anki", "net.ankiweb.dtop"]
+        preset.automation = automation
+        // Anki blue light bar.
+        preset.lightBarColor = RGBLightColor(r: 30, g: 130, b: 235)
+        return preset
     }
 
     // MARK: - Gaming - First-Person (JSON)
@@ -1305,6 +1375,31 @@ struct ExamplePresets {
                       filename: Preset.generateFilename())
     }
 
+    /// Showcase: Tap the Mac. The only preset that needs no hardware at all -
+    /// the input is the Mac's own accelerometer feeling you knock on the
+    /// chassis. Tap the palm rest or the lid with a fingertip.
+    ///
+    /// A single tap is deliberately left unbound. It is by far the easiest
+    /// count to trigger by accident (setting the laptop down, closing a
+    /// drawer), so the gesture only starts at two.
+    static var showcaseChassisTap: Preset {
+        var bindings: [BindingModel] = [
+            BindingModel(input: .chassisTap(2),
+                         outputs: [OutputAction(type: .systemAction,
+                                                systemActionKind: .missionControl)]),
+            BindingModel(input: .chassisTap(3),
+                         outputs: [OutputAction(type: .systemAction,
+                                                systemActionKind: .startDictation)]),
+        ]
+        bindings[0].note = "Double tap the Mac = Mission Control"
+        bindings[1].note = "Triple tap the Mac = Start Dictation"
+        return makePreset(
+            name: "Tap the Mac",
+            tag: "Knock on the chassis; no controller needed",
+            joystickTag: "Reads the Mac's built-in motion sensor. Taps under a third of a second apart count as one gesture, so tap-tap is a double and a pause starts over. Typing is ignored on purpose.",
+            bindings: bindings)
+    }
+
     /// Parse a legacy-format preset JSON string into a Preset.
     private static func parse(_ json: String) -> Preset {
         guard let data = json.data(using: .utf8),
@@ -1312,6 +1407,17 @@ struct ExamplePresets {
             return Preset(name: "Error", tag: "Failed to parse")
         }
         return preset
+    }
+
+    /// Build one binding from the legacy grammar the JSON presets use
+    /// ("btn 0", ["key 44"]) plus the per-row note the editor shows under
+    /// the input. Keeps a hand-written preset as readable as the JSON ones
+    /// while carrying notes, which the legacy parser drops.
+    private static func bind(_ input: String, _ outputs: [String], _ note: String) -> BindingModel? {
+        guard let inputEvent = InputEvent.parse(input) else { return nil }
+        let actions = outputs.compactMap { OutputAction.parse($0) }
+        guard !actions.isEmpty else { return nil }
+        return BindingModel(input: inputEvent, outputs: actions, note: note)
     }
 }
 
@@ -2638,6 +2744,39 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click"}
         ],
         "tips": ["A button plays and pauses; B and X skip tracks.", "Bumpers change the volume; left stick clicks through playlists."]
+      },
+      {
+        "id": "anki", "category": "app", "displayName": "Anki",
+        "subtitle": "Flashcard review: rate, undo, replay audio, mark, bury",
+        "appPath": "/Applications/Anki.app", "launchURL": "",
+        "light": {"r": 30, "g": 130, "b": 235},
+        "confineCursor": false, "autoRecenter": false, "hideCursor": false,
+        "bindings": [
+          {"input": "btn 0", "outputs": ["key 44"], "note": "Show answer / Good (Space)"},
+          {"input": "btn 2", "outputs": ["key 30"], "note": "Again (1)"},
+          {"input": "btn 1", "outputs": ["key 31"], "note": "Hard (2)"},
+          {"input": "btn 3", "outputs": ["key 33"], "note": "Easy (4)"},
+          {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo (Cmd+Z)"},
+          {"input": "btn 5", "outputs": ["key 21"], "note": "Replay audio (R)"},
+          {"input": "btn 8", "outputs": ["key 7"], "note": "Deck list (D)"},
+          {"input": "btn 9", "outputs": ["key 22"], "note": "Study deck (S)"},
+          {"input": "btn 11", "outputs": ["key 225", "key 37"], "note": "Mark / unmark (*)"},
+          {"input": "btn 12", "outputs": ["key 45"], "note": "Bury card (-)"},
+          {"input": "btn 13", "outputs": ["key 8"], "note": "Edit card (E)"},
+          {"input": "axi 0 -", "outputs": ["mou 0 - 16"], "note": "Pointer left"},
+          {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Pointer right"},
+          {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Pointer up"},
+          {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Pointer down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Scroll down"},
+          {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Right click"},
+          {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Left click"},
+          {"input": "hat 0 U", "outputs": ["key 82"], "note": "Scroll card up"},
+          {"input": "hat 0 D", "outputs": ["key 81"], "note": "Scroll card down"},
+          {"input": "hat 0 L", "outputs": ["key 80"], "note": "Left arrow"},
+          {"input": "hat 0 R", "outputs": ["key 79"], "note": "Right arrow"}
+        ],
+        "tips": ["The bottom face button shows the answer and rates Good; left, right, and top are Again, Hard, and Easy.", "Left bumper undoes a mis-rating, right bumper replays the card's audio."]
       },
       {
         "id": "vlc", "category": "app", "displayName": "VLC",

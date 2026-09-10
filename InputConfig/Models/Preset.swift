@@ -159,6 +159,12 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// people created or edited are never lost on upgrade.
     var note: String?
 
+    /// Chord: when set, this row only fires while the modifier control is
+    /// also held (Triangle + D-pad up). A plain row on the same input is
+    /// suppressed while the chord is satisfied, so the two do not both
+    /// fire. nil (every existing preset) keeps the plain behavior.
+    var modifierInput: InputEvent?
+
     init(input: InputEvent, outputs: [OutputAction] = []) {
         self.id = UUID()
         self.input = input
@@ -179,6 +185,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
          holdThresholdMs: Int? = nil,
          doubleTapOutputs: [OutputAction]? = nil,
          doubleTapWindowMs: Int? = nil,
+         modifierInput: InputEvent? = nil,
          note: String? = nil) {
         self.id = id
         self.input = input
@@ -204,6 +211,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.holdThresholdMs = holdThresholdMs
         self.doubleTapOutputs = doubleTapOutputs
         self.doubleTapWindowMs = doubleTapWindowMs
+        self.modifierInput = modifierInput
         self.note = note
     }
 
@@ -211,6 +219,11 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// `BindingModel(input:outputs:)` initializer zeroes every advanced
     /// field (deadzone, curve, toggle, turbo, repeat, haptics, speech,
     /// macro steps, note), which silently downgraded duplicated rows.
+    ///
+    /// `modifierInput` was itself missing from the initializer this calls, so
+    /// duplicating a chord row dropped its second button and the copy fired on
+    /// the plain button alone. Keep this list in sync with the stored
+    /// properties: anything absent here is silently lost on duplicate.
     func duplicated() -> BindingModel {
         BindingModel(id: UUID(), input: input, outputs: outputs,
                      deadzone: deadzone, outerDeadzone: outerDeadzone, invertAxis: invertAxis,
@@ -227,6 +240,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
                      holdThresholdMs: holdThresholdMs,
                      doubleTapOutputs: doubleTapOutputs,
                      doubleTapWindowMs: doubleTapWindowMs,
+                     modifierInput: modifierInput,
                      note: note)
     }
 }
@@ -493,6 +507,17 @@ struct Preset: Identifiable, Codable, Hashable {
     /// unless the user writes something. Codable-optional so older preset
     /// files decode without the field.
     var notes: String = ""
+    /// Explicit position among its siblings (same folder, or ungrouped).
+    ///
+    /// `nil` means "this file predates manual ordering". Those presets fall
+    /// back to newest-modified-first, exactly as before, and are assigned a
+    /// real value the first time the library loads, so old preset files keep
+    /// working and keep their familiar order.
+    var sortOrder: Int?
+    /// System-wide chord that switches to this preset. Pressing it while
+    /// this preset is already the active one stops it instead. Optional, so
+    /// presets saved before this existed decode unchanged.
+    var activateHotKey: HotKeySpec?
     /// RGB light-bar color override stored as 0-255 components. When non-nil
     /// the mapping engine paints the controller's light bar with this color
     /// while the preset is active, and reverts to the slot's general color
@@ -531,6 +556,12 @@ struct Preset: Identifiable, Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, name, tag, joysticks, filename, isActive, createdAt, modifiedAt
         case groupID, notes, lightBarColor, lightBarBrightness, automation, driveConfig
+        case sortOrder
+        // Was missing here, so the synthesized encode(to:) silently dropped
+        // every per-preset shortcut on save and init(from:) never read one
+        // back. Setting a preset shortcut appeared to work and then did
+        // nothing, because it never reached disk.
+        case activateHotKey
     }
 
     /// Custom Codable init so older preset files without `notes`,
@@ -553,6 +584,8 @@ struct Preset: Identifiable, Codable, Hashable {
         self.automation = try c.decodeIfPresent(PresetAutomation.self, forKey: .automation)
             ?? PresetAutomation()
         self.driveConfig = try c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)
+        self.activateHotKey = try c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)
+        self.sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
     }
 
     static func generateFilename() -> String {
@@ -602,6 +635,7 @@ struct Preset: Identifiable, Codable, Hashable {
         case .cursorRegion:    return 9
         case .stickRegion:     return 10
         case .midi:            return 11
+        case .chassisTap:      return 12
         }
     }
 }
@@ -785,7 +819,14 @@ enum ControllerType: String, CaseIterable, Identifiable {
                 if let standardKey = reverseSource[inputStr],
                    let destInputStr = destMap[standardKey],
                    let newInput = InputEvent.parse(destInputStr) {
-                    newBindings.append(BindingModel(input: newInput, outputs: binding.outputs))
+                    // Copy the whole row and swap only the input. The bare
+                    // BindingModel(input:outputs:) initializer discards
+                    // deadzone, toggle, turbo, macros, hold / double-tap,
+                    // haptics, speech and the chord's modifier, so converting
+                    // a preset between controller types silently gutted it.
+                    var moved = binding.duplicated()
+                    moved.input = newInput
+                    newBindings.append(moved)
                 } else {
                     // Keep unmapped bindings as-is
                     newBindings.append(binding)

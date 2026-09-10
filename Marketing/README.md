@@ -1,17 +1,24 @@
-# InputConfig App Store Marketing
+# InputConfig marketing
 
-Ten App Store screenshots at 2880x1800 live in `posters/`, in presentation order:
+Two commands, run from this directory:
 
-1. **Any input source. Total control.** — hero
-2. **Made for every hand.** — one-stick driving and PlayStation Access Controller support
-3. **Press a control. Bind it.** — scan to bind
-4. **Map any button to anything.**
-5. **Fine-tune every binding.** — turbo, macros, hold, double-tap, haptics, speech
-6. **See every input, live.** — Live Visualizer
-7. **Unique outputs.** — MIDI notes and CC, mouse, scroll, macros, spoken phrases
-8. **Touchpad support, done right.** — calibration and tap regions
-9. **Dial in the perfect deadzone.** — per stick and trigger
-10. **Aim and fire with precision.** — gyroscope motion aim
+```bash
+tools/shoot_all.sh          # capture every screen into shots/
+python3 tools/posters13.py  # composite -> ~/Desktop/InputConfig Posters 1.3
+```
 
-Style: near-white background (#FBFBFD), SF Pro, green accent, dual soft shadow, app
-windows captured over a solid backdrop with anti-aliased rounded corners.
+`README-PIPELINE.md` is the reference: what each step does, why the corners are
+cut the way they are, and the traps that have cost time before. Read it before
+changing either script.
+
+Ten posters at 2880x1800 are written to `~/Desktop/InputConfig Posters 1.3`.
+They are not kept in the repo - regenerate them, do not archive them, so there
+is never a stale set to pick from by mistake.
+
+Four shots have no debug hook and are captured by hand. Do not delete them:
+
+* `editor-scan.png` - the scan overlay counting down
+* `options-full-live.png` - one binding row with every option open
+* `viz-controller.png`, `viz-midi.png` - the live visualizer, controller and MIDI
+
+Everything else in `shots/` is produced by `tools/shoot_all.sh`.

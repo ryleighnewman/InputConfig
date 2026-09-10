@@ -50,6 +50,7 @@ final class TestBenchService: ObservableObject {
         runEightBitDoModeTests()
         runDualSenseHIDReportTests()
         runPresetCodableTests()
+        runVersionConsistencyTests()
         runHelpGuideTests()
         runVariableSensitivityMathTests()
         runHIDDescriptorParserTests()
@@ -408,6 +409,30 @@ final class TestBenchService: ObservableObject {
     }
 
     // MARK: - 9. Help Guide Integrity
+
+    /// The What's New popup only fires when the bundle's version differs
+    /// from the one the user last saw, and it looks the notes up by that
+    /// same string. If the newest changelog entry does not match the
+    /// shipping version, the release notes never appear for anybody. This
+    /// catches that before it ships.
+    private func runVersionConsistencyTests() {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        record("Version", "Bundle carries a version", pass: !short.isEmpty && !build.isEmpty,
+               detail: "\(short) (\(build))")
+        // An unexpanded build variable means Info.plist and the build
+        // settings have drifted apart.
+        record("Version", "Version is a real number, not a build variable",
+               pass: !short.contains("$"), detail: short)
+        let newest = Changelog.entries.first?.version ?? ""
+        record("Version", "Newest changelog entry matches the bundle version",
+               pass: newest == short,
+               detail: newest == short ? "\(short)"
+                                       : "changelog says \(newest), bundle says \(short)")
+        record("Version", "Changelog entries are unique",
+               pass: Set(Changelog.entries.map(\.version)).count == Changelog.entries.count,
+               detail: "\(Changelog.entries.count) entries")
+    }
 
     private func runHelpGuideTests() {
         let guides = HelpGuideLibrary.all

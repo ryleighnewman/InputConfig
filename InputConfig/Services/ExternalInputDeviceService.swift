@@ -324,14 +324,14 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         guard AXIsProcessTrusted() else { return }
         if keyboardGlobalMonitor == nil {
             keyboardGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.keyDown, .keyUp]
+                matching: [.keyDown, .keyUp, .systemDefined]
             ) { [weak self] ev in
                 self?.handleKeyboardNSEvent(ev)
             }
         }
         if keyboardLocalMonitor == nil {
             keyboardLocalMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.keyDown, .keyUp]
+                matching: [.keyDown, .keyUp, .systemDefined]
             ) { [weak self] ev in
                 self?.handleKeyboardNSEvent(ev)
                 return ev
@@ -346,6 +346,31 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         #endif
     }
 
+    /// NX_KEYTYPE_* -> the HID code the rest of the app stores for that key.
+    /// Inverse of InputSimulator's specialKeyMap, so a media key scanned as
+    /// INPUT lands on the same code a media key OUTPUT sends.
+    static let hidUsageByNXKeyType: [Int: Int] = [
+        0x91: 71,   // Brightness Down
+        0x90: 72,   // Brightness Up
+        0x14: 307,  // Rewind
+        0x10: 308,  // Play / Pause
+        0x13: 309,  // Fast Forward
+        0x07: 310,  // Mute
+        0x00: 311,  // Volume Up
+        0x01: 312,  // Volume Down
+    ]
+
+    /// Decodes an NSSystemDefined event into (HID code, pressed). Returns nil
+    /// for anything that is not a recognised aux key press or release.
+    static func mediaKey(from ev: NSEvent) -> (hid: Int, isDown: Bool)? {
+        guard ev.type == .systemDefined, ev.subtype.rawValue == 8 else { return nil }
+        let keyType = (ev.data1 & 0xFFFF_0000) >> 16
+        let state = (ev.data1 & 0x0000_FF00) >> 8
+        guard let hid = hidUsageByNXKeyType[keyType] else { return nil }
+        guard state == 0x0A || state == 0x0B else { return nil }
+        return (hid, state == 0x0A)
+    }
+
     #if canImport(AppKit)
     private func handleKeyboardNSEvent(_ ev: NSEvent) {
         // Skip keys we synthesized ourselves so a key OUTPUT can't loop back
@@ -354,8 +379,20 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
            cg.getIntegerValueField(.eventSourceUserData) == InputSimulator.ownEventMarker {
             return
         }
-        guard let hid = Self.hidUsage(forVirtualKeyCode: Int(ev.keyCode)) else { return }
         let dev = Self.builtInKeyboardID
+        // Media / brightness keys arrive as NSSystemDefined with the key in
+        // data1, not as a keyCode.
+        if ev.type == .systemDefined {
+            guard let media = Self.mediaKey(from: ev) else { return }
+            if media.isDown {
+                if !receivedAnyKeyboardEvent { receivedAnyKeyboardEvent = true }
+                events.send(.keyDown(deviceID: dev, hidCode: media.hid))
+            } else {
+                events.send(.keyUp(deviceID: dev, hidCode: media.hid))
+            }
+            return
+        }
+        guard let hid = Self.hidUsage(forVirtualKeyCode: Int(ev.keyCode)) else { return }
         switch ev.type {
         case .keyDown:
             if ev.isARepeat { return }
@@ -382,6 +419,11 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// inside the lookup function allocated a ~100-entry dict on every key
     /// event during typing.
     private static let hidUsageByVirtualKey: [Int: Int] = [
+        // The Globe key tapped on its own. macOS reports it as a plain
+        // keyDown at vk 179 carrying no fn flag (holding fn as a modifier
+        // produces no key event at all), and it has no standard HID usage,
+        // so it maps to the app's private code.
+        179: KeyCodeMap.globeKeyCode,
         // Letters and number row.
             0: 4, 1: 22, 2: 7, 3: 9, 4: 11, 5: 10, 6: 29, 7: 27, 8: 6, 9: 25,
             11: 5, 12: 20, 13: 26, 14: 8, 15: 21, 16: 28, 17: 23,
@@ -390,9 +432,12 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             34: 12, 35: 19, 36: 40, 37: 15, 38: 13, 39: 52, 40: 14, 41: 51,
             42: 49, 43: 54, 44: 56, 45: 17, 46: 16, 47: 55, 48: 43, 49: 44,
             50: 53, 51: 42, 53: 41,
-            // Modifiers.
-            55: 227, 56: 225, 57: 57, 58: 226, 59: 224,
+            // Modifiers. 54 is Right Command, which was missing entirely, so
+            // the right-hand Command key could never be scanned or bound.
+            54: 231, 55: 227, 56: 225, 57: 57, 58: 226, 59: 224,
             60: 229, 61: 230, 62: 228,
+            // fn / Globe HELD as a modifier (the tapped form is 179 above).
+            63: KeyCodeMap.globeFnCode,
             // Keypad.
             65: 99, 67: 85, 69: 87, 71: 83, 75: 84, 76: 88, 78: 86, 81: 103,
             82: 98, 83: 89, 84: 90, 85: 91, 86: 92, 87: 93, 88: 94, 89: 95,
@@ -400,6 +445,8 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             // Function keys.
             96: 62, 97: 63, 98: 64, 99: 60, 100: 65, 101: 66, 103: 68,
             105: 104, 107: 105, 109: 67, 111: 69, 113: 106,
+            // F16-F19 were absent, so those keys scanned as nothing at all.
+            106: 107, 64: 108, 79: 109, 80: 110,
             // Navigation cluster.
             114: 73, 115: 74, 116: 75, 117: 76, 118: 61, 119: 77, 120: 59,
             121: 78, 122: 58, 123: 80, 124: 79, 125: 81, 126: 82

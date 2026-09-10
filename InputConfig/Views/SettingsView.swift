@@ -1,6 +1,7 @@
 #if os(macOS)
 import SwiftUI
 import GameController
+import Carbon.HIToolbox
 
 struct SettingsView: View {
     @EnvironmentObject var presetStore: PresetStore
@@ -31,6 +32,17 @@ struct SettingsView: View {
     /// Drives the system-wide "toggle most recent preset" hotkey. Same key
     /// AppState reads at launch to decide whether to register the chord.
     @AppStorage(GlobalHotKeyService.enabledDefaultsKey) private var globalHotkeyEnabled = false
+
+    /// Emergency stop. Defaults to on: a kill switch you have to switch on
+    /// first is not a kill switch.
+    @AppStorage(EmergencyStopService.enabledKey) private var panicHotkeyEnabled = true
+    @AppStorage(EmergencyStopService.controllerKey) private var panicControllerEnabled = true
+    @AppStorage(EmergencyStopService.controllerBtnKey) private var panicControllerButton =
+        EmergencyStopService.defaultControllerButton
+    @AppStorage(EmergencyStopService.holdSecondsKey) private var panicHoldSeconds =
+        EmergencyStopService.defaultHoldSeconds
+    /// Bumped when the chord changes so the warning line re-evaluates.
+    @State private var panicSpecRevision = 0
 
     @AppStorage(FrontmostAppWatcher.enabledDefaultsKey) private var autoSwitchEnabled = false
 
@@ -257,6 +269,80 @@ struct SettingsView: View {
                             }
                         }
                     Text("Press \(GlobalHotKeyService.shared.shortcutDescription) anywhere to turn your most recently used preset on or off, even while another app is in front. Works system-wide and needs no extra permission. If another app already uses this shortcut, the switch turns itself back off.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section(title: "Emergency Stop") {
+                    Text("One action that only ever stops. It halts the engine, lets go of every key, button, and note being held, and gives the pointer back. It never turns a preset on, so it is safe to hit when you are not sure what is happening.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Toggle("Keyboard shortcut", isOn: $panicHotkeyEnabled)
+                        .onChange(of: panicHotkeyEnabled) { _, on in
+                            EmergencyStopService.shared.setEnabled(on)
+                            if on && !EmergencyStopService.shared.isRegistered {
+                                panicHotkeyEnabled = false
+                            }
+                        }
+                    HStack(spacing: 10) {
+                        Text("Shortcut")
+                            .foregroundStyle(.secondary)
+                        HotKeyRecorderField(spec: EmergencyStopService.shared.spec) { newSpec in
+                            EmergencyStopService.shared.setSpec(newSpec)
+                            panicHotkeyEnabled = EmergencyStopService.shared.isRegistered
+                            panicSpecRevision &+= 1
+                        }
+                        .disabled(!panicHotkeyEnabled)
+                        Spacer()
+                    }
+                    if EmergencyStopService.shared.spec.stealsATypingKey {
+                        Label("This key will stop working for typing everywhere on the Mac. A function key avoids that.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("A single key is allowed. F13 or another function key is a good choice, because nothing else uses it and it is reachable with one hand.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .id(panicSpecRevision)
+
+                    Divider()
+
+                    Toggle("Hold a button on the controller", isOn: $panicControllerEnabled)
+                    Text("This is the one that matters when a preset has taken over the keyboard and mouse: the controller in your hands is still a way out. It works no matter what the preset maps this button to.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 10) {
+                        Text("Button")
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $panicControllerButton) {
+                            ForEach(BindingRowView.standardButtonLabels, id: \.index) { entry in
+                                Text(entry.label).tag(entry.index)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 230)
+                        Text("held for")
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $panicHoldSeconds) {
+                            Text("1 second").tag(1.0)
+                            Text("1.5 seconds").tag(1.5)
+                            Text("2 seconds").tag(2.0)
+                            Text("3 seconds").tag(3.0)
+                        }
+                        .labelsHidden()
+                        .frame(width: 130)
+                        Spacer()
+                    }
+                    .disabled(!panicControllerEnabled)
+
+                    Text("You can also give any single control an Emergency Stop output in the binding editor, and the menu bar has a button for it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -831,6 +917,7 @@ struct SettingsView: View {
         !controllerService.connectedControllers.isEmpty
             || !controllerService.rawHIDGamepadSlots.isEmpty
             || controllerService.steamControllerSlot != nil
+            || controllerService.debugMarketingFakeActive
     }
 
     /// Cards for controllers read directly over raw HID (anything macOS does
@@ -1329,6 +1416,42 @@ enum Changelog {
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.4", points: [
+            "Tap the Mac. Your MacBook has a motion sensor, and InputConfig can now feel you knock on the case. Double tap or triple tap the palm rest or the lid to fire any output. It is the first input that needs no hardware at all: no controller, no MIDI device, nothing plugged in",
+            "Taps are told apart by counting: two taps close together are a double, three are a triple, and a pause starts a new count. Typing is ignored on purpose, so working at the keyboard never sets it off",
+            "New built-in preset Tap the Mac under Feature Showcases: double tap for Mission Control, triple tap to start dictation",
+            "Emergency stop: one action that only ever stops, never starts. It halts the engine, releases every held key, button, and note, and gives the pointer back",
+            "The emergency stop works three ways: a system-wide keyboard shortcut, holding Home / PS / Guide on the controller for two seconds, and a button in the menu bar. Any control can also be bound to it directly",
+            "The controller hold works no matter what the preset maps that button to, so a preset that has taken over the keyboard and mouse can always be escaped from the controller itself",
+            "Start Dictation as a System Function output: a control now presses the dictation key itself, exactly as pressing F5 does, so it works with no extra setup",
+            "New Accessibility group under System Function: Start Dictation, Speak Selection, Zoom On / Off, Zoom In, and Zoom Out, so the accessibility shortcuts no longer have to be built by hand out of key combinations",
+            "Per-preset shortcuts: give any preset its own system-wide key that switches to it, and press it again to stop it",
+            "Chords: a binding can now require a second button, so Triangle + D-pad up can run a macro while D-pad up alone keeps its normal job. Set it under Press Behavior with the new While holding menu",
+            "Gyro ratcheting: the new Pause Motion While Held app action stops motion aim while a button is held, so you can re-aim the controller without dragging the cursor, the way you lift a mouse",
+            "The fn / Globe key is now available in two places, because macOS treats them as two different things. fn / Globe (hold) is under Modifier Keys and adds the fn modifier to another key, which is how shortcuts like Globe + E and Globe + D work. Globe Key (Emoji) is under Special Keys and presses the Globe key on its own, firing whatever you have set it to do",
+            "Keyboard Brightness Up and Down added to the Display group",
+            "Fixed: presets that use only the trackpad, a cursor region, or a Mac tap did nothing unless a game controller happened to be connected. They now work on their own, which is the whole point of them",
+            "Presets can be reordered by dragging, and dragged from one folder into another. Drop a preset onto another to place it there. The order you set now sticks, instead of rearranging itself whenever a preset was edited",
+            "Fixed a crash when dragging presets or folders in the sidebar",
+            "The scan button now detects modifier keys pressed on their own, including Shift, Control, Option, Command and the fn / Globe key, plus the right Command key and F16 to F19. None of these could be scanned before",
+            "The trigger deadzone bar is see-through, so the red inner-deadzone band stays visible while you pull the trigger",
+            "InputConfig no longer opens a second copy of itself. Two copies fought over the keyboard and mouse, and only one could use the emergency stop",
+            "The app now says so when another app has taken the emergency stop shortcut, instead of failing silently",
+            "Editing a preset while it is running now takes effect straight away, instead of waiting for a restart",
+            "Duplicating a binding or a slot, and converting a preset between controllers, now keep every setting. Chords, macros, deadzone and the rest used to be dropped",
+            "Bindings switched to Axis or Hat by hand now pick a direction, so they fire the way the menu says",
+            "Dragging with a controller works: holding a mapped click while moving the stick now sends real drag events, so window moves, text selection, sliders, and drag and drop all work",
+            "Cursor motion from a stick no longer asks the system where the cursor is on every frame. This was the cause of high CPU with Variable Sensitivity on",
+            "Slow scrolling from a stick is smooth instead of dead or jittery; the fractional part is carried between frames the way cursor motion already was",
+            "A stick resting at the edge of its deadzone no longer chatters on and off every frame",
+            "The binding editor scrolls and expands smoothly. Moving the pointer across the list no longer makes every row redraw, and row measurements no longer feed back into the layout",
+            "Bindings can be reordered by dragging the handle on the left of each row. The row lifts and follows the pointer, the list opens a gap where it will land, and a row with its Options open folds them away while you drag it",
+            "A controller reconnecting over Bluetooth no longer shows up twice in the list",
+            "A Cancel button on the scan overlay, so a scan can be cancelled without a keyboard",
+            "The help guides have a search field, plus new guides for chords, ratcheting, and tapping the Mac",
+            "New built-in preset Anki in Desktop & Productivity: the face buttons rate flashcards, the bumpers undo and replay audio, stick clicks mark and bury, and the D-pad scrolls the card. Every row is labelled with its Anki action, and Anki is in the Smart Preset Maker's app list too",
+            "Fixed: the release notes you are reading now did not appear for people who already had the app installed, so earlier updates arrived silently",
+        ]),
         Entry(version: "1.3", points: [
             "Knob modes for MIDI dials: Dial mode treats the centre of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at centre",
             "Turn mode fires a nudge for every few steps of rotation, clockwise or counterclockwise, built for volume, brightness, and stepped scrolling",
@@ -1424,61 +1547,146 @@ enum Changelog {
 struct WhatsNewView: View {
     @Environment(\.dismiss) private var dismiss
 
-    /// The entry to present: the newest changelog entry whose version
-    /// matches the running short version, falling back to the newest.
-    private var entry: Changelog.Entry {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        return Changelog.entries.first(where: { $0.version == short }) ?? Changelog.entries[0]
+    /// The version the user last saw notes for. Everything released after it
+    /// is included, so upgrading across two releases does not skip one.
+    var since: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            featuresPage
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+    }
+
+    private var featuresPage: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                if let appIcon = NSApp.applicationIconImage {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .frame(width: 44, height: 44)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Welcome to version \(Changelog.currentVersion)")
+                        .font(.title2.weight(.bold))
+                    Text("Here's what's new since your last update.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(points.prefix(10), id: \.self) { point in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\u{2022}").foregroundStyle(.secondary)
+                        Text(point).font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text("The full list is under the version number in Settings, About.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .innerWell(radius: Metrics.sectionRadius)
+        }
+    }
+
+    /// Every point released since the version the user last saw, newest
+    /// release first. Falls back to the newest release on its own.
+    private var points: [String] {
+        guard let since,
+              let index = Changelog.entries.firstIndex(where: { $0.version == since }),
+              index > 0
+        else { return Changelog.entries.first?.points ?? [] }
+        return Changelog.entries[0..<index].flatMap(\.points)
+    }
+}
+
+
+// MARK: - Shortcut recorder
+
+/// Click, then press the chord you want. Records the next key press that
+/// carries at least one modifier, so a bare letter cannot be captured as a
+/// system-wide shortcut by accident.
+struct HotKeyRecorderField: View {
+    let spec: HotKeySpec
+    let onRecord: (HotKeySpec) -> Void
+
+    @State private var recording = false
+    /// Set when the user pressed a key with no modifiers, which macOS will
+    /// not register as a global shortcut.
+    @State private var needsModifier = false
+    @State private var monitor: Any?
+    @State private var current: HotKeySpec
+
+    init(spec: HotKeySpec, onRecord: @escaping (HotKeySpec) -> Void) {
+        self.spec = spec
+        self.onRecord = onRecord
+        _current = State(initialValue: spec)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.tint)
-                    .padding(.top, 26)
-                Text("What's New in InputConfig")
-                    .font(.title2.weight(.bold))
-                Text("Version \(entry.version)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 16)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(entry.points, id: \.self) { point in
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.tint)
-                            Text(point)
-                                .font(.callout)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxHeight: 320)
-
-            Button {
-                dismiss()
-            } label: {
-                Text("Continue")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .padding(.horizontal, 30)
-            .padding(.top, 18)
-            .padding(.bottom, 24)
+        Button {
+            recording ? stop() : start()
+        } label: {
+            Text(recording
+                 ? (needsModifier ? "Add \u{2318} \u{2325} \u{2303} or \u{21E7}" : "Press a key...")
+                 : current.displayString)
+                .font(.body.monospaced())
+                .frame(minWidth: 130)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(recording ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(recording ? Color.accentColor : Color.clear, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
-        .frame(width: 480)
+        .buttonStyle(.plain)
+        .help("Click, then press the shortcut you want. It needs at least one of Command, Option, Control, or Shift: macOS will not hand an app a shortcut that is a single key on its own.")
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        recording = true
+        needsModifier = false
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            var mods: UInt32 = 0
+            if event.modifierFlags.contains(.control) { mods |= UInt32(controlKey) }
+            if event.modifierFlags.contains(.option)  { mods |= UInt32(optionKey) }
+            if event.modifierFlags.contains(.shift)   { mods |= UInt32(shiftKey) }
+            if event.modifierFlags.contains(.command) { mods |= UInt32(cmdKey) }
+            if event.keyCode == UInt16(kVK_Escape) && mods == 0 {
+                stop()
+                return nil
+            }
+            // At least one modifier is required. Measured on macOS 26:
+            // RegisterEventHotKey never fires for a modifier-less chord, for
+            // a plain key and a function key alike, so accepting one here
+            // produced a shortcut that looked set and silently did nothing.
+            // Keep listening instead of recording a dead chord.
+            guard mods != 0 else {
+                needsModifier = true
+                return nil
+            }
+            let recorded = HotKeySpec(keyCode: UInt32(event.keyCode), modifiers: mods)
+            current = recorded
+            onRecord(recorded)
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        recording = false
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
     }
 }

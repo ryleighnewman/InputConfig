@@ -9,6 +9,18 @@ import GameController
 class MappingEngine: ObservableObject {
     @Published var isRunning: Bool = false
     @Published var activePreset: Preset?
+
+    /// Non-published copies of exactly what the 120 Hz poll loop reads.
+    ///
+    /// `pollControllers` used to start with `guard let preset = activePreset`,
+    /// which goes through the @Published getter and re-materialises the whole
+    /// Preset - every JoystickMapping, BindingModel and OutputAction - on
+    /// EVERY tick. That showed up in a profile as `initializeWithCopy for
+    /// BindingModel` / `OutputAction` and as time inside
+    /// `activePreset.getter`. These are refreshed only when the preset
+    /// actually changes.
+    private var pollJoysticks: [JoystickMapping] = []
+    private var pollDriveConfig: DriveConfig?
     /// Effective poll rate of the active timer in Hz. Driven by
     /// `installPollTimer()` so the UI (DebugLogView footer, Settings
     /// readout) always shows the *actual* rate, not the saved
@@ -93,9 +105,30 @@ class MappingEngine: ObservableObject {
     /// bookkeeping. `removeAll(keepingCapacity:)` keeps the hash
     /// table allocated and just zeroes the count.
     private var scratchActiveSet: Set<String> = []
+    /// Emergency stop: when the panic button was first seen held, per slot.
+    /// nil means it is not currently down anywhere.
+    private var panicHoldStart: TimeInterval?
+
+    /// Chords: plain input keys claimed this frame by a satisfied chord row
+    /// on the slot being polled, so the plain row on the same input stays quiet.
+    private var chordClaimed: Set<String> = []
+    private var chordKeyCache: [UUID: String] = [:]
+    /// Gyro ratchet: true while a "Pause Motion While Held" row on the slot
+    /// being polled is held. Motion bindings read 0 for the frame.
+    private var currentSlotMotionMuted = false
+    /// True while evaluating a binding that was active last frame, so an
+    /// axis releases at 90% of its threshold instead of chattering at the
+    /// deadzone edge.
+    private var hysteresisActive = false
     private var scratchAllActiveSet: Set<String> = []
 
-    private var debugEnabled = true
+    /// Follows the "show developer activity log" setting. This used to be
+    /// hard-wired to true with no setter, so every press and release built a
+    /// log string and the 5 Hz published log flush invalidated the root view
+    /// in shipping builds, for a panel almost nobody has open.
+    private var debugEnabled = false
+    private var debugSettingObserver: NSObjectProtocol?
+    private static let debugLogDefaultsKey = "InputConfig.showDebugLog"
     private var debugLineCount = 0
 
     /// Internal buffer the polling loop writes to without triggering UI
@@ -124,6 +157,10 @@ class MappingEngine: ObservableObject {
     /// trying to configure it.
     @Published var outputsPaused: Bool = false {
         didSet {
+            // Re-rate the poll loop for the new state. Dropping from 120 Hz to
+            // 15 Hz while the editor is open is what stops the timer competing
+            // with scrolling.
+            if oldValue != outputsPaused, isRunning { installPollTimer() }
             if outputsPaused {
                 // Release any output state that was currently held so the
                 // user doesn't end up with a stuck key or held mouse button
@@ -146,10 +183,27 @@ class MappingEngine: ObservableObject {
         }
     }
 
+    /// Observes PresetStore saves so the running engine follows edits.
+    private var presetSaveObserver: NSObjectProtocol?
+
+    /// Re-arm on the edited preset when it is the one currently running.
+    /// `start(with:)` already calls `stop()` first, so this is a clean
+    /// restart rather than a merge.
+    func activePresetWasEdited(_ updated: Preset) {
+        guard isRunning, activePreset?.id == updated.id else { return }
+        start(with: updated)
+    }
+
     init(controllerService: GameControllerService) {
         self.controllerService = controllerService
         installControllerDisconnectObserver()
         installSleepWakeObservers()
+        presetSaveObserver = NotificationCenter.default.addObserver(
+            forName: PresetStore.presetSavedNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let preset = note.userInfo?["preset"] as? Preset else { return }
+            MainActor.assumeIsolated { self?.activePresetWasEdited(preset) }
+        }
     }
 
     /// Release every synthesized output when the machine sleeps, and refresh
@@ -275,6 +329,27 @@ class MappingEngine: ObservableObject {
     // MARK: - Start / Stop
 
     func start(with preset: Preset) {
+        // The Mac's own accelerometer streams at ~800 Hz, so only wake it when
+        // this preset actually binds a chassis tap.
+        let usesChassisTap = preset.joysticks.contains { group in
+            group.bindings.contains { $0.input.type == .chassisTap }
+        }
+        if usesChassisTap {
+            ChassisTapService.shared.start()
+        } else {
+            ChassisTapService.shared.stop()
+        }
+
+        debugEnabled = UserDefaults.standard.bool(forKey: Self.debugLogDefaultsKey)
+        if debugSettingObserver == nil {
+            debugSettingObserver = NotificationCenter.default.addObserver(
+                forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.debugEnabled = UserDefaults.standard.bool(forKey: Self.debugLogDefaultsKey)
+                }
+            }
+        }
         // The original guard required a controller mapping. With external
         // keyboard / mouse inputs we may legitimately have a preset with no
         // controller-shape bindings, so accept anything that has at least
@@ -294,6 +369,8 @@ class MappingEngine: ObservableObject {
         if isRunning { stop() }
 
         activePreset = preset
+        pollJoysticks = preset.joysticks
+        pollDriveConfig = preset.driveConfig
         isRunning = true
         engineGeneration &+= 1
         activeStates.removeAll()
@@ -301,6 +378,17 @@ class MappingEngine: ObservableObject {
         toggleStates.removeAll()
         turboTimestamps.removeAll()
         macrosInFlight.removeAll()
+        // Per-session state that used to survive start() and stop(). A
+        // holdFired entry left over from the previous run swallowed the next
+        // tap and sent a phantom key-up; a stale chordKeyCache entry kept
+        // edge-detecting an edited chord under its old key forever.
+        deferredPressStart.removeAll()
+        holdFired.removeAll()
+        lastTapTime.removeAll()
+        pendingSingleTapToken.removeAll()
+        chordKeyCache.removeAll()
+        macroCancelRequests.removeAll()
+        lastSlotState.removeAll()
         serializedKeyCache.removeAll()
         bindKeyCache.removeAll()
         debugLog.removeAll()
@@ -511,7 +599,16 @@ class MappingEngine: ObservableObject {
     /// the saved `pollHz`. When on, returns the battery rate if the
     /// Mac is currently on battery (per SystemStatsService.power.source),
     /// else the AC rate. Clamped to [30, 240].
+    /// Poll rate while an editor sheet has outputs paused. Nothing can fire
+    /// at all in that state, so 120 Hz is pure waste: it was the single
+    /// biggest main-thread cost measured while scrolling the binding editor.
+    /// Not zero, because the controller's emergency-stop hold is checked in
+    /// the same loop and has to stay responsive; a 2-second hold is still
+    /// sampled 30 times at this rate.
+    private static let pausedPollHz = 15
+
     private func resolveEffectivePollHz() -> Int {
+        if outputsPaused { return Self.pausedPollHz }
         let defaults = UserDefaults.standard
         let autoSwitch = defaults.bool(forKey: "InputConfig.autoPollHzByPower")
         let fallback = defaults.object(forKey: "InputConfig.pollHz") as? Int ?? 120
@@ -577,6 +674,7 @@ class MappingEngine: ObservableObject {
     }
 
     func stop() {
+        ChassisTapService.shared.stop()
         StatsService.shared.engineStopped()
         engineGeneration &+= 1   // poison any in-flight macro/turbo blocks
         pollTimer?.invalidate()
@@ -589,6 +687,17 @@ class MappingEngine: ObservableObject {
         toggleStates.removeAll()
         turboTimestamps.removeAll()
         macrosInFlight.removeAll()
+        // Per-session state that used to survive start() and stop(). A
+        // holdFired entry left over from the previous run swallowed the next
+        // tap and sent a phantom key-up; a stale chordKeyCache entry kept
+        // edge-detecting an edited chord under its old key forever.
+        deferredPressStart.removeAll()
+        holdFired.removeAll()
+        lastTapTime.removeAll()
+        pendingSingleTapToken.removeAll()
+        chordKeyCache.removeAll()
+        macroCancelRequests.removeAll()
+        lastSlotState.removeAll()
         serializedKeyCache.removeAll()
         bindKeyCache.removeAll()
         externalEventSubscription?.cancel()
@@ -649,6 +758,8 @@ class MappingEngine: ObservableObject {
         faderBaseline.removeAll()
         faderEngaged.removeAll()
         activePreset = nil
+        pollJoysticks = []
+        pollDriveConfig = nil
         log("Engine stopped")
         // Final flush so the user sees the stop event in the log view.
         flushPendingLog()
@@ -716,11 +827,14 @@ class MappingEngine: ObservableObject {
     /// Throttled live mirror of drive telemetry for on-screen feedback.
     /// nil when drive mode is off / inactive.
     @Published var driveLiveState: DriveModeProcessor.LiveState?
-    private var pendingScrollDeltaX: Int32 = 0
-    private var pendingScrollDeltaY: Int32 = 0
+    private var pendingScrollDeltaX: Float = 0
+    private var pendingScrollDeltaY: Float = 0
+    private var scrollCarryX: Float = 0
+    private var scrollCarryY: Float = 0
 
     private func pollControllers() {
-        guard let preset = activePreset else { return }
+        guard activePreset != nil else { return }
+        let preset = (joysticks: pollJoysticks, driveConfig: pollDriveConfig)
         pollCount += 1
         // Cumulative session counter for the Stats panel - cheap UInt64
         // increment, ignored when the panel isn't subscribed.
@@ -765,24 +879,45 @@ class MappingEngine: ObservableObject {
             // Set<String> every joystick every poll frame.
             scratchActiveSet.removeAll(keepingCapacity: true)
 
-            for binding in joystickMapping.bindings {
-                let isActive: Bool
-                if binding.input.type == .extKey || binding.input.type == .extMouse {
-                    isActive = checkExternalInput(binding.input)
-                } else if binding.input.type == .midi {
-                    // MIDI is device-independent like the keyboard / mouse
-                    // inputs: it must fire even when no game controller is
-                    // connected, which is the whole point of using a MIDI
-                    // pad controller as a standalone Mac remote.
-                    isActive = checkMIDIInput(binding.input, binding: binding,
-                                              threshold: binding.deadzone ?? defaultAxisThreshold)
-                } else if let s = state {
-                    isActive = checkInput(binding.input, state: s, binding: binding)
-                } else {
-                    // Controller binding but the slot is empty - can't fire.
-                    isActive = false
+            // Pre-pass: which plain inputs a held chord claims this frame,
+            // and whether a gyro-ratchet row is held. Both must be known
+            // before any row fires, so the order of rows does not matter.
+            chordClaimed.removeAll(keepingCapacity: true)
+            currentSlotMotionMuted = false
+            for b in joystickMapping.bindings {
+                if let mod = b.modifierInput,
+                   inputIsActive(mod, state: state, binding: nil),
+                   inputIsActive(b.input, state: state, binding: b) {
+                    chordClaimed.insert(cachedKey(for: b))
                 }
-                let inputKey = cachedKey(for: binding)
+                if !currentSlotMotionMuted,
+                   b.outputs.contains(where: { $0.type == .appAction && $0.appActionKind == .holdMuteMotion }),
+                   inputIsActive(b.input, state: state, binding: b) {
+                    currentSlotMotionMuted = true
+                }
+            }
+
+            for binding in joystickMapping.bindings {
+                let plainKey = cachedKey(for: binding)
+                hysteresisActive = activeStates[joystickIndex]?.contains(plainKey) ?? false
+                var isActive = inputIsActive(binding.input, state: state, binding: binding)
+                hysteresisActive = false
+                let inputKey: String
+                if let mod = binding.modifierInput {
+                    // Chord row: needs the modifier too, and tracks its own
+                    // press state so it never shares an edge with the plain row.
+                    if isActive { isActive = inputIsActive(mod, state: state, binding: nil) }
+                    if let k = chordKeyCache[binding.id] {
+                        inputKey = k
+                    } else {
+                        let k = plainKey + "+" + mod.serialized
+                        chordKeyCache[binding.id] = k
+                        inputKey = k
+                    }
+                } else {
+                    inputKey = plainKey
+                    if isActive, chordClaimed.contains(plainKey) { isActive = false }
+                }
                 // bindKey is keyed by binding UUID so two distinct
                 // bindings on the same physical input (e.g. one toggle,
                 // one turbo, or two different macros) don't share
@@ -978,6 +1113,11 @@ class MappingEngine: ObservableObject {
             activeStates[joystickIndex] = scratchActiveSet
         }
 
+        // The kill switch. Runs after the binding loop so it can reuse the
+        // controller state already read this frame; it stays independent of
+        // what the preset maps that button to.
+        checkEmergencyHold(now: nowMonotonic)
+
         // One-stick drive mode (build 18). Runs after the binding loops so
         // its analog steering rides the same per-frame mouse flush below.
         // Releases every held key whenever drive is off or outputs pause.
@@ -1024,9 +1164,18 @@ class MappingEngine: ObservableObject {
                 InputSimulator.shared.moveMouse(deltaX: wholeX, deltaY: wholeY)
                 StatsService.shared.recordMouseMotion(pixels: abs(wholeX) + abs(wholeY))
             }
-            if pendingScrollDeltaX != 0 || pendingScrollDeltaY != 0 {
-                InputSimulator.shared.scrollWheel(deltaX: pendingScrollDeltaX, deltaY: pendingScrollDeltaY)
-                StatsService.shared.recordScroll(ticks: Int(abs(pendingScrollDeltaX) + abs(pendingScrollDeltaY)))
+            // Whole-pixel scroll with the fraction carried, exactly like the
+            // cursor path: no dead band at low deflection, and fewer,
+            // larger events instead of one single-pixel event per frame.
+            let scrollX = pendingScrollDeltaX + scrollCarryX
+            let scrollY = pendingScrollDeltaY + scrollCarryY
+            let wholeScrollX = Int32(max(-100_000, min(100_000, scrollX.isFinite ? scrollX : 0)))
+            let wholeScrollY = Int32(max(-100_000, min(100_000, scrollY.isFinite ? scrollY : 0)))
+            scrollCarryX = scrollX - Float(wholeScrollX)
+            scrollCarryY = scrollY - Float(wholeScrollY)
+            if wholeScrollX != 0 || wholeScrollY != 0 {
+                InputSimulator.shared.scrollWheel(deltaX: wholeScrollX, deltaY: wholeScrollY)
+                StatsService.shared.recordScroll(ticks: Int(abs(wholeScrollX) + abs(wholeScrollY)))
             }
         }
 
@@ -1065,6 +1214,71 @@ class MappingEngine: ObservableObject {
         externalMouseDY.removeAll(keepingCapacity: true)
         externalScrollDX.removeAll(keepingCapacity: true)
         externalScrollDY.removeAll(keepingCapacity: true)
+    }
+
+    /// One answer for "is this control down right now", whatever device
+    /// it lives on. Keyboard, mouse, and MIDI inputs fire with no game
+    /// controller connected; controller inputs need the slot's state.
+    private func inputIsActive(_ input: InputEvent, state: ControllerState?, binding: BindingModel?) -> Bool {
+        switch input.type {
+        case .extKey, .extMouse:
+            return checkExternalInput(input)
+        case .midi:
+            return checkMIDIInput(input, binding: binding,
+                                  threshold: binding?.deadzone ?? defaultAxisThreshold)
+        default:
+            if let s = state {
+                return checkInput(input, state: s, binding: binding)
+            }
+            // These read their own service rather than a controller slot, so
+            // they have to keep firing when no controller is connected at all
+            // (a trackpad-only or tap-only preset is perfectly valid). Every
+            // other type genuinely needs the slot's state.
+            switch input.type {
+            case .touchpad, .touchpadRegion, .touchpadGesture, .cursorRegion, .chassisTap:
+                return checkInput(input, state: Self.detachedState, binding: binding)
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Stand-in slot state for inputs that never read the controller.
+    private static let detachedState = ControllerState()
+
+    /// Holding the panic button on ANY connected controller for the
+    /// configured time stops everything. Deliberately independent of the
+    /// preset's bindings: if a preset has taken over the keyboard and mouse,
+    /// the controller in your hands has to be a way out.
+    private func checkEmergencyHold(now: TimeInterval) {
+        let service = EmergencyStopService.shared
+        guard service.controllerHoldEnabled else {
+            panicHoldStart = nil
+            return
+        }
+        let button = service.controllerButton
+        var isDown = false
+        // Prefer the state this frame already read; only fall back to the
+        // service for slots the binding loop does not cover.
+        for slot in 0..<max(1, controllerService.controllerDetails.count) {
+            let state = lastSlotState[slot] ?? controllerService.readControllerState(at: slot)
+            if let state, (state.buttons[button] ?? 0) > 0.5 {
+                isDown = true
+                break
+            }
+        }
+        guard isDown else {
+            panicHoldStart = nil
+            return
+        }
+        guard let start = panicHoldStart else {
+            panicHoldStart = now
+            return
+        }
+        if now - start >= service.holdSeconds {
+            panicHoldStart = nil
+            service.stop(reason: .controllerHold)
+        }
     }
 
     /// Returns cached serialized key for a binding's input to avoid string allocations in 120Hz loop
@@ -1207,13 +1421,16 @@ class MappingEngine: ObservableObject {
         case .axis:
             guard var value = state.axes[input.index] else { return false }
             if binding?.invertAxis == true { value = -value }
+            // Release a little below the activation point, so sensor noise
+            // at the edge is not a press and release every frame.
+            let threshold = hysteresisActive ? axisThreshold * 0.9 : axisThreshold
             switch input.axisDirection {
             case .positive:
-                return value > axisThreshold
+                return value > threshold
             case .negative:
-                return value < -axisThreshold
+                return value < -threshold
             case .none:
-                return abs(value) > axisThreshold
+                return abs(value) > threshold
             }
 
         case .hat:
@@ -1318,6 +1535,7 @@ class MappingEngine: ObservableObject {
             // zone so resting drift doesn't fire the binding.
             guard let channel = input.motionChannel,
                   let raw = state.motion[channel] else { return false }
+            if currentSlotMotionMuted { return false }
             let value = (binding?.invertAxis == true) ? -raw : raw
             switch input.axisDirection {
             case .positive: return value > axisThreshold
@@ -1330,6 +1548,12 @@ class MappingEngine: ObservableObject {
             // only reachable from legacy code paths that don't expect
             // external types.
             return checkExternalInput(input)
+
+        case .chassisTap:
+            // Edge-fire, exactly like a touchpad gesture: the service raises a
+            // one-shot flag when a tap group closes and holds it briefly so
+            // the poll loop sees a press and then a release.
+            return ChassisTapService.shared.consumeTap(count: input.index)
 
         case .midi:
             return checkMIDIInput(input, binding: binding, threshold: axisThreshold)
@@ -1494,6 +1718,8 @@ class MappingEngine: ObservableObject {
         if press {
             for output in outputs where output.type == .appAction {
                 let kind = output.appActionKind ?? .togglePauseOutputs
+                // Held-only gate, handled per frame in pollControllers.
+                if kind == .holdMuteMotion { continue }
                 let target = output.targetPresetID
                 DispatchQueue.main.async {
                     MenuBarController.shared.performAppAction(kind, targetPresetID: target)
@@ -1911,6 +2137,9 @@ class MappingEngine: ObservableObject {
                    let channel = input.motionChannel,
                    var motionValue = state.motion[channel] {
                     if binding?.invertAxis == true { motionValue = -motionValue }
+                    // Gyro ratchet held: the controller can be re-aimed
+                    // without moving the cursor.
+                    if currentSlotMotionMuted { motionValue = 0 }
                     // Filter by half-axis like we do for touchpad.
                     switch input.axisDirection {
                     case .positive: if motionValue < 0 { motionValue = 0 }
@@ -2005,7 +2234,7 @@ class MappingEngine: ObservableObject {
                 // Clamp before Int32(): an absurd imported scroll speed would
                 // otherwise trap even though isFinite is true.
                 let scaledSpeed = rawScroll.isFinite
-                    ? Int32(max(-1_000_000, min(1_000_000, rawScroll))) : 0
+                    ? max(-1_000_000, min(1_000_000, rawScroll)) : 0
                 switch (axis, dir) {
                 case (.horizontal, .positive): pendingScrollDeltaX += scaledSpeed
                 case (.horizontal, .negative): pendingScrollDeltaX -= scaledSpeed

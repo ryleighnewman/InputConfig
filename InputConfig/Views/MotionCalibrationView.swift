@@ -158,6 +158,38 @@ struct MotionCalibrationView: View {
     /// Lets the user verify motion is actually flowing BEFORE running
     /// calibration. If a gyro never moves the values here, the controller
     /// either doesn't expose motion or macOS isn't piping it through.
+    /// Marketing capture stand-in. The real panel needs a GCMotion, which a
+    /// synthetic controller cannot provide, so the sheet showed an empty band
+    /// where the readings belong. Compiles to nothing in Release.
+    #if DEBUG
+    @ViewBuilder
+    private var syntheticLiveReadings: some View {
+        TimelineView(.periodic(from: Date(), by: 1.0 / 30.0)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.path.ecg")
+                        .foregroundStyle(.teal)
+                    Text("Live sensor readings")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    availabilityBadge(label: "active", available: true)
+                    availabilityBadge(label: "gyro", available: true)
+                    availabilityBadge(label: "gravity", available: true)
+                }
+                GyroVisualizationView(
+                    gyroX: Float(sin(t * 1.3)) * 0.8,
+                    gyroY: Float(cos(t * 0.9)) * 0.8,
+                    gyroZ: Float(sin(t * 0.6)) * 0.5,
+                    rollAngle: Float(sin(t * 0.7)) * 0.35,
+                    pitchAngle: Float(cos(t * 0.5)) * 0.30,
+                    yawAngle: Float(sin(t * 0.4)) * 0.25)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+    #endif
+
     @ViewBuilder
     private var liveReadings: some View {
         if let entry = selectedControllerEntry, let motion = entry.controller.motion {
@@ -286,6 +318,15 @@ struct MotionCalibrationView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.08)))
             }
+        } else {
+            // Marketing capture only: stands in for the real panel, which needs
+            // a GCMotion a synthetic controller cannot provide. Compiled out
+            // of Release entirely.
+            #if DEBUG
+            if controllerService.debugMarketingFakeActive {
+                syntheticLiveReadings
+            }
+            #endif
         }
     }
 
@@ -389,7 +430,29 @@ struct MotionCalibrationView: View {
 
     @ViewBuilder
     private var controllerPicker: some View {
-        if motionCapableControllers.isEmpty {
+        if motionCapableControllers.isEmpty, controllerService.debugMarketingFakeActive {
+            // Marketing capture: the synthetic controllers have no GCController
+            // behind them, so they cannot appear in motionCapableControllers.
+            // Render the row the picker would have shown.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Controller")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "largecircle.fill.circle")
+                        .foregroundStyle(Color.accentColor)
+                    Text(controllerService.controllerNames[0] ?? "Controller")
+                        .font(.body)
+                    Spacer()
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Text("Calibrated")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+        } else if motionCapableControllers.isEmpty {
             HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)

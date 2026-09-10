@@ -41,6 +41,9 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     /// `touchpadGestureKind`. Behaves like a button - fires for one
     /// poll frame when the gesture is recognised.
     case touchpadGesture = "tpg"
+    /// A physical tap on the Mac's own chassis, read from the built-in
+    /// accelerometer. `index` carries the tap count: 1, 2, or 3.
+    case chassisTap = "cht"
     /// A message from an external MIDI device (keyboard, pad controller,
     /// knob box). Notes and pads behave like buttons; CC knobs, pitch
     /// bend, and aftertouch behave like analog axes. `index` carries the
@@ -63,6 +66,7 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
         case .cursorRegion: return "Cursor Region"
         case .stickRegion: return "Stick Region"
         case .touchpadGesture: return "Touchpad Gesture"
+        case .chassisTap: return "Tap the Mac"
         case .midi: return "MIDI"
         }
     }
@@ -402,6 +406,12 @@ struct InputEvent: Codable, Hashable, Identifiable {
             return "\(stick) Stick Region"
         case .touchpadGesture:
             return touchpadGestureKind?.displayName ?? "Touchpad Gesture"
+        case .chassisTap:
+            switch index {
+            case 2:  return "Double tap the Mac"
+            case 3:  return "Triple tap the Mac"
+            default: return "Tap the Mac"
+            }
         case .midi:
             let kind = midiKind ?? .note
             let chan = midiChannel.map { "ch\($0)" } ?? "any ch"
@@ -473,6 +483,9 @@ struct InputEvent: Codable, Hashable, Identifiable {
         case .touchpadGesture:
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")"
+        case .chassisTap:
+            // "cht <count>" e.g. "cht 2" for a double tap
+            return "cht \(index)"
         case .midi:
             // "mid <kind> <number> <channel|any> <dir> <deviceID|any>"
             // e.g. "mid note 60 any + any", "mid cc 74 1 + any"
@@ -572,6 +585,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
                   let kind = TouchpadGestureKind(rawValue: parts[1]) else { return nil }
             return InputEvent(type: .touchpadGesture, index: 0,
                               touchpadGestureKind: kind)
+        case "cht":
+            // "cht <count>"
+            guard parts.count >= 2, let count = Int(parts[1]) else { return nil }
+            return InputEvent(type: .chassisTap, index: max(1, min(3, count)))
         case "mid":
             // "mid <kind> <number> <channel|any> <dir> <deviceID|any>"
             guard parts.count >= 3,
@@ -610,6 +627,11 @@ struct InputEvent: Codable, Hashable, Identifiable {
                    axisDirection: direction,
                    touchpadFinger: finger,
                    touchpadAxis: axis)
+    }
+
+    /// `count` is how many taps make the gesture: 1, 2 or 3.
+    static func chassisTap(_ count: Int) -> InputEvent {
+        InputEvent(type: .chassisTap, index: count)
     }
 
     static func touchpadRegion(_ id: UUID) -> InputEvent {

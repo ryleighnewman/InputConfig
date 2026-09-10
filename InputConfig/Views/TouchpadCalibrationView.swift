@@ -31,6 +31,23 @@ struct TouchpadCalibrationView: View {
 
     @State private var selectedTab: Tab = .calibration
 
+    #if DEBUG
+    /// Marketing capture hook: `tools/post inputconfig.debug.touchpadTab regions`
+    /// switches this sheet's tab. The screenshot script used to click the
+    /// segmented picker through the accessibility API, which SwiftUI does not
+    /// expose as a radio group, so the click silently did nothing and the
+    /// Regions shot was a duplicate of the Calibration one.
+    private var debugTabHook: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onReceive(DistributedNotificationCenter.default().publisher(
+                for: Notification.Name("inputconfig.debug.touchpadTab"))) { note in
+                if let raw = note.object as? String, let tab = Tab(rawValue: raw) {
+                    selectedTab = tab
+                }
+            }
+    }
+    #endif
+
     /// Which physical surface the sheet is operating on. Persisted in
     /// TouchpadService.currentActiveDevice so the picker reopens to the
     /// user's last pick.
@@ -109,6 +126,9 @@ struct TouchpadCalibrationView: View {
                 .accessibilityAddTraits(.isHeader)
 
             devicePicker
+            #if DEBUG
+            debugTabHook
+            #endif
 
             Picker("", selection: $selectedTab) {
                 ForEach(Tab.allCases) { tab in
@@ -143,6 +163,23 @@ struct TouchpadCalibrationView: View {
             startPolling()
             reloadRegionsForActiveDevice()
             loadSavedCalibration()
+            #if DEBUG
+            // Marketing capture: the calibration grid only fills in as a real
+            // finger drags across the pad, so with no hardware the panel
+            // photographs completely blank. Seed it with a plausible sweep -
+            // dense in the middle, thinning at the corners the way a real
+            // drag leaves it - so the shot shows the feature doing something.
+            if DebugMarketing.shared.fakeController {
+                let cols = 12, rows = 7
+                for r in 0..<rows {
+                    for c in 0..<cols {
+                        let edge = (r == 0 || r == rows - 1) && (c < 2 || c > cols - 3)
+                        let gap = (r == 2 && c == 10) || (r == 4 && c == 1)
+                        touched[r * cols + c] = !edge && !gap
+                    }
+                }
+            }
+            #endif
         }
         .onDisappear {
             stopPolling()

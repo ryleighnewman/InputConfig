@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.4
+
+- Tap the Mac. Your MacBook has a motion sensor, and InputConfig can now feel
+  you knock on the case. Double tap or triple tap the palm rest or the lid to
+  fire any output. It is the first input that needs no hardware at all: no
+  controller, no MIDI device, nothing plugged in.
+- Taps are told apart by counting: two taps close together are a double, three
+  are a triple, and a pause starts a new count. Typing is ignored on purpose,
+  so working at the keyboard never sets it off.
+- New built-in preset Tap the Mac under Feature Showcases: double tap for
+  Mission Control, triple tap to start dictation.
+- Emergency stop: one action that only ever stops, never starts. It halts the
+  engine, releases every held key, button, and note, and gives the pointer
+  back.
+- The emergency stop works three ways: a system-wide keyboard shortcut,
+  holding Home / PS / Guide on the controller for two seconds, and a button in
+  the menu bar. Any control can also be bound to it directly.
+- The controller hold works no matter what the preset maps that button to, so
+  a preset that has taken over the keyboard and mouse can always be escaped
+  from the controller itself.
+- Start Dictation as a System Function output: a control now presses the
+  dictation key itself, exactly as pressing F5 does, so it works with no extra
+  setup.
+- New Accessibility group under System Function: Start Dictation, Speak
+  Selection, Zoom On / Off, Zoom In, and Zoom Out, so the accessibility
+  shortcuts no longer have to be built by hand out of key combinations.
+- Per-preset shortcuts: give any preset its own system-wide key that switches
+  to it, and press it again to stop it.
+- Chords: a binding can now require a second button, so Triangle + D-pad up
+  can run a macro while D-pad up alone keeps its normal job. Set it under
+  Press Behavior with the new While holding menu.
+- Gyro ratcheting: the new Pause Motion While Held app action stops motion aim
+  while a button is held, so you can re-aim the controller without dragging
+  the cursor, the way you lift a mouse.
+- The fn / Globe key is now available in two places, because macOS treats them
+  as two different things. fn / Globe (hold) is under Modifier Keys and adds
+  the fn modifier to another key, which is how shortcuts like Globe + E and
+  Globe + D work. Globe Key (Emoji) is under Special Keys and presses the
+  Globe key on its own, firing whatever you have set it to do.
+- Keyboard Brightness Up and Down added to the Display group.
+- Fixed: presets that use only the trackpad, a cursor region, or a Mac tap did
+  nothing unless a game controller happened to be connected. They now work on
+  their own, which is the whole point of them.
+- Presets can be reordered by dragging, and dragged from one folder into
+  another. Drop a preset onto another to place it there. The order you set now
+  sticks, instead of rearranging itself whenever a preset was edited.
+- Fixed a crash when dragging presets or folders in the sidebar.
+- The scan button now detects modifier keys pressed on their own, including
+  Shift, Control, Option, Command and the fn / Globe key, plus the right
+  Command key and F16 to F19. None of these could be scanned before.
+- The trigger deadzone bar is see-through, so the red inner-deadzone band
+  stays visible while you pull the trigger.
+- InputConfig no longer opens a second copy of itself. Two copies fought over
+  the keyboard and mouse, and only one could use the emergency stop.
+- The app now says so when another app has taken the emergency stop shortcut,
+  instead of failing silently.
+- Editing a preset while it is running now takes effect straight away, instead
+  of waiting for a restart.
+- Duplicating a binding or a slot, and converting a preset between
+  controllers, now keep every setting. Chords, macros, deadzone and the rest
+  used to be dropped.
+- Bindings switched to Axis or Hat by hand now pick a direction, so they fire
+  the way the menu says.
+- Dragging with a controller works: holding a mapped click while moving the
+  stick now sends real drag events, so window moves, text selection, sliders,
+  and drag and drop all work.
+- Cursor motion from a stick no longer asks the system where the cursor is on
+  every frame. This was the cause of high CPU with Variable Sensitivity on.
+- Slow scrolling from a stick is smooth instead of dead or jittery; the
+  fractional part is carried between frames the way cursor motion already was.
+- A stick resting at the edge of its deadzone no longer chatters on and off
+  every frame.
+- The binding editor scrolls and expands smoothly. Moving the pointer across
+  the list no longer makes every row redraw, and row measurements no longer
+  feed back into the layout.
+- Bindings can be reordered by dragging the handle on the left of each row.
+  The row lifts and follows the pointer, the list opens a gap where it will
+  land, and a row with its Options open folds them away while you drag it.
+- A controller reconnecting over Bluetooth no longer shows up twice in the
+  list.
+- A Cancel button on the scan overlay, so a scan can be cancelled without a
+  keyboard.
+- The help guides have a search field, plus new guides for chords, ratcheting,
+  and tapping the Mac.
+- New built-in preset Anki in Desktop & Productivity: the face buttons rate
+  flashcards, the bumpers undo and replay audio, stick clicks mark and bury,
+  and the D-pad scrolls the card. Every row is labelled with its Anki action,
+  and Anki is in the Smart Preset Maker's app list too.
+- Fixed: the release notes you are reading now did not appear for people who
+  already had the app installed, so earlier updates arrived silently.
+
 ## 1.3
 
 - Knob modes for MIDI dials: Dial mode treats the centre of the knob as zero,

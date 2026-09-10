@@ -97,6 +97,14 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     // Display
     case brightnessUp = "bup"
     case brightnessDown = "bdn"
+    case keyboardBrightnessUp = "kbu"
+    case keyboardBrightnessDown = "kbd"
+    // Accessibility
+    case startDictation = "dct"
+    case speakSelection = "spk"
+    case zoomToggle = "zom"
+    case zoomIn = "zmi"
+    case zoomOut = "zmo"
     // Mac
     case missionControl = "mct"
     case launchpad = "lpd"
@@ -120,6 +128,13 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         case .previousTrack: return "Previous Track"
         case .brightnessUp: return "Brightness Up"
         case .brightnessDown: return "Brightness Down"
+        case .keyboardBrightnessUp: return "Keyboard Brightness Up"
+        case .keyboardBrightnessDown: return "Keyboard Brightness Down"
+        case .startDictation: return "Start Dictation"
+        case .speakSelection: return "Speak Selection"
+        case .zoomToggle: return "Zoom On / Off"
+        case .zoomIn: return "Zoom In"
+        case .zoomOut: return "Zoom Out"
         case .missionControl: return "Mission Control"
         case .launchpad: return "Launchpad"
         case .spotlight: return "Spotlight Search"
@@ -149,6 +164,13 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         case .previousTrack: return "backward.fill"
         case .brightnessUp: return "sun.max.fill"
         case .brightnessDown: return "sun.min.fill"
+        case .keyboardBrightnessUp: return "keyboard.badge.ellipsis"
+        case .keyboardBrightnessDown: return "keyboard"
+        case .startDictation: return "mic.fill"
+        case .speakSelection: return "speaker.wave.2.fill"
+        case .zoomToggle: return "plus.magnifyingglass"
+        case .zoomIn: return "plus.magnifyingglass"
+        case .zoomOut: return "minus.magnifyingglass"
         case .missionControl: return "rectangle.3.group.fill"
         case .launchpad: return "square.grid.3x3.fill"
         case .spotlight: return "magnifyingglass"
@@ -165,9 +187,27 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .volumeUp, .volumeDown, .muteToggle: return "Sound"
         case .playPause, .nextTrack, .previousTrack: return "Media"
-        case .brightnessUp, .brightnessDown: return "Display"
+        case .brightnessUp, .brightnessDown,
+             .keyboardBrightnessUp, .keyboardBrightnessDown: return "Display"
+        case .startDictation, .speakSelection,
+             .zoomToggle, .zoomIn, .zoomOut: return "Accessibility"
         case .missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu: return "Mac"
         case .runShortcut, .openApp, .openURL: return "Automation"
+        }
+    }
+
+    /// One line under the name in the picker, for the kinds that depend on a
+    /// macOS setting being switched on.
+    var requirementNote: String? {
+        switch self {
+        case .startDictation:
+            return "Needs Dictation switched on in System Settings, Keyboard"
+        case .speakSelection:
+            return "Needs Accessibility, Spoken Content, Speak selection switched on"
+        case .zoomToggle, .zoomIn, .zoomOut:
+            return "Needs Accessibility, Zoom, Use keyboard shortcuts to zoom switched on"
+        default:
+            return nil
         }
     }
 
@@ -175,7 +215,10 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     static let grouped: [(category: String, kinds: [SystemActionKind])] = [
         ("Sound", [.volumeUp, .volumeDown, .muteToggle]),
         ("Media", [.playPause, .nextTrack, .previousTrack]),
-        ("Display", [.brightnessUp, .brightnessDown]),
+        ("Display", [.brightnessUp, .brightnessDown,
+                     .keyboardBrightnessUp, .keyboardBrightnessDown]),
+        ("Accessibility", [.startDictation, .speakSelection,
+                           .zoomToggle, .zoomIn, .zoomOut]),
         ("Mac", [.missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu]),
         ("Automation", [.runShortcut, .openApp, .openURL]),
     ]
@@ -227,6 +270,13 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
     case previousPreset = "prev"
     case deactivate = "off"
     case togglePauseOutputs = "pause"
+    /// Gyro ratchet: motion bindings on this controller stop moving the
+    /// cursor while the input is held, so the controller can be re-aimed
+    /// without dragging the view. Nothing happens on release.
+    case holdMuteMotion = "mutemotion"
+    /// Stop everything now: halt the engine, release every held key, button
+    /// and note, and deactivate the preset. Never starts anything.
+    case emergencyStop = "estop"
 
     var id: String { rawValue }
 
@@ -237,6 +287,8 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
         case .previousPreset: return "Previous Preset"
         case .deactivate: return "Deactivate"
         case .togglePauseOutputs: return "Pause / Resume Outputs"
+        case .holdMuteMotion: return "Pause Motion While Held"
+        case .emergencyStop: return "Emergency Stop (release everything)"
         }
     }
 }

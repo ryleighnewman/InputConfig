@@ -71,7 +71,7 @@ struct TipJarView: View {
             Image(systemName: "heart.fill")
                 .font(.system(size: 36))
                 .iconTint(.pink)
-            Text("Support InputConfig")
+            Text("Donate to InputConfig")
                 .font(.title2.weight(.semibold))
             Text("InputConfig is free forever and proudly open source. If it makes your setup better, a tip helps fund continued development.")
                 .font(.caption)
@@ -355,7 +355,7 @@ final class TipJarWindowController {
             .background(VisualEffectBackground().ignoresSafeArea())
             .reduceMotionFriendly())
         let newWindow = NSWindow(contentViewController: hosting)
-        newWindow.title = "Support InputConfig"
+        newWindow.title = "Donate to InputConfig"
         newWindow.setContentSize(NSSize(width: 520, height: 640))
         // .fullSizeContentView lets the blur reach under the transparent
         // titlebar so the top bar isn't see-through to the desktop.

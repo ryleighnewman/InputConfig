@@ -7,6 +7,7 @@ import GameController
 /// ContentView below.
 extension Notification.Name {
     static let inputConfigShowStats              = Notification.Name("InputConfig.ShowStats")
+    static let inputConfigOpenAbout              = Notification.Name("InputConfig.OpenAbout")
     static let inputConfigOpenSmartMaker         = Notification.Name("InputConfig.OpenSmartMaker")
     static let inputConfigToggleActivePreset     = Notification.Name("InputConfig.ToggleActive")
     static let inputConfigOpenTouchpadCalibration = Notification.Name("InputConfig.OpenTouchpadCal")
@@ -31,6 +32,18 @@ extension Notification.Name {
     /// BindingRowView flips its showAdvanced flag so the user sees
     /// the Options disclosure expand on its own.
     static let inputConfigExpandBindingOptions   = Notification.Name("InputConfig.ExpandBindingOptions")
+}
+
+/// Opens Settings on the About tab when the Help window asks for it. Lives in
+/// its own modifier because ContentView's body is already at the Swift
+/// type-checker's limit; an inline onReceive here fails to compile.
+private struct OpenAboutObserver: ViewModifier {
+    @Binding var tab: SettingsView.SettingsTab?
+    func body(content: Content) -> some View {
+        content.onReceive(
+            NotificationCenter.default.publisher(for: .inputConfigOpenAbout)
+        ) { _ in tab = .about }
+    }
 }
 
 struct ContentView: View {
@@ -63,6 +76,21 @@ struct ContentView: View {
     /// hasn't seen. Empty string = fresh install (stamp silently, no popup -
     /// the welcome screen already explains the app).
     @AppStorage("InputConfig.lastSeenVersion") private var lastSeenVersion: String = ""
+    /// Version the user last saw notes for, so the popup can list every
+    /// release since. nil shows only the current release.
+    @State private var whatsNewSince: String?
+
+    /// True when the app has been in use for a while, which tells an upgrade
+    /// apart from a first run when no last-seen version is stored. Uses the
+    /// support directory's creation date because it predates every setting.
+    static var looksLikeExistingInstall: Bool {
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first else { return false }
+        let appDir = support.appendingPathComponent("InputConfig", isDirectory: true)
+        guard let created = try? appDir.resourceValues(
+            forKeys: [.creationDateKey]).creationDate else { return false }
+        return Date().timeIntervalSince(created) > 600
+    }
     @State private var showingWhatsNew: Bool = false
     @State private var newlyCreatedPresetId: UUID?
     @State private var showingImportSheet = false
@@ -291,6 +319,7 @@ struct ContentView: View {
         } message: { preset in
             Text("\"\(preset.name)\" will be moved to the Trash at the bottom of the sidebar. Restore it from there any time.")
         }
+        .modifier(OpenAboutObserver(tab: $settingsSheetTab))
         .modifier(TutorialPlumbing(
             state: tutorialState,
             anchors: $tutorialAnchors,
@@ -342,15 +371,33 @@ struct ContentView: View {
         .sheet(isPresented: $showingWhatsNew, onDismiss: {
             lastSeenVersion = Self.currentShortVersion
         }) {
-            WhatsNewView()
+            WhatsNewView(since: whatsNewSince)
                 .glassBackground()
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: MenuBarController.showWhatsNewNotification)) { _ in
+            // Opened by hand from the menu bar: show this release's notes.
+            whatsNewSince = nil
+            showingWhatsNew = true
         }
         .onAppear {
             let current = Self.currentShortVersion
             if lastSeenVersion.isEmpty {
-                // Fresh install: nothing is "new", just remember where we are.
-                lastSeenVersion = current
+                // No stored version means one of two very different things:
+                // a genuine first run, or an upgrade from a build that
+                // shipped before this popup existed. Treating both as a
+                // first run is what silently swallowed the release notes
+                // for everyone who was already using the app.
+                if Self.looksLikeExistingInstall {
+                    whatsNewSince = nil
+                    showingWhatsNew = true
+                } else {
+                    lastSeenVersion = current
+                }
             } else if lastSeenVersion != current {
+                // Show everything released since they last looked, so
+                // skipping a version does not skip its notes.
+                whatsNewSince = lastSeenVersion
                 showingWhatsNew = true
             }
         }
@@ -927,18 +974,19 @@ struct ContentView: View {
         )
         .draggable(preset.id.uuidString)
         .dropDestination(for: String.self) { items, _ in
-            // Drop one preset onto another → create new group with both
+            // Drop one preset onto another → put it at that row's position.
+            // Reorders inside a folder and moves between folders with the same
+            // gesture. This used to create a new folder from the two presets,
+            // which meant there was no way to reorder at all; that action is
+            // still on the row's context menu as "New Group...".
+            var handled = false
             for item in items {
                 if let uuid = UUID(uuidString: item), uuid != preset.id {
-                    creatingGroupForPreset = preset
-                    newGroupName = "New Group"
-                    // Stash the dragged preset id by piggybacking on the
-                    // existing creatingGroupForPreset state - we'll use both
-                    // ids when the sheet's Create button is tapped.
-                    pendingGroupPresetIDs = [preset.id, uuid]
+                    presetStore.movePreset(uuid, toPositionOf: preset.id)
+                    handled = true
                 }
             }
-            return true
+            return handled
         }
         .contextMenu {
             Menu("Move to Group") {
@@ -1070,7 +1118,8 @@ struct ContentView: View {
             }
 
             if controllerService.connectedControllers.isEmpty
-                && controllerService.rawHIDGamepadSlots.isEmpty {
+                && controllerService.rawHIDGamepadSlots.isEmpty
+                && !controllerService.debugMarketingFakeActive {
                 HStack(spacing: 6) {
                     ControllerGlyph(height: 13)
                         .foregroundStyle(.secondary)
@@ -1082,7 +1131,20 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             } else {
-                ForEach(Array(controllerService.connectedControllers.enumerated()), id: \.offset) { index, controller in
+                #if DEBUG
+                if controllerService.debugMarketingFakeActive {
+                    ForEach(controllerService.controllerDetails.keys.sorted(), id: \.self) { idx in
+                        ControllerChipView(
+                            controller: nil, index: idx,
+                            color: Self.controllerColors[idx % Self.controllerColors.count],
+                            info: controllerService.controllerDetails[idx],
+                            onSetLight: { _, _, _ in }, onSetBrightness: { _ in },
+                            onToggleRGB: {}, isRGBActive: false, onRefresh: {},
+                            onOpenExample: {}, rgbSpeed: $controllerService.rgbCycleSpeed)
+                    }
+                }
+                #endif
+                ForEach(Array(controllerService.connectedControllers.enumerated()), id: \.element) { index, controller in
                     ControllerChipView(
                         controller: controller,
                         index: index,
@@ -1288,13 +1350,13 @@ struct ContentView: View {
                 HStack(spacing: 3) {
                     Image(systemName: "heart")
                         .font(.system(size: 11))
-                    Text("Support")
+                    Text("Donate")
                         .font(.caption)
                 }
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Support development")
+            .accessibilityLabel("Donate to InputConfig")
             .accessibilityHint("Opens the tip jar")
 
             Spacer()
@@ -1438,7 +1500,7 @@ struct ContentView: View {
                             .frame(maxHeight: 460)
                         }
                     }
-                    Text("Control your Mac with a game controller or any input device. An accessible way to map controllers, keyboards, and mice to keyboard, mouse, MIDI, and more.")
+                    Text("Advanced Input Configuration")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -1519,9 +1581,17 @@ struct ContentView: View {
                              icon: "gamecontroller.fill",
                              detail: "DualSense, DualShock 4, Xbox, Switch Pro, Joy-Cons, Stadia, 8BitDo, and any MFi gamepad.",
                              tint: .cyan)
+                    demoCard(kind: .chassisTap,
+                             icon: "hand.tap.fill",
+                             detail: "Knock on your MacBook. Two taps or three on the palm rest or lid fire any output, with no controller or cable needed.",
+                             tint: .mint)
                     demoCard(kind: .midiInput,
                              icon: "pianokeys",
                              detail: "Use a MIDI keyboard or knob box as input, no controller needed. Knobs can switch, scroll with speed, nudge in steps, or work the Mac's volume like a fader.",
+                             tint: .pink)
+                    demoCard(kind: .midi,
+                             icon: "music.note.list",
+                             detail: "Send Note, CC, and Pitch Bend through a virtual MIDI port to GarageBand, Logic, Ableton, and more.",
                              tint: .pink)
                     demoCard(kind: .systemControl,
                              icon: "gearshape.2.fill",
@@ -1587,10 +1657,6 @@ struct ContentView: View {
                              icon: "speaker.wave.2.fill",
                              detail: "Speak a custom phrase on press through Mac speakers or the controller speaker.",
                              tint: .indigo)
-                    demoCard(kind: .midi,
-                             icon: "music.note.list",
-                             detail: "Send Note, CC, and Pitch Bend through a virtual MIDI port to GarageBand, Logic, Ableton, and more.",
-                             tint: .pink)
                     demoCard(kind: .midiCC,
                              icon: "dial.high.fill",
                              detail: "Sticks and triggers send continuous MIDI Control Change values. Soft knobs for your DAW.",
@@ -2724,7 +2790,11 @@ struct ContentView: View {
 // MARK: - Controller Chip View
 
 struct ControllerChipView: View {
-    let controller: GCController
+    /// Optional so the marketing capture pipeline can render a chip for a
+    /// synthetic controller, which has no GCController behind it. Everything
+    /// the chip draws comes from `info`; the controller is only consulted for
+    /// its vendor name.
+    let controller: GCController?
     let index: Int
     let color: Color
     let info: ControllerInfo?
@@ -2768,7 +2838,7 @@ struct ControllerChipView: View {
                 .foregroundStyle(color)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(controller.vendorName ?? "Controller \(index)")
+                Text(controller?.vendorName ?? info?.name ?? "Controller \(index)")
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -2810,7 +2880,7 @@ struct ControllerChipView: View {
             showPopover.toggle()
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(controller.vendorName ?? "Controller \(index)")
+        .accessibilityLabel(controller?.vendorName ?? info?.name ?? "Controller \(index)")
         .accessibilityValue(chipAccessibilityValue)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens controller light and settings")
@@ -2876,7 +2946,7 @@ struct ControllerChipView: View {
                 ControllerGlyph(height: 16)
                     .foregroundStyle(color)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(controller.vendorName ?? "Controller \(index)")
+                    Text(controller?.vendorName ?? info?.name ?? "Controller \(index)")
                         .font(.subheadline)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
@@ -3850,7 +3920,8 @@ struct PresetDetailView: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 if controllerService.connectedControllers.isEmpty
-                    && controllerService.rawHIDGamepadSlots.isEmpty {
+                    && controllerService.rawHIDGamepadSlots.isEmpty
+                    && !controllerService.debugMarketingFakeActive {
                     detailsRow(title: "Controllers", icon: "antenna.radiowaves.left.and.right.slash",
                                items: ["No controllers currently connected."])
                 } else {
@@ -4937,6 +5008,10 @@ struct DebugAutomationHooks: ViewModifier {
                 case "stats": showingStats = true
                 case "settings": settingsSheetTab = .general
                 case "about": settingsSheetTab = .about
+                // Exercises the exact call the Help window's "here" link makes,
+                // so the cross-window path can be tested without pixel-clicking
+                // a link in a window that keeps losing front position.
+                case "aboutlink": MenuBarController.shared.openAboutPage()
                 case "motion": showingMotion = true
                 case "touchpad": showingTouchpad = true
                 default: break
@@ -4951,6 +5026,108 @@ struct DebugAutomationHooks: ViewModifier {
             }
             .onReceive(dnc("inputconfig.debug.closesheets")) { _ in
                 closeSheets()
+            }
+            .onReceive(dnc("inputconfig.debug.whatsnew")) { _ in
+                // Exercises the real menu bar path: open the window, post
+                // the request, let ContentView's observer present it.
+                MenuBarController.shared.showWhatsNew()
+            }
+            .onReceive(dnc("inputconfig.debug.injecttap")) { note in
+                // "<count>" or "<count>,<spacing ms>"
+                let parts = ((note.object as? String) ?? "").split(separator: ",")
+                let n = Int(parts.first ?? "") ?? 2
+                let ms = parts.count > 1 ? (Double(parts[1]) ?? 150) : 150
+                ChassisTapService.shared.injectSyntheticTaps(count: n, spacing: ms / 1000)
+            }
+            .onReceive(dnc("inputconfig.debug.scan")) { _ in
+                NotificationCenter.default.post(
+                    name: PresetEditorView.debugStartScanNotification, object: nil)
+            }
+            .onReceive(dnc("inputconfig.debug.presetorder")) { _ in
+                var out = ""
+                for g in presetStore.groups.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+                    out += "[\(g.name)]\n"
+                    for p in presetStore.presets(in: g.id) {
+                        out += "   \(p.sortOrder.map(String.init) ?? "-")  \(p.name)\n"
+                    }
+                }
+                out += "[Ungrouped]\n"
+                for p in presetStore.presets(in: nil) {
+                    out += "   \(p.sortOrder.map(String.init) ?? "-")  \(p.name)\n"
+                }
+                try? out.write(toFile: NSTemporaryDirectory() + "presetorder.txt",
+                               atomically: true, encoding: .utf8)
+            }
+            .onReceive(dnc("inputconfig.debug.movepreset")) { note in
+                // "<dragged preset>,<target preset>" - exercises the exact
+                // store call the row's dropDestination makes.
+                let parts = ((note.object as? String) ?? "").split(separator: ",")
+                guard parts.count == 2,
+                      let drag = presetStore.presets.first(where: { $0.name == String(parts[0]) }),
+                      let target = presetStore.presets.first(where: { $0.name == String(parts[1]) })
+                else { return }
+                presetStore.movePreset(drag.id, toPositionOf: target.id)
+            }
+            .onReceive(dnc("inputconfig.debug.tapstrikes")) { _ in
+                try? ChassisTapService.shared.drainStrikes()
+                    .write(toFile: NSTemporaryDirectory() + "tapstrikes.txt",
+                           atomically: true, encoding: .utf8)
+            }
+            .onReceive(dnc("inputconfig.debug.tapcommits")) { _ in
+                try? (ChassisTapService.shared.drainCommits() + "\n")
+                    .write(toFile: NSTemporaryDirectory() + "tapcommits.txt",
+                           atomically: true, encoding: .utf8)
+            }
+            .onReceive(dnc("inputconfig.debug.taptrace")) { note in
+                let secs = Double((note.object as? String) ?? "") ?? 8
+                ChassisTapService.shared.startTrace(seconds: secs,
+                    path: NSTemporaryDirectory() + "taptrace.txt")
+            }
+            .onReceive(dnc("inputconfig.debug.tapstats")) { _ in
+                let d = ChassisTapService.shared.drainDiagnostics()
+                let line = "reports=\(d.reports) strikes=\(d.strikes) peak=\(String(format: "%.4f", d.peak))g noise=\(String(format: "%.4f", d.noise))g ready=\(d.ready) running=\(ChassisTapService.shared.isRunning)"
+                try? line.write(to: URL(fileURLWithPath: NSTemporaryDirectory())
+                    .appendingPathComponent("tapstats.txt"), atomically: true, encoding: .utf8)
+            }
+            .onReceive(dnc("inputconfig.debug.systemaction")) { note in
+                if let raw = note.object as? String,
+                   let kind = SystemActionKind(rawValue: raw) {
+                    SystemActionService.shared.perform(kind, parameter: nil)
+                }
+            }
+            .onReceive(dnc("inputconfig.debug.panic")) { _ in
+                EmergencyStopService.shared.stop(reason: .menu)
+            }
+            .onReceive(dnc("inputconfig.debug.enginestate")) { _ in
+                let running = MenuBarController.shared.debugEngineRunning
+                let active = MenuBarController.shared.debugActivePresetName ?? "none"
+                let held = InputSimulator.shared.debugHeldKeyCount
+                try? "running=\(running) active=\(active) heldKeys=\(held)"
+                    .write(to: URL(fileURLWithPath: NSTemporaryDirectory())
+                        .appendingPathComponent("enginestate.txt"),
+                           atomically: true, encoding: .utf8)
+            }
+            .onReceive(dnc("inputconfig.debug.capture")) { note in
+                // In-process render of the frontmost sheet or window for
+                // layout checks; "<name>-full" renders the whole scrolled
+                // document. Needs no screen-recording grant.
+                let name = (note.object as? String) ?? "icapture"
+                let win = NSApp.windows.first { $0.isVisible && $0.attachedSheet != nil }?.attachedSheet
+                    ?? NSApp.keyWindow ?? NSApp.mainWindow
+                var target = win?.contentView
+                if name.hasSuffix("-full"), let root = target {
+                    func scrolls(_ v: NSView) -> [NSScrollView] {
+                        (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrolls)
+                    }
+                    if let doc = scrolls(root).max(by: { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })?.documentView {
+                        target = doc
+                    }
+                }
+                guard let view = target,
+                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name + ".png")
+                try? rep.representation(using: .png, properties: [:])?.write(to: url)
             }
         #else
         content
@@ -5102,14 +5279,21 @@ struct DebugCaptureSheets: ViewModifier {
             .sheet(isPresented: Binding(get: { deadzoneAxis != nil },
                                         set: { if !$0 { deadzoneAxis = nil } })) {
                 if let ax = deadzoneAxis {
+                    // Present exactly as the shipping path in BindingRowView does:
+                    // no forced frame, so the sheet hugs its content. A
+                    // minHeight here padded the sheet ~100pt taller than the
+                    // content and every captured screenshot showed dead space
+                    // that does not exist in the real app.
                     DeadzoneCalibrationView(axisIndex: ax, deadzone: $dz, outerDeadzone: $odz,
                                             isInverted: false, onClose: { deadzoneAxis = nil })
-                        .padding(24)
-                        .frame(minWidth: 560, minHeight: 640)
                         .glassBackground()
                 }
             }
             .sheet(isPresented: $showDrive) {
+                // A ScrollView has no intrinsic height, so this one genuinely
+                // needs a minHeight; without it the sheet collapses to a
+                // sliver. Only the deadzone sheet was wrongly forced taller
+                // than its content.
                 ScrollView { DriveModeSection(driveConfig: $driveCfg).padding(28) }
                     .frame(minWidth: 760, minHeight: 720)
                     // Marketing capture only: suppress the macOS keyboard focus

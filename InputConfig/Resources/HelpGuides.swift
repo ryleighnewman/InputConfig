@@ -46,7 +46,10 @@ enum HelpGuideLibrary {
         lightBar,
         touchpadAsMouse,
         steamController,
+        emergencyStop,
+        dictationAndAccessibilityKeys,
         gyroscopeAim,
+        chordBindings,
         oneStickDriving,
         dataPersistence,
     ]
@@ -469,7 +472,7 @@ enum HelpGuideLibrary {
         sections: [
             HelpSection(
                 heading: "Desktop & Productivity",
-                body: "Drive macOS without touching the keyboard. Desktop Navigation maps the sticks to cursor and scroll plus common shortcuts. Web Browsing adds tab cycling and history navigation. Mouse + Scroll is a clean dual-stick mouse. Media Controller maps the face buttons to play/pause and volume. Presentation Remote drives Keynote-style slide navigation."
+                body: "Drive macOS without touching the keyboard. Desktop Navigation maps the sticks to cursor and scroll plus common shortcuts. Web Browsing adds tab cycling and history navigation. Mouse + Scroll is a clean dual-stick mouse. Media Controller maps the face buttons to play/pause and volume. Presentation Remote drives Keynote-style slide navigation. Anki turns the face buttons into flashcard ratings, with undo, audio replay, mark, and bury on the bumpers and stick clicks."
             ),
             HelpSection(
                 heading: "Gaming: First-Person",
@@ -610,12 +613,106 @@ enum HelpGuideLibrary {
                 body: "The built-in Showcase: Gyro Aim preset wires Gyro Y to mouse X and Gyro X to mouse Y with sensible defaults. Activate it and tilt the controller to move the cursor - the same feel as motion aim in Splatoon, Breath of the Wild, or Returnal."
             ),
             HelpSection(
+                heading: "Ratcheting: hold a button to pause motion",
+                body: "Motion aim runs out of wrist travel. Ratcheting lets you pause the gyro, swing the controller back to a comfortable angle, and carry on, the way you lift a mouse off the desk.",
+                steps: [
+                    "Add a binding on the button you want to hold, for example L1 or a back paddle.",
+                    "Set its output type to App Action and pick Pause Motion While Held.",
+                    "While that button is held, every Motion binding on the same controller stops moving the cursor. Let go and motion resumes instantly.",
+                    "Sticks, buttons, and the touchpad keep working while motion is paused, so you can still click and move."
+                ]
+            ),
+            HelpSection(
                 heading: "Drift and dead zones",
                 body: "Stationary controllers report tiny non-zero gyro values because the sensors aren't perfectly calibrated. InputConfig applies a small dead zone by default (0.05 rad/s) to filter this. If the cursor drifts when you set the controller down, raise the binding's deadzone slider in Advanced."
             ),
             HelpSection(
                 heading: "Compatibility",
                 body: "Apple's Game Controller framework only exposes motion if the controller actually publishes it AND macOS has paired the motion service. Some Bluetooth pairings drop motion data - try a wired connection if the gyro doesn't seem to work. The Settings > Controllers tab shows whether motion is available for each connected device."
+            ),
+        ]
+    )
+
+    static let dictationAndAccessibilityKeys = HelpGuide(
+        id: "dictation-accessibility-keys",
+        title: "Dictation, Zoom, and Speak Selection",
+        category: "Bindings",
+        summary: "Put dictation, screen zoom, and read aloud on a controller button. These live under System Function, in the Accessibility group.",
+        sections: [
+            HelpSection(
+                heading: "Start Dictation",
+                body: "Set a control's output to System Function, then Start Dictation. One press starts dictation, the next press stops it, exactly as if you had pressed the dictation key on the keyboard. Nothing else to set up, as long as Dictation is switched on in System Settings, Keyboard."
+            ),
+            HelpSection(
+                heading: "How it works",
+                body: "The dictation key on F5 is an ordinary key press as far as macOS is concerned, so InputConfig can send it directly. That means the button follows whatever your Dictation shortcut is set to, including the default microphone key, and it keeps working if you change that setting later."
+            ),
+            HelpSection(
+                heading: "Zoom and Speak Selection",
+                body: "Zoom On / Off, Zoom In, and Zoom Out send the standard macOS zoom shortcuts, and Speak Selection reads the selected text aloud. Each one needs its macOS feature switched on first: Zoom under Accessibility, Zoom, Use keyboard shortcuts to zoom, and Speak selection under Accessibility, Spoken Content."
+            ),
+        ]
+    )
+
+    static let emergencyStop = HelpGuide(
+        id: "emergency-stop",
+        title: "Emergency Stop: Getting Out of a Preset",
+        category: "Getting started",
+        summary: "A preset can take over your keyboard and mouse. The emergency stop is the way back out, and it works three different ways so one of them is always available.",
+        sections: [
+            HelpSection(
+                heading: "What it does",
+                body: "The emergency stop only ever stops. It halts the engine, lets go of every key, mouse button, and MIDI note InputConfig is holding down, and makes the pointer visible again. It never turns a preset on, so there is no risk in using it when you are not sure what is happening."
+            ),
+            HelpSection(
+                heading: "Three ways to trigger it",
+                steps: [
+                    "The keyboard shortcut. Control Option Command and the period key, by default, from anywhere on the Mac. You can change it in Settings, General, Emergency Stop.",
+                    "Holding a button on the controller. By default, hold Home / PS / Guide for two seconds. This works no matter what the preset maps that button to, and it is the one to remember: if a preset has taken over the keyboard and mouse, the controller in your hands is still a way out.",
+                    "The menu bar. Click the InputConfig icon and press Emergency Stop."
+                ]
+            ),
+            HelpSection(
+                heading: "Give any control its own stop button",
+                body: "In the binding editor, set a row's output type to App Action and choose Emergency Stop. That control then stops everything the moment it is pressed. A back paddle or an unused face button is a good choice, and on the Access Controller a dedicated switch works well."
+            ),
+            HelpSection(
+                heading: "If a game swallows the keyboard shortcut",
+                body: "A game running full screen with exclusive input can swallow system shortcuts. The controller hold and the bound Emergency Stop output both run inside InputConfig's own polling, so they keep working when the keyboard shortcut cannot get through. This is why the controller path is on by default."
+            ),
+            HelpSection(
+                heading: "Shortcuts for individual presets",
+                body: "Each preset can have its own system-wide shortcut, set with the Key field at the top of the binding editor. Pressing it switches to that preset from anywhere; pressing it again while that preset is running stops it. Presets cannot share a shortcut, and none of them may use the emergency stop chord; the editor says so if there is a clash."
+            ),
+        ]
+    )
+
+    static let chordBindings = HelpGuide(
+        id: "chord-bindings",
+        title: "Chords: Two Buttons for One Action",
+        category: "Bindings",
+        summary: "A chord is a binding that only fires while another button is held, like Triangle + D-pad up. It gives every button a second layer without giving up its normal job.",
+        sections: [
+            HelpSection(
+                heading: "Making a chord",
+                steps: [
+                    "Edit a preset and add a binding on the button that does the work, for example D-pad up.",
+                    "Set its output as usual: a key, a macro, a system function, anything.",
+                    "Open the row's Options and, under Press Behavior, set While holding to the button that acts as the modifier, for example Y / Triangle.",
+                    "Save. The row now fires only while Triangle is down and D-pad up is pressed."
+                ]
+            ),
+            HelpSection(
+                heading: "Plain and chord rows on the same button",
+                body: "Keep a plain D-pad up row for the normal action and add a second D-pad up row with a modifier for the chord. While the modifier is held the plain row stays quiet, so the two never fire together. Hold the modifier first, then press the button, the same order as Shift plus a key."
+            ),
+            HelpSection(
+                heading: "The modifier's own binding",
+                body: "The modifier button keeps whatever binding it already has. If Triangle is bound to a key and you use it as a modifier, that key still fires when Triangle goes down. If you do not want that, give the modifier a row with no output, or choose a button that has nothing bound, such as a back paddle."
+            ),
+            HelpSection(
+                heading: "Where chords work",
+                body: "Chords are for game controllers: the modifier is always a button on the same controller as the row. Keyboard, mouse, and MIDI rows do not offer a modifier."
             ),
         ]
     )

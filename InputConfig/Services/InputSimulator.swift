@@ -58,6 +58,11 @@ final class InputSimulator: @unchecked Sendable {
         guard !pressedKeys.contains(hidCode) else { return }
         pressedKeys.insert(hidCode)
 
+        // Globe / fn is a pure modifier here. Posting a real fn key event would
+        // trigger whatever single-press action the user has assigned to it, so
+        // it only ever decorates the keys pressed alongside it.
+        if hidCode == KeyCodeMap.globeFnCode { return }
+
         if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: true) {
                 // Apply EVERY currently-held modifier, not just the case where
@@ -77,6 +82,11 @@ final class InputSimulator: @unchecked Sendable {
     func keyUp(_ hidCode: Int) {
         guard pressedKeys.contains(hidCode) else { return }
         pressedKeys.remove(hidCode)
+
+        // Globe / fn is a pure modifier here. Posting a real fn key event would
+        // trigger whatever single-press action the user has assigned to it, so
+        // it only ever decorates the keys pressed alongside it.
+        if hidCode == KeyCodeMap.globeFnCode { return }
 
         if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
@@ -137,6 +147,7 @@ final class InputSimulator: @unchecked Sendable {
         case 225, 229: return .maskShift
         case 226, 230: return .maskAlternate
         case 227, 231: return .maskCommand
+        case KeyCodeMap.globeFnCode: return .maskSecondaryFn
         default: return nil
         }
     }
@@ -255,14 +266,49 @@ final class InputSimulator: @unchecked Sendable {
 
     // MARK: - Mouse Motion Simulation
 
-    func moveMouse(deltaX: Int, deltaY: Int) {
-        let location = NSEvent.mouseLocation
-        let screenHeight = NSScreen.main?.frame.height ?? 1080
-        let currentPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-        let newPoint = CGPoint(x: currentPoint.x + CGFloat(deltaX), y: currentPoint.y + CGFloat(deltaY))
+    /// Cursor position we last posted, so continuous motion does not ask the
+    /// window server where the cursor is on every poll frame (that call plus
+    /// the screen lookup was the cost behind "Variable Sensitivity spikes
+    /// the CPU"). Re-read from the system after an idle gap, when the user
+    /// may have moved the real mouse, and every 8th frame so the tracked
+    /// point cannot drift past a screen edge for long.
+    private var trackedCursor: CGPoint?
+    private var trackedAt: TimeInterval = 0
+    private var trackedFrames = 0
+    private var cachedScreenHeight: CGFloat = 0
 
-        if let event = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-                               mouseCursorPosition: newPoint, mouseButton: .left) {
+    func moveMouse(deltaX: Int, deltaY: Int) {
+        let now = ProcessInfo.processInfo.systemUptime
+        trackedFrames &+= 1
+        if trackedCursor == nil || now - trackedAt > 0.1 || trackedFrames % 8 == 0 {
+            let location = NSEvent.mouseLocation
+            if let h = NSScreen.main?.frame.height { cachedScreenHeight = h }
+            if cachedScreenHeight == 0 { cachedScreenHeight = 1080 }
+            trackedCursor = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
+        }
+        trackedAt = now
+        var point = trackedCursor ?? .zero
+        point.x += CGFloat(deltaX)
+        point.y += CGFloat(deltaY)
+        trackedCursor = point
+
+        // A move while a mapped button is held must be a drag event, or
+        // window moves, text selection, sliders and drag-and-drop never
+        // happen: the system does not promote a plain move into a drag.
+        let type: CGEventType
+        let button: CGMouseButton
+        if pressedMouseButtons.contains(0) {
+            type = .leftMouseDragged; button = .left
+        } else if pressedMouseButtons.contains(1) {
+            type = .rightMouseDragged; button = .right
+        } else if let other = pressedMouseButtons.first, let cg = cgMouseButton(for: other) {
+            type = .otherMouseDragged; button = cg
+        } else {
+            type = .mouseMoved; button = .left
+        }
+
+        if let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                               mouseCursorPosition: point, mouseButton: button) {
             event.setIntegerValueField(.mouseEventDeltaX, value: Int64(deltaX))
             event.setIntegerValueField(.mouseEventDeltaY, value: Int64(deltaY))
             taggedPost(event)
@@ -310,6 +356,12 @@ final class InputSimulator: @unchecked Sendable {
         }
         pressedMouseButtons.removeAll()
     }
+
+    #if DEBUG
+    /// How many keys the simulator currently holds down. Used by the smoke
+    /// test to prove the emergency stop actually let go of them.
+    var debugHeldKeyCount: Int { pressedKeys.count + pressedMouseButtons.count }
+    #endif
 
     // MARK: - Diagnostic Test
 
@@ -441,14 +493,358 @@ final class AccessibilityPermissionService: ObservableObject {
 /// the chord is pressed it posts `toggleNotification`; ContentView listens and
 /// performs the toggle on the main actor. Off by default; the user opts in
 /// from Settings.
+/// One Carbon event handler for every global shortcut in the app.
+///
+/// Carbon delivers hot-key presses to every installed handler, so a
+/// per-service handler that ignores the event's ID fires on shortcuts it
+/// does not own. This owns the single handler, reads the ID off the
+/// event, and calls only the action registered for it.
+final class HotKeyCenter: @unchecked Sendable {
+    nonisolated(unsafe) static let shared = HotKeyCenter()
+
+    private let lock = NSLock()
+    private var handlerRef: EventHandlerRef?
+    private var actions: [UInt32: () -> Void] = [:]
+    private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var nextID: UInt32 = 1
+
+    private init() {}
+
+    /// Registers a system-wide chord. Returns a token for `unregister`, or
+    /// nil when the chord is unavailable (usually another app owns it).
+    @discardableResult
+    func register(keyCode: UInt32, modifiers: UInt32,
+                  action: @escaping () -> Void) -> UInt32? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard installHandlerLocked() else { return nil }
+
+        let id = nextID
+        nextID &+= 1
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4A4B4350), id: id)  // 'JKCP'
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
+                                         GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr, let ref else {
+            NSLog("HotKeyCenter: RegisterEventHotKey failed (status \(status)); the chord may be taken by another app")
+            return nil
+        }
+        refs[id] = ref
+        actions[id] = action
+        return id
+    }
+
+    func unregister(_ token: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let ref = refs.removeValue(forKey: token) { UnregisterEventHotKey(ref) }
+        actions.removeValue(forKey: token)
+    }
+
+    /// Called from the C callback with the ID read off the event.
+    fileprivate func fire(_ id: UInt32) {
+        lock.lock()
+        let action = actions[id]
+        lock.unlock()
+        action?()
+    }
+
+    private func installHandlerLocked() -> Bool {
+        if handlerRef != nil { return true }
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        let status = InstallEventHandler(GetApplicationEventTarget(),
+                                         hotKeyDispatchCallback, 1, &spec, nil, &handlerRef)
+        guard status == noErr else {
+            NSLog("HotKeyCenter: InstallEventHandler failed (status \(status)); global shortcuts are unavailable")
+            handlerRef = nil
+            return false
+        }
+        return true
+    }
+}
+
+/// Capture-free C callback: reads the hot-key ID off the event and hands it
+/// to the center on the main queue.
+private let hotKeyDispatchCallback: EventHandlerUPP = { _, eventRef, _ -> OSStatus in
+    guard let eventRef else { return noErr }
+    var hkID = EventHotKeyID()
+    let status = GetEventParameter(eventRef,
+                                   EventParamName(kEventParamDirectObject),
+                                   EventParamType(typeEventHotKeyID),
+                                   nil, MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+    guard status == noErr else { return noErr }
+    let id = hkID.id
+    DispatchQueue.main.async { HotKeyCenter.shared.fire(id) }
+    return noErr
+}
+
+/// A recorded chord: a virtual key code plus Carbon modifier mask.
+struct HotKeySpec: Codable, Hashable {
+    var keyCode: UInt32
+    var modifiers: UInt32
+
+    /// Chord as the user reads it, e.g. "Control Option Command ." using the
+    /// standard macOS glyphs.
+    var displayString: String {
+        var out = ""
+        if modifiers & UInt32(controlKey) != 0 { out += "\u{2303}" }
+        if modifiers & UInt32(optionKey)  != 0 { out += "\u{2325}" }
+        if modifiers & UInt32(shiftKey)   != 0 { out += "\u{21E7}" }
+        if modifiers & UInt32(cmdKey)     != 0 { out += "\u{2318}" }
+        return out + HotKeySpec.keyName(for: keyCode)
+    }
+
+    /// True when this is a bare key you would normally type, so registering
+    /// it system-wide would swallow it everywhere. Function keys, arrows and
+    /// the navigation cluster are fine on their own.
+    var stealsATypingKey: Bool {
+        guard modifiers == 0 else { return false }
+        switch Int(keyCode) {
+        case kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8,
+             kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15,
+             kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
+             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_Help,
+             kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow:
+            return false
+        default:
+            return true
+        }
+    }
+
+    static func keyName(for code: UInt32) -> String {
+        switch Int(code) {
+        case kVK_ANSI_Period: return "."
+        case kVK_ANSI_Comma:  return ","
+        case kVK_ANSI_Slash:  return "/"
+        case kVK_Escape:      return "esc"
+        case kVK_Space:       return "space"
+        case kVK_Delete:      return "delete"
+        case kVK_F1:  return "F1";  case kVK_F2:  return "F2"
+        case kVK_F3:  return "F3";  case kVK_F4:  return "F4"
+        case kVK_F5:  return "F5";  case kVK_F6:  return "F6"
+        case kVK_F7:  return "F7";  case kVK_F8:  return "F8"
+        case kVK_F9:  return "F9";  case kVK_F10: return "F10"
+        case kVK_F11: return "F11"; case kVK_F12: return "F12"
+        default:
+            if let key = KeyCodeMap.allKeys.first(where: {
+                ExternalInputDeviceService.hidUsage(forVirtualKeyCode: Int(code)) == $0.code
+            }) {
+                return key.name
+            }
+            return "Key \(code)"
+        }
+    }
+}
+
+/// The app-wide kill switch.
+///
+/// One rule: this only ever STOPS. It never activates a preset, so it is
+/// safe to hit when you cannot see the screen or do not know what state the
+/// app is in. It is reachable three ways, deliberately redundant, because
+/// the whole point is that one of them is available when the others are not:
+/// a system-wide chord, holding a button on the controller itself, and the
+/// menu bar. The controller path matters most: if a preset has taken over
+/// the keyboard and mouse, the controller may be the only input you have.
+final class EmergencyStopService: @unchecked Sendable {
+    nonisolated(unsafe) static let shared = EmergencyStopService()
+
+    /// Posted after a stop so the UI can deactivate the preset and confirm.
+    static let stoppedNotification = Notification.Name("InputConfig.EmergencyStopped")
+
+    static let enabledKey       = "InputConfig.panicHotkeyEnabled"
+    static let keyCodeKey       = "InputConfig.panicKeyCode"
+    static let modifiersKey     = "InputConfig.panicModifiers"
+    static let controllerKey    = "InputConfig.panicControllerEnabled"
+    static let controllerBtnKey = "InputConfig.panicControllerButton"
+    static let holdSecondsKey   = "InputConfig.panicHoldSeconds"
+
+    /// Control + Option + Command + period. Period is the Mac's cancel key,
+    /// and the three modifiers keep it clear of anything an app or game binds.
+    static let defaultSpec = HotKeySpec(keyCode: UInt32(kVK_ANSI_Period),
+                                        modifiers: UInt32(controlKey | optionKey | cmdKey))
+    /// Home / PS / Guide. Almost never mapped, and present on every
+    /// mainstream controller.
+    static let defaultControllerButton = 10
+    static let defaultHoldSeconds = 2.0
+
+    private var token: UInt32?
+    private(set) var isRegistered = false
+
+    private init() {}
+
+    static func registerDefaults() {
+        UserDefaults.standard.register(defaults: [
+            enabledKey: true,
+            keyCodeKey: Int(defaultSpec.keyCode),
+            modifiersKey: Int(defaultSpec.modifiers),
+            controllerKey: true,
+            controllerBtnKey: defaultControllerButton,
+            holdSecondsKey: defaultHoldSeconds,
+        ])
+    }
+
+    var spec: HotKeySpec {
+        let d = UserDefaults.standard
+        let code = d.object(forKey: Self.keyCodeKey) as? Int
+        let mods = d.object(forKey: Self.modifiersKey) as? Int
+        return HotKeySpec(keyCode: UInt32(code ?? Int(Self.defaultSpec.keyCode)),
+                          modifiers: UInt32(mods ?? Int(Self.defaultSpec.modifiers)))
+    }
+
+    var isEnabled: Bool { UserDefaults.standard.bool(forKey: Self.enabledKey) }
+
+    // The engine asks for these on every poll frame, so they are cached in
+    // memory rather than read from UserDefaults each time. A preference read
+    // walks the CFPreferences search list, which was costing a third of the
+    // poll loop at 120 Hz. Refreshed whenever defaults change.
+    private var cachedHoldEnabled = true
+    private var cachedButton = EmergencyStopService.defaultControllerButton
+    private var cachedHoldSeconds = EmergencyStopService.defaultHoldSeconds
+    private var defaultsObserver: NSObjectProtocol?
+
+    var controllerHoldEnabled: Bool { cachedHoldEnabled }
+    var controllerButton: Int { cachedButton }
+    var holdSeconds: Double { cachedHoldSeconds }
+
+    /// Pull the controller-hold settings into memory. Called at registration
+    /// and whenever any default changes.
+    func refreshCachedSettings() {
+        let d = UserDefaults.standard
+        cachedHoldEnabled = d.bool(forKey: Self.controllerKey)
+        cachedButton = (d.object(forKey: Self.controllerBtnKey) as? Int)
+            ?? Self.defaultControllerButton
+        let secs = d.double(forKey: Self.holdSecondsKey)
+        cachedHoldSeconds = secs > 0 ? secs : Self.defaultHoldSeconds
+    }
+
+    private func observeDefaults() {
+        guard defaultsObserver == nil else { return }
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.refreshCachedSettings()
+        }
+    }
+
+    /// (Re-)register the chord to match the current settings. Safe to call
+    /// repeatedly; it tears down the previous registration first.
+    @discardableResult
+    func refreshRegistration() -> Bool {
+        refreshCachedSettings()
+        observeDefaults()
+        if let t = token { HotKeyCenter.shared.unregister(t); token = nil }
+        isRegistered = false
+        guard isEnabled else { return true }
+        let s = spec
+        guard let t = HotKeyCenter.shared.register(keyCode: s.keyCode, modifiers: s.modifiers,
+                                                   action: { EmergencyStopService.shared.stop(reason: .hotkey) })
+        else { return false }
+        token = t
+        isRegistered = true
+        return true
+    }
+
+    func setSpec(_ newSpec: HotKeySpec) {
+        let d = UserDefaults.standard
+        d.set(Int(newSpec.keyCode), forKey: Self.keyCodeKey)
+        d.set(Int(newSpec.modifiers), forKey: Self.modifiersKey)
+        refreshRegistration()
+    }
+
+    func setEnabled(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.enabledKey)
+        refreshRegistration()
+    }
+
+    enum Reason: String {
+        case hotkey = "keyboard shortcut"
+        case controllerHold = "controller button held"
+        case binding = "a binding"
+        case menu = "the menu"
+    }
+
+    /// Stop everything, in the order that matters: halt the engine first so
+    /// nothing is re-pressed on the next frame, then let go of every key,
+    /// button, and note we are holding, then put the cursor back.
+    func stop(reason: Reason) {
+        let work = {
+            // 1. Engine and preset. Observers run synchronously on this
+            //    thread, so the poll loop is stopped before we release.
+            NotificationCenter.default.post(name: Self.stoppedNotification,
+                                            object: nil,
+                                            userInfo: ["reason": reason.rawValue])
+            // 2. Let go of everything we are holding down.
+            InputSimulator.shared.releaseAll()
+            MIDIService.shared.releaseAllNotes()
+            // 3. Give the pointer back. CursorGuardService is main-actor
+            //    isolated and this block only ever runs on the main thread.
+            MainActor.assumeIsolated {
+                CursorGuardService.shared.clearPresetOverride()
+                CursorGuardService.shared.forceShowCursor()
+            }
+            NSLog("InputConfig: emergency stop (\(reason.rawValue))")
+        }
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+    }
+}
+
+/// Per-preset activation shortcuts. Each preset that defines one gets a
+/// system-wide chord that switches to it; pressing it again while that
+/// preset is the active one stops it.
+final class PresetHotKeyService: @unchecked Sendable {
+    nonisolated(unsafe) static let shared = PresetHotKeyService()
+
+    /// Posted with the preset id in `object` when its chord is pressed.
+    static let activateNotification = Notification.Name("InputConfig.ActivatePresetHotKey")
+
+    private var tokens: [UUID: UInt32] = [:]
+    /// Chords that could not be claimed, so Settings can say so.
+    private(set) var failed: Set<UUID> = []
+
+    private init() {}
+
+    /// Re-register every preset chord. Called whenever the library changes.
+    func sync(with presets: [Preset]) {
+        for (_, token) in tokens { HotKeyCenter.shared.unregister(token) }
+        tokens.removeAll()
+        failed.removeAll()
+        for preset in presets {
+            guard let spec = preset.activateHotKey else { continue }
+            let id = preset.id
+            if let token = HotKeyCenter.shared.register(
+                keyCode: spec.keyCode, modifiers: spec.modifiers,
+                action: {
+                    NotificationCenter.default.post(
+                        name: PresetHotKeyService.activateNotification, object: id)
+                }) {
+                tokens[id] = token
+            } else {
+                failed.insert(id)
+            }
+        }
+    }
+
+    /// True when two presets ask for the same chord, or one collides with
+    /// the emergency stop, so the editor can warn instead of failing silently.
+    static func conflicts(for spec: HotKeySpec, excluding presetID: UUID?,
+                          in presets: [Preset]) -> Bool {
+        if EmergencyStopService.shared.isEnabled,
+           EmergencyStopService.shared.spec == spec { return true }
+        return presets.contains { $0.id != presetID && $0.activateHotKey == spec }
+    }
+}
+
+/// The system-wide "toggle the most recent preset" chord. Unchanged in
+/// behavior; it now goes through HotKeyCenter so it only fires for its own
+/// chord rather than for every hot key the app registers.
 final class GlobalHotKeyService: @unchecked Sendable {
-    static let shared = GlobalHotKeyService()
+    nonisolated(unsafe) static let shared = GlobalHotKeyService()
     static let toggleNotification = Notification.Name("InputConfig.ToggleRecentPreset")
     /// UserDefaults key shared by Settings (the toggle) and AppState (boot).
     static let enabledDefaultsKey = "InputConfig.globalHotkeyEnabled"
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
+    private var token: UInt32?
     private(set) var isEnabled = false
 
     /// Human-readable chord, shown in Settings.
@@ -461,43 +857,20 @@ final class GlobalHotKeyService: @unchecked Sendable {
     @discardableResult
     func enable() -> Bool {
         guard !isEnabled else { return true }
-
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                 eventKind: UInt32(kEventHotKeyPressed))
-        // Capture-free C callback: it only bounces a notification onto the
-        // main queue, touching no instance state, so there is no data race.
-        let callback: EventHandlerUPP = { _, _, _ -> OSStatus in
-            DispatchQueue.main.async {
+        guard let t = HotKeyCenter.shared.register(
+            keyCode: UInt32(kVK_ANSI_P),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            action: {
                 NotificationCenter.default.post(
                     name: GlobalHotKeyService.toggleNotification, object: nil)
-            }
-            return noErr
-        }
-        let installStatus = InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, nil, &handlerRef)
-        guard installStatus == noErr else {
-            NSLog("GlobalHotKeyService: InstallEventHandler failed (status \(installStatus)); hotkey not enabled")
-            return false
-        }
-
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4A4B4350), id: 1) // 'JKCP'
-        let mods = UInt32(controlKey | optionKey | cmdKey)
-        let registerStatus = RegisterEventHotKey(UInt32(kVK_ANSI_P), mods, hotKeyID,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
-        guard registerStatus == noErr else {
-            // The chord is likely already claimed by another app. Don't report
-            // ourselves as enabled when the registration didn't take, and clean
-            // up the handler we just installed.
-            NSLog("GlobalHotKeyService: RegisterEventHotKey failed (status \(registerStatus)); the chord may be taken by another app")
-            if let h = handlerRef { RemoveEventHandler(h); handlerRef = nil }
-            return false
-        }
+            }) else { return false }
+        token = t
         isEnabled = true
         return true
     }
 
     func disable() {
-        if let h = hotKeyRef { UnregisterEventHotKey(h); hotKeyRef = nil }
-        if let e = handlerRef { RemoveEventHandler(e); handlerRef = nil }
+        if let t = token { HotKeyCenter.shared.unregister(t); token = nil }
         isEnabled = false
     }
 
@@ -634,6 +1007,18 @@ final class SystemActionService: @unchecked Sendable {
         case .previousTrack: postAuxKey(20)  // NX_KEYTYPE_REWIND
         case .brightnessUp: postAuxKey(2)    // NX_KEYTYPE_BRIGHTNESS_UP
         case .brightnessDown: postAuxKey(3)  // NX_KEYTYPE_BRIGHTNESS_DOWN
+        case .keyboardBrightnessUp: postAuxKey(21)    // NX_KEYTYPE_ILLUMINATION_UP
+        case .keyboardBrightnessDown: postAuxKey(22)  // NX_KEYTYPE_ILLUMINATION_DOWN
+        case .startDictation:
+            startDictation()
+        case .speakSelection:
+            postCombo(keyCode: 53, flags: .maskAlternate)                 // Option+Esc
+        case .zoomToggle:
+            postCombo(keyCode: 28, flags: [.maskAlternate, .maskCommand]) // Option+Cmd+8
+        case .zoomIn:
+            postCombo(keyCode: 24, flags: [.maskAlternate, .maskCommand]) // Option+Cmd+=
+        case .zoomOut:
+            postCombo(keyCode: 27, flags: [.maskAlternate, .maskCommand]) // Option+Cmd+-
         case .missionControl:
             openSystemApp("Mission Control")
         case .launchpad:
@@ -752,6 +1137,32 @@ final class SystemActionService: @unchecked Sendable {
 
     /// Post one full press + release of a keyboard combo, marked as our
     /// own so listen-only taps can filter it.
+    /// Start or stop macOS dictation by pressing the dictation key itself.
+    ///
+    /// Measured from a physical F5 press on an Apple keyboard: the dictation
+    /// key is NOT a HID consumer usage and NOT an NX special key. It is an
+    /// ordinary key event with virtual keycode 176 carrying the Fn flag:
+    ///
+    ///     KEYDOWN virtualKeyCode=176 flags=0x800100
+    ///
+    /// so it can be posted like any other key. This works with Dictation's
+    /// default shortcut (the microphone key), which means the user does not
+    /// have to configure a custom shortcut first.
+    private func startDictation() {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source,
+                                      virtualKey: Self.dictationKeyCode, keyDown: down) else { continue }
+            event.flags = [.maskSecondaryFn, .maskNonCoalesced]
+            event.setIntegerValueField(.eventSourceUserData,
+                                       value: InputSimulator.ownEventMarker)
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Apple's virtual keycode for the dictation / microphone key (F5).
+    static let dictationKeyCode: CGKeyCode = 176
+
     private func postCombo(keyCode: CGKeyCode, flags: CGEventFlags) {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         for down in [true, false] {

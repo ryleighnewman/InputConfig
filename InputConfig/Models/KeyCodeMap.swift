@@ -3,6 +3,22 @@ import Foundation
 /// Maps HID usage codes to human-readable key names
 /// Based on the original Joystick Mapper's key code table
 struct KeyCodeMap {
+    /// fn HELD as a modifier. macOS exposes this as an event flag rather than
+    /// a keyboard usage, so it gets a private code well clear of the HID
+    /// keyboard page (which tops out in the 200s here). Measured: holding the
+    /// key raises `flagsChanged vk=63` and stamps `.maskSecondaryFn` on
+    /// whichever key is pressed alongside it.
+    static let globeFnCode = 400
+
+    /// The Globe key TAPPED on its own, which is a different event from
+    /// holding fn: macOS emits a discrete `keyDown vk=179` carrying no fn
+    /// flag, and that is what fires the "Press the Globe key to" action
+    /// (emoji picker, input source, dictation). Holding fn as a modifier
+    /// never produces it.
+    static let globeKeyCode = 401
+    /// Virtual keycode the Globe tap reports as. Measured, not inferred.
+    static let globeVirtualKey = 179
+
     struct KeyEntry: Identifiable {
         let id: Int
         let code: Int
@@ -66,6 +82,7 @@ struct KeyCodeMap {
             KeyEntry(code: 230, name: "Alt / Option (Right)", group: "Modifier Keys"),
             KeyEntry(code: 224, name: "Ctrl (Left)", group: "Modifier Keys"),
             KeyEntry(code: 228, name: "Ctrl (Right)", group: "Modifier Keys"),
+            KeyEntry(code: KeyCodeMap.globeFnCode, name: "fn / Globe (hold)", group: "Modifier Keys"),
         ])
 
         // Other Keys
@@ -125,6 +142,7 @@ struct KeyCodeMap {
             KeyEntry(code: 304, name: "Mission Control", group: "Special Keys"),
             KeyEntry(code: 305, name: "Keyboard Light Down", group: "Special Keys"),
             KeyEntry(code: 306, name: "Keyboard Light Up", group: "Special Keys"),
+            KeyEntry(code: KeyCodeMap.globeKeyCode, name: "Globe Key (Emoji)", group: "Special Keys"),
             KeyEntry(code: 307, name: "Rewind Track", group: "Special Keys"),
             KeyEntry(code: 308, name: "Play Audio Track", group: "Special Keys"),
             KeyEntry(code: 309, name: "Fast Forward Track", group: "Special Keys"),
@@ -271,6 +289,7 @@ struct KeyCodeMap {
         98: 0x52,  // Keypad 0
         99: 0x41,  // Keypad .
         103: 0x51, // Keypad =
+        KeyCodeMap.globeKeyCode: KeyCodeMap.globeVirtualKey, // Globe tapped alone
         224: 0x3B, // Ctrl Left
         225: 0x38, // Shift Left
         226: 0x3A, // Option Left

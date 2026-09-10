@@ -1,4 +1,5 @@
 import SwiftUI
+import Carbon.HIToolbox
 
 /// Payload that asks the editor to scroll to and highlight a specific
 /// binding row. Posted from the Live Visualizer popovers via the
@@ -231,6 +232,7 @@ struct PresetEditorView: View {
             // top of the box reads like the glass body, matching the main
             // window instead of a distinct toolbar band.
             .headerFade()
+            .background(NoInitialTextFocus().frame(width: 0, height: 0))
             .navigationTitle("Edit Bindings & Mappings")
             .overlay(alignment: .top) {
                 // Brief confirmation toast for the Quick Zero toolbar
@@ -447,6 +449,14 @@ struct PresetEditorView: View {
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(
+                for: PresetEditorView.debugStartScanNotification)) { _ in
+                #if DEBUG
+                if !preset.joysticks.isEmpty, !preset.joysticks[0].bindings.isEmpty {
+                    startScan(joystickIndex: 0, bindingIndex: 0)
+                }
+                #endif
+            }
             .overlay {
                 if showingScanOverlay {
                     ScanOverlayView(
@@ -630,6 +640,42 @@ struct PresetEditorView: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedHeaderField, equals: .tag)
             }
+            HStack(spacing: 8) {
+                Text("Key:")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+                if let spec = preset.activateHotKey {
+                    HotKeyRecorderField(spec: spec) { preset.activateHotKey = $0 }
+                    Button("Remove") { preset.activateHotKey = nil }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if PresetHotKeyService.conflicts(for: spec, excluding: preset.id,
+                                                     in: presetStore.presets) {
+                        Label("Another shortcut already uses this", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text("Switches to this preset from anywhere. Press it again to stop.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Add a shortcut") {
+                        preset.activateHotKey = HotKeySpec(
+                            keyCode: UInt32(kVK_ANSI_1),
+                            modifiers: UInt32(controlKey | optionKey | cmdKey))
+                    }
+                    .buttonStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(Color.accentColor)
+                    Text("A system-wide key that turns this preset on.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -740,16 +786,23 @@ struct PresetEditorView: View {
         case .cursorRegion:    return 9
         case .stickRegion:     return 10
         case .midi:            return 11
+        case .chassisTap:      return 12
         }
     }
 
     private func duplicateJoystick(at index: Int) {
         withAnimation {
-            var clone = preset.joysticks[index]
-            clone = JoystickMapping(
-                tag: clone.tag,
-                bindings: clone.bindings.map { $0.duplicated() }
+            let source = preset.joysticks[index]
+            // Carry the slot's own settings across too. Rebuilding from just
+            // (tag, bindings) dropped customName and inputKind, so a
+            // duplicated slot lost its name and reverted to auto-detect.
+            var clone = JoystickMapping(
+                tag: source.tag,
+                bindings: source.bindings.map { $0.duplicated() },
+                isExpanded: source.isExpanded
             )
+            clone.customName = source.customName
+            clone.inputKind = source.inputKind
             preset.joysticks.insert(clone, after: index)
         }
     }
@@ -761,6 +814,10 @@ struct PresetEditorView: View {
     }
 
     // MARK: - Scanning
+
+    /// DEBUG: open a scan on the first row, so the scanner can be exercised
+    /// and the scan overlay captured for marketing without a human click.
+    static let debugStartScanNotification = Notification.Name("InputConfig.DebugStartScan")
 
     private func startScan(joystickIndex: Int, bindingIndex: Int) {
         // Release any keyboard focus from the Name / Tag fields so that
@@ -892,5 +949,52 @@ private extension Array {
     mutating func insert(_ element: Element, after index: Int) {
         let insertIndex = Swift.min(index + 1, count)
         insert(element, at: insertIndex)
+    }
+}
+
+
+// MARK: - Initial focus
+
+/// Stops AppKit handing the freshly presented sheet's keyboard focus to the
+/// preset-name field.
+///
+/// Nobody opens the binding editor to rename the preset, so the focus was
+/// unwanted to begin with, and it was expensive: a focused `TextField` puts
+/// AppKit's field editor - the window's only `cursorUpdate` tracking area -
+/// inside the scrolling content. Every frame that content moves, AppKit marks
+/// tracking regions dirty and resets the cursor, and a customized pointer
+/// (Accessibility > Display > Pointer) makes each of those resets regenerate
+/// and re-upload the cursor images to WindowServer. That showed up as
+/// `displayCycleUpdateStructuralRegions -> NSCursor set ->
+/// SLSRegisterCursorWithImages` eating roughly half the editor's scroll time.
+///
+/// Clicking the field still focuses it normally.
+private struct NoInitialTextFocus: NSViewRepresentable {
+    func makeNSView(context: Context) -> ClearFocusView { ClearFocusView() }
+    func updateNSView(_ nsView: ClearFocusView, context: Context) {}
+
+    final class ClearFocusView: NSView {
+        private var done = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard !done, let window else { return }
+            done = true
+            window.initialFirstResponder = nil
+            // SwiftUI installs the field editor after the sheet is on screen,
+            // so clear once now and once on the next turn of the run loop.
+            clear(window)
+            DispatchQueue.main.async { [weak window] in
+                guard let window else { return }
+                window.initialFirstResponder = nil
+                self.clear(window)
+            }
+        }
+
+        private func clear(_ window: NSWindow) {
+            if window.firstResponder is NSText {
+                window.makeFirstResponder(nil)
+            }
+        }
     }
 }

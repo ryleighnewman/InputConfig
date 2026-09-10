@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import GameController
 import Combine
 import AppKit
@@ -196,8 +197,18 @@ class GameControllerService: ObservableObject {
         NSLog("[GameControllerService] Cleared stale tutorial fake controller from previous session")
     }
 
+    /// True while the DEBUG marketing capture fakes are installed. Always
+    /// false in Release, so the shipping sidebar is unaffected.
+    var debugMarketingFakeActive: Bool {
+        #if DEBUG
+        return marketingFakeActive
+        #else
+        return false
+        #endif
+    }
+
     #if DEBUG
-    private(set) var marketingFakeActive = false
+    @Published private(set) var marketingFakeActive = false
     /// DEBUG / marketing-capture only: inject two clean-named synthetic
     /// controllers (a DualSense Edge in slot 0, a PlayStation Access Controller
     /// in slot 1) so App Store screenshots show a populated sidebar and a
@@ -510,6 +521,21 @@ class GameControllerService: ObservableObject {
 
     // MARK: - Controller Discovery
 
+    private var pendingRefresh: DispatchWorkItem?
+
+    /// A Bluetooth reconnect can deliver "connected" for the new object
+    /// before "disconnected" for the old one. Rebuilding on every
+    /// notification listed both, which is the duplicate DualSense people
+    /// saw. One trailing rebuild per burst collapses the pair.
+    private func scheduleRefresh() {
+        pendingRefresh?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.refreshControllers() }
+        }
+        pendingRefresh = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
     private func setupControllerNotifications() {
         NotificationCenter.default.addObserver(
             forName: .GCControllerDidConnect,
@@ -520,7 +546,7 @@ class GameControllerService: ObservableObject {
             let name = (note.object as? GCController)?.vendorName ?? "Controller"
             Task { @MainActor in
                 StatsService.shared.controllerConnected(name: name)
-                self?.refreshControllers()
+                self?.scheduleRefresh()
             }
         }
 
@@ -534,7 +560,7 @@ class GameControllerService: ObservableObject {
                 let stillConnected = !GCController.controllers().isEmpty
                 StatsService.shared.controllerDisconnected(
                     name: name, anyStillConnected: stillConnected)
-                self.refreshControllers()
+                self.scheduleRefresh()
             }
         }
 
@@ -852,6 +878,11 @@ class GameControllerService: ObservableObject {
         if let steamSlot = steamControllerSlot, index == steamSlot {
             return "Steam Controller"
         }
+        #if DEBUG
+        // Marketing capture: name the synthetic controllers so the visualizer
+        // header reads like a real session instead of "No controller in slot".
+        if marketingFakeActive, let name = controllerNames[index] { return name }
+        #endif
         return "No controller in slot \(index)"
     }
 
@@ -1531,6 +1562,22 @@ class GameControllerService: ObservableObject {
     // MARK: - Polling (for mapping engine)
 
     func readControllerState(at index: Int) -> ControllerState? {
+        #if DEBUG
+        // Marketing capture: drive the sticks and triggers along a slow sweep
+        // so calibration plots draw a full trail and the live readouts show
+        // real numbers instead of a dead 0%. Never compiled into Release.
+        if marketingFakeActive, index <= 1 {
+            let t = CACurrentMediaTime()
+            var st = ControllerState()
+            st.axes[0] = Float(cos(t * 2.1)) * 0.93
+            st.axes[1] = Float(sin(t * 2.1)) * 0.93
+            st.axes[2] = Float(cos(t * 1.6)) * 0.72
+            st.axes[3] = Float(sin(t * 1.6)) * 0.72
+            st.axes[4] = Float((sin(t * 1.15) + 1) / 2)
+            st.axes[5] = Float((cos(t * 0.95) + 1) / 2)
+            return st
+        }
+        #endif
         // Steam Controllers occupy the virtual slot just past the last
         // MFi controller. When a binding targets that slot we ask the
         // SteamControllerService for its synthesized ControllerState.

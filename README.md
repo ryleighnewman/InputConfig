@@ -22,16 +22,20 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.3
+## What's new in 1.4
 
-- MIDI devices as input, everywhere: bind notes, pads, knobs, the pitch wheel, the sustain pedal, and aftertouch to anything, with no game controller connected
-- Knob modes for MIDI dials: Switch fires past halfway, Dial speeds up the further you turn from centre, Turn nudges once per step, with per-binding step sensitivity
-- System Function outputs: volume, mute, media keys, brightness, Mission Control, Launchpad, Spotlight, lock screen, the screenshot toolbar, Siri Shortcuts, and opening any app or URL
-- System volume as a fader: the Mac's volume follows a knob 1-to-1, engaging only once you actually move it
-- The Live Visualizer gained a full MIDI Instrument template: a velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log
-- Two new built-in presets (MIDI: Knob Deck and MIDI: Media Deck), new welcome-screen feature demos, and a What's New popup after updates
-- An Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion
-- A redesigned About page and a refreshed welcome screen
+- Tap the Mac: your MacBook's motion sensor turns a knock on the palm rest or the lid into an input. Double taps and triple taps are told apart, typing is ignored, and no hardware is needed at all
+- Emergency stop: one action that only ever stops. A system-wide shortcut, a two-second hold on Home / PS / Guide, or a menu bar button halts the engine and releases every held key, button, and note
+- Per-preset shortcuts: give any preset its own system-wide key that switches to it, and press it again to stop it
+- Chords: a binding can require a second button held, so one control does different things depending on what is held with it
+- Gyro ratcheting: Pause Motion While Held stops motion aim while a button is down, so you can re-aim the controller without dragging the cursor
+- Start Dictation as a System Function, plus a new Accessibility group: Speak Selection, Zoom On / Off, Zoom In, and Zoom Out
+- The fn / Globe key in both of its roles: hold it as a modifier for shortcuts like Globe + E, or press Globe on its own for emoji and dictation
+- The scan button now detects modifier keys pressed on their own, including Shift, Control, Option, Command, fn / Globe, right Command, and F16 to F19
+- Presets reorder by dragging and move between folders, and the order you set sticks
+- The binding editor scrolls and expands smoothly, and rows reorder by dragging the handle: the row lifts, follows the pointer, and the list opens a gap where it will land
+- Presets that use only the trackpad, a cursor region, or a Mac tap now work without a game controller connected
+- Two new built-in presets: Tap the Mac and Anki
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
@@ -44,7 +48,7 @@ mice, trackpads, and MIDI gear go in; keys, mouse, macros, MIDI, system function
 and Siri Shortcuts come out. Hundreds of presets ship with it, sorted into folders
 you can name and colour.
 
-![Press a control, bind it](Marketing/posters/02-scan.jpg)
+![Press anything to bind it](Marketing/posters/02-scan.jpg)
 
 Scanning maps any input the instant you touch it. No manual codes, no guesswork,
 and it works for controllers, MIDI gear, and your Mac's own keyboard and trackpad.
@@ -67,7 +71,7 @@ brakes, and shifts from one control, and it outputs keyboard and mouse, so it wo
 in games that never planned for it. Built with the PlayStation Access Controller
 and other adaptive hardware in mind.
 
-![Outputs that run your Mac](Marketing/posters/06-outputs.jpg)
+![Send MIDI, run your Mac](Marketing/posters/06-outputs.jpg)
 
 One pad press can change the volume, skip a track, dim the display, open Mission
 Control, lock the screen, or run a whole Siri Shortcut. Every binding shows exactly
@@ -90,7 +94,7 @@ Tune the inner and outer deadzone on every stick and trigger with a live plot, s
 drift disappears and full travel stays. Bind gyroscope rotation to the mouse for
 motion aim in any app, with live sensor readings and a resting-zero calibration.
 
-![Free, open source, yours](Marketing/posters/10-about.jpg)
+![Open source, yours](Marketing/posters/10-about.jpg)
 
 No accounts, no tracking, no locked features. Built by one person who needed it,
 shaped by the community that uses it.

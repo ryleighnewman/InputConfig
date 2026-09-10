@@ -407,7 +407,16 @@ struct VirtualControllerView<Trailing: View>: View {
     @State private var lastSignatureChangeAt: CFTimeInterval = 0
 
     private var state: ControllerState {
-        controllerService.currentStates[slot] ?? ControllerState()
+        #if DEBUG
+        // Marketing capture: currentStates is only filled by the live poll, so
+        // without this the visualizer sits at 0% while the sidebar already
+        // shows the synthetic controllers.
+        if controllerService.debugMarketingFakeActive,
+           let synthetic = controllerService.readControllerState(at: slot) {
+            return synthetic
+        }
+        #endif
+        return controllerService.currentStates[slot] ?? ControllerState()
     }
 
     /// Order-independent hash of the state with every float snapped to a

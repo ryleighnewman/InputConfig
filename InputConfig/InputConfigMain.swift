@@ -37,6 +37,7 @@ final class AppState: ObservableObject {
         // touching NSApp here trapped at launch for every Sonoma user.
         // NSApplication.shared is non-optional and creates the instance.
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        AppState.enforceSingleInstance()
         // Boot the freeze watchdog before any heavy work runs - this is the
         // earliest place the main actor is alive, so we get the most
         // accurate "main thread responsiveness" baseline.
@@ -52,6 +53,17 @@ final class AppState: ObservableObject {
         // turned it on in Settings, so it works app-wide from launch.
         if UserDefaults.standard.bool(forKey: GlobalHotKeyService.enabledDefaultsKey) {
             GlobalHotKeyService.shared.enable()
+        }
+        // The emergency stop is on by default and registered before anything
+        // can activate a preset. A kill switch you have to enable first is
+        // not a kill switch.
+        EmergencyStopService.registerDefaults()
+        // A kill switch that silently failed to register is worse than none,
+        // because you believe you have one. Carbon hot keys are exclusive per
+        // process, so another app (or a second copy of this one) holding the
+        // same chord makes this fail quietly.
+        if !EmergencyStopService.shared.refreshRegistration() {
+            AppState.warnEmergencyStopUnavailable()
         }
         // If the previous session ended abnormally and the user hasn't
         // opted out of session restore, re-activate whichever preset
@@ -98,6 +110,49 @@ final class AppState: ObservableObject {
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// Refuse to run beside another copy of ourselves.
+    ///
+    /// Two instances each run their own MappingEngine poll loop and both post
+    /// to the same `.cghidEventTap`, so controls the visible preset never
+    /// bound appear to fire, output becomes the union of two presets, and
+    /// quitting one leaves the other running. Worse, the emergency stop uses a
+    /// Carbon hot key, which is exclusive per process: the SECOND copy's kill
+    /// switch silently fails to register, so the runaway instance is precisely
+    /// the one that cannot be stopped. Several launchable copies exist on a
+    /// developer machine (App Store build, dev build, DerivedData), which
+    /// makes this easy to hit by accident.
+    static func enforceSingleInstance() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == bundleID && $0.processIdentifier != me
+        }
+        guard let other = others.first else { return }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "InputConfig is already running"
+        alert.informativeText = "Another copy of InputConfig is already open, and two copies fight over the same keyboard and mouse: controls you never mapped can appear to fire, and the emergency stop only works in one of them.\n\nThis copy will quit. Use the one already running."
+        alert.addButton(withTitle: "Quit This Copy")
+        alert.addButton(withTitle: "Show the Other Copy")
+        if alert.runModal() == .alertSecondButtonReturn {
+            other.activate(options: [.activateAllWindows])
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    /// Say plainly when the panic chord could not be claimed, instead of only
+    /// writing a line to the log nobody reads.
+    static func warnEmergencyStopUnavailable() {
+        let chord = EmergencyStopService.shared.spec.displayString
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "The emergency stop shortcut is not available"
+        alert.informativeText = "Another app has already claimed \(chord), so InputConfig could not register it. That keyboard shortcut will not stop a running preset.\n\nYou can still stop everything by holding the controller's Home button, or from the InputConfig menu bar icon. Choose a different shortcut in Settings to restore it."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Tear down outputs in priority order. Called on willTerminate.
@@ -808,7 +863,7 @@ struct InputConfig: App {
 
                 Divider()
 
-                Button("Support InputConfig...") {
+                Button("Donate to InputConfig...") {
                     TipJarWindowController.shared.show()
                 }
 

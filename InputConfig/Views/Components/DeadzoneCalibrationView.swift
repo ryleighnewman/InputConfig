@@ -170,7 +170,8 @@ struct DeadzoneCalibrationView: View {
             .padding(.top, 4)
 
             if controllerService.connectedControllers.isEmpty
-                && controllerService.rawHIDGamepadSlots.isEmpty {
+                && controllerService.rawHIDGamepadSlots.isEmpty
+                && !controllerService.debugMarketingFakeActive {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -290,10 +291,13 @@ struct DeadzoneCalibrationView: View {
                         .offset(y: -(barHeight * outer))
                 }
 
-                // Active fill above the inner deadzone
+                // Active fill above the inner deadzone. Deliberately
+                // translucent: at full opacity this bar painted straight over
+                // the red inner-deadzone band, so the moment you pulled the
+                // trigger the very thing you are calibrating disappeared.
                 let belowInner = pulled <= inner
                 Rectangle()
-                    .fill(belowInner ? Color.accentColor.opacity(0.35) : Color.accentColor)
+                    .fill(Color.accentColor.opacity(belowInner ? 0.30 : 0.55))
                     .frame(width: barWidth, height: barHeight * pulled)
                     .animation(.easeOut(duration: 0.08), value: pulled)
             }

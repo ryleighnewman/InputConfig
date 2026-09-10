@@ -8,6 +8,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     // creative MIDI output, per-preset automation, and finally usage stats.
     case keyboardMouse
     case controllers
+    case chassisTap
     case variableSensitivity
     case deadzone
     case toggleMode
@@ -35,6 +36,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     /// Stable key used to look up the matching example preset by name.
     var presetKey: String? {
         switch self {
+        case .chassisTap:          return "chassis_tap"
         case .variableSensitivity: return "variable_sensitivity"
         case .deadzone:            return "deadzone"
         case .haptic:              return "haptic"
@@ -102,6 +104,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
         case .inputRemap:          return "Keyboard & Mouse as Input"
         case .holdDoubleTap:       return "Hold & Double-Tap"
         case .appAutoSwitch:       return "Per-App Auto-Switch"
+        case .chassisTap:          return "Tap the Mac"
         case .cursorRegions:       return "Cursor Regions"
         }
     }
@@ -146,6 +149,8 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
             return "Every binding can carry three actions: press, hold, and double-tap each fire their own outputs, with an adjustable hold threshold and double-tap window per binding. One controller button becomes jump on tap, sprint on hold, and inventory on double-tap."
         case .appAutoSwitch:
             return "Presets can activate themselves when a chosen app comes to the front: the game preset in the game, the DAW preset in your DAW, the browsing preset everywhere else. Add bundle identifiers in the editor's Automation panel, flip the global toggle in Settings, and InputConfig does the switching for you."
+        case .chassisTap:
+            return "Your MacBook has a motion sensor inside it, and InputConfig can feel you knock on the case. Tap the palm rest or the lid with a fingertip: two taps close together are a double, three are a triple, and a pause starts a new count. It is the only input that needs no hardware at all, so it works with nothing plugged in. Typing is ignored on purpose, so working at the keyboard never sets it off."
         case .cursorRegions:
             return "Draw regions on the screen that act as inputs: the cursor entering one can press keys, run macros, or fire any other output. Pair with stick- or gyro-driven cursor movement for dwell-free, gaze-style control, or park hot corners anywhere you like."
         case .systemControl:
@@ -259,6 +264,7 @@ struct FeatureDemoView: View {
         case .inputRemap:          return .orange
         case .holdDoubleTap:       return .blue
         case .appAutoSwitch:       return .green
+        case .chassisTap:          return .mint
         case .cursorRegions:       return .purple
         }
     }
@@ -287,6 +293,7 @@ struct FeatureDemoView: View {
         case .inputRemap:          return "keyboard.badge.ellipsis"
         case .holdDoubleTap:       return "hand.tap.fill"
         case .appAutoSwitch:       return "app.connected.to.app.below.fill"
+        case .chassisTap:          return "hand.tap.fill"
         case .cursorRegions:       return "rectangle.dashed"
         }
     }
@@ -319,6 +326,7 @@ struct FeatureDemoView: View {
             case .inputRemap:          InputRemapDemo()
             case .holdDoubleTap:       HoldDoubleTapDemo()
             case .appAutoSwitch:       AppAutoSwitchDemo()
+            case .chassisTap:          ChassisTapDemo()
             case .cursorRegions:       CursorRegionsDemo()
             }
         }
@@ -1839,6 +1847,67 @@ private struct AppAutoSwitchDemo: View {
 
 /// Cursor regions demo: the pointer glides into a dashed region and a key
 /// fires.
+/// Two taps landing on a MacBook, with the shock rippling out and the counter
+/// ticking over. Loops on a ~3.4 s cycle: tap, tap, gesture recognised, rest.
+private struct ChassisTapDemo: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { context in
+            content(at: context.date.timeIntervalSinceReferenceDate)
+        }
+    }
+    @ViewBuilder private func content(at t: TimeInterval) -> some View {
+        let cycle = t.truncatingRemainder(dividingBy: 3.4)
+        // Two strikes, 0.45 s apart, then the gesture resolves.
+        let strikes: [Double] = [0.5, 0.95]
+        let recognised = cycle > 1.5 && cycle < 3.0
+        let count = strikes.filter { cycle >= $0 }.count
+        HStack(spacing: 26) {
+            ZStack {
+                // Lid and base, drawn plainly so the ripple is the only motion.
+                VStack(spacing: 2) {
+                    RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(Color.secondary.opacity(0.55), lineWidth: 1.5)
+                        .frame(width: 118, height: 74)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 140, height: 6)
+                }
+                ForEach(Array(strikes.enumerated()), id: \.offset) { _, at in
+                    let age = cycle - at
+                    if age >= 0, age < 0.75 {
+                        let p = age / 0.75
+                        Circle()
+                            .strokeBorder(Color.mint.opacity(1 - p), lineWidth: 2)
+                            .frame(width: 16 + p * 74, height: 16 + p * 74)
+                            .offset(y: 12)
+                    }
+                }
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.mint)
+                    .opacity(strikes.contains { cycle >= $0 && cycle < $0 + 0.18 } ? 1 : 0.28)
+                    .offset(y: 12)
+            }
+            VStack(spacing: 6) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(recognised ? Color.mint.opacity(0.3) : Color.secondary.opacity(0.12))
+                        .frame(width: 44, height: 44)
+                    Text("\(count)")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(recognised ? Color.mint : Color.secondary)
+                        .contentTransition(.numericText())
+                }
+                Text(recognised ? "Double tap" : (count > 0 ? "Counting" : "Waiting"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 private struct CursorRegionsDemo: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
