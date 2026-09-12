@@ -70,8 +70,19 @@ final class InputSimulator: @unchecked Sendable {
                 // Cmd+C (Cmd held, then C pressed) fired C as a bare key because
                 // the C event carried no modifier flags, so combo outputs like
                 // Copy, the screenshot shortcuts, and Cmd+Shift+Z did nothing.
-                let flags = currentModifierFlags()
-                if !flags.isEmpty { event.flags = flags }
+                var flags = currentModifierFlags()
+                // PATCH: a modifier pressed on its own must arrive as a
+                // flagsChanged event (exactly what a physical keyboard sends),
+                // otherwise apps that watch for a lone Option / Cmd tap
+                // (voice-input toggles, IME switchers) never see it. Flags are
+                // always written explicitly (never inherited from the event
+                // source) and carry the left/right device bit like real keys.
+                if modifierFlags(for: hidCode) != nil {
+                    event.type = .flagsChanged
+                    flags.insert(deviceModifierBit(for: hidCode))
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                } else if !flags.isEmpty { event.flags = flags }
                 taggedPost(event)
             }
         } else {
@@ -92,8 +103,15 @@ final class InputSimulator: @unchecked Sendable {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
                 // Carry the still-held modifiers so releasing the letter of a
                 // chord (e.g. the C of Cmd+C) does not read as a bare key-up.
-                let flags = currentModifierFlags()
-                if !flags.isEmpty { event.flags = flags }
+                var flags = currentModifierFlags()
+                // PATCH: see keyDown. On release the modifier is already gone
+                // from pressedKeys; write the (possibly empty) flags explicitly
+                // so the release is not inherited as "still held".
+                if modifierFlags(for: hidCode) != nil {
+                    event.type = .flagsChanged
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                } else if !flags.isEmpty { event.flags = flags }
                 taggedPost(event)
             }
         } else {
@@ -139,6 +157,22 @@ final class InputSimulator: @unchecked Sendable {
             chunk.append(contentsOf: u)
         }
         flush()
+    }
+
+    /// Device-specific modifier bit (NX_DEVICEL*/R* masks) so a synthesized
+    /// left or right modifier looks like the physical key it stands for.
+    private func deviceModifierBit(for hidCode: Int) -> CGEventFlags {
+        switch hidCode {
+        case 224: return CGEventFlags(rawValue: 0x0001)   // left control
+        case 228: return CGEventFlags(rawValue: 0x2000)   // right control
+        case 225: return CGEventFlags(rawValue: 0x0002)   // left shift
+        case 229: return CGEventFlags(rawValue: 0x0004)   // right shift
+        case 226: return CGEventFlags(rawValue: 0x0020)   // left option
+        case 230: return CGEventFlags(rawValue: 0x0040)   // right option
+        case 227: return CGEventFlags(rawValue: 0x0008)   // left command
+        case 231: return CGEventFlags(rawValue: 0x0010)   // right command
+        default: return []
+        }
     }
 
     private func modifierFlags(for hidCode: Int) -> CGEventFlags? {
@@ -207,7 +241,7 @@ final class InputSimulator: @unchecked Sendable {
         // for buttons outside 0...31. Either case used to force-unwrap
         // and crash the entire mapping engine mid-binding; now both
         // fall back gracefully.
-        guard let screenHeight = NSScreen.main?.frame.height,
+        guard let screenHeight = NSScreen.screens.first?.frame.height,
               let cgButton = cgMouseButton(for: button) else { return }
         pressedMouseButtons.insert(button)
 
@@ -236,7 +270,7 @@ final class InputSimulator: @unchecked Sendable {
         // and our pressed-state stays consistent.
         pressedMouseButtons.remove(button)
 
-        let screenHeight = NSScreen.main?.frame.height ?? 0
+        let screenHeight = NSScreen.screens.first?.frame.height ?? 0
         let location = NSEvent.mouseLocation
         let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
 
@@ -282,7 +316,7 @@ final class InputSimulator: @unchecked Sendable {
         trackedFrames &+= 1
         if trackedCursor == nil || now - trackedAt > 0.1 || trackedFrames % 8 == 0 {
             let location = NSEvent.mouseLocation
-            if let h = NSScreen.main?.frame.height { cachedScreenHeight = h }
+            if let h = NSScreen.screens.first?.frame.height { cachedScreenHeight = h }
             if cachedScreenHeight == 0 { cachedScreenHeight = 1080 }
             trackedCursor = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
         }
