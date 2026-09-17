@@ -1,13 +1,19 @@
-# InputConfig
+# InputConfig: free controller mapper for Mac
 
-InputConfig is a free, open-source input mapper for macOS. It turns any game
-controller, keyboard, mouse, or MIDI device into your Mac's input: browse the web
-from a gamepad, run your Mac from a MIDI knob box, play games that never supported
-controllers, or replace a keyboard entirely if using one is difficult.
+InputConfig is a free, open-source controller mapper for macOS. Map any PS5, Xbox or
+Switch controller to keyboard keys and mouse movement, use a controller as a mouse,
+run your Mac from a MIDI knob box, play games that never supported controllers, or
+replace a keyboard entirely if using one is difficult. It works in every app, not
+only games.
 
-Works with PS5 DualSense and DualSense Edge, DualShock 4, Xbox Wireless, Switch Pro,
-8BitDo, the PlayStation Access Controller, MIDI keyboards and pad controllers, and any
-HID-compatible gamepad. No drivers, no subscription, no account.
+Works with PS5 DualSense and DualSense Edge, PS4 DualShock 4, Xbox Wireless, Series
+and Elite, Switch Pro and Joy-Con, 8BitDo, the PlayStation Access Controller, the
+Xbox Adaptive Controller, MIDI keyboards and pad controllers, and any HID-compatible
+gamepad. No drivers, no subscription, no account.
+
+Website and documentation: [inputconfig.com](https://inputconfig.com), with
+[help for every feature](https://inputconfig.com/help/), [guides](https://inputconfig.com/guides/),
+and [ready-made presets for 450+ games and apps](https://inputconfig.com/presets/).
 
 <a href="https://apps.apple.com/us/app/inputconfig/id6777759147?mt=12"><img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" alt="Download on the Mac App Store" height="56"></a>
 
@@ -291,4 +297,4 @@ InputConfig does not collect any data. See [PRIVACY.md](PRIVACY.md).
 
 ## Contact
 
-Questions, bugs, or feature requests? Reach out at [ryleighnewman.com](https://ryleighnewman.com).
+Questions, bugs, or feature requests? Open an issue here, see [inputconfig.com/help](https://inputconfig.com/help/), or reach out at [ryleighnewman.com](https://ryleighnewman.com).
