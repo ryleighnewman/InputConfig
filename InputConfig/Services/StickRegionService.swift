@@ -131,27 +131,29 @@ final class StickRegionService: ObservableObject {
     }
 
     private func loadRegions() {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
-              let decoded = try? JSONDecoder().decode(PersistedRoot.self, from: data) else {
-            return
-        }
-        var rebuilt: [Int: [TouchpadRegion]] = [0: [], 1: []]
-        for (key, list) in decoded.byStick {
-            if let idx = Int(key) {
-                rebuilt[idx] = list
-            }
-        }
-        regionsByStick = rebuilt
+        // The working set starts empty; a preset fills it when it runs or
+        // is edited. (Before 1.5 this read an app-wide list from defaults.)
+        regionsByStick = [0: [], 1: []]
     }
 
-    private func persistRegions() {
-        var keyed: [String: [TouchpadRegion]] = [:]
-        for (idx, list) in regionsByStick {
-            keyed["\(idx)"] = list
-        }
-        let root = PersistedRoot(byStick: keyed)
-        if let data = try? JSONEncoder().encode(root) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
-        }
+    /// Regions belong to presets (`Preset.stickRegions`); the preset
+    /// captures the working set on Save, so nothing is written here.
+    private func persistRegions() { }
+
+    /// Make these the regions in play.
+    func load(_ byStick: [Int: [TouchpadRegion]]) {
+        var rebuilt: [Int: [TouchpadRegion]] = [0: [], 1: []]
+        for (i, list) in byStick { rebuilt[i] = list }
+        regionsByStick = rebuilt
+        rebuildLookup()
+    }
+
+    /// Regions the app kept app-wide before 1.5, for the migration.
+    static func legacyAppWideRegions() -> [Int: [TouchpadRegion]] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let decoded = try? JSONDecoder().decode(PersistedRoot.self, from: data) else { return [:] }
+        var out: [Int: [TouchpadRegion]] = [:]
+        for (key, list) in decoded.byStick { if let i = Int(key) { out[i] = list } }
+        return out
     }
 }

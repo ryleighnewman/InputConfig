@@ -467,6 +467,7 @@ final class MIDIInputService: @unchecked Sendable {
         }
         guard status == noErr else {
             NSLog("[MIDIInput] MIDIClientCreate failed: %d", status)
+            ActivityLog.shared.error("MIDI", "Could not create the MIDI client (status \(status))")
             return
         }
 
@@ -487,6 +488,7 @@ final class MIDIInputService: @unchecked Sendable {
         }
         guard portStatus == noErr else {
             NSLog("[MIDIInput] MIDIInputPortCreate failed: %d", portStatus)
+            ActivityLog.shared.error("MIDI", "Could not open the MIDI input port (status \(portStatus))")
             MIDIClientDispose(newClient)
             return
         }
@@ -499,6 +501,7 @@ final class MIDIInputService: @unchecked Sendable {
 
         connectAllSources()
         NSLog("[MIDIInput] started")
+        ActivityLog.shared.info("MIDI", "MIDI input open, \(MIDIGetNumberOfSources()) source(s)")
     }
 
     func stop() {
@@ -872,6 +875,33 @@ final class MIDIInputService: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return devices
     }
+
+    #if DEBUG
+    /// Marketing capture only: toggle a pretend keyboard that reports a held
+    /// C major chord, a few knob positions, and a little pitch bend, so the
+    /// MIDI visualizer can be photographed in use with no hardware attached.
+    func debugToggleFakeInstrument() {
+        lock.lock(); defer { lock.unlock() }
+        let dev = "fake.keyboard"
+        if let i = devices.firstIndex(where: { $0.id == dev }) {
+            devices.remove(at: i)
+            notesDown[dev] = nil; noteVel[dev] = nil; ccValues[dev] = nil; ccStamps[dev] = nil
+            pitchBend[dev] = nil; channelStamps[dev] = nil
+            eventCounter += 1
+            return
+        }
+        devices.append(Device(id: dev, name: "KeyLab 49"))
+        notesDown[dev] = [1: [60, 64, 67]]
+        noteVel[dev] = [60: 96, 64: 84, 67: 112]
+        ccValues[dev] = [1: [1: 84, 7: 100, 64: 127, 71: 40]]
+        var stamps: [Int: UInt64] = [:]
+        for (k, cc) in [1, 7, 64, 71].enumerated() { stamps[cc] = eventCounter + UInt64(k + 1) }
+        ccStamps[dev] = [1: stamps]
+        pitchBend[dev] = [1: 0.3]
+        eventCounter += 8
+        channelStamps[dev] = [1: eventCounter]
+    }
+    #endif
 
     /// True when at least one MIDI source (other than our own output
     /// port) is connected. Drives the editor's "no MIDI device" hint.

@@ -219,6 +219,9 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         activePresetName = nil
         activePresetStartedAt = nil
         flushNow()
+        // Publish right away so the open Statistics sheet shows the zeros
+        // instead of waiting for the next dirty flush.
+        statsTick &+= 1
     }
 
     // MARK: - Persistence

@@ -9,6 +9,12 @@ struct ScanOverlayView: View {
     @ObservedObject var controllerService: GameControllerService
     let onInputDetected: (InputEvent) -> Void
     let onCancel: () -> Void
+    /// Touchpad family only: the press (button 13) and a tap look alike
+    /// to a hand, so the overlay gathers everything the pad reported in a
+    /// short window and hands the candidates over for the person to
+    /// choose. When nil, the first event wins as for any other control.
+    var onTouchpadChoice: (([InputEvent]) -> Void)? = nil
+    @State private var touchpadCandidates: [InputEvent] = []
 
     @State private var timeRemaining: Int = 20
     @State private var detectedInput: InputEvent?
@@ -45,7 +51,7 @@ struct ScanOverlayView: View {
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
 
-                Text("Hold a button or move an axis on your controller, press a key, click, or scroll on your Mac, or play a note or twist a knob on a MIDI device.")
+                Text("Hold a button or move an axis on your controller, press a key, click, or scroll on your Mac, or play a note or twist a knob on a MIDI device. Taps on the Mac are picked from the input type menu, not scanned.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
@@ -113,6 +119,11 @@ struct ScanOverlayView: View {
             controllerService.startScanning { event in
                 completeScan(with: event)
             }
+            // Taps on the Mac are deliberately NOT scanned: pressing a
+            // controller button or a key jolts the MacBook enough to count
+            // as a tap, which then won the scan over the control the user
+            // meant. Tap the Mac is chosen from the input type menu instead
+            // (with its tap-count picker), never by scanning.
             installInputMonitor()
             announce("Scanning for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it. Press Escape to cancel.")
         }
@@ -242,7 +253,34 @@ struct ScanOverlayView: View {
     #endif
 
     /// Single completion path for controller scan results.
+    private static func isTouchpadFamily(_ e: InputEvent) -> Bool {
+        (e.type == .button && e.index == 13) || e.type == .touchpadGesture
+    }
+
     private func completeScan(with event: InputEvent) {
+        if let choose = onTouchpadChoice, Self.isTouchpadFamily(event) {
+            // Collect for half a second: a click reports the press at once
+            // and the finger lift a little later, so both can be shown.
+            if didCompleteScan {
+                if !touchpadCandidates.contains(where: { $0.serialized == event.serialized }) {
+                    touchpadCandidates.append(event)
+                }
+                return
+            }
+            didCompleteScan = true
+            touchpadCandidates = [event]
+            detectedInput = event
+            announce("Touchpad detected.")
+            // A one-finger tap may be the first half of a double tap, which
+            // is only known when the second finger lifts, up to ~650 ms on;
+            // give it time. A press or two-finger tap needs only the lift.
+            let window: Double = (event.type == .touchpadGesture && event.touchpadGestureKind == .oneFingerTap) ? 0.9 : 0.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + window) {
+                cleanup()
+                choose(touchpadCandidates)
+            }
+            return
+        }
         guard !didCompleteScan else { return }
         didCompleteScan = true
         detectedInput = event

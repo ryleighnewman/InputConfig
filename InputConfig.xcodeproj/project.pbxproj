@@ -71,7 +71,15 @@
 		FB10010014STATSSVC0000001 /* StatsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010014STATSSVC0000001 /* StatsService.swift */; };
 		FB10010015STATSVIEW000001 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010015STATSVIEW000001 /* StatsView.swift */; };
 		FB10010016MOTIONCALSVC001 /* MotionCalibrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */; };
+		FB1001ACTIVITYLOG0001 /* ActivityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001ACTIVITYLOG0001 /* ActivityLog.swift */; };
+		FB1001MOUSEPUMP00001 /* MouseMotionPump.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001MOUSEPUMP00001 /* MouseMotionPump.swift */; };
+		FB1001HIDREGISTRY001 /* HIDDeviceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001HIDREGISTRY001 /* HIDDeviceRegistry.swift */; };
+		FB1001SCAFFOLD000001 /* ControllerScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001SCAFFOLD000001 /* ControllerScaffold.swift */; };
+		FB1001REVIEWSVC00001 /* ReviewPromptService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001REVIEWSVC00001 /* ReviewPromptService.swift */; };
+		FB1001REVIEWVIEW0001 /* ReviewPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001REVIEWVIEW0001 /* ReviewPromptView.swift */; };
+		FB1001DEVICEMENU0001 /* DeviceCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001DEVICEMENU0001 /* DeviceCommands.swift */; };
 		FB10010017MOTIONCALVW0001 /* MotionCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */; };
+		FB1001TAPCALVIEW00001 /* TapCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */; };
 		FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */; };
 		FB10010004EIGHTBITDO000001 /* EightBitDoDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */; };
 		FB10010002HELPGUIDES00001 /* HelpGuides.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010002HELPGUIDES00001 /* HelpGuides.swift */; };
@@ -79,6 +87,7 @@
 		CF97327A192CF8FA603B8E98 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 86B1CDE4228157DC93E5DAF3 /* AppKit.framework */; };
 		D1BABA54C5FFEC5A13FA70B6 /* GameControllerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8207CB5F209C9B16F9F67675 /* GameControllerService.swift */; };
 		DBA89E693D7C54FEEBBE54DD /* ScanOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A55F49CC8E2B40BD0376ED9 /* ScanOverlayView.swift */; };
+		FB1001FINDERBAR00001 /* BindingFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001FINDERBAR00001 /* BindingFinder.swift */; };
 		DFB21A4556458137C0DB216D /* InputConfigMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA725C5D236DDF6D38B1933 /* InputConfigMain.swift */; };
 		E753B7D373A453F72513C4A3 /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C2207F21589E350202E2A6D /* Preset.swift */; };
 		F5507342D4D6DD92F3857308 /* PresetEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */; };
@@ -101,6 +110,13 @@
 		FB20010014STATSSVC0000001 /* StatsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsService.swift; sourceTree = "<group>"; };
 		FB20010015STATSVIEW000001 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationService.swift; sourceTree = "<group>"; };
+		FB2001ACTIVITYLOG0001 /* ActivityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityLog.swift; sourceTree = "<group>"; };
+		FB2001MOUSEPUMP00001 /* MouseMotionPump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseMotionPump.swift; sourceTree = "<group>"; };
+		FB2001HIDREGISTRY001 /* HIDDeviceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDDeviceRegistry.swift; sourceTree = "<group>"; };
+		FB2001SCAFFOLD000001 /* ControllerScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerScaffold.swift; sourceTree = "<group>"; };
+		FB2001REVIEWSVC00001 /* ReviewPromptService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptService.swift; sourceTree = "<group>"; };
+		FB2001REVIEWVIEW0001 /* ReviewPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptView.swift; sourceTree = "<group>"; };
+		FB2001DEVICEMENU0001 /* DeviceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCommands.swift; sourceTree = "<group>"; };
 		FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryService.swift; sourceTree = "<group>"; };
 		FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreezeWatchdogService.swift; sourceTree = "<group>"; };
 		FB20010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalInputDeviceService.swift; sourceTree = "<group>"; };
@@ -111,6 +127,7 @@
 		FBF1HELPER002TOUCHPAD /* TouchpadHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = TouchpadHelper; path = TouchpadHelper/TouchpadHelper; sourceTree = "<group>"; };
 		FBF1HELPER003LIGHT /* LightHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = LightHelper; path = LightHelper/LightHelper; sourceTree = "<group>"; };
 		FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationView.swift; sourceTree = "<group>"; };
+		FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapCalibrationView.swift; sourceTree = "<group>"; };
 		FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualControllerView.swift; sourceTree = "<group>"; };
 		FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EightBitDoDetector.swift; sourceTree = "<group>"; };
 		FB20010002HELPGUIDES00001 /* HelpGuides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpGuides.swift; sourceTree = "<group>"; };
@@ -132,6 +149,7 @@
 		8C2207F21589E350202E2A6D /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
 		9953EE66C8AB92001E3C8F60 /* InputEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputEvent.swift; sourceTree = "<group>"; };
 		9A55F49CC8E2B40BD0376ED9 /* ScanOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanOverlayView.swift; sourceTree = "<group>"; };
+		FB2001FINDERBAR00001 /* BindingFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindingFinder.swift; sourceTree = "<group>"; };
 		9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoystickGroupView.swift; sourceTree = "<group>"; };
 		FB2001GYROVIZ002000000000 /* GyroVisualizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GyroVisualizationView.swift; sourceTree = "<group>"; };
 		D97FA28EE21F9D6A4DA2907A /* BindingRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BindingRowView.swift; sourceTree = "<group>"; };
@@ -214,6 +232,7 @@
 			children = (
 				9953EE66C8AB92001E3C8F60 /* InputEvent.swift */,
 				D9AFC638DF7D9B649E63CD4D /* KeyCodeMap.swift */,
+				FB2001SCAFFOLD000001 /* ControllerScaffold.swift */,
 				5AEC52DE5A4CD75E782F3060 /* OutputAction.swift */,
 				8C2207F21589E350202E2A6D /* Preset.swift */,
 				FB20010010CTRLPROFILE00001 /* ControllerProfile.swift */,
@@ -234,6 +253,7 @@
 				9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */,
 				78B2AC33DEB3ABD558D03415 /* KeyCodePicker.swift */,
 				9A55F49CC8E2B40BD0376ED9 /* ScanOverlayView.swift */,
+				FB2001FINDERBAR00001 /* BindingFinder.swift */,
 				FB20010019SYSSTATSPNL00001 /* SystemStatsPanel.swift */,
 				FB2001001CGAMINGUTILPNL0001 /* GamingUtilitiesPanel.swift */,
 				FB2001001DPRESETAUTOSEC001 /* PresetAutomationSection.swift */,
@@ -271,6 +291,10 @@
 				FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */,
 				FB20010014STATSSVC0000001 /* StatsService.swift */,
 				FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */,
+				FB2001ACTIVITYLOG0001 /* ActivityLog.swift */,
+				FB2001MOUSEPUMP00001 /* MouseMotionPump.swift */,
+				FB2001HIDREGISTRY001 /* HIDDeviceRegistry.swift */,
+				FB2001REVIEWSVC00001 /* ReviewPromptService.swift */,
 				FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */,
 				FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */,
 				FB20010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift */,
@@ -319,12 +343,15 @@
 				FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */,
 				FB20010017STICKREGVIEW0001 /* StickRegionsView.swift */,
 				FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */,
+				FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */,
 				FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */,
 				FB20010015STATSVIEW000001 /* StatsView.swift */,
 				FB2001001EIMPORTREVIEW001 /* ImportReviewSheet.swift */,
 				FB20010003HELPVIEW0000001 /* HelpGuideView.swift */,
 				F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */,
 				726EEF6CFAA7F842D5D0B903 /* SettingsView.swift */,
+				FB2001DEVICEMENU0001 /* DeviceCommands.swift */,
+				FB2001REVIEWVIEW0001 /* ReviewPromptView.swift */,
 				FB2001000BTESTBENCHVIEW001 /* TestBenchView.swift */,
 				FB20010007TIPJARVIEW000001 /* TipJarView.swift */,
 				8AF01C10AC20892908C67FFD /* Components */,
@@ -371,18 +398,6 @@
 			knownRegions = (
 				Base,
 				en,
-				es,
-				fr,
-				de,
-				it,
-				"pt-BR",
-				nl,
-				ru,
-				pl,
-				ja,
-				ko,
-				"zh-Hans",
-				"zh-Hant",
 			);
 			mainGroup = D9ED230EE7B5B9FF51E3CECE;
 			minimizedProjectReferenceProxies = 1;
@@ -469,7 +484,15 @@
 				FB10010014STATSSVC0000001 /* StatsService.swift in Sources */,
 				FB10010015STATSVIEW000001 /* StatsView.swift in Sources */,
 				FB10010016MOTIONCALSVC001 /* MotionCalibrationService.swift in Sources */,
+				FB1001ACTIVITYLOG0001 /* ActivityLog.swift in Sources */,
+				FB1001MOUSEPUMP00001 /* MouseMotionPump.swift in Sources */,
+				FB1001HIDREGISTRY001 /* HIDDeviceRegistry.swift in Sources */,
+				FB1001SCAFFOLD000001 /* ControllerScaffold.swift in Sources */,
+				FB1001REVIEWSVC00001 /* ReviewPromptService.swift in Sources */,
+				FB1001REVIEWVIEW0001 /* ReviewPromptView.swift in Sources */,
+				FB1001DEVICEMENU0001 /* DeviceCommands.swift in Sources */,
 				FB10010017MOTIONCALVW0001 /* MotionCalibrationView.swift in Sources */,
+				FB1001TAPCALVIEW00001 /* TapCalibrationView.swift in Sources */,
 				FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */,
 				FB1001000FTOUCHPADSVC00001 /* TouchpadService.swift in Sources */,
 				D1BABA54C5FFEC5A13FA70B6 /* GameControllerService.swift in Sources */,
@@ -507,6 +530,7 @@
 				F5507342D4D6DD92F3857308 /* PresetEditorView.swift in Sources */,
 				4D20653BDBA1B3C512F4A4FA /* PresetStore.swift in Sources */,
 				DBA89E693D7C54FEEBBE54DD /* ScanOverlayView.swift in Sources */,
+				FB1001FINDERBAR00001 /* BindingFinder.swift in Sources */,
 				99DFEFC3C45DB71FA7E58F26 /* SettingsView.swift in Sources */,
 				FB1001000ATESTBENCHSVC0001 /* TestBenchService.swift in Sources */,
 				FB1001000BTESTBENCHVIEW001 /* TestBenchView.swift in Sources */,
@@ -534,7 +558,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -542,7 +566,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
@@ -625,7 +649,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -633,7 +657,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.5;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;

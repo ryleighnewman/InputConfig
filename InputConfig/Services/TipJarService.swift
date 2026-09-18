@@ -39,7 +39,9 @@ final class TipJarService: ObservableObject {
     @Published private(set) var consumableProducts: [Product] = []
     @Published private(set) var subscriptionProducts: [Product] = []
     @Published private(set) var isLoading = false
-    @Published private(set) var lastError: String?
+    /// The most recent failure, shown by the tip jar as an alert and
+    /// cleared when dismissed. The view sets it for a thrown purchase.
+    @Published var lastError: String?
     @Published private(set) var totalTipsCount: Int = 0
     @Published private(set) var activeSubscription: Product?
     @Published var purchaseInProgress: String? // product ID being purchased
@@ -99,12 +101,22 @@ final class TipJarService: ObservableObject {
 
         switch result {
         case .success(let verification):
-            let transaction = try checkVerified(verification)
-            await transaction.finish()
-            incrementTipCount()
-            await refreshActiveSubscription()
-            AccessibilityNotification.Announcement("Thank you for your support").post()
-            return true
+            // Finish the transaction whether or not it verified. An
+            // unfinished transaction is redelivered by StoreKit on every
+            // launch, forever, after the person has already been charged.
+            // A failed verification is reported, not swallowed.
+            switch verification {
+            case .verified(let transaction):
+                await transaction.finish()
+                incrementTipCount()
+                await refreshActiveSubscription()
+                AccessibilityNotification.Announcement("Thank you for your support").post()
+                return true
+            case .unverified(let transaction, let error):
+                await transaction.finish()
+                lastError = "The purchase could not be verified: \(error.localizedDescription)"
+                throw TipJarError.unverifiedTransaction
+            }
 
         case .userCancelled:
             return false
@@ -167,6 +179,13 @@ final class TipJarService: ObservableObject {
         Task.detached { [weak self] in
             for await result in Transaction.updates {
                 guard let self = self else { return }
+                // An unverified update is finished too, for the same reason
+                // as in purchase(): leaving it open means it arrives again on
+                // every launch.
+                if case .unverified(let transaction, _) = result {
+                    await transaction.finish()
+                    continue
+                }
                 if case .verified(let transaction) = result {
                     await transaction.finish()
                     // Do NOT count subscription auto-renewals as new tips: they

@@ -39,6 +39,8 @@ struct PresetEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var scanningBinding: (joystickIndex: Int, bindingIndex: Int)?
+    /// True while the scan is for a row's chord control rather than its input.
+    @State private var scanningModifier = false
     @State private var showingScanOverlay = false
 
     /// Identifies which header text field (if any) currently owns the
@@ -53,10 +55,16 @@ struct PresetEditorView: View {
     /// UUID of the binding row currently pulsing yellow because we just
     /// jumped to it. nil when no pulse is active.
     @State private var pulsingBindingID: UUID?
+    /// A jump requested by the finder (the parent's `pendingJump` is a plain
+    /// input, so the editor keeps its own for rows it adds itself).
+    @State private var finderJump: EditorJumpTarget?
     /// After a directional scan we pop a confirmation dialog asking whether
     /// to wire the input directly to mouse motion or just record it raw and
     /// let the user assign an output manually.
     @State private var pendingScanMapping: PendingScanMapping?
+    /// Touchpad scan: the candidates the overlay saw (press, tap, two-finger
+    /// tap), for the "which one did you mean" dialog.
+    @State private var pendingTouchpadChoice: [InputEvent]?
 
     /// Carries the scan result + the binding location through the
     /// confirmation dialog. We have to keep these together because
@@ -91,6 +99,11 @@ struct PresetEditorView: View {
     @State private var showingTouchpadCalibration: Bool = false
     /// Drives the Calibrate Motion sheet from the toolbar button.
     @State private var showingMotionCalibration: Bool = false
+    /// Drives the Calibrate Taps sheet. Only offered on Macs that publish
+    /// the chassis accelerometer; checked once so the toolbar never hits
+    /// IOKit on every body pass.
+    @State private var showingTapCalibration: Bool = false
+    @State private var hasChassisTapSensor: Bool = ChassisTapService.shared.isAvailable
     /// True when a motion input was scanned but no controller is yet
     /// calibrated. Drives an alert that offers to jump into calibration.
     @State private var pendingMotionCalibrationOffer: Bool = false
@@ -129,6 +142,11 @@ struct PresetEditorView: View {
                         enginePausedBanner
                     }
 
+                    // Search the rows of this preset; a click scrolls to the row.
+                    PresetSearchBar(preset: preset) { hit in
+                        finderJump = EditorJumpTarget(joystickIndex: hit.joystickIndex, inputSerialized: hit.inputSerialized)
+                    }
+
                     headerSection
 
                     Divider()
@@ -147,6 +165,7 @@ struct PresetEditorView: View {
                                 onRemoveBinding: { bindIdx in removeBinding(at: bindIdx, from: index) },
                                 onDuplicateBinding: { bindIdx in duplicateBinding(at: bindIdx, in: index) },
                                 onScanInput: { bindIdx in startScan(joystickIndex: index, bindingIndex: bindIdx) },
+                                onScanModifierInput: { bindIdx in startScan(joystickIndex: index, bindingIndex: bindIdx, forModifier: true) },
                                 onSortBindings: { sortBindings(in: index) },
                                 onDuplicate: { duplicateJoystick(at: index) },
                                 onRemoveJoystick: { removeJoystick(at: index) },
@@ -166,7 +185,7 @@ struct PresetEditorView: View {
 
                     Button {
                         withAnimation {
-                            preset.joysticks.append(JoystickMapping(tag: "<write comments here>"))
+                            preset.joysticks.append(JoystickMapping(tag: ""))
                         }
                     } label: {
                         Label("Add a new Input Device", systemImage: "plus.circle")
@@ -202,9 +221,9 @@ struct PresetEditorView: View {
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Accessibility Tools Suite")
-                                    .font(.headline)
+                                    .font(.callout.weight(.semibold))
                                 Text("Alternative input schemes built for accessibility.")
-                                    .font(.caption)
+                                    .font(.callout)
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -255,11 +274,33 @@ struct PresetEditorView: View {
             .animation(.easeOut(duration: 0.2), value: showQuickZeroToast)
             .onAppear {
                 if lastSnapshot == nil { lastSnapshot = preset }
+                // Load your Shortcuts and applications now, in the
+                // background, so the output menu opens instantly later.
+                SystemListsCache.shared.refreshIfStale()
+                // Screen region rows light as the pointer moves, which needs
+                // the cursor sampled while the editor is open.
+                if !preset.cursorRegions.isEmpty { CursorRegionService.shared.beginTracking() }
+                controllerService.retainLiveInput("editor")
+                // The region editors and the row pickers work on the
+                // services' working set: make it this preset's.
+                preset.applyRegionsToServices()
+                // Knocks should light up rows and be scannable while the
+                // editor is open, preset active or not.
+                if hasChassisTapSensor { ChassisTapService.shared.retain("editor") }
+            }
+            .onDisappear {
+                ChassisTapService.shared.release("editor")
+                if !preset.cursorRegions.isEmpty { CursorRegionService.shared.endTracking() }
+                controllerService.releaseLiveInput("editor")
             }
             .onChange(of: preset) { _, _ in recordHistory() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") {
+                        restoreRunningPresetRegions()
+                        dismiss()
+                    }
+                        .keyboardShortcut(.cancelAction)
                         .buttonStyle(.solidSecondary)
                         .spotlightAnchor(SpotlightID.editorCancel)
                         .accessibilityLabel("Cancel editing")
@@ -267,7 +308,11 @@ struct PresetEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        // Zones drawn while editing live in the services;
+                        // take them into the preset so they save with it.
+                        preset.captureRegionsFromServices()
                         onSave(preset)
+                        restoreRunningPresetRegions(savedDraft: preset)
                         dismiss()
                     }
                     .buttonStyle(.solid)
@@ -303,46 +348,8 @@ struct PresetEditorView: View {
                 }
                 // Touchpad calibration button - only visible when a
                 // touchpad-capable controller (DualSense / DS4) is connected.
-                if hasTouchpadCapableController {
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            showingTouchpadCalibration = true
-                        } label: {
-                            Label("Calibrate Touchpad", systemImage: "rectangle.and.hand.point.up.left.fill")
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        .help("Calibrate the touchpad surface so swipes feel uniform")
-                    }
-                }
-                // Motion calibration button - visible when at least one
-                // motion-capable controller is connected. Mirrors the
-                // touchpad calibration button so editing a motion preset
-                // can reach calibration in one click.
-                if hasMotionCapableController {
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            showingMotionCalibration = true
-                        } label: {
-                            Label("Calibrate Motion", systemImage: "gyroscope")
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        .help("Set the resting zero for the controller's gyro and accelerometer")
-                    }
-                    // Quick zero gyro: lives right next to the Motion
-                    // calibration button so users see the relationship
-                    // (one is a multi-second still-hold capture; this
-                    // one is a one-frame snapshot for fast re-zeroing
-                    // when the controller is already at rest).
-                    ToolbarItem(placement: .automatic) {
-                        Button {
-                            quickZeroGyro()
-                        } label: {
-                            Label("Quick Zero", systemImage: "scope")
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        .help("Snapshot current gyro reading as the new zero (place controller flat first)")
-                    }
-                }
+                // Calibrators (touchpad, motion, quick zero, taps) live in the
+                // Options of the rows they tune; nothing on the toolbar.
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Sort All Bindings") {
@@ -360,7 +367,7 @@ struct PresetEditorView: View {
                         }
 
                         Divider()
-                        Menu("Convert Controller Type...") {
+                        Menu("Convert Controller Type…") {
                             ForEach(ControllerType.allCases) { source in
                                 Menu("From \(source.rawValue)") {
                                     ForEach(ControllerType.allCases.filter { $0 != source }) { dest in
@@ -397,6 +404,51 @@ struct PresetEditorView: View {
                     .environmentObject(controllerService)
                     .glassBackground()
             }
+            .sheet(isPresented: $showingTapCalibration) {
+                TapCalibrationView()
+                    .glassBackground()
+            }
+            #if DEBUG
+            // `post inputconfig.debug.editorsheet tap|motion` opens one of
+            // the editor's own sheets, so they can be captured from outside.
+            .onReceive({ () -> NotificationCenter.Publisher in
+                DebugHookRelay.shared.ensure("inputconfig.debug.editorsheet")
+                return NotificationCenter.default.publisher(for: Notification.Name("inputconfig.debug.editorsheet"))
+            }()) { note in
+                switch (note.object as? String) ?? "" {
+                case "tap": showingTapCalibration = true
+                case "motion": showingMotionCalibration = true
+                default: break
+                }
+            }
+            // `post inputconfig.debug.enrichrow <row number>` turns on every
+            // fine-tune on that row of the first group, in memory only, so
+            // the whole Options panel can be captured populated.
+            .onReceive({ () -> NotificationCenter.Publisher in
+                DebugHookRelay.shared.ensure("inputconfig.debug.enrichrow")
+                return NotificationCenter.default.publisher(for: Notification.Name("inputconfig.debug.enrichrow"))
+            }()) { note in
+                guard let n = Int((note.object as? String) ?? ""), !preset.joysticks.isEmpty,
+                      preset.joysticks[0].bindings.indices.contains(n - 1) else { return }
+                var row = preset.joysticks[0].bindings[n - 1]
+                row.turboEnabled = true
+                row.turboRate = 10
+                row.repeatCount = 2
+                row.holdOutputs = [OutputAction(type: .key, keyCode: 41)]
+                row.holdThresholdMs = 400
+                row.doubleTapOutputs = [OutputAction(type: .key, keyCode: 40)]
+                row.doubleTapWindowMs = 300
+                row.macroSteps = [
+                    MacroStep(action: OutputAction(type: .key, keyCode: 227), delayMs: 0, holdMs: 40),
+                    MacroStep(action: OutputAction(type: .key, keyCode: 6), delayMs: 30, holdMs: 40),
+                ]
+                row.hapticEnabled = true
+                row.hapticIntensity = 0.7
+                row.speechEnabled = true
+                row.speechText = "Copied"
+                preset.joysticks[0].bindings[n - 1] = row
+            }
+            #endif
             .alert("Calibrate motion first?",
                    isPresented: $pendingMotionCalibrationOffer) {
                 Button("Calibrate now") {
@@ -405,6 +457,34 @@ struct PresetEditorView: View {
                 Button("Skip", role: .cancel) { }
             } message: {
                 Text("You just scanned a gyroscope input. Without calibration, a still controller will still slowly drift the cursor. Run a 2-second calibration to set the resting zero.")
+            }
+            // Touchpad scan: a press and a tap feel the same under a finger, so
+            // the person picks. Every option is offered; the ones the pad
+            // actually reported are marked.
+            .confirmationDialog(
+                "Touchpad: which one?",
+                isPresented: Binding(get: { pendingTouchpadChoice != nil },
+                                     set: { if !$0 { pendingTouchpadChoice = nil } }),
+                titleVisibility: .visible
+            ) {
+                if let seen = pendingTouchpadChoice {
+                    let options: [InputEvent] = [
+                        InputEvent.button(13),
+                        InputEvent.touchpadGesture(.oneFingerTap),
+                        InputEvent.touchpadGesture(.doubleTap),
+                        InputEvent.touchpadGesture(.twoFingerTap),
+                    ]
+                    ForEach(options, id: \.serialized) { option in
+                        let detected = seen.contains(where: { $0.serialized == option.serialized })
+                        Button(touchpadOptionLabel(option) + (detected ? " (detected)" : "")) {
+                            pendingTouchpadChoice = nil
+                            handleScannedInput(option)
+                        }
+                    }
+                    Button("Cancel", role: .cancel) { pendingTouchpadChoice = nil }
+                }
+            } message: {
+                Text("A press is the pad clicked down; a tap is a finger touching and lifting without a click; a double tap is two of those quickly. Pick the one this row should react to. For a double press, keep the press and turn on Send a different action on a double tap in the row's Options.")
             }
             // Post-scan prompt for axis + touchpad inputs: offer to auto-wire
             // the matching mouse motion, or keep the input raw so the user
@@ -467,6 +547,16 @@ struct PresetEditorView: View {
                         onCancel: {
                             showingScanOverlay = false
                             controllerService.stopScanning()
+                        },
+                        onTouchpadChoice: { candidates in
+                            showingScanOverlay = false
+                            controllerService.stopScanning()
+                            // The chord scan has no ambiguity to resolve.
+                            if scanningModifier, let first = candidates.first {
+                                handleScannedInput(first)
+                            } else {
+                                pendingTouchpadChoice = candidates
+                            }
                         }
                     )
                 }
@@ -477,6 +567,11 @@ struct PresetEditorView: View {
             // already open).
             .onAppear {
                 if let target = pendingJump {
+                    performJump(to: target, using: proxy)
+                }
+            }
+            .onChange(of: finderJump) { _, newValue in
+                if let target = newValue {
                     performJump(to: target, using: proxy)
                 }
             }
@@ -518,6 +613,22 @@ struct PresetEditorView: View {
     /// One-frame variant of the multi-second still-hold capture in
     /// MotionCalibrationView; intended for quick re-zero when the
     /// controller is already at rest.
+    /// After the editor closes, the services go back to holding the
+    /// running preset's regions (or the just-saved preset's, when it is the
+    /// one running), so a preset edited while another runs never leaves its
+    /// zones behind in the engine.
+    private func restoreRunningPresetRegions(savedDraft: Preset? = nil) {
+        if let running = presetStore.presets.first(where: { $0.isActive }) {
+            if let savedDraft, savedDraft.id == running.id {
+                savedDraft.applyRegionsToServices()
+            } else {
+                running.applyRegionsToServices()
+            }
+        } else if let savedDraft {
+            savedDraft.applyRegionsToServices()
+        }
+    }
+
     private func quickZeroGyro() {
         var count = 0
         for controller in controllerService.connectedControllers {
@@ -593,21 +704,15 @@ struct PresetEditorView: View {
     /// row highlight still fires when you press a button on the controller.
     /// Outputs resume automatically when the editor closes.
     private var enginePausedBanner: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "pause.circle.fill")
-                .font(.title3)
+                .font(.callout)
                 .iconTint(.yellow)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Outputs paused while editing")
-                    .font(.subheadline.weight(.semibold))
-                Text("Your active preset is still detecting inputs so binding rows highlight as you press buttons, but the cursor, keystrokes, and MIDI are paused. Outputs resume when you close the editor.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
+            Text("Outputs paused while editing")
+                .font(.callout.weight(.semibold))
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.yellow.opacity(0.15))
@@ -616,6 +721,9 @@ struct PresetEditorView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.yellow.opacity(0.55), lineWidth: 1)
         )
+        .frame(maxWidth: .infinity)
+        .help("Your active preset still detects inputs so rows highlight, but the cursor, keystrokes, and MIDI are paused until you close the editor.")
+        .accessibilityLabel("Outputs paused while editing. Inputs still highlight rows; the cursor, keystrokes, and MIDI resume when you close the editor.")
     }
 
     // MARK: - Header
@@ -624,7 +732,7 @@ struct PresetEditorView: View {
         VStack(spacing: 12) {
             HStack {
                 Text("Name:")
-                    .font(.subheadline)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)
                 TextField("Preset Name", text: $preset.name)
@@ -633,7 +741,7 @@ struct PresetEditorView: View {
             }
             HStack {
                 Text("Tag:")
-                    .font(.subheadline)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)
                 TextField("Tag / Description", text: $preset.tag)
@@ -642,23 +750,23 @@ struct PresetEditorView: View {
             }
             HStack(spacing: 8) {
                 Text("Key:")
-                    .font(.subheadline)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)
                 if let spec = preset.activateHotKey {
                     HotKeyRecorderField(spec: spec) { preset.activateHotKey = $0 }
                     Button("Remove") { preset.activateHotKey = nil }
                         .buttonStyle(.plain)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                     if PresetHotKeyService.conflicts(for: spec, excluding: preset.id,
                                                      in: presetStore.presets) {
                         Label("Another shortcut already uses this", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.orange)
                     } else {
                         Text("Switches to this preset from anywhere. Press it again to stop.")
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                 } else {
@@ -671,7 +779,7 @@ struct PresetEditorView: View {
                     .font(.callout)
                     .foregroundStyle(Color.accentColor)
                     Text("A system-wide key that turns this preset on.")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -819,7 +927,8 @@ struct PresetEditorView: View {
     /// and the scan overlay captured for marketing without a human click.
     static let debugStartScanNotification = Notification.Name("InputConfig.DebugStartScan")
 
-    private func startScan(joystickIndex: Int, bindingIndex: Int) {
+    private func startScan(joystickIndex: Int, bindingIndex: Int, forModifier: Bool = false) {
+        scanningModifier = forModifier
         // Release any keyboard focus from the Name / Tag fields so that
         // pressing keys during scan doesn't accidentally type into them.
         // (The user's intent during a scan is to identify a controller
@@ -832,8 +941,32 @@ struct PresetEditorView: View {
         }
     }
 
+    private func touchpadOptionLabel(_ e: InputEvent) -> String {
+        if e.type == .button { return "Touchpad press (click the pad down)" }
+        switch e.touchpadGestureKind {
+        case .oneFingerTap: return "Touchpad tap (one finger)"
+        case .doubleTap: return "Touchpad double tap"
+        case .twoFingerTap: return "Two-finger tap"
+        default: return e.displayName
+        }
+    }
+
     private func handleScannedInput(_ event: InputEvent) {
         guard let scanning = scanningBinding else { return }
+        if scanningModifier {
+            // Chord control: anything the scanner can see qualifies, since
+            // the engine checks the modifier with the same code as a row
+            // input. The row's own input is left alone.
+            // Scan adds to the chord rather than replacing it, up to three.
+            var row = preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex]
+            row.setModifiers(row.modifiers + [event])
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex] = row
+            showingScanOverlay = false
+            controllerService.stopScanning()
+            scanningBinding = nil
+            scanningModifier = false
+            return
+        }
         // Always record the input on the binding so the row reflects what
         // the user just scanned.
         preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].input = event
@@ -916,7 +1049,12 @@ struct PresetEditorView: View {
                 default:
                     mouseAxis = .horizontal
                 }
-                mouseDirection = (pending.event.axisDirection == .negative) ? .negative : .positive
+                // Yaw is straight (a positive gyro Y rate is a turn to the
+                // right); pitch is crossed (a positive gyro X rate is nose
+                // up, screen Y grows downward). See MotionChannel.
+                let crossed = (pending.event.motionChannel == .gyroX || pending.event.motionChannel == .pitchAngle)
+                let inputPositive = pending.event.axisDirection != .negative
+                mouseDirection = (inputPositive != crossed) ? .positive : .negative
             default:
                 return
             }

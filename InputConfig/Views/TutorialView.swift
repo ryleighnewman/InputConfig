@@ -5,7 +5,7 @@ import AppKit
 
 /// Identifier used to tag a UI element so the tutorial can highlight it.
 /// Each step references one of these by string id; ContentView attaches
-/// `.spotlightAnchor("...")` to the matching element and the overlay reads
+/// `.spotlightAnchor("…")` to the matching element and the overlay reads
 /// the global frame from a PreferenceKey.
 enum SpotlightID {
     static let sidebar          = "sidebar"
@@ -617,9 +617,10 @@ struct TutorialDemoView: View {
 }
 
 private struct AnalogStickDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let x = CGFloat(cos(t * 1.5))
             let y = CGFloat(sin(t * 1.5))
@@ -653,9 +654,10 @@ private struct AnalogStickDemo: View {
 }
 
 private struct PressureTriggerDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let v = CGFloat(abs(sin(t * 1.2)))
             HStack(spacing: 14) {
@@ -690,9 +692,10 @@ private struct PressureTriggerDemo: View {
 }
 
 private struct InlineGyroDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let yaw   = Float(sin(t / 3.5 * 2 * .pi))
             let pitch = Float(sin(t / 2.2 * 2 * .pi))
@@ -720,9 +723,10 @@ private struct InlineGyroDemo: View {
 }
 
 private struct LightBarDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let hue = (ctx.date.timeIntervalSinceReferenceDate / 4)
                 .truncatingRemainder(dividingBy: 1)
             let color = Color(hue: hue, saturation: 0.9, brightness: 1)
@@ -749,10 +753,11 @@ private struct LightBarDemo: View {
 }
 
 private struct MacroChainDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let keys = ["⌘", "C", "⌥", "Tab"]
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let active = Int(t * 1.5) % keys.count
             HStack(spacing: 14) {
@@ -783,9 +788,10 @@ private struct MacroChainDemo: View {
 }
 
 private struct ButtonMappingDemo: View {
+    @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || AppA11y.reduceMotion)) { ctx in
+        TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let pressed = sin(t * 2) > 0
             HStack(spacing: 12) {

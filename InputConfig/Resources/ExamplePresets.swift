@@ -44,6 +44,11 @@ struct ExamplePresets {
         "Media Controller":              GroupName.desktop,
         "Presentation Remote":           GroupName.desktop,
         "Anki":                          GroupName.desktop,
+        "Access Controller":             GroupName.desktop,
+        "Keyboard Deck":                 GroupName.desktop,
+        "Trackpad & Mouse":              GroupName.desktop,
+        "Modifier Holds":                GroupName.desktop,
+        "Double Click Deck":             GroupName.desktop,
 
         "FPS (PS5 DualSense)":           GroupName.firstPerson,
         "FPS (Xbox)":                    GroupName.firstPerson,
@@ -70,8 +75,14 @@ struct ExamplePresets {
         "Gyro Aim":               GroupName.showcase,
         "Motion Cursor":          GroupName.showcase,
         "Toggle Mode":            GroupName.showcase,
+        "One-Stick Driving":      GroupName.showcase,
         "Stacked Outputs":        GroupName.showcase,
         "Tap the Mac":            GroupName.showcase,
+        "Touchpad Zones":         GroupName.showcase,
+        "Cursor Regions":         GroupName.showcase,
+        "Hold & Double-Tap":      GroupName.showcase,
+        "Keyboard & Mouse Input": GroupName.showcase,
+        "Shortcuts & Apps":       GroupName.showcase,
         "MIDI: CC Dials":                   GroupName.midi,
     ]
 
@@ -109,10 +120,523 @@ struct ExamplePresets {
         GroupName.showcase:    "teal",
     ]
 
+    // MARK: - Notes for the shipped presets
+
+    /// The Notes text for each shipped preset, by name: what the layout does,
+    /// button by button, and any Mac setting it depends on. Applied when a
+    /// preset is seeded and, once, to installs whose copy has empty notes.
+    static let presetNotes: [String: String] = [
+        "Anki": "A flashcard session from the pad. Cross shows the answer and rates Good, Square is Again, Circle is Hard, Triangle is Easy, so one thumb runs a whole review. L1 undoes a mis-rating, R1 replays the audio, Share opens the deck list, Options starts studying, the stick clicks mark and bury a card, and the touchpad press edits it.\n\nThe left stick is the pointer, the right stick scrolls, the triggers click, and the D-pad sends the arrow keys for long cards and lists. Anki's shortcuts are its defaults; if you have changed them in Anki, change the matching row here.",
+        "Modifier Holds": "The right-hand modifier keys, held on their own, run the Mac: hold Right Command for Spotlight (double tap it for Launchpad), hold Right Option to start Dictation, hold Right Shift for Mission Control.\n\nNo row fires on a plain press, so Command, Option, and Shift keep working as modifiers in every shortcut. The hold is 450 ms and the double tap window 300 ms; open a row's Options to change either.",
+        "Double Click Deck": "Double clicks as inputs. Double click a mouse's side button 4 for Mission Control, side button 5 for Launchpad, or the middle button for Spotlight. A single click on each keeps doing what it always did, because a double click is only counted on the second click.\n\nOn a trackpad with tap to click on, a double tap is a double click too.",
+        "Keyboard Deck": "The Mac's own keyboard as an input. F13 opens Mission Control, F14 Spotlight, F15 plays or pauses, F16 opens the screenshot menu, F17 Launchpad, F18 starts dictation, F19 locks the screen.\n\nThose seven keys are on every full-size keyboard and nothing in macOS uses them, so this preset never takes a key away from you: InputConfig listens alongside macOS, it does not replace what a key does. Scan any row and press the key you would rather use. Needs the Accessibility permission the app asks for.",
+        "Trackpad & Mouse": "The Mac's trackpad or mouse as an input. The two side buttons on a mouse go back and forward, the middle click opens Mission Control, and a force click on the trackpad opens Launchpad.\n\nForce Touch is read only while InputConfig is the front window, because macOS gives trackpad force to the front app alone; the buttons work from any app. Watch the Live Visualizer's Mouse and Trackpad template to see each click, scroll, and press as it happens.",
+        "Deadzone Calibration": "A showcase for deadzones. Both sticks move the pointer; the right stick has a wide inner deadzone and an outer limit, the left stick a tight one. Move each and feel the difference, then open Calibrate on a stick row to set your own with the live plot. A clicks.",
+        "Desktop Navigation": "A pointer and the everyday shortcuts, for using the Mac without touching the keyboard. Left stick moves the pointer, right stick scrolls, right trigger clicks, left trigger right-clicks, the D-pad sends the arrow keys.\n\nFace buttons: A selects all, B undoes, X cuts, Y pastes. Bumpers switch apps, Back opens Spotlight, Start is Return. For copy, add a row for Cmd C or change B.\n\nNo Mac settings needed beyond the Accessibility permission the app asks for.",
+        "FPS (8BitDo)": "The first-person layout tuned for 8BitDo pads in A (Apple) mode. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Select is Escape, Start is Tab.\n\nSet the mode switch on the back to A before pairing.",
+        "FPS (PS5 DualSense)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, R2 fires, L2 aims. Cross jumps, Circle crouches with Control, Square reloads, Triangle is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. L3 sprints with Shift, R3 sends V. The touchpad press opens the map with M. Share is Tab, Options is Escape.\n\nThe touchpad can also be a trackpad; see the Touchpad Mouse preset.",
+        "FPS (Switch Pro)": "The same first-person layout with Nintendo button positions: B (bottom) jumps, A (right) is C for crouch, Y (left) reloads, X (top) is slot 1. Left stick moves, right stick looks, ZR fires, ZL aims. L is slot 4, R middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Minus is Tab, Plus is Escape.",
+        "FPS (Xbox)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. LB is slot 4, RB middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints with Shift, right stick click sends E. View is Escape, Menu is Tab.",
+        "Fortnite": "For cloud streams (Xbox Cloud Gaming, GeForce NOW) that do not see the pad. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B crouches, X reloads, Y uses. Bumpers place a wall and a floor, D-pad places stairs and a roof, sets a trap, and opens the map. Left stick click sprints, right stick click edits. Back is the inventory, Start is Escape.",
+        "Haptic Feedback": "A showcase for Vibrate. Each face button types its letter (A, B, C, D) and rumbles, stronger from A to D. Vibrate is an option on every row, with an intensity and a duration, on controllers with rumble.",
+        "MIDI: CC Dials": "The sticks and triggers as soft MIDI controllers on channel 1: left stick X and Y send CC 1 and CC 11, right stick X and Y send CC 74 and CC 71, triggers send CC 7 and CC 10. Use MIDI Learn in any synth or DAW to grab one.",
+        "MIDI: DAW Performance": "A MIDI instrument from the controller, through InputConfig's virtual MIDI port. Face buttons play a C major chord (C, E, G, C), right stick bends pitch and adds modulation, right trigger is volume (CC 7), left trigger is expression (CC 11). D-pad up starts, down stops, right continues the transport.\n\nIn GarageBand or Logic, pick InputConfig as the MIDI input on a software instrument track.",
+        "MIDI: Drum Pad": "Finger drumming from the face buttons on channel 10: kick, snare, closed hat, open hat, with turbo for rolls while held; the triggers hit a low tom and a crash. Each pad vibrates. Point a drum instrument in your DAW at InputConfig's MIDI port.",
+        "MIDI: Knob Deck": "A MIDI controller runs the Mac. CC 7 (a fader) is the Mac's volume, the mod wheel scrolls, CC 71 turned sends the arrow keys, the sustain pedal clicks, pads 36 and 37 send Return and Escape. Pick your MIDI device in the slot's input kind menu.",
+        "MIDI: Media Deck": "A MIDI controller as a media remote. CC 7 is the Mac's volume fader, CC 71 steps volume, CC 74 steps brightness, pads 36 to 41 are play, next, previous, mute, Mission Control, and an app. Pick your MIDI device in the slot's input kind menu.",
+        "MIDI: Transport Control": "A DAW remote over MIDI. A starts, B stops, X continues (MIDI transport messages), the bumpers select patch 1 and patch 2 with program changes, the D-pad nudges CC 7 volume. Map them in your DAW's control surface or MIDI Learn settings.",
+        "Macros & Turbo": "A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. LB sends J. Turbo and macros are options on every row.",
+        "Media Controller": "A remote for Music, Spotify, VLC, the TV app, and YouTube in a browser: it sends the Mac's own media keys, so it works whichever app is playing.\n\nA plays and pauses, B skips forward, X skips back, Y mutes. Bumpers, the D-pad, and the left stick change the volume. Back is Escape for leaving full screen.",
+        "Minecraft": "Java Edition, which has no controller support of its own. Left stick walks (WASD), right stick looks (mouse), right trigger mines and attacks, left trigger places and uses. A jumps, B sneaks, X opens the inventory, Y drops. Bumpers scroll the hotbar, D-pad picks hotbar slots 1 to 4, left stick click sprints, right stick click swaps hands.\n\nIf the camera creeps, raise the deadzone on the right stick rows. Look speed is the Speed value on those rows.",
+        "Motion Cursor": "Point the controller like a laser pointer: tilt it and the pointer follows the tilt, so tilting back to level puts the pointer back where it started. Works on the DualSense, DualShock 4, Switch Pro Controller, and Joy-Cons. A clicks, B right-clicks, Y is Return, right stick scrolls.\n\nRB makes the controller's current tilt the new neutral and puts the pointer in the middle of the screen. Hold LB to move the controller without moving the pointer, the way you lift a mouse off the desk. The gyro zero looks after itself while the controller rests; Calibrate Motion in a row's Options is there if you want to set it by hand.",
+        "Mouse + Scroll": "The plain pointer preset. Left stick moves the pointer, right stick scrolls, D-pad nudges the pointer slowly for small targets. A clicks, B right-clicks, X middle-clicks.\n\nIf the pointer drifts on its own, raise the stick's deadzone on its row (Calibrate opens a live plot). If it feels too fast or too slow, change Speed on the stick rows.",
+        "Presentation Remote": "Keynote, PowerPoint, and Google Slides. A goes to the next slide, B to the previous one, X starts or advances with Space, Y blanks the screen (B in Keynote and PowerPoint). Left stick moves the pointer for a laser-pointer effect, bumpers click. Back is Escape to leave the show, Start sends F5 to start a PowerPoint show.",
+        "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows above only cover the eight sockets: handbrake, horn, boost, reset, gears, camera, and rewind. Change the letters on each row to match the game's own key list.",
+        "Racing Game": "Any racing game that takes keyboard input. Left stick steers with A and D, right trigger is the throttle (W), left trigger the brake (S). A is the handbrake, B shifts up with Shift, X sends E, Y sends R for reset, bumpers send Q and F. Right stick looks around. Back is Escape, Start is Tab.\n\nChange the letters on each row to match the game's own key list; most racers let you rebind.",
+        "Spoken Feedback": "A showcase for Speak. Each face button types its letter and says a phrase out loud. Speak is an option on every row; the voice is chosen in Settings, Accessibility (System voice follows the Mac's Spoken Content setting).",
+        "Stacked Outputs": "A showcase for several outputs on one row, fired together. A presses Space, right-clicks, plays a MIDI note, speaks, and vibrates, all at once. B presses Command and 4 together, which is a stacked shortcut. Add outputs to any row with the plus button; for a sequence with delays, use a macro instead.",
+        "Steam Controller": "Valve's Steam Controller, wired or with its dongle. The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
+        "Access Controller": "The PlayStation Access Controller's PS button is kept by macOS and never reaches an app, so nothing is bound to it; everything here runs from the stick and the sockets. Built for the PlayStation Access Controller with its default button profile: Cross, Circle, Square, Triangle, L1, R1, L2, and R2 on the eight sockets, which the Mac sees as buttons 1 to 8. The stick is the pointer; the sockets click, double click, scroll, and send Return and Space; L2 holds Command so a press with another socket is a shortcut. If you changed the profile in the PlayStation app, Scan each row and press the socket you mean.\n\nIf the pointer drifts, raise the deadzone on the stick rows (Calibrate opens a live plot). Change Speed on those rows if it feels too fast or slow.",
+        "Touchpad Zones": "The DualSense or DualShock 4 touchpad divided into four zones, each a soft button: touch the top-left corner to undo, top-right to redo, bottom-left to copy, bottom-right to paste. Each zone gives a short pulse so you can feel that it landed. The press is still a left click and a two-finger tap is a right click.\n\nThe four zones belong to this preset. Open Calibrate Touchpad in any touchpad row's Options to resize them, rename them, or draw your own; a new zone becomes a Touchpad Region input on any row, and every preset has zones of its own.",
+        "Cursor Regions": "Three corners of the screen are the inputs: put the pointer in the top-left corner for Mission Control, the top-right for Spotlight, the bottom-right for Launchpad. No controller is involved, though a controller moving the pointer fires them just the same.\n\nThe regions belong to this preset. Resize them, move them, or add more in the preset's own region editor, and the same corner can mean something different in another preset.",
+        "Hold & Double-Tap": "One control, three outputs. A / Cross clicks, held it right-clicks, tapped twice it presses Return. B / Circle is Space, held it is Escape. LB is Tab, tapped twice it is Shift Tab.\n\nThe thresholds are in each row's Options: the hold time and the double-tap window. Longer windows suit a hand that moves slowly; shorter ones feel snappier.",
+        "Keyboard & Mouse Input": "The Mac's own keyboard and mouse as inputs, not just as outputs. F13, F14, and F15 run Mission Control, Spotlight, and play / pause; the two side buttons on a mouse go back and forward.\n\nThose keys were chosen because nothing else needs them, so running this preset never takes a key away from you. Scan any row and press the key or button you would rather use.",
+        "Shortcuts & Apps": "Outputs that run something instead of pressing a key: Cross opens Safari, Circle opens inputconfig.com, Square and Triangle are Mission Control and Spotlight, and LB is set to Run Shortcut.\n\nOpen that row's menu to pick one of your own Shortcuts; the list is read from the Shortcuts app. Open App takes an app name, a bundle id, or a path, and Open URL takes anything the Mac has a handler for.",
+        "Gyro Aim": "Aim by tilting: the pointer follows the controller's tilt, up and down and side to side, and the triggers click. Tilting back to level brings the pointer back to where it started.\n\nHold LB to pause the motion while you swing the controller back to a comfortable angle, the way you lift a mouse off the desk, then let go and carry on. Press RB to make the current tilt the new neutral and centre the pointer. Both are App Action outputs, so you can move them to any control. Speed on the motion rows sets how far the pointer travels per degree of tilt.",
+        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Works on M2 and later, and on M1 Pro, Max, and Ultra.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
+        "Toggle Mode": "A showcase for Toggle: press once to hold a key, press again to release it. A holds Shift, B holds Command, X holds F10 (mute in many apps), Y holds W for auto-run in games. The row vibrates when it latches. Toggle is an option on every row.",
+        "Touchpad Mouse": "The DualSense or DualShock 4 touchpad as a trackpad. One finger moves the pointer, a second finger scrolls, pressing the touchpad clicks. Cross clicks too, Circle right-clicks.\n\nTouchpad rows have their own sensitivity; open Calibrate on a touchpad row to see your finger live and set the speed. Regions and swipe gestures can be added from the touchpad row's options.",
+        "Variable Sensitivity": "A showcase for response curves. Both sticks move the pointer; the right stick uses a smooth curve (slow near centre, fast at the edge) and the left an aggressive one. Push each the same amount and compare. The curve is on every stick row under its options. A clicks.",
+        "Web Browsing": "Safari, Chrome, Firefox: pointer on the left stick, scroll on the right, click on the right trigger. B right-clicks. X closes the tab, Y opens a new one, the bumpers go back and forward, the triggers switch tabs, Back jumps to the address bar. Start switches apps.\n\nWith the address bar focused, Dictation (System Settings, Keyboard) is the easiest way to type a search from the sofa; add a Dictation row to a spare button.",
+    ]
+
+    /// The per-row note for each shipped preset, by preset name and the
+    /// row's serialized input ("btn 0", "axi 2 +", "hat 0 U", "mtn gyroY +",
+    /// "tpd 0 x +"). Only rows with no note get one.
+    static let rowNotes: [String: [String: String]] = [
+        "Deadzone Calibration": [
+            "axi 0 +": "Pointer right, tight deadzone",
+            "axi 0 -": "Pointer left, tight deadzone",
+            "axi 1 +": "Pointer down, tight deadzone",
+            "axi 1 -": "Pointer up, tight deadzone",
+            "axi 2 +": "Pointer right, wide deadzone and outer limit",
+            "axi 2 -": "Pointer left, wide deadzone and outer limit",
+            "axi 3 +": "Pointer down, wide deadzone and outer limit",
+            "axi 3 -": "Pointer up, wide deadzone and outer limit",
+            "btn 0": "Left click",
+        ],
+        "Desktop Navigation": [
+            "axi 0 +": "Pointer right",
+            "axi 0 -": "Pointer left",
+            "axi 1 +": "Pointer down",
+            "axi 1 -": "Pointer up",
+            "axi 2 +": "Scroll right",
+            "axi 2 -": "Scroll left",
+            "axi 3 +": "Scroll down",
+            "axi 3 -": "Scroll up",
+            "axi 4 +": "Right click",
+            "axi 5 +": "Left click",
+            "btn 0": "Select all (Cmd A)",
+            "btn 1": "Undo (Cmd Z)",
+            "btn 2": "Cut (Cmd X)",
+            "btn 3": "Paste (Cmd V)",
+            "btn 4": "Next app (Cmd Tab)",
+            "btn 5": "Previous app (Cmd Shift Tab)",
+            "btn 8": "Spotlight (Cmd Space)",
+            "btn 9": "Return",
+            "hat 0 D": "Down arrow",
+            "hat 0 L": "Left arrow",
+            "hat 0 R": "Right arrow",
+            "hat 0 U": "Up arrow",
+        ],
+        "FPS (8BitDo)": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Aim down sights (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (C)",
+            "btn 11": "Sprint (Shift, held)",
+            "btn 12": "Use (E)",
+            "btn 2": "Reload (R)",
+            "btn 3": "Weapon slot 1",
+            "btn 4": "Weapon slot 4",
+            "btn 5": "Middle click",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Scoreboard (Tab)",
+            "hat 0 D": "Previous weapon (scroll down)",
+            "hat 0 L": "Q",
+            "hat 0 R": "Use (F)",
+            "hat 0 U": "Next weapon (scroll up)",
+        ],
+        "FPS (PS5 DualSense)": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Aim down sights (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (Control)",
+            "btn 11": "Sprint (Shift, held)",
+            "btn 12": "V",
+            "btn 13": "Map (M)",
+            "btn 2": "Reload (R)",
+            "btn 3": "Weapon slot 1",
+            "btn 4": "Weapon slot 4",
+            "btn 5": "Middle click",
+            "btn 8": "Scoreboard (Tab)",
+            "btn 9": "Menu (Escape)",
+            "hat 0 D": "Previous weapon (scroll down)",
+            "hat 0 L": "Q",
+            "hat 0 R": "Use (F)",
+            "hat 0 U": "Next weapon (scroll up)",
+        ],
+        "FPS (Switch Pro)": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Aim down sights (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (C)",
+            "btn 11": "Sprint (Shift, held)",
+            "btn 12": "Use (E)",
+            "btn 2": "Reload (R)",
+            "btn 3": "Weapon slot 1",
+            "btn 4": "Weapon slot 4",
+            "btn 5": "Middle click",
+            "btn 8": "Scoreboard (Tab)",
+            "btn 9": "Menu (Escape)",
+            "hat 0 D": "Previous weapon (scroll down)",
+            "hat 0 L": "Q",
+            "hat 0 R": "Use (F)",
+            "hat 0 U": "Next weapon (scroll up)",
+        ],
+        "FPS (Xbox)": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Aim down sights (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (C)",
+            "btn 11": "Sprint (Shift, held)",
+            "btn 12": "Use (E)",
+            "btn 2": "Reload (R)",
+            "btn 3": "Weapon slot 1",
+            "btn 4": "Weapon slot 4",
+            "btn 5": "Middle click",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Scoreboard (Tab)",
+            "hat 0 D": "Previous weapon (scroll down)",
+            "hat 0 L": "Q",
+            "hat 0 R": "Use (F)",
+            "hat 0 U": "Next weapon (scroll up)",
+        ],
+        "Fortnite": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Aim (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (Control)",
+            "btn 11": "Sprint (Shift, held)",
+            "btn 12": "Edit (G)",
+            "btn 2": "Reload (R)",
+            "btn 3": "Use (E)",
+            "btn 4": "Wall (Z)",
+            "btn 5": "Floor (X)",
+            "btn 8": "Inventory (Tab)",
+            "btn 9": "Menu (Escape)",
+            "hat 0 D": "Trap (V)",
+            "hat 0 L": "Roof (1)",
+            "hat 0 R": "Map (M)",
+            "hat 0 U": "Stairs (C)",
+        ],
+        "Gyro Aim": [
+            "axi 4 +": "Aim (right click)",
+            "axi 5 +": "Fire (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Crouch (Control)",
+            "mtn gyroX +": "Tilt up: look up",
+            "mtn gyroX -": "Tilt down: look down",
+            "mtn gyroY +": "Turn right: look right",
+            "mtn gyroY -": "Turn left: look left",
+        ],
+        "Haptic Feedback": [
+            "btn 0": "Type A, light rumble",
+            "btn 1": "Type B, medium rumble",
+            "btn 2": "Type C, strong rumble",
+            "btn 3": "Type D, strongest rumble",
+        ],
+        "MIDI: CC Dials": [
+            "axi 0 +": "CC 1, modulation",
+            "axi 0 -": "CC 1, modulation",
+            "axi 1 +": "CC 11, expression",
+            "axi 2 +": "CC 74, filter cutoff",
+            "axi 3 +": "CC 71, resonance",
+            "axi 4 +": "CC 10, pan",
+            "axi 5 +": "CC 7, volume",
+        ],
+        "MIDI: DAW Performance": [
+            "axi 2 +": "Pitch bend up",
+            "axi 2 -": "Pitch bend down",
+            "axi 3 +": "Modulation (CC 1)",
+            "axi 4 +": "Expression (CC 11)",
+            "axi 5 +": "Volume (CC 7)",
+            "btn 0": "Note C",
+            "btn 1": "Note E",
+            "btn 2": "Note G",
+            "btn 3": "Note C (octave up)",
+            "hat 0 D": "Transport stop",
+            "hat 0 R": "Transport continue",
+            "hat 0 U": "Transport start",
+        ],
+        "MIDI: Drum Pad": [
+            "axi 4 +": "Low tom (note 41)",
+            "axi 5 +": "Crash cymbal (note 49)",
+            "btn 0": "Kick (note 36), turbo for rolls",
+            "btn 1": "Snare (note 38), turbo for rolls",
+            "btn 2": "Closed hi-hat (note 42), turbo for rolls",
+            "btn 3": "Open hi-hat (note 46), turbo for rolls",
+        ],
+        "MIDI: Transport Control": [
+            "btn 0": "Transport start",
+            "btn 1": "Transport stop",
+            "btn 2": "Transport continue",
+            "btn 4": "Patch 1 (program change 0)",
+            "btn 5": "Patch 2 (program change 1)",
+            "hat 0 D": "Volume down (CC 7)",
+            "hat 0 U": "Volume up (CC 7)",
+        ],
+        "Macros & Turbo": [
+            "btn 0": "Macro: copy, switch app, paste",
+            "btn 3": "Macro: down three items, then Return",
+            "btn 4": "J",
+            "btn 5": "Space, repeated while held (turbo)",
+        ],
+        "Media Controller": [
+            "axi 0 +": "Next track",
+            "axi 0 -": "Previous track",
+            "axi 1 +": "Volume down",
+            "axi 1 -": "Volume up",
+            "btn 0": "Play or pause",
+            "btn 1": "Next track",
+            "btn 2": "Previous track",
+            "btn 3": "Mute",
+            "btn 4": "Volume down",
+            "btn 5": "Volume up",
+            "btn 8": "Escape (leave full screen)",
+            "hat 0 D": "Volume down",
+            "hat 0 L": "Previous track",
+            "hat 0 R": "Next track",
+            "hat 0 U": "Volume up",
+        ],
+        "Minecraft": [
+            "axi 0 +": "Strafe right (D)",
+            "axi 0 -": "Strafe left (A)",
+            "axi 1 +": "Walk back (S)",
+            "axi 1 -": "Walk forward (W)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Place or use (right click)",
+            "axi 5 +": "Mine or attack (left click)",
+            "btn 0": "Jump (Space)",
+            "btn 1": "Sneak (Shift, held)",
+            "btn 11": "Sprint (Control, held)",
+            "btn 12": "Swap hands (F)",
+            "btn 2": "Inventory (E)",
+            "btn 3": "Drop item (Q)",
+            "btn 4": "Previous hotbar slot (scroll)",
+            "btn 5": "Next hotbar slot (scroll)",
+            "btn 8": "Escape (menu)",
+            "btn 9": "Player list (Tab)",
+            "hat 0 D": "Hotbar slot 3",
+            "hat 0 L": "Hotbar slot 4",
+            "hat 0 R": "Hotbar slot 2",
+            "hat 0 U": "Hotbar slot 1",
+        ],
+        "Motion Cursor": [
+            "axi 3 +": "Scroll up",
+            "axi 3 -": "Scroll down",
+            "btn 0": "Left click",
+            "btn 1": "Right click",
+            "btn 3": "Return",
+            "btn 4": "Hold to pause motion",
+            "btn 5": "Re-zero gyro, center pointer",
+            "mtn gyroX +": "Tilt up: pointer up",
+            "mtn gyroX -": "Tilt down: pointer down",
+            "mtn gyroY +": "Turn right: pointer right",
+            "mtn gyroY -": "Turn left: pointer left",
+        ],
+        "Mouse + Scroll": [
+            "axi 0 +": "Pointer right",
+            "axi 0 -": "Pointer left",
+            "axi 1 +": "Pointer down",
+            "axi 1 -": "Pointer up",
+            "axi 2 +": "Scroll right",
+            "axi 2 -": "Scroll left",
+            "axi 3 +": "Scroll down",
+            "axi 3 -": "Scroll up",
+            "btn 0": "Left click",
+            "btn 1": "Right click",
+            "btn 2": "Middle click",
+            "hat 0 D": "Nudge pointer down (slow)",
+            "hat 0 L": "Nudge pointer left (slow)",
+            "hat 0 R": "Nudge pointer right (slow)",
+            "hat 0 U": "Nudge pointer up (slow)",
+        ],
+        "Presentation Remote": [
+            "axi 0 +": "Pointer right",
+            "axi 0 -": "Pointer left",
+            "axi 1 +": "Pointer down",
+            "axi 1 -": "Pointer up",
+            "btn 0": "Next slide (Right arrow)",
+            "btn 1": "Previous slide (Left arrow)",
+            "btn 2": "Start or advance (Space)",
+            "btn 3": "Blank the screen (B)",
+            "btn 4": "Left click",
+            "btn 5": "Right click",
+            "btn 8": "Leave the show (Escape)",
+            "btn 9": "Start PowerPoint show (F5)",
+        ],
+        "Racing Game": [
+            "axi 0 +": "Steer right (D)",
+            "axi 0 -": "Steer left (A)",
+            "axi 2 +": "Look right",
+            "axi 2 -": "Look left",
+            "axi 3 +": "Look down",
+            "axi 3 -": "Look up",
+            "axi 4 +": "Brake (S)",
+            "axi 5 +": "Throttle (W)",
+            "btn 0": "Handbrake (Space)",
+            "btn 1": "Shift up (Shift)",
+            "btn 2": "E",
+            "btn 3": "Reset car (R)",
+            "btn 4": "Q",
+            "btn 5": "F",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Tab",
+        ],
+        "Spoken Feedback": [
+            "btn 0": "Type A and speak",
+            "btn 1": "Type B and speak",
+            "btn 2": "Type C and speak",
+            "btn 3": "Type D and speak",
+        ],
+        "Stacked Outputs": [
+            "btn 0": "Space, right click, a MIDI note, speech, and a rumble, together",
+            "btn 1": "Command 4 (two keys at once)",
+        ],
+        "Steam Controller": [
+            "axi 2 +": "Right trackpad: pointer right",
+            "axi 2 -": "Right trackpad: pointer left",
+            "axi 3 +": "Right trackpad: pointer down",
+            "axi 3 -": "Right trackpad: pointer up",
+            "axi 4 +": "Left trigger: right click",
+            "axi 5 +": "Right trigger: left click",
+            "btn 13": "Steam button: Spotlight (Cmd Space)",
+            "btn 15": "Left grip: Shift (held)",
+            "btn 16": "Right grip: Option (held)",
+            "btn 18": "Right trackpad press: left click",
+            "btn 2": "Right bumper: Cmd ] (forward)",
+            "btn 3": "Left bumper: Cmd [ (back)",
+            "btn 4": "Y: Space",
+            "btn 5": "B: Escape",
+            "btn 6": "X: Tab",
+            "btn 7": "A: Return",
+        ],
+        "Toggle Mode": [
+            "btn 0": "Toggle Shift held",
+            "btn 1": "Toggle Command held",
+            "btn 2": "Toggle F10 (mute in many apps)",
+            "btn 3": "Toggle W held (auto-run)",
+        ],
+        "Touchpad Mouse": [
+            "btn 0": "Left click",
+            "btn 1": "Right click",
+            "btn 13": "Touchpad press: left click",
+            "tpg oneFingerTap": "Touchpad tap: left click",
+            "tpg twoFingerTap": "Two-finger tap: right click",
+            "tpd 0 x +": "Finger 1 right: pointer right",
+            "tpd 0 x -": "Finger 1 left: pointer left",
+            "tpd 0 y +": "Finger 1 down: pointer down",
+            "tpd 0 y -": "Finger 1 up: pointer up",
+            "tpd 1 y +": "Finger 2 down: scroll down",
+            "tpd 1 y -": "Finger 2 up: scroll up",
+        ],
+        "Variable Sensitivity": [
+            "axi 0 +": "Pointer right, aggressive curve",
+            "axi 0 -": "Pointer left, aggressive curve",
+            "axi 1 +": "Pointer down, aggressive curve",
+            "axi 1 -": "Pointer up, aggressive curve",
+            "axi 2 +": "Pointer right, smooth curve",
+            "axi 2 -": "Pointer left, smooth curve",
+            "axi 3 +": "Pointer down, smooth curve",
+            "axi 3 -": "Pointer up, smooth curve",
+            "btn 0": "Left click",
+        ],
+        "Web Browsing": [
+            "axi 0 +": "Pointer right",
+            "axi 0 -": "Pointer left",
+            "axi 1 +": "Pointer down",
+            "axi 1 -": "Pointer up",
+            "axi 2 +": "Scroll right",
+            "axi 2 -": "Scroll left",
+            "axi 3 +": "Scroll down",
+            "axi 3 -": "Scroll up",
+            "axi 4 +": "Previous tab (Cmd Shift [)",
+            "axi 5 +": "Next tab (Cmd Shift ])",
+            "btn 0": "Left click",
+            "btn 1": "Right click",
+            "btn 2": "Close tab (Cmd W)",
+            "btn 3": "New tab (Cmd T)",
+            "btn 4": "Back (Cmd [)",
+            "btn 5": "Forward (Cmd ])",
+            "btn 8": "Address bar (Cmd L)",
+            "btn 9": "Switch app (Cmd Tab)",
+        ],
+    ]
+
+    /// Fill in the shipped notes wherever the preset has none: the Notes
+    /// field, and every row whose note is empty. Text the user has written
+    /// is never replaced. Returns whether anything changed.
+    @discardableResult
+    static func fillShippedNotes(_ preset: inout Preset) -> Bool {
+        var changed = false
+        if preset.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let text = presetNotes[preset.name] {
+            preset.notes = text
+            changed = true
+        }
+        if let rows = rowNotes[preset.name] {
+            for j in preset.joysticks.indices {
+                for b in preset.joysticks[j].bindings.indices
+                where (preset.joysticks[j].bindings[b].note ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let key = preset.joysticks[j].bindings[b].input.serialized
+                    if let note = rows[key] {
+                        preset.joysticks[j].bindings[b].note = note
+                        changed = true
+                    }
+                }
+            }
+        }
+        return changed
+    }
+
+    /// Puts a shipped preset's rows under section headings (Left stick,
+    /// Buttons, D-pad...) when none of them has a section yet, so the editor
+    /// shows it organised. A preset whose rows all belong to one section is
+    /// left flat: one heading over everything says nothing. Returns true when
+    /// anything changed.
+    static func fillShippedSections(_ preset: inout Preset) -> Bool {
+        var changed = false
+        for j in preset.joysticks.indices {
+            let rows = preset.joysticks[j].bindings
+            guard !rows.isEmpty, rows.allSatisfy({ ($0.section ?? "").isEmpty }) else { continue }
+            let grouped = ControllerScaffold.grouped(rows)
+            let sections = Set(grouped.compactMap(\.section))
+            guard sections.count > 1 else { continue }
+            preset.joysticks[j].bindings = grouped
+            changed = true
+        }
+        return changed
+    }
+
     /// Per-feature lookup so the welcome demos can jump to the matching
     /// showcase preset. Key is a stable identifier; value is the preset name.
     static let demoPresetNames: [String: String] = [
         "chassis_tap":          "Tap the Mac",
+        "touchpad_regions":     "Touchpad Zones",
         "variable_sensitivity": "Variable Sensitivity",
         "deadzone":             "Deadzone Calibration",
         "haptic":               "Haptic Feedback",
@@ -126,7 +650,15 @@ struct ExamplePresets {
         "auto_launch":          "Minecraft",
         "midi_cc":              "MIDI: CC Dials",
         "midi_input":           "MIDI: Knob Deck",
-        "system_control":       "MIDI: Media Deck",
+        "system_control":       "Media Controller",
+        "siri_shortcuts":       "Shortcuts & Apps",
+        "input_remap":          "Keyboard Deck",
+        "mac_trackpad":         "Trackpad & Mouse",
+        "modifier_holds":       "Modifier Holds",
+        "hold_double_tap":      "Hold & Double-Tap",
+        "app_auto_switch":      "Anki",
+        "cursor_regions":       "Cursor Regions",
+        "light_bar":            "FPS (PS5 DualSense)",
         "keyboard_mouse":       "Desktop Navigation",
     ]
 
@@ -160,6 +692,11 @@ struct ExamplePresets {
             mediaController,
             presentationRemote,
             anki,
+            accessController,
+            keyboardDeck,
+            trackpadAndMouse,
+            modifierHolds,
+            doubleClickDeck,
 
             // Gaming - First-Person (one per controller family)
             fpsDualSense,
@@ -193,6 +730,12 @@ struct ExamplePresets {
             showcaseStackedOutputs,
             showcaseMidiCC,
             showcaseChassisTap,
+            showcaseTouchpadZones,
+            showcaseCursorRegions,
+            showcaseHoldDoubleTap,
+            showcaseKeyboardMouseInput,
+            showcaseShortcutsAndApps,
+            oneStickDriving,
         ]
     }
 
@@ -254,10 +797,10 @@ struct ExamplePresets {
                     "btn 1": ["mbt 1"],
                     "btn 2": ["key 227", "key 26"],
                     "btn 3": ["key 227", "key 23"],
-                    "btn 4": ["key 227", "key 54"],
-                    "btn 5": ["key 227", "key 55"],
-                    "axi 4 +": ["key 227", "key 55"],
-                    "axi 5 +": ["key 227", "key 225", "key 55"],
+                    "btn 4": ["key 227", "key 47"],
+                    "btn 5": ["key 227", "key 48"],
+                    "axi 4 +": ["key 227", "key 225", "key 47"],
+                    "axi 5 +": ["key 227", "key 225", "key 48"],
                     "btn 8": ["key 227", "key 15"],
                     "btn 9": ["key 227", "key 43"]
                 }
@@ -303,20 +846,20 @@ struct ExamplePresets {
             "joysticks": [{
                 "tag": "Face buttons control playback, D-pad controls volume",
                 "binds": {
-                    "btn 0": ["key 232"],
-                    "btn 1": ["key 233"],
-                    "btn 2": ["key 234"],
-                    "btn 3": ["key 235"],
-                    "btn 4": ["key 237"],
-                    "btn 5": ["key 238"],
-                    "hat 0 U": ["key 128"],
-                    "hat 0 D": ["key 129"],
-                    "hat 0 L": ["key 130"],
-                    "hat 0 R": ["key 131"],
-                    "axi 1 -": ["key 128"],
-                    "axi 1 +": ["key 129"],
-                    "axi 0 -": ["key 130"],
-                    "axi 0 +": ["key 131"],
+                    "btn 0": ["sys ply"],
+                    "btn 1": ["sys nxt"],
+                    "btn 2": ["sys prv"],
+                    "btn 3": ["sys mut"],
+                    "btn 4": ["sys vdn"],
+                    "btn 5": ["sys vup"],
+                    "hat 0 U": ["sys vup"],
+                    "hat 0 D": ["sys vdn"],
+                    "hat 0 L": ["sys prv"],
+                    "hat 0 R": ["sys nxt"],
+                    "axi 1 -": ["sys vup"],
+                    "axi 1 +": ["sys vdn"],
+                    "axi 0 -": ["sys prv"],
+                    "axi 0 +": ["sys nxt"],
                     "btn 8": ["key 41"]
                 }
             }]
@@ -393,16 +936,10 @@ struct ExamplePresets {
         ].compactMap { $0 }
         var preset = makePreset(
             name: "Anki",
-            tag: "Flashcard review: rate, undo, replay audio, mark, bury",
-            joystickTag: "Face buttons rate the card (bottom = show answer / Good, left = Again, right = Hard, top = Easy). Bumpers undo and replay audio, stick clicks mark and bury, D-pad scrolls the card, sticks drive the pointer and scroll, triggers click.",
+            tag: "Flashcard review: rate, undo, replay audio",
+            joystickTag: "Face buttons rate the card, bumpers undo and replay, sticks drive the pointer",
             bindings: bindings)
-        preset.notes = """
-        Anki from a controller. The bottom face button shows the answer and then rates Good, so it can run a whole session by itself; the other three are Again, Hard, and Easy. Every row's note names its Anki action.
-
-        These are Anki's default shortcuts. If you changed the answer keys in Anki's Preferences (Review) or turned off "Spacebar (or enter) also answers card", use Scan to remap those rows.
-
-        Activating the preset opens Anki. Turn on automatic preset switching in Settings and it also takes over by itself whenever Anki comes to the front.
-        """
+        preset.notes = "Anki's default shortcuts. If you changed them in Anki's Preferences, Scan the row and press the new key."
         var automation = PresetAutomation()
         automation.launchAppPath = "/Applications/Anki.app"
         // Current Anki builds identify as net.ankiweb.anki; older releases
@@ -415,10 +952,109 @@ struct ExamplePresets {
         return preset
     }
 
+    /// PlayStation Access Controller: one stick and eight button sockets,
+    /// with the PS and Options buttons in the middle. Its default profile
+    /// puts Cross, Circle, Square, Triangle, L1, R1, L2, and R2 on the eight
+    /// sockets, which the Mac sees as buttons 0 to 7. The whole desktop from
+    /// one hand: the stick is the pointer, the sockets click, scroll, and hit
+    /// the keys that matter most.
+    static var accessController: Preset {
+        var bindings: [BindingModel] = [
+            bind("axi 0 -", ["mou 0 - 18"],  "Stick left: pointer left"),
+            bind("axi 0 +", ["mou 0 + 18"],  "Stick right: pointer right"),
+            bind("axi 1 -", ["mou 1 - 18"],  "Stick up: pointer up"),
+            bind("axi 1 +", ["mou 1 + 18"],  "Stick down: pointer down"),
+            bind("btn 0",   ["mbt 0"],       "Socket 1 (Cross): left click"),
+            bind("btn 1",   ["mbt 1"],       "Socket 2 (Circle): right click"),
+            bind("btn 2",   ["mbt 0"],       "Socket 3 (Square): double click"),
+            bind("btn 3",   ["key 40"],      "Socket 4 (Triangle): Return"),
+            bind("btn 4",   ["whe 1 - 5"],   "Socket 5 (L1): scroll up while held"),
+            bind("btn 5",   ["whe 1 + 5"],   "Socket 6 (R1): scroll down while held"),
+            bind("btn 6",   ["key 227"],     "Socket 7 (L2): hold Command, for Command-click and shortcuts"),
+            bind("btn 7",   ["key 44"],      "Socket 8 (R2): Space"),
+            // The centre buttons: which index a socket sends depends on the
+            // on-device profile, so both are bound. The PS button itself is
+            // kept by macOS and never reaches an app, so nothing is bound to
+            // it; use a socket for anything you need on the Mac.
+            bind("btn 8",   ["sys mct"],     "Options: Mission Control"),
+            bind("btn 9",   ["sys spt"],     "Menu socket: Spotlight"),
+        ].compactMap { $0 }
+        // Square is a double click: one press, two clicks.
+        if let i = bindings.firstIndex(where: { $0.input.serialized == "btn 2" }) {
+            bindings[i].repeatCount = 2
+            bindings[i].repeatDelayMs = 60
+        }
+        // Its one stick is just "Stick", not a left one.
+        for i in bindings.indices {
+            switch bindings[i].input.type {
+            case .axis: bindings[i].section = "Stick"
+            case .button: bindings[i].section = bindings[i].input.index >= 8 ? "Menu buttons" : "Buttons"
+            default: break
+            }
+        }
+        return makePreset(
+            name: "Access Controller",
+            tag: "One stick and eight buttons for the whole desktop",
+            joystickTag: "Stick = pointer; sockets click, scroll, Return, Space, and hold Command; Options and PS open Mission Control and Spotlight",
+            bindings: bindings)
+    }
+
+    /// One-Stick Driving: the whole car from a single joystick. The stick is
+    /// owned by the preset's Drive block (the One-Stick Driving section in
+    /// the editor), which steers, accelerates, brakes, and shifts from it,
+    /// so no rows are bound to the stick axes. The eight sockets of a
+    /// PlayStation Access Controller (or any eight buttons) take the rest.
+    static var oneStickDriving: Preset {
+        var bindings: [BindingModel] = [
+            bind("btn 0", ["key 44"],  "Socket 1 (Cross): handbrake (Space)"),
+            bind("btn 1", ["key 11"],  "Socket 2 (Circle): horn (H)"),
+            bind("btn 2", ["key 225"], "Socket 3 (Square): boost (Shift)"),
+            bind("btn 3", ["key 21"],  "Socket 4 (Triangle): reset the car (R)"),
+            bind("btn 4", ["key 20"],  "Socket 5 (L1): shift down (Q)"),
+            bind("btn 5", ["key 8"],   "Socket 6 (R1): shift up (E)"),
+            bind("btn 6", ["key 6"],   "Socket 7 (L2): change camera (C)"),
+            bind("btn 7", ["key 43"],  "Socket 8 (R2): rewind / flashback (Tab)"),
+            bind("btn 8", ["key 41"],  "Options: pause (Escape)"),
+            bind("btn 9", ["key 40"],  "Menu socket: confirm (Return)"),
+        ].compactMap { $0 }
+        for i in bindings.indices {
+            bindings[i].section = bindings[i].input.index >= 8 ? "Menu buttons" : "Sockets"
+        }
+        var preset = makePreset(
+            name: "One-Stick Driving",
+            tag: "Steer, gas, brake, and reverse from one joystick",
+            joystickTag: "The stick drives (see the One-Stick Driving section); sockets are handbrake, horn, boost, reset, gears, camera, rewind",
+            bindings: bindings)
+        var drive = DriveConfig()
+        drive.enabled = true
+        drive.slot = 0
+        drive.steerAxis = 0
+        drive.throttleAxis = 1
+        // Keys, not mouse: every racer that can be driven from a keyboard
+        // takes A / D for steering, and few take mouse steering.
+        drive.steerMode = .keys
+        drive.steerLeftKey = 4      // A
+        drive.steerRightKey = 7     // D
+        drive.accelKey = 26         // W
+        drive.brakeKey = 22         // S
+        drive.reverseKey = 22       // S again once stopped, as most games treat it
+        drive.deadzone = 0.15
+        drive.steerCurve = 1.4      // gentle near centre, full lock at the edge
+        drive.throttleCurve = 1.3   // fine low-speed control
+        // Let go of the stick and the car slows like a power chair does.
+        drive.coastBrake = true
+        drive.coastBrakeStrength = 0.35
+        drive.reverseGestureEnabled = true
+        drive.reverseTapCount = 2
+        drive.reverseWindowMs = 700
+        preset.driveConfig = drive
+        return preset
+    }
+
     // MARK: - Gaming - First-Person (JSON)
 
     static var fpsDualSense: Preset {
-        parse("""
+        var preset = parse("""
         {
             "name": "FPS (PS5 DualSense)",
             "tag": "PS5 DualSense FPS layout with touchpad as map",
@@ -454,6 +1090,9 @@ struct ExamplePresets {
             }]
         }
         """)
+        // PlayStation blue on the light bar whenever this preset is active.
+        preset.lightBarColor = RGBLightColor(r: 0, g: 112, b: 209)
+        return preset
     }
 
     static var fpsXbox: Preset {
@@ -981,7 +1620,8 @@ struct ExamplePresets {
             name: "Haptic Feedback",
             tag: "Face buttons rumble at four intensities, A through D",
             joystickTag: "Press A/B/X/Y to type the letter and feel the haptic step up",
-            bindings: bindings)
+            bindings: bindings,
+            light: RGBLightColor(r: 255, g: 89, b: 0))
     }
 
     static var showcaseSpokenFeedback: Preset {
@@ -1090,9 +1730,14 @@ struct ExamplePresets {
                          outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 6)]),
             BindingModel(input: .touchpad(finger: 1, axis: .y, direction: .negative),
                          outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 6)]),
-            // Touchpad button = left click. Standard face buttons still work.
+            // Touchpad button = left click, and a tap clicks too, the way a
+            // Mac trackpad does. Two fingers tapped together right-click.
             BindingModel(input: .button(13),
                          outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            BindingModel(input: .touchpadGesture(.oneFingerTap),
+                         outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            BindingModel(input: .touchpadGesture(.twoFingerTap),
+                         outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
             BindingModel(input: .button(0),
                          outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
             BindingModel(input: .button(1),
@@ -1101,7 +1746,232 @@ struct ExamplePresets {
         return makePreset(
             name: "Touchpad Mouse",
             tag: "DualSense / DualShock touchpad drives the mouse cursor",
-            joystickTag: "Finger 1 slides cursor, finger 2 scrolls, click presses left button",
+            joystickTag: "Finger 1 slides the pointer, finger 2 scrolls, a tap or a press clicks, two fingers tapped right-click",
+            bindings: bindings,
+            light: RGBLightColor(r: 0, g: 200, b: 180))
+    }
+
+    /// Showcase: the touchpad carved into four zones, each its own button.
+    /// The zones ship inside the preset with fixed ids.
+    static let touchpadZoneIDs: [(id: UUID, name: String, minX: Double, maxX: Double, minY: Double, maxY: Double, color: Int)] = [
+        (UUID(uuidString: "5A1E0001-0000-4000-8000-000000000001")!, "Undo",  0.00, 0.48, 0.00, 0.48, 0),
+        (UUID(uuidString: "5A1E0001-0000-4000-8000-000000000002")!, "Redo",  0.52, 1.00, 0.00, 0.48, 1),
+        (UUID(uuidString: "5A1E0001-0000-4000-8000-000000000003")!, "Copy",  0.00, 0.48, 0.52, 1.00, 2),
+        (UUID(uuidString: "5A1E0001-0000-4000-8000-000000000004")!, "Paste", 0.52, 1.00, 0.52, 1.00, 3),
+    ]
+
+    static var showcaseTouchpadZones: Preset {
+        let z = touchpadZoneIDs
+        var bindings: [BindingModel] = [
+            BindingModel(input: .touchpadRegion(z[0].id), outputs: [OutputAction(type: .key, keyCode: 227), OutputAction(type: .key, keyCode: 29)]),
+            BindingModel(input: .touchpadRegion(z[1].id), outputs: [OutputAction(type: .key, keyCode: 227), OutputAction(type: .key, keyCode: 225), OutputAction(type: .key, keyCode: 29)]),
+            BindingModel(input: .touchpadRegion(z[2].id), outputs: [OutputAction(type: .key, keyCode: 227), OutputAction(type: .key, keyCode: 6)]),
+            BindingModel(input: .touchpadRegion(z[3].id), outputs: [OutputAction(type: .key, keyCode: 227), OutputAction(type: .key, keyCode: 25)]),
+            BindingModel(input: .button(13), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            BindingModel(input: .touchpadGesture(.twoFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
+        ]
+        let notes = ["Top-left zone: Undo (Cmd Z)", "Top-right zone: Redo (Cmd Shift Z)", "Bottom-left zone: Copy (Cmd C)", "Bottom-right zone: Paste (Cmd V)", "Touchpad press: left click", "Two-finger tap: right click"]
+        for i in bindings.indices { bindings[i].note = notes[i]; bindings[i].section = i < 4 ? "Zones" : "Touchpad" }
+        for i in 0..<4 { bindings[i].hapticEnabled = true; bindings[i].hapticIntensity = 0.35 }
+        var preset = makePreset(
+            name: "Touchpad Zones",
+            tag: "The DualSense touchpad as four soft buttons",
+            joystickTag: "Four zones on the pad send Undo, Redo, Copy, and Paste with a pulse; the press clicks and a two-finger tap right-clicks",
+            bindings: bindings,
+            light: RGBLightColor(r: 255, g: 120, b: 40))
+        preset.touchpadRegions = z.map {
+            TouchpadRegion(id: $0.id, name: $0.name, minX: $0.minX, maxX: $0.maxX,
+                           minY: $0.minY, maxY: $0.maxY, colorIndex: $0.color)
+        }
+        return preset
+    }
+
+    /// Showcase: three corners of the screen as inputs. The regions belong
+    /// to this preset, which is what makes a corner mean one thing here and
+    /// something else in another preset.
+    static let cursorRegionIDs: [(id: UUID, name: String, minX: Double, maxX: Double, minY: Double, maxY: Double, color: Int)] = [
+        (UUID(uuidString: "5A1E0002-0000-4000-8000-000000000001")!, "Top left corner",     0.00, 0.05, 0.00, 0.05, 0),
+        (UUID(uuidString: "5A1E0002-0000-4000-8000-000000000002")!, "Top right corner",    0.95, 1.00, 0.00, 0.05, 1),
+        (UUID(uuidString: "5A1E0002-0000-4000-8000-000000000003")!, "Bottom right corner", 0.95, 1.00, 0.95, 1.00, 2),
+    ]
+
+    static var showcaseCursorRegions: Preset {
+        let r = cursorRegionIDs
+        var bindings: [BindingModel] = [
+            BindingModel(input: InputEvent(type: .cursorRegion, index: 0, cursorRegionID: r[0].id),
+                         outputs: [OutputAction(type: .systemAction, systemActionKind: .missionControl)]),
+            BindingModel(input: InputEvent(type: .cursorRegion, index: 0, cursorRegionID: r[1].id),
+                         outputs: [OutputAction(type: .systemAction, systemActionKind: .spotlight)]),
+            BindingModel(input: InputEvent(type: .cursorRegion, index: 0, cursorRegionID: r[2].id),
+                         outputs: [OutputAction(type: .systemAction, systemActionKind: .launchpad)]),
+        ]
+        let notes = ["Pointer in the top-left corner: Mission Control",
+                     "Pointer in the top-right corner: Spotlight",
+                     "Pointer in the bottom-right corner: Launchpad"]
+        for i in bindings.indices { bindings[i].note = notes[i]; bindings[i].section = "Screen corners" }
+        var preset = makePreset(
+            name: "Cursor Regions",
+            tag: "Corners of the screen as buttons",
+            joystickTag: "No controller needed: the inputs are areas of the screen, and moving the pointer into one fires it",
+            bindings: bindings)
+        preset.cursorRegions = r.map {
+            TouchpadRegion(id: $0.id, name: $0.name, minX: $0.minX, maxX: $0.maxX,
+                           minY: $0.minY, maxY: $0.maxY, colorIndex: $0.color)
+        }
+        return preset
+    }
+
+    /// Showcase: one control, three outputs.
+    static var showcaseHoldDoubleTap: Preset {
+        var bindings: [BindingModel] = [
+            bind("btn 0", ["mbt 0"], "A / Cross: click. Hold it for a right click, tap it twice for Return"),
+            bind("btn 1", ["key 44"], "B / Circle: Space. Hold it for Escape"),
+            bind("btn 4", ["key 43"], "LB / L1: Tab. Tap it twice for Shift Tab"),
+        ].compactMap { $0 }
+        bindings[0].holdOutputs = [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]
+        bindings[0].holdThresholdMs = 500
+        bindings[0].doubleTapOutputs = [OutputAction(type: .key, keyCode: 40)]
+        bindings[0].doubleTapWindowMs = 300
+        bindings[1].holdOutputs = [OutputAction(type: .key, keyCode: 41)]
+        bindings[1].holdThresholdMs = 500
+        bindings[2].doubleTapOutputs = [OutputAction(type: .key, keyCode: 225), OutputAction(type: .key, keyCode: 43)]
+        bindings[2].doubleTapWindowMs = 300
+        for i in bindings.indices { bindings[i].section = "Buttons" }
+        return makePreset(
+            name: "Hold & Double-Tap",
+            tag: "Three outputs on one button",
+            joystickTag: "Each row carries a press, a hold, and a double tap, so three buttons do the work of nine",
+            bindings: bindings)
+    }
+
+    /// Showcase: the Mac's own keyboard and mouse as inputs. Deliberately
+    /// only keys and buttons nothing else needs, so running it never takes a
+    /// key away from you.
+    /// The Mac's own keyboard as an input device. F13 to F19 exist on every
+    /// full-size keyboard and nothing in macOS uses them, so each one can
+    /// carry a system function without taking a key away from anything.
+    /// The app listens alongside macOS, so a key keeps doing what it did;
+    /// that is why this deck avoids keys that already do something.
+    static var keyboardDeck: Preset {
+        var bindings: [BindingModel] = [
+            bind("ekb 104 any", ["sys mct"], "F13: Mission Control"),
+            bind("ekb 105 any", ["sys spt"], "F14: Spotlight"),
+            bind("ekb 106 any", ["sys ply"], "F15: Play / Pause"),
+            bind("ekb 107 any", ["sys scr"], "F16: Screenshot menu"),
+            bind("ekb 108 any", ["sys lpd"], "F17: Launchpad"),
+            bind("ekb 109 any", ["sys dct"], "F18: Start Dictation"),
+            bind("ekb 110 any", ["sys lck"], "F19: Lock Screen"),
+        ].compactMap { $0 }
+        for i in bindings.indices { bindings[i].section = "Function keys" }
+        return makePreset(
+            name: "Keyboard Deck",
+            tag: "F13 to F19 run the Mac",
+            joystickTag: "The Mac's keyboard: seven spare function keys, each a system function",
+            bindings: bindings)
+    }
+
+    /// The Mac's trackpad or mouse as an input device: the side buttons go
+    /// back and forward, the middle click opens Mission Control, and a
+    /// force click on the trackpad opens Launchpad.
+    static var trackpadAndMouse: Preset {
+        var bindings: [BindingModel] = [
+            bind("ems button 3 + any", ["key 227", "key 91"], "Side button 4: back"),
+            bind("ems button 4 + any", ["key 227", "key 92"], "Side button 5: forward"),
+            bind("ems button 2 + any", ["sys mct"], "Middle click: Mission Control"),
+            bind("ems deepPress 0 + any", ["sys lpd"], "Force click: Launchpad"),
+        ].compactMap { $0 }
+        for i in bindings.indices {
+            bindings[i].section = bindings[i].input.extMouseKind == .deepPress ? "Trackpad" : "Mouse buttons"
+        }
+        return makePreset(
+            name: "Trackpad & Mouse",
+            tag: "Side buttons, middle click, and force click",
+            joystickTag: "The Mac's pointer: the two side buttons, the middle click, and the trackpad's force click",
+            bindings: bindings)
+    }
+
+    /// Modifier keys as inputs with the hold and double-tap fine-tunes, so
+    /// a modifier keeps doing its job and only a long hold or a double tap
+    /// on its own fires something: no row has a plain press output.
+    static var modifierHolds: Preset {
+        func row(_ input: String, hold: String, ms: Int, doubleTap: String? = nil, note: String) -> BindingModel? {
+            guard let ev = InputEvent.parse(input), let holdAction = OutputAction.parse(hold) else { return nil }
+            var b = BindingModel(input: ev, outputs: [])
+            b.holdOutputs = [holdAction]
+            b.holdThresholdMs = ms
+            if let doubleTap, let action = OutputAction.parse(doubleTap) {
+                b.doubleTapOutputs = [action]
+                b.doubleTapWindowMs = 300
+            }
+            b.note = note
+            b.section = "Modifier keys"
+            return b
+        }
+        let bindings: [BindingModel] = [
+            row("ekb 231 any", hold: "sys spt", ms: 450, doubleTap: "sys lpd",
+                note: "Right Command: hold for Spotlight, double tap for Launchpad"),
+            row("ekb 230 any", hold: "sys dct", ms: 450, note: "Right Option: hold to start Dictation"),
+            row("ekb 229 any", hold: "sys mct", ms: 450, note: "Right Shift: hold for Mission Control"),
+        ].compactMap { $0 }
+        return makePreset(
+            name: "Modifier Holds",
+            tag: "Hold a modifier on its own to run the Mac",
+            joystickTag: "The Mac's keyboard: the right-hand modifiers, held alone, do more",
+            bindings: bindings)
+    }
+
+    /// Double clicks as inputs. A double click on a button nobody
+    /// double-clicks (the side buttons, the middle button) is free to mean
+    /// something, and a single click keeps doing what it always did.
+    static var doubleClickDeck: Preset {
+        var bindings: [BindingModel] = [
+            bind("ems doubleClick 3 + any", ["sys mct"], "Double click side button 4: Mission Control"),
+            bind("ems doubleClick 4 + any", ["sys lpd"], "Double click side button 5: Launchpad"),
+            bind("ems doubleClick 2 + any", ["sys spt"], "Double click the middle button: Spotlight"),
+        ].compactMap { $0 }
+        for i in bindings.indices { bindings[i].section = "Double clicks" }
+        return makePreset(
+            name: "Double Click Deck",
+            tag: "Double click a spare mouse button",
+            joystickTag: "The Mac's mouse: the side and middle buttons, double clicked",
+            bindings: bindings)
+    }
+
+    static var showcaseKeyboardMouseInput: Preset {
+        var bindings: [BindingModel] = [
+            bind("ekb 104 any", ["sys mct"], "F13: Mission Control"),
+            bind("ekb 105 any", ["sys spt"], "F14: Spotlight"),
+            bind("ekb 106 any", ["sys ply"], "F15: Play / Pause"),
+            bind("ems button 3 + any", ["key 227", "key 91"], "Mouse button 4: back (Cmd left bracket)"),
+            bind("ems button 4 + any", ["key 227", "key 92"], "Mouse button 5: forward (Cmd right bracket)"),
+        ].compactMap { $0 }
+        for i in bindings.indices {
+            bindings[i].section = bindings[i].input.type == .extKey ? "Keyboard" : "Mouse"
+        }
+        return makePreset(
+            name: "Keyboard & Mouse Input",
+            tag: "Spare keys and mouse buttons as inputs",
+            joystickTag: "No controller: F13 to F15 and the two side buttons on a mouse drive the Mac",
+            bindings: bindings)
+    }
+
+    /// Showcase: the outputs that run something rather than press a key.
+    static var showcaseShortcutsAndApps: Preset {
+        var bindings: [BindingModel] = [
+            bind("btn 0", ["sys opa Safari"], "A / Cross: open Safari"),
+            bind("btn 1", ["sys our https%3A%2F%2Finputconfig%2Ecom"], "B / Circle: open inputconfig.com"),
+            bind("btn 2", ["sys mct"], "X / Square: Mission Control"),
+            bind("btn 3", ["sys spt"], "Y / Triangle: Spotlight"),
+        ].compactMap { $0 }
+        var shortcut = BindingModel(input: .button(4),
+                                    outputs: [OutputAction(type: .systemAction, systemActionKind: .runShortcut)])
+        shortcut.note = "LB / L1: run a Shortcut. Pick one of yours from the row's menu"
+        bindings.append(shortcut)
+        for i in bindings.indices { bindings[i].section = "Buttons" }
+        return makePreset(
+            name: "Shortcuts & Apps",
+            tag: "Open an app, a link, or a Shortcut from a button",
+            joystickTag: "Outputs that run something instead of pressing a key: Open App, Open URL, Run Shortcut, and two Mac functions",
             bindings: bindings)
     }
 
@@ -1167,17 +2037,24 @@ struct ExamplePresets {
     /// is non-nil (DualSense, DualShock 4, Switch Pro, Joy-Con).
     static var showcaseGyroAim: Preset {
         let bindings: [BindingModel] = [
+            // Yaw: turning the controller right moves the pointer right. A
+            // positive gyro Y rate is a turn to the right as delivered on
+            // the Mac (checked by hand on a DualSense), so these are straight.
             BindingModel(input: .motion(.gyroY, direction: .positive),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 10)],
                          deadzone: 0.05, variableSensitivity: true),
             BindingModel(input: .motion(.gyroY, direction: .negative),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .negative, speed: 10)],
                          deadzone: 0.05, variableSensitivity: true),
+            // Pitch: tilting the controller up moves the pointer up. A
+            // positive gyro X rate is nose UP (checked by hand on a
+            // DualSense) while screen Y grows downward, so these rows are
+            // crossed.
             BindingModel(input: .motion(.gyroX, direction: .positive),
-                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
+                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 10)],
                          deadzone: 0.05, variableSensitivity: true),
             BindingModel(input: .motion(.gyroX, direction: .negative),
-                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 10)],
+                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
                          deadzone: 0.05, variableSensitivity: true),
             // Triggers click. Right trigger = left mouse click (primary fire),
             // left trigger = right mouse click (aim down sights).
@@ -1187,12 +2064,22 @@ struct ExamplePresets {
                          outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
             BindingModel(input: .button(0), outputs: [OutputAction(type: .key, keyCode: 44)]),  // space
             BindingModel(input: .button(1), outputs: [OutputAction(type: .key, keyCode: 224)]), // ctrl
+            // The two controls a motion layout needs and nothing else
+            // provides: ratcheting, so you can swing the controller back to
+            // a comfortable angle without the pointer following, and a
+            // re-zero for when a rested controller still drifts.
+            BindingModel(input: .button(4),
+                         outputs: [OutputAction(type: .appAction, appActionKind: .holdMuteMotion)]),
+            BindingModel(input: .button(5),
+                         outputs: [OutputAction(type: .appAction, appActionKind: .rezeroMotion),
+                                   OutputAction(type: .appAction, appActionKind: .centerPointer)]),
         ]
         return makePreset(
             name: "Gyro Aim",
             tag: "Tilt the controller to aim; triggers fire and ADS",
-            joystickTag: "Gyro Y → mouse X, Gyro X → mouse Y. Hold the controller level and yaw / pitch to look around",
-            bindings: bindings)
+            joystickTag: "Tilt to aim: sideways tilt → mouse X, forward tilt → mouse Y. LB pauses motion while held, RB re-zeros and centres the pointer",
+            bindings: bindings,
+            light: RGBLightColor(r: 128, g: 0, b: 255))
     }
 
     /// Motion-driven desktop cursor. Same idea as Gyro Aim but tuned for
@@ -1203,19 +2090,24 @@ struct ExamplePresets {
     /// Joy-Con as a "wave-the-controller" pointer.
     static var showcaseMotionCursor: Preset {
         let bindings: [BindingModel] = [
-            // Yaw → X, Pitch → Y, with conservative defaults.
+            // Yaw → X, Pitch → Y, with conservative defaults. A positive
+            // gyro Y rate is a turn to the right on the Mac, so yaw is
+            // straight; pitch below is crossed.
             BindingModel(input: .motion(.gyroY, direction: .positive),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 6)],
-                         deadzone: 0.15, sensitivityCurve: .exponential, variableSensitivity: true),
+                         deadzone: 0.05, sensitivityCurve: .exponential, variableSensitivity: true),
             BindingModel(input: .motion(.gyroY, direction: .negative),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .negative, speed: 6)],
-                         deadzone: 0.15, sensitivityCurve: .exponential, variableSensitivity: true),
+                         deadzone: 0.05, sensitivityCurve: .exponential, variableSensitivity: true),
+            // Pitch: tilting the controller up moves the pointer up. A
+            // positive gyro X rate is nose up, so these rows are crossed
+            // (screen Y grows downward).
             BindingModel(input: .motion(.gyroX, direction: .positive),
-                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 6)],
-                         deadzone: 0.15, sensitivityCurve: .exponential, variableSensitivity: true),
-            BindingModel(input: .motion(.gyroX, direction: .negative),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 6)],
-                         deadzone: 0.15, sensitivityCurve: .exponential, variableSensitivity: true),
+                         deadzone: 0.05, sensitivityCurve: .exponential, variableSensitivity: true),
+            BindingModel(input: .motion(.gyroX, direction: .negative),
+                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 6)],
+                         deadzone: 0.05, sensitivityCurve: .exponential, variableSensitivity: true),
             // A = left click, B = right click, Y = double-tap (Return)
             BindingModel(input: .button(0), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
             BindingModel(input: .button(1), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
@@ -1227,12 +2119,21 @@ struct ExamplePresets {
             BindingModel(input: .axis(3, direction: .negative),
                          outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 4)],
                          deadzone: 0.18, variableSensitivity: true),
+            // Same motion controls as Gyro Aim: hold LB to park the pointer
+            // while you bring the controller back to a comfortable angle,
+            // press RB with the controller still to re-zero a drifting gyro.
+            BindingModel(input: .button(4),
+                         outputs: [OutputAction(type: .appAction, appActionKind: .holdMuteMotion)]),
+            BindingModel(input: .button(5),
+                         outputs: [OutputAction(type: .appAction, appActionKind: .rezeroMotion),
+                                   OutputAction(type: .appAction, appActionKind: .centerPointer)]),
         ]
         return makePreset(
             name: "Motion Cursor",
             tag: "Wave the controller to move the cursor; face buttons click",
-            joystickTag: "Wider gyro deadzone and slower speed than Gyro Aim; perfect for couch desktop use on Switch Pro / DualSense",
-            bindings: bindings)
+            joystickTag: "Slower than Gyro Aim, with clicks and scrolling on the buttons; perfect for couch desktop use on Switch Pro / DualSense",
+            bindings: bindings,
+            light: RGBLightColor(r: 0, g: 255, b: 255))
     }
 
     /// Showcase: Toggle Mode. Demonstrates the per-binding "toggle"
@@ -1369,10 +2270,13 @@ struct ExamplePresets {
     /// showcase + MIDI presets, since the legacy JSON parser does not carry
     /// advanced fields like haptic, deadzone, curve, macros).
     private static func makePreset(name: String, tag: String, joystickTag: String,
-                                   bindings: [BindingModel]) -> Preset {
+                                   bindings: [BindingModel],
+                                   light: RGBLightColor? = nil) -> Preset {
         let joystick = JoystickMapping(tag: joystickTag, bindings: bindings)
-        return Preset(name: name, tag: tag, joysticks: [joystick],
-                      filename: Preset.generateFilename())
+        var preset = Preset(name: name, tag: tag, joysticks: [joystick],
+                            filename: Preset.generateFilename())
+        preset.lightBarColor = light
+        return preset
     }
 
     /// Showcase: Tap the Mac. The only preset that needs no hardware at all -
@@ -2308,7 +3212,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -11577,62 +12481,6 @@ enum SmartPresetLibrary {
         "tips": ["Right trigger attacks or uses a tool; left trigger aims.", "Sprint with the left stick click; the View button opens your bag."]
       },
       {
-        "id": "cursor", "category": "app", "displayName": "Cursor",
-        "subtitle": "Navigate code and run shortcuts",
-        "appPath": "", "launchURL": "",
-        "light": {"r": 60, "g": 60, "b": 70},
-        "confineCursor": false, "autoRecenter": false, "hideCursor": false,
-        "bindings": [
-          {"input": "axi 0 -", "outputs": ["mou 0 - 16"], "note": "Cursor left"},
-          {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Cursor right"},
-          {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Cursor up"},
-          {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Cursor down"},
-          {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Scroll down"},
-          {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
-          {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click"},
-          {"input": "btn 0", "outputs": ["key 227", "key 22"], "note": "Save"},
-          {"input": "btn 1", "outputs": ["key 227", "key 9"], "note": "Find"},
-          {"input": "btn 2", "outputs": ["key 227", "key 225", "key 19"], "note": "Command palette"},
-          {"input": "btn 3", "outputs": ["key 227", "key 5"], "note": "Toggle sidebar"},
-          {"input": "hat 0 L", "outputs": ["key 227", "key 226", "key 80"], "note": "Previous editor"},
-          {"input": "hat 0 R", "outputs": ["key 227", "key 226", "key 79"], "note": "Next editor"},
-          {"input": "hat 0 U", "outputs": ["key 82"], "note": "Line up"},
-          {"input": "hat 0 D", "outputs": ["key 81"], "note": "Line down"},
-          {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
-          {"input": "btn 5", "outputs": ["key 227", "key 225", "key 29"], "note": "Redo"},
-          {"input": "btn 9", "outputs": ["key 41"], "note": "Escape"}
-        ],
-        "tips": ["Left stick moves the pointer; right stick scrolls.", "Face buttons run common editor shortcuts; rebind to taste."]
-      },
-      {
-        "id": "zed", "category": "app", "displayName": "Zed",
-        "subtitle": "Navigate code and run shortcuts",
-        "appPath": "", "launchURL": "",
-        "light": {"r": 80, "g": 140, "b": 210},
-        "confineCursor": false, "autoRecenter": false, "hideCursor": false,
-        "bindings": [
-          {"input": "axi 0 -", "outputs": ["mou 0 - 16"], "note": "Cursor left"},
-          {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Cursor right"},
-          {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Cursor up"},
-          {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Cursor down"},
-          {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Scroll down"},
-          {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
-          {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click"},
-          {"input": "btn 0", "outputs": ["key 227", "key 22"], "note": "Save"},
-          {"input": "btn 1", "outputs": ["key 227", "key 9"], "note": "Find"},
-          {"input": "btn 2", "outputs": ["key 227", "key 225", "key 19"], "note": "Command palette"},
-          {"input": "btn 3", "outputs": ["key 227", "key 5"], "note": "Toggle sidebar"},
-          {"input": "hat 0 L", "outputs": ["key 227", "key 226", "key 80"], "note": "Previous editor"},
-          {"input": "hat 0 R", "outputs": ["key 227", "key 226", "key 79"], "note": "Next editor"},
-          {"input": "hat 0 U", "outputs": ["key 82"], "note": "Line up"},
-          {"input": "hat 0 D", "outputs": ["key 81"], "note": "Line down"},
-          {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
-          {"input": "btn 5", "outputs": ["key 227", "key 225", "key 29"], "note": "Redo"},
-          {"input": "btn 9", "outputs": ["key 41"], "note": "Escape"}
-        ],
-        "tips": ["Left stick moves the pointer; right stick scrolls.", "Face buttons run common editor shortcuts; rebind to taste."]
-      },
-      {
         "id": "jetbrains-rider", "category": "app", "displayName": "JetBrains Rider",
         "subtitle": "Navigate code and run shortcuts",
         "appPath": "", "launchURL": "",
@@ -11894,7 +12742,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -11922,7 +12770,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -11950,7 +12798,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -11978,7 +12826,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -12006,7 +12854,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Secondary skill (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade"},
           {"input": "btn 1", "outputs": ["key 20"], "note": "Potion (Q)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)? interact"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Skill 3 (E)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Skill 4 (R)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Skill slot 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Skill slot 2"},
@@ -14618,6 +15466,21 @@ enum SmartPresetGenerator {
         var autoRecenter: Bool
         var hideCursor: Bool
         var lightColor: SmartPresetProfile.Light?
+        /// On a pad with a touchpad, add the rows that make it a trackpad:
+        /// one finger moves the pointer, two fingers scroll, a tap clicks,
+        /// a two-finger tap right-clicks, the pad's press clicks.
+        var touchpadAsTrackpad: Bool = false
+        /// On a pad with motion, and a profile that looks with the mouse,
+        /// add gyro fine aim: tilting nudges the pointer on top of the stick.
+        var gyroFineAim: Bool = false
+        /// A short rumble whenever a trigger-driven click fires.
+        var rumbleOnTriggers: Bool = false
+    }
+
+    /// Whether the profile turns the controller into a mouse-look game
+    /// (any row sends mouse motion). Gyro fine aim only makes sense then.
+    static func usesMouseLook(_ profile: SmartPresetProfile) -> Bool {
+        profile.bindings.contains { b in b.outputs.contains { $0.hasPrefix("mou ") } }
     }
 
     static func makePreset(from profile: SmartPresetProfile,
@@ -14635,7 +15498,59 @@ enum SmartPresetGenerator {
             var bm = BindingModel(input: input, outputs: outputs)
             let trimmed = b.note.trimmingCharacters(in: .whitespacesAndNewlines)
             bm.note = trimmed.isEmpty ? nil : trimmed
+            // A trigger that clicks can rumble as it does, so a shot or a
+            // swing is felt. Only rows a trigger drives to a mouse button.
+            if options.rumbleOnTriggers, input.type == .axis, (4...5).contains(input.index),
+               outputs.contains(where: { $0.type == .mouseButton }) {
+                bm.hapticEnabled = true
+                bm.hapticIntensity = 0.35
+            }
             bindingModels.append(bm)
+        }
+        let used = Set(bindingModels.map { $0.input.serialized })
+        func add(_ bm: BindingModel) { if !used.contains(bm.input.serialized) { bindingModels.append(bm) } }
+        if options.touchpadAsTrackpad, brand.hasTouchpad {
+            var rows: [BindingModel] = [
+                BindingModel(input: .touchpad(finger: 0, axis: .x, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 12)]),
+                BindingModel(input: .touchpad(finger: 0, axis: .x, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .negative, speed: 12)]),
+                BindingModel(input: .touchpad(finger: 0, axis: .y, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 12)]),
+                BindingModel(input: .touchpad(finger: 0, axis: .y, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 12)]),
+                BindingModel(input: .touchpad(finger: 1, axis: .y, direction: .positive),
+                             outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 6)]),
+                BindingModel(input: .touchpad(finger: 1, axis: .y, direction: .negative),
+                             outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 6)]),
+                BindingModel(input: .button(13), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+                BindingModel(input: .touchpadGesture(.oneFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+                BindingModel(input: .touchpadGesture(.twoFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
+            ]
+            let notes = ["One finger: pointer right", "One finger: pointer left", "One finger: pointer down", "One finger: pointer up",
+                         "Two fingers: scroll down", "Two fingers: scroll up",
+                         "Press the pad: click", "Tap: click", "Two-finger tap: right click"]
+            for i in rows.indices { rows[i].note = notes[i]; rows[i].section = "Touchpad" }
+            rows.forEach(add)
+        }
+        if options.gyroFineAim, brand.hasMotion, usesMouseLook(profile) {
+            var rows: [BindingModel] = [
+                BindingModel(input: .motion(.gyroY, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroY, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .negative, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroX, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroX, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+            ]
+            let notes = ["Turn right: aim right", "Turn left: aim left", "Tilt up: aim up", "Tilt down: aim down"]
+            for i in rows.indices { rows[i].note = notes[i]; rows[i].section = "Gyro aim" }
+            rows.forEach(add)
         }
         let slot = JoystickMapping(tag: slotGuide(for: profile, brand: brand),
                                    bindings: bindingModels)
@@ -14665,7 +15580,7 @@ enum SmartPresetGenerator {
                                                  b: UInt8(clamping: light.b))
             preset.lightBarBrightness = 2
         }
-        preset.notes = buildNotes(for: profile, brand: brand)
+        preset.notes = buildNotes(for: profile, brand: brand, options: options)
         preset.driveConfig = profile.drive
         return preset
     }
@@ -14681,18 +15596,29 @@ enum SmartPresetGenerator {
     /// now lives on each binding row (each row has its own note), so this stays
     /// concise: a one-line intro, the first-run scan reminder, any hardware
     /// extras, and the profile's tips. No giant per-button dump.
-    private static func buildNotes(for profile: SmartPresetProfile, brand: ControllerBrand) -> String {
+    private static func buildNotes(for profile: SmartPresetProfile, brand: ControllerBrand, options: Options) -> String {
         var out = "Smart preset for \(profile.displayName) on \(brand.displayName).\n"
         out += "What each control does is noted right on its row in the binding editor. "
         out += "If something doesn't respond, open the editor and use Scan to remap it (controllers vary).\n"
         if brand.hasMotion || brand.hasTouchpad {
             out += "\nYour \(brand.displayName) extras: \(brand.capabilitySummary).\n"
             if brand.hasMotion {
-                out += "Motion: add a gyro fine-aim binding, then run Help, Calibrate Motion / Gyro.\n"
+                if options.gyroFineAim, usesMouseLook(profile) {
+                    out += "Gyro aim is on: tilting the pad nudges the aim on top of the stick. Run Motion Calibration once (a row's Options, or the Calibrate menu) so a still pad is still.\n"
+                } else {
+                    out += "Motion: add a gyro fine-aim binding, then run Motion Calibration.\n"
+                }
             }
             if brand.hasTouchpad {
-                out += "Touchpad: add a Touchpad binding to use it as a trackpad.\n"
+                if options.touchpadAsTrackpad {
+                    out += "The touchpad is a trackpad: one finger moves the pointer, two fingers scroll, a tap clicks, a two-finger tap right-clicks.\n"
+                } else {
+                    out += "Touchpad: add a Touchpad binding to use it as a trackpad.\n"
+                }
             }
+        }
+        if options.rumbleOnTriggers {
+            out += "The triggers rumble when they click.\n"
         }
         if !profile.tips.isEmpty {
             out += "\nTips:\n" + profile.tips.map { "- \($0)" }.joined(separator: "\n")

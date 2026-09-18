@@ -31,7 +31,12 @@ class MappingEngine: ObservableObject {
     /// via the throttled `activeInputsPublished` instead so a fast-changing
     /// joystick does not re-render the editor 120 times per second.
     var activeInputs: Set<String> = []
-    @Published var activeInputsPublished: Set<String> = []
+    /// Not published here on purpose: see LiveInputStore. Mirrored there
+    /// at the same 10 Hz cadence, so the editor rows still light without
+    /// the whole window re-rendering.
+    var activeInputsPublished: Set<String> = [] {
+        didSet { LiveInputStore.shared.active = activeInputsPublished }
+    }
     private var activeInputsLastFlush: CFTimeInterval = -.infinity
     @Published var debugLog: [(text: String, joystickIndex: Int?)] = []  // Rolling debug log visible in UI
 
@@ -66,10 +71,59 @@ class MappingEngine: ObservableObject {
 
     private var activeStates: [Int: Set<String>] = [:]
     private let defaultAxisThreshold: Float = 0.25
+    /// Smallest per-frame finger movement, as a fraction of the pad, that
+    /// counts as motion: about one native pixel on a DualSense pad.
+    private static let touchpadMotionThreshold: Float = 0.0005
     private let hatThreshold: Float = 0.5
 
     // Toggle mode state: tracks which bindings are currently toggled on
     private var toggleStates: [String: Bool] = [:]
+    /// Presses fired so far in the current turbo run, per binding, for the
+    /// auto-click "stop after N presses" setting.
+    private var turboCounts: [String: Int] = [:]
+    /// The controller slot whose bindings are being evaluated right now, so
+    /// an app action fired from a button can act on that controller.
+    private var pollingJoystickIndex: Int = 0
+    /// Group index to the controller slot it reads; see `effectiveSlot`.
+    private var slotForGroup: [Int: Int] = [:]
+
+    /// Pitch pointing (position control). The pointer's vertical offset is
+    /// a function of the controller's absolute pitch: offset = gain x
+    /// (pitch - pitch at anchor). `emitted` is how much of that offset has
+    /// been sent to the pointer so far, in radians; each poll sends the
+    /// difference. Point up, slam down to flat, and the pointer is back on
+    /// the anchor because the anchor is an angle, not a sum of steps. This
+    /// is how console pointer modes work (Wii, Switch); a relative
+    /// gyro-as-mouse cannot promise it. Re-anchored on start, re-zero and
+    /// Center Pointer.
+    private struct PitchAnchor { var anchor: Float; var emitted: Float = 0 }
+    /// Keyed by group and tilt channel (pitch on gyro X, roll on gyro Y).
+    private var pitchAnchors: [Int: PitchAnchor] = [:]
+    private var pitchAnchorReset = true
+    private func anchorKey(_ group: Int, _ channel: MotionChannel) -> Int { group &* 16 &+ channelIndex(channel) }
+
+    /// Make the controller's current pitch the pointer's new neutral (the
+    /// re-zero and Center Pointer actions).
+    func reanchorMotion() {
+        pitchAnchorReset = true
+    }
+
+    /// Radians of pitch offset not yet sent to the pointer for this group,
+    /// or nil when the controller has no absolute pitch. Positive = nose up
+    /// relative to the anchor.
+    private func pendingTilt(group: Int, channel: MotionChannel, state: ControllerState) -> Float? {
+        guard let absolute = state.motionAbsolute[channel] else { return nil }
+        if pitchAnchorReset {
+            pitchAnchors = [:]
+            pitchAnchorReset = false
+        }
+        let key = anchorKey(group, channel)
+        let entry = pitchAnchors[key] ?? PitchAnchor(anchor: absolute)
+        if pitchAnchors[key] == nil { pitchAnchors[key] = entry }
+        return (absolute - entry.anchor) - entry.emitted
+    }
+    private var slotResolveTick = 0
+    private var loggedSlotRedirect: [Int: Int] = [:]
     /// Fader engagement per absolute-volume binding: resting position at
     /// activation, and whether the user has moved the control since.
     private var faderBaseline: [UUID: Float] = [:]
@@ -173,8 +227,12 @@ class MappingEngine: ObservableObject {
                 // desync them: an un-pause would not re-press a held toggle, and
                 // the next press would immediately toggle it back off.
                 toggleStates.removeAll()
+                MouseMotionPump.shared.setVelocity(x: 0, y: 0)
+                MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
                 pendingMouseDeltaX = 0
                 pendingMouseDeltaY = 0
+                pendingMotionDeltaX = 0
+                pendingMotionDeltaY = 0
                 mouseCarryX = 0
                 mouseCarryY = 0
                 pendingScrollDeltaX = 0
@@ -328,16 +386,82 @@ class MappingEngine: ObservableObject {
 
     // MARK: - Start / Stop
 
+    /// Posted on the main thread when a preset starts or stops running.
+    static let didStartNotification = Notification.Name("InputConfig.engine.didStart")
+    static let didStopNotification = Notification.Name("InputConfig.engine.didStop")
+
+    /// Settings' Speed times the preset's own multiplier, refreshed once
+    /// per second rather than read through two published properties on
+    /// every poll frame.
+    private var pointerGain: Float {
+        let now = CACurrentMediaTime()
+        if now - pointerGainCheckedAt > 1 {
+            pointerGainCheckedAt = now
+            let global = Float(CursorGuardService.shared.sensitivityMultiplier)
+            let preset = Float(activePreset?.automation.sensitivityMultiplier ?? 1)
+            let g = global * preset
+            pointerGainCache = (g.isFinite && g > 0) ? g : 1
+        }
+        return pointerGainCache
+    }
+    private var pointerGainCache: Float = 1
+    private var pointerGainCheckedAt: CFTimeInterval = 0
+
+    /// Every input type the preset reads: each row's own input plus the
+    /// controls it holds as a chord.
+    private static func inputTypesUsed(by preset: Preset) -> Set<InputType> {
+        var types = Set<InputType>()
+        for group in preset.joysticks {
+            for b in group.bindings {
+                types.insert(b.input.type)
+                for m in b.modifiers { types.insert(m.type) }
+            }
+        }
+        return types
+    }
+
     func start(with preset: Preset) {
+        // Decide first whether this preset can run at all. Everything below
+        // touches live state (the region working sets, the chassis sensor,
+        // the slot map), and doing that before this check meant activating
+        // an empty preset while another was running replaced the running
+        // preset's zones with nothing and left it dead.
+        let hasAnyBinding = preset.joysticks.contains { !$0.bindings.isEmpty }
+        let hasDriveMode = preset.driveConfig?.enabled == true
+        guard hasAnyBinding || hasDriveMode else { return }
+        // Rating ask: counts real use, so the card only appears for
+        // someone who has been running presets for a while.
+        ReviewPromptService.shared.recordActivation()
+        lastActivityAt = [:]
+        activity("Started \u{201C}\(preset.name)\u{201D}")
+        // Make start() idempotent. The "edit the currently-active preset"
+        // path re-enters start() with no intervening stop(); without this,
+        // reference-counted services (touchpad helper, cursor-region timer,
+        // system-stats timer, external-input monitors) get retained again
+        // and never balanced, leaking a live subprocess and timers, and
+        // stale deferred-tap/toggle state carries into the reloaded preset.
+        // It runs before any service is retained below: stop() releases
+        // them, and a retain placed ahead of it was being released a few
+        // lines later, which switched the chassis sensor off on every
+        // re-activation.
+        if isRunning { stop() }
+
+        // This preset's touchpad, screen, and stick regions are the ones
+        // the engine tests against from now on.
+        preset.applyRegionsToServices()
+        slotForGroup = [:]
+        pitchAnchorReset = true
+        loggedSlotRedirect = [:]
+        // Every input a row listens to, including the controls it holds as
+        // a chord. A row whose modifier is a MIDI note or a screen region
+        // needs that service running as much as a row whose input is.
+        let inputTypes = Self.inputTypesUsed(by: preset)
         // The Mac's own accelerometer streams at ~800 Hz, so only wake it when
         // this preset actually binds a chassis tap.
-        let usesChassisTap = preset.joysticks.contains { group in
-            group.bindings.contains { $0.input.type == .chassisTap }
-        }
-        if usesChassisTap {
-            ChassisTapService.shared.start()
+        if inputTypes.contains(.chassisTap) {
+            ChassisTapService.shared.retain("engine")
         } else {
-            ChassisTapService.shared.stop()
+            ChassisTapService.shared.release("engine")
         }
 
         debugEnabled = UserDefaults.standard.bool(forKey: Self.debugLogDefaultsKey)
@@ -350,25 +474,11 @@ class MappingEngine: ObservableObject {
                 }
             }
         }
-        // The original guard required a controller mapping. With external
-        // keyboard / mouse inputs we may legitimately have a preset with no
-        // controller-shape bindings, so accept anything that has at least
-        // one binding anywhere.
-        let hasAnyBinding = preset.joysticks.contains { !$0.bindings.isEmpty }
-        // A preset can be pure one-stick driving with no normal bindings; it
-        // still needs the poll loop running to produce drive output.
-        let hasDriveMode = preset.driveConfig?.enabled == true
-        guard hasAnyBinding || hasDriveMode else { return }
-
-        // Make start() idempotent. The "edit the currently-active preset"
-        // path re-enters start() with no intervening stop(); without this,
-        // reference-counted services (touchpad helper, cursor-region timer,
-        // system-stats timer, external-input monitors) get retained again
-        // and never balanced, leaking a live subprocess and timers, and
-        // stale deferred-tap/toggle state carries into the reloaded preset.
-        if isRunning { stop() }
 
         activePreset = preset
+        controllerService.retainLiveInput("engine")
+        NotificationCenter.default.post(name: Self.didStartNotification, object: nil)
+        pointerGainCheckedAt = 0   // pick up this preset's Speed at once
         pollJoysticks = preset.joysticks
         pollDriveConfig = preset.driveConfig
         isRunning = true
@@ -377,6 +487,7 @@ class MappingEngine: ObservableObject {
         activeInputs.removeAll()
         toggleStates.removeAll()
         turboTimestamps.removeAll()
+        turboCounts.removeAll()
         macrosInFlight.removeAll()
         // Per-session state that used to survive start() and stop(). A
         // holdFired entry left over from the previous run swallowed the next
@@ -420,11 +531,8 @@ class MappingEngine: ObservableObject {
 
         // Spin up the touchpad helper only if the preset actually uses
         // touchpad inputs. Avoids running a subprocess users didn't opt in to.
-        let usesTouchpad = preset.joysticks.contains { joystick in
-            joystick.bindings.contains {
-                $0.input.type == .touchpad || $0.input.type == .touchpadRegion
-            }
-        }
+        let usesTouchpad = inputTypes.contains(.touchpad) || inputTypes.contains(.touchpadRegion)
+            || inputTypes.contains(.touchpadGesture)
         if usesTouchpad {
             TouchpadService.shared.retain()
             usesTouchpadInput = true
@@ -438,9 +546,7 @@ class MappingEngine: ObservableObject {
         // permission-free NSEvent.mouseLocation poll owned by
         // CursorRegionService. Only start it when the preset actually
         // uses a cursor region, and balance it in stop().
-        let usesCursorRegion = preset.joysticks.contains { joystick in
-            joystick.bindings.contains { $0.input.type == .cursorRegion }
-        }
+        let usesCursorRegion = inputTypes.contains(.cursorRegion)
         if usesCursorRegion {
             CursorRegionService.shared.beginTracking()
             usesCursorRegionInput = true
@@ -457,10 +563,11 @@ class MappingEngine: ObservableObject {
         // MIDI message, so a keyboard / pad controller is live the moment
         // the preset activates. Cheap to leave open, but there is no
         // reason to hold a CoreMIDI client for presets that never use it.
-        let usesMIDIInput = preset.joysticks.contains { group in
-            group.bindings.contains { $0.input.type == .midi }
-        }
+        let usesMIDIInput = inputTypes.contains(.midi)
         if usesMIDIInput {
+            // The client is opened at launch for the whole session (the
+            // device list and the visualizer's MIDI view read it too), so
+            // this only reconnects sources; nothing to close on stop.
             MIDIInputService.shared.start()
             log("MIDI input opened for this preset")
         }
@@ -477,20 +584,20 @@ class MappingEngine: ObservableObject {
         // light-capable controller flashes the preset's color while it's
         // active. We apply temporarily - the slot's stored default color is
         // untouched, so revert in stop() simply re-asserts it.
+        #if DEBUG
+        controllerService.debugTempLightLog.append(
+            "start override=\(preset.lightBarColor.map { "(\($0.r),\($0.g),\($0.b))" } ?? "nil") "
+            + "slots=\(Array(controllerService.controllerDetails.keys).sorted()) "
+            + "hasLight=\(controllerService.controllerDetails.mapValues { $0.hasLight })")
+        #endif
         if let override = preset.lightBarColor {
-            // Stop any running rainbow first, otherwise the 40 Hz cycle would
-            // overwrite the preset color on its next frame.
-            controllerService.stopAllRGBCycles()
+            // Handed over as the standing override rather than written once:
+            // a controller that connects later, or reconnects, then lands on
+            // the preset's colour instead of the slot default.
             let bri: UInt8? = preset.lightBarBrightness.map { UInt8(max(0, min(2, $0))) }
-            for slot in controllerService.controllerDetails.keys
-                where controllerService.controllerDetails[slot]?.hasLight == true {
-                controllerService.applyTemporaryLight(
-                    at: slot,
-                    red: override.floatR,
-                    green: override.floatG,
-                    blue: override.floatB,
-                    brightness: bri)
-            }
+            controllerService.applyPresetLight(
+                red: override.floatR, green: override.floatG,
+                blue: override.floatB, brightness: bri)
             log("Applied preset light-bar override (\(override.r),\(override.g),\(override.b))")
         }
 
@@ -500,6 +607,18 @@ class MappingEngine: ObservableObject {
         // the editor sheet can hitch. 60 cuts CPU in half but feels laggy
         // for fast-twitch inputs. Stored in UserDefaults so it persists.
         installPollTimer()
+        // The pump is a 125 Hz strict timer; it only runs for a preset that
+        // can move the pointer or scroll. Every other service here is gated
+        // on use, and this one was the exception: four keyboard bindings
+        // paid for 125 wakeups a second they never used.
+        let movesPointer = preset.joysticks.contains { group in
+            group.bindings.contains { row in
+                (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? [])).contains {
+                    $0.type == .mouseMotion || $0.type == .mouseWheel || $0.type == .mouseWheelStep
+                }
+            }
+        } || preset.driveConfig?.enabled == true
+        if movesPointer { MouseMotionPump.shared.start() }
 
         // Per-preset automation: apply CursorGuard overrides + auto-
         // launch any app the preset names. Applied BEFORE the cursor-
@@ -538,27 +657,20 @@ class MappingEngine: ObservableObject {
         // monitors); neither uses Input Monitoring. Our own posted output
         // events carry an own-event marker, so they are filtered out and
         // cannot loop back in as input.
-        let usesExtMouse = preset.joysticks.contains { joystick in
-            joystick.bindings.contains { $0.input.type == .extMouse }
-        }
-        let usesExtKey = preset.joysticks.contains { joystick in
-            joystick.bindings.contains { $0.input.type == .extKey }
-        }
+        let usesExtMouse = inputTypes.contains(.extMouse)
+        let usesExtKey = inputTypes.contains(.extKey)
         if usesExtMouse || usesExtKey {
             externalEventSubscription = ExternalInputDeviceService.shared.events
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] event in
                     self?.ingestExternalEvent(event)
                 }
-            // Only start what the preset actually needs.
-            if usesExtMouse {
-                ExternalInputDeviceService.shared.startMouseMonitoring()
-                log("External mouse input enabled")
-            }
-            if usesExtKey {
-                ExternalInputDeviceService.shared.startKeyboardMonitoring()
-                log("External keyboard input enabled")
-            }
+            // Hold only what the preset actually needs; the visualizer and
+            // the editor's Scan hold their own, so stopping the engine
+            // never pulls a monitor out from under them.
+            ExternalInputDeviceService.shared.retain("engine", mouse: usesExtMouse, keyboard: usesExtKey)
+            if usesExtMouse { log("External mouse input enabled") }
+            if usesExtKey { log("External keyboard input enabled") }
         }
 
         // Flush log entries to the @Published array at 5 Hz so observers
@@ -674,7 +786,11 @@ class MappingEngine: ObservableObject {
     }
 
     func stop() {
-        ChassisTapService.shared.stop()
+        if isRunning, let name = activePreset?.name { activity("Stopped \u{201C}\(name)\u{201D}") }
+        MouseMotionPump.shared.stop()
+        smoothedAxes.removeAll()
+        lastFrameTime = 0
+        ChassisTapService.shared.release("engine")
         StatsService.shared.engineStopped()
         engineGeneration &+= 1   // poison any in-flight macro/turbo blocks
         pollTimer?.invalidate()
@@ -686,6 +802,7 @@ class MappingEngine: ObservableObject {
         // preset doesn't see stale toggle / turbo / cache entries.
         toggleStates.removeAll()
         turboTimestamps.removeAll()
+        turboCounts.removeAll()
         macrosInFlight.removeAll()
         // Per-session state that used to survive start() and stop(). A
         // holdFired entry left over from the previous run swallowed the next
@@ -702,7 +819,9 @@ class MappingEngine: ObservableObject {
         bindKeyCache.removeAll()
         externalEventSubscription?.cancel()
         externalEventSubscription = nil
-        ExternalInputDeviceService.shared.stopMonitoring()
+        ExternalInputDeviceService.shared.release("engine")
+        externalDoubleClickUntil.removeAll()
+        externalScrollGestureActive.removeAll()
         externalKeysDown.removeAll()
         externalMouseButtonsDown.removeAll()
         externalMouseDX.removeAll()
@@ -712,6 +831,8 @@ class MappingEngine: ObservableObject {
         driveProcessor.releaseAll()
         InputSimulator.shared.releaseAll()
         MIDIService.shared.releaseAllNotes()
+        controllerService.releaseLiveInput("engine")
+        NotificationCenter.default.post(name: Self.didStopNotification, object: nil)
         if usesTouchpadInput {
             TouchpadService.shared.release()
             usesTouchpadInput = false
@@ -745,11 +866,10 @@ class MappingEngine: ObservableObject {
         // light-capable controller's stored slot color. setControllerLight
         // reads from `lightColors` / slot defaults, so the user-configured
         // general color comes back automatically.
-        if let preset = activePreset, preset.lightBarColor != nil {
-            for slot in controllerService.controllerDetails.keys
-                where controllerService.controllerDetails[slot]?.hasLight == true {
-                controllerService.setControllerLight(at: slot)
-            }
+        // Not gated on the engine's copy of the preset: the colour can be
+        // set from the visualizer while the preset runs, after this copy
+        // was taken. Re-asserting the slot colour is cheap either way.
+        if controllerService.revertTemporaryLights() {
             log("Reverted light bar to general color")
         }
 
@@ -767,6 +887,25 @@ class MappingEngine: ObservableObject {
 
     // MARK: - Debug Logging
 
+    /// The activity stream everyone sees: one plain line per thing that
+    /// happened, always on (the raw PRESS / RELEASE debug lines stay behind
+    /// the developer toggle). Repeats of the same row inside half a second
+    /// are dropped so a stick held across the deadzone edge does not flood
+    /// the log.
+    private var lastActivityAt: [String: CFTimeInterval] = [:]
+    private func activity(_ text: String, key: String? = nil, joystick: Int? = nil) {
+        if let key {
+            let now = CACurrentMediaTime()
+            if let last = lastActivityAt[key], now - last < 0.5 { return }
+            lastActivityAt[key] = now
+        }
+        ActivityLog.shared.event("Engine", text, slot: joystick)
+    }
+
+    private static func describe(_ outputs: [OutputAction]) -> String {
+        outputs.isEmpty ? "nothing bound" : outputs.map(\.displayName).joined(separator: " + ")
+    }
+
     private func log(_ message: String, joystick: Int? = nil) {
         debugLineCount += 1
         let entry = "[\(debugLineCount)] \(message)"
@@ -778,6 +917,20 @@ class MappingEngine: ObservableObject {
         if pendingLog.count > 50 {
             pendingLog.removeFirst()
         }
+        // The same line goes to the app-wide activity log, classified so
+        // the developer log can colour and count it.
+        let level: ActivityLog.Level
+        let lower = message.lowercased()
+        if lower.contains("fail") || lower.contains("error") || lower.contains("could not") {
+            level = .error
+        } else if lower.contains("no controller") || lower.contains("skipp") || lower.contains("missing") {
+            level = .warning
+        } else if message.contains("PRESS") || message.contains("RELEASE") || message.contains("Raw state") {
+            level = .event
+        } else {
+            level = .info
+        }
+        ActivityLog.shared.post(level, "Engine", message, slot: joystick)
         #if DEBUG
         print("[MappingEngine] \(message)")
         #endif
@@ -817,6 +970,67 @@ class MappingEngine: ObservableObject {
     private var pendingMouseDeltaY: Float = 0
     private var mouseCarryX: Float = 0
     private var mouseCarryY: Float = 0
+    /// Gyro-driven pointer displacement this frame, in exact pixels (angle
+    /// turned x gain). Handed to the pump at frame end, which pays it out
+    /// smoothly without ever dropping any of it.
+    private var pendingMotionDeltaX: Float = 0
+    private var pendingMotionDeltaY: Float = 0
+    /// Stick-driven pointer speed this frame, in pixels per 120 Hz frame.
+    /// Handed to MouseMotionPump as a velocity at the end of the frame; the
+    /// pump moves the pointer on its own timer, so the motion stays fluid
+    /// when this poll runs late.
+    private var pendingMouseRateX: Float = 0
+    private var pendingMouseRateY: Float = 0
+    /// Stick- and dial-driven scroll speed this frame, in scroll units per
+    /// 120 Hz frame, handed to the pump like the pointer rate.
+    private var pendingScrollRateX: Float = 0
+    private var pendingScrollRateY: Float = 0
+
+    /// When the previous poll frame ran, so analog motion can be scaled by
+    /// the time that actually passed. Speed values are defined per 120 Hz
+    /// frame; a late frame moves the cursor by the missed amount instead
+    /// of stalling, and a fast one by proportionally less, so the pointer
+    /// travels at a steady rate however the timer fires.
+    private var lastFrameTime: Double = 0
+    /// The factor for this frame: elapsed time over one 120 Hz frame,
+    /// clamped so a long pause (sleep, a stalled main thread) cannot
+    /// fling the cursor when polling resumes.
+    private var frameScale: Float = 1
+
+    /// Low-passed stick values, keyed by slot and axis. Stick sensors are
+    /// noisy at the few-percent level and their values step rather than
+    /// glide, which reaches the cursor as a fine shake and as robotic
+    /// changes of pace. A short filter (about 25 ms) takes both out without
+    /// a feel of lag; a full push still reaches full speed in a few frames.
+    private var smoothedAxes: [Int: Float] = [:]
+
+
+    /// A stable small number per motion channel, for the smoothing keys.
+    private func channelIndex(_ channel: MotionChannel) -> Int {
+        MotionChannel.allCases.firstIndex(of: channel) ?? 0
+    }
+
+    /// The smoothed value for one stick axis this frame.
+    private func smoothedAxis(_ raw: Float, joystick: Int, axis: Int) -> Float {
+        let key = joystick &* 256 &+ axis
+        guard let previous = smoothedAxes[key] else {
+            smoothedAxes[key] = raw
+            return raw
+        }
+        // alpha = 1 - e^(-dt / tau), tau = 25 ms, dt from frameScale (1 = 8.3 ms).
+        let dt = frameScale / 120
+        let alpha = 1 - expf(-dt / 0.025)
+        // Snap when the stick is let go or pushed the other way, so release
+        // is instant and there is no glide through centre.
+        let value: Float
+        if raw == 0 || (raw > 0) != (previous > 0) {
+            value = raw
+        } else {
+            value = previous + (raw - previous) * alpha
+        }
+        smoothedAxes[key] = value
+        return value
+    }
 
     /// One-stick drive-mode engine (build 18). Holds gear/PWM/gesture state
     /// across poll frames; fed from the active preset's driveConfig.
@@ -841,25 +1055,59 @@ class MappingEngine: ObservableObject {
         SystemStatsService.shared.recordControllerPolls()
         pendingMouseDeltaX = 0
         pendingMouseDeltaY = 0
+        pendingMotionDeltaX = 0
+        pendingMotionDeltaY = 0
         pendingScrollDeltaX = 0
         pendingScrollDeltaY = 0
+        pendingMouseRateX = 0
+        pendingMouseRateY = 0
+        pendingScrollRateX = 0
+        pendingScrollRateY = 0
 
         // Hoist time-source reads out of the per-binding inner loop.
         // CACurrentMediaTime is a monotonic Double seconds counter with
         // no allocation cost; replaces the Date() that used to be
         // constructed per turbo binding per poll frame.
         let nowMonotonic = CACurrentMediaTime()
+        if lastFrameTime > 0 {
+            let dt = Float(nowMonotonic - lastFrameTime)
+            frameScale = max(0.25, min(4, dt * 120))
+        } else {
+            frameScale = 1
+        }
+        lastFrameTime = nowMonotonic
         // The raw-state log line and the published-active-inputs flush
         // also wanted a Date(), but they only fire infrequently so we
         // build one lazily inside those branches.
         let shouldLogRawState = (pollCount % 120 == 1)
 
         lastSlotState.removeAll(keepingCapacity: true)
+        // Refresh the group-to-controller map twice a second.
+        slotResolveTick += 1
+        if slotResolveTick >= 60 || slotForGroup.isEmpty {
+            slotResolveTick = 0
+            var resolved: [Int: Int] = [:]
+            for (index, mapping) in preset.joysticks.enumerated() {
+                let slot = controllerService.effectiveSlot(for: mapping, groupIndex: index)
+                resolved[index] = slot
+                if slot != index, loggedSlotRedirect[index] != slot {
+                    loggedSlotRedirect[index] = slot
+                    log("Input device \(index) is reading \(controllerService.controllerName(at: slot)) in slot \(slot)",
+                        joystick: index)
+                }
+            }
+            slotForGroup = resolved
+        }
+
         for (joystickIndex, joystickMapping) in preset.joysticks.enumerated() {
             // External-only bindings can fire even without a controller, so
             // we don't bail out when the slot is empty - we just skip the
             // controller-side checks for that binding.
-            let state = controllerService.readControllerState(at: joystickIndex)
+            // Which controller this group reads. Resolved every half second
+            // rather than every frame: the answer only changes when a
+            // controller connects or the user picks a different device.
+            let readSlot = slotForGroup[joystickIndex] ?? joystickIndex
+            let state = controllerService.readControllerState(at: readSlot)
             if let state { lastSlotState[joystickIndex] = state }
 
             // Log raw state once per second for debugging. The .filter +
@@ -885,8 +1133,9 @@ class MappingEngine: ObservableObject {
             chordClaimed.removeAll(keepingCapacity: true)
             currentSlotMotionMuted = false
             for b in joystickMapping.bindings {
-                if let mod = b.modifierInput,
-                   inputIsActive(mod, state: state, binding: nil),
+                let mods = b.modifiers
+                if !mods.isEmpty,
+                   mods.allSatisfy({ inputIsActive($0, state: state, binding: nil) }),
                    inputIsActive(b.input, state: state, binding: b) {
                     chordClaimed.insert(cachedKey(for: b))
                 }
@@ -897,20 +1146,25 @@ class MappingEngine: ObservableObject {
                 }
             }
 
+            pollingJoystickIndex = joystickIndex
             for binding in joystickMapping.bindings {
                 let plainKey = cachedKey(for: binding)
                 hysteresisActive = activeStates[joystickIndex]?.contains(plainKey) ?? false
                 var isActive = inputIsActive(binding.input, state: state, binding: binding)
                 hysteresisActive = false
                 let inputKey: String
-                if let mod = binding.modifierInput {
-                    // Chord row: needs the modifier too, and tracks its own
-                    // press state so it never shares an edge with the plain row.
-                    if isActive { isActive = inputIsActive(mod, state: state, binding: nil) }
+                let rowModifiers = binding.modifiers
+                if !rowModifiers.isEmpty {
+                    // Chord row: every held control must be down too, and it
+                    // tracks its own press state so it never shares an edge
+                    // with the plain row.
+                    if isActive {
+                        isActive = rowModifiers.allSatisfy { inputIsActive($0, state: state, binding: nil) }
+                    }
                     if let k = chordKeyCache[binding.id] {
                         inputKey = k
                     } else {
-                        let k = plainKey + "+" + mod.serialized
+                        let k = plainKey + "+" + rowModifiers.map(\.serialized).joined(separator: "+")
                         chordKeyCache[binding.id] = k
                         inputKey = k
                     }
@@ -981,6 +1235,7 @@ class MappingEngine: ObservableObject {
                                 fireOutputs(binding.outputs, press: true, inputIsAxis: inputIsAxis)
                             }
                             toggleStates[bindKey] = true
+                            activity("\(binding.input.displayName) toggled on \u{2192} \(Self.describe(binding.outputs))", joystick: joystickIndex)
                             fireFeedback(for: binding, joystickIndex: joystickIndex)
                         }
                     }
@@ -988,6 +1243,21 @@ class MappingEngine: ObservableObject {
                     if toggleStates[bindKey] == true,
                        let s = state ?? (binding.input.type == .midi ? ControllerState() : nil) {
                         fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
+                    }
+                    // Toggle plus turbo is an auto-clicker: one press starts
+                    // the repeating run, the next press (or the press limit)
+                    // stops it.
+                    if binding.turboEnabled == true {
+                        if toggleStates[bindKey] == true {
+                            if !turboTick(binding, bindKey: bindKey, inputIsAxis: inputIsAxis, now: nowMonotonic) {
+                                toggleStates[bindKey] = false
+                                turboTimestamps.removeValue(forKey: bindKey)
+                                turboCounts.removeValue(forKey: bindKey)
+                            }
+                        } else if turboTimestamps[bindKey] != nil {
+                            turboTimestamps.removeValue(forKey: bindKey)
+                            turboCounts.removeValue(forKey: bindKey)
+                        }
                     }
                 } else if binding.turboEnabled == true {
                     // Turbo mode: rapid fire while held
@@ -998,29 +1268,7 @@ class MappingEngine: ObservableObject {
                             }
                             fireFeedback(for: binding, joystickIndex: joystickIndex)
                         }
-                        // Clamp turbo rate to a sane range so a zero or
-                        // negative value (from a malformed preset) can't
-                        // produce a +Infinity interval that disables
-                        // turbo entirely. 1 Hz floor / 60 Hz ceiling.
-                        let rate = max(1, min(60, binding.turboRate ?? 10))
-                        let interval = 1.0 / Double(rate)
-                        let lastFire = turboTimestamps[bindKey] ?? -.infinity
-                        if nowMonotonic - lastFire >= interval {
-                            fireOutputs(binding.outputs, press: true, inputIsAxis: inputIsAxis)
-                            // Schedule release after ~40% of the interval.
-                            // Capture engineGeneration so a stop() between
-                            // press and release skips the release fire on
-                            // a poisoned engine (avoids stuck keys when
-                            // the user deactivates the preset mid-turbo).
-                            let gen = engineGeneration
-                            let outputs = binding.outputs
-                            let axisFlag = inputIsAxis
-                            DispatchQueue.main.asyncAfter(deadline: .now() + interval * 0.4) { [weak self] in
-                                guard let self = self, self.engineGeneration == gen else { return }
-                                self.fireOutputs(outputs, press: false, inputIsAxis: axisFlag)
-                            }
-                            turboTimestamps[bindKey] = nowMonotonic
-                        }
+                        _ = turboTick(binding, bindKey: bindKey, inputIsAxis: inputIsAxis, now: nowMonotonic)
                         if let s = state ?? (binding.input.type == .midi ? ControllerState() : nil) {
                             fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                         }
@@ -1028,6 +1276,7 @@ class MappingEngine: ObservableObject {
                         log("TURBO END: \(inputKey)", joystick: joystickIndex)
                         fireOutputs(binding.outputs, press: false, inputIsAxis: inputIsAxis)
                         turboTimestamps.removeValue(forKey: bindKey)
+                        turboCounts.removeValue(forKey: bindKey)
                     }
                 } else {
                     // Normal mode
@@ -1037,6 +1286,19 @@ class MappingEngine: ObservableObject {
                         StatsService.shared.recordButtonPress(inputKey: inputKey)
                         if debugEnabled {
                             log("PRESS: \(inputKey) -> \(binding.outputs.map(\.serialized))", joystick: joystickIndex)
+                        }
+                        // Motion and touchpad rows are continuous; their edges
+                        // are not events anyone wants a line for.
+                        if binding.input.type != .motion, binding.input.type != .touchpad {
+                            let what: String
+                            if let steps = binding.macroSteps, !steps.isEmpty {
+                                what = "macro, \(steps.count) steps"
+                            } else if binding.holdOutputs != nil || binding.doubleTapOutputs != nil {
+                                what = "tap: " + Self.describe(binding.outputs)
+                            } else {
+                                what = Self.describe(binding.outputs)
+                            }
+                            activity("\(binding.input.displayName) \u{2192} \(what)", key: bindKey, joystick: joystickIndex)
                         }
                         // Check for macro. Guard against a re-press
                         // while the previous macro chain is still in
@@ -1073,6 +1335,7 @@ class MappingEngine: ObservableObject {
                         // action. It stays pressed until the input releases.
                         holdFired.insert(bindKey)
                         if debugEnabled { log("HOLD: \(inputKey)", joystick: joystickIndex) }
+                        activity("\(binding.input.displayName) held \u{2192} \(Self.describe(hold))", joystick: joystickIndex)
                         fireOutputs(hold, press: true, inputIsAxis: inputIsAxis)
                     } else if !isActive && wasActive {
                         if debugEnabled { log("RELEASE: \(inputKey)", joystick: joystickIndex) }
@@ -1147,6 +1410,18 @@ class MappingEngine: ObservableObject {
         // active touchpad-mouse preset without the cursor flying around.
         // (Deltas themselves are zeroed at the start of every frame.)
         if !outputsPaused {
+            // The two Speed multipliers, Settings' and the preset's, apply
+            // here, at the one place every pointer movement passes through.
+            // Neither was read anywhere before: both sliders were inert.
+            let gain = pointerGain
+            // Stick speed is per 120 Hz frame; the pump wants pixels per second.
+            MouseMotionPump.shared.setVelocity(x: pendingMouseRateX * 120 * gain, y: pendingMouseRateY * 120 * gain)
+            MouseMotionPump.shared.addDisplacement(x: pendingMotionDeltaX * gain, y: pendingMotionDeltaY * gain)
+            MouseMotionPump.shared.setScrollVelocity(x: pendingScrollRateX * 120, y: pendingScrollRateY * 120)
+            let pumped = MouseMotionPump.shared.takeMovedPixels()
+            if pumped > 0 { StatsService.shared.recordMouseMotion(pixels: pumped) }
+            let scrolled = MouseMotionPump.shared.takeScrolledUnits()
+            if scrolled > 0 { StatsService.shared.recordScroll(ticks: scrolled) }
             // Convert the Float accumulator to whole pixels and carry the
             // fractional remainder into the next frame so slow motion is smooth.
             let totalX = pendingMouseDeltaX + mouseCarryX
@@ -1314,6 +1589,11 @@ class MappingEngine: ObservableObject {
     /// monitoring runs.
     private var externalPressure: Float = 0
     private var externalPressureStage: Int = 0
+    /// A double click is a moment, not a state: the second click stamps a
+    /// short window during which a Double click row reads as pressed.
+    private var externalDoubleClickUntil: [String: Date] = [:]
+    /// Devices with a finger scroll gesture in progress, momentum included.
+    private var externalScrollGestureActive: Set<String> = []
 
     private func ingestExternalEvent(_ event: ExternalInputDeviceService.Event) {
         switch event {
@@ -1342,6 +1622,10 @@ class MappingEngine: ObservableObject {
         case .pressureChanged(_, let value, let stage):
             externalPressure = value
             externalPressureStage = stage
+        case .mouseDoubleClick(let dev, let btn):
+            externalDoubleClickUntil["\(dev)/\(btn)"] = Date().addingTimeInterval(0.2)
+        case .scrollGesture(let dev, let active):
+            if active { externalScrollGestureActive.insert(dev) } else { externalScrollGestureActive.remove(dev) }
         }
     }
 
@@ -1377,6 +1661,15 @@ class MappingEngine: ObservableObject {
                 return externalPressure >= 0.25
             case .deepPress:
                 return externalPressureStage >= 2
+            case .doubleClick:
+                let now = Date()
+                if let dev = input.extDeviceID {
+                    return (externalDoubleClickUntil["\(dev)/\(input.index)"] ?? .distantPast) > now
+                }
+                return externalDoubleClickUntil.contains { $0.key.hasSuffix("/\(input.index)") && $0.value > now }
+            case .scrollGesture:
+                if let dev = input.extDeviceID { return externalScrollGestureActive.contains(dev) }
+                return !externalScrollGestureActive.isEmpty
             case .moveX, .moveY, .scrollX, .scrollY:
                 // Half-axis style: positive direction means delta > 0, etc.
                 // Threshold is 1 because HID deltas come through as integer
@@ -1467,10 +1760,17 @@ class MappingEngine: ObservableObject {
             // accumulator, which broke analog touchpad-to-mouse
             // bindings (they fired once on swipe entry, then nothing).
             let value = TouchpadService.shared.peekDelta(finger: finger, axis: axis)
+            // This is a per-frame delta as a fraction of the pad, not a
+            // stick position, so a stick deadzone is the wrong yardstick by
+            // three orders of magnitude: against the default 0.25 a finger
+            // would have to cross a quarter of the pad inside one 8 ms poll
+            // to count, so no swipe ever activated the row and nothing was
+            // output. Anything past a pixel or so of real movement counts.
+            let moved = Self.touchpadMotionThreshold
             switch input.axisDirection {
-            case .positive: return value > axisThreshold
-            case .negative: return value < -axisThreshold
-            case .none:     return abs(value) > axisThreshold
+            case .positive: return value > moved
+            case .negative: return value < -moved
+            case .none:     return abs(value) > moved
             }
 
         case .touchpadRegion:
@@ -1536,12 +1836,15 @@ class MappingEngine: ObservableObject {
             guard let channel = input.motionChannel,
                   let raw = state.motion[channel] else { return false }
             if currentSlotMotionMuted { return false }
-            let value = (binding?.invertAxis == true) ? -raw : raw
-            switch input.axisDirection {
-            case .positive: return value > axisThreshold
-            case .negative: return value < -axisThreshold
-            case .none:     return abs(value) > axisThreshold
+            // Both half-axis rows fire whenever there is anything to move;
+            // each zeroes the half it does not own when it computes its delta.
+            if let pending = pendingTilt(group: pollingJoystickIndex, channel: channel, state: state) {
+                // Pointing: fire while the pointer still has offset to cover.
+                // 0.0003 rad is under a third of a pixel at Speed 6.
+                return abs(pending) > 0.0003
             }
+            let correction = state.motionCorrection[channel] ?? 0
+            return abs(raw) >= 0.005 || abs(correction) > 0.00001
 
         case .extKey, .extMouse:
             // Routed through `checkExternalInput` instead; this branch is
@@ -1710,6 +2013,43 @@ class MappingEngine: ObservableObject {
 
     // MARK: - Output Firing
 
+    /// One poll step of a turbo run: fires when the gap has elapsed, with the
+    /// row's interval (ms takes precedence over the older presses-per-second),
+    /// an optional random +/- on every gap, and an optional press limit.
+    /// Returns false once the limit is reached so a toggled run can stop.
+    private func turboTick(_ binding: BindingModel, bindKey: String, inputIsAxis: Bool, now: CFTimeInterval) -> Bool {
+        let maxCount = binding.turboMaxCount ?? 0
+        let fired = turboCounts[bindKey] ?? 0
+        if maxCount > 0, fired >= maxCount { return false }
+        let base: Double
+        if let ms = binding.turboIntervalMs, ms > 0 {
+            base = Double(max(5, min(60_000, ms))) / 1000
+        } else {
+            // Clamp the rate so a zero or negative value from a malformed
+            // preset cannot produce an infinite interval. 1 Hz to 60 Hz.
+            base = 1.0 / Double(max(1, min(60, binding.turboRate ?? 10)))
+        }
+        var interval = base
+        if let jitter = binding.turboJitterMs, jitter > 0 {
+            interval = max(0.005, base + Double.random(in: -Double(jitter)...Double(jitter)) / 1000)
+        }
+        let lastFire = turboTimestamps[bindKey] ?? -.infinity
+        guard now - lastFire >= interval else { return true }
+        fireOutputs(binding.outputs, press: true, inputIsAxis: inputIsAxis)
+        turboCounts[bindKey] = fired + 1
+        // Release after ~40% of the gap (capped so slow auto-clicks still
+        // feel like clicks). engineGeneration guards a stop() in between.
+        let gen = engineGeneration
+        let outputs = binding.outputs
+        let axisFlag = inputIsAxis
+        DispatchQueue.main.asyncAfter(deadline: .now() + min(0.08, base * 0.4)) { [weak self] in
+            guard let self = self, self.engineGeneration == gen else { return }
+            self.fireOutputs(outputs, press: false, inputIsAxis: axisFlag)
+        }
+        turboTimestamps[bindKey] = now
+        return !(maxCount > 0 && fired + 1 >= maxCount)
+    }
+
     private func fireOutputs(_ outputs: [OutputAction], press: Bool, inputIsAxis: Bool = false) {
         // App actions run even while outputs are paused; otherwise a
         // controller-bound Pause / Resume binding could pause the engine and
@@ -1721,8 +2061,11 @@ class MappingEngine: ObservableObject {
                 // Held-only gate, handled per frame in pollControllers.
                 if kind == .holdMuteMotion { continue }
                 let target = output.targetPresetID
+                // The controller slot this group is reading, not the group
+                // number: re-zero must hit the controller that was pressed.
+                let source = slotForGroup[pollingJoystickIndex] ?? pollingJoystickIndex
                 DispatchQueue.main.async {
-                    MenuBarController.shared.performAppAction(kind, targetPresetID: target)
+                    MenuBarController.shared.performAppAction(kind, targetPresetID: target, sourceJoystick: source)
                 }
             }
         }
@@ -1752,6 +2095,9 @@ class MappingEngine: ObservableObject {
             case .mouseButton:
                 if let btn = output.mouseButtonIndex {
                     if press {
+                        if let x = output.clickX, let y = output.clickY {
+                            InputSimulator.shared.placePointer(atX: x, y: y)
+                        }
                         InputSimulator.shared.mouseButtonDown(btn)
                     } else {
                         InputSimulator.shared.mouseButtonUp(btn)
@@ -2091,6 +2437,7 @@ class MappingEngine: ObservableObject {
                 var signedMagnitude: Float = 1.0   // for touchpad / motion: sign indicates direction of motion
                 if useVariable, input.type == .axis, var axisValue = state.axes[input.index] {
                     if binding?.invertAxis == true { axisValue = -axisValue }
+                    axisValue = smoothedAxis(axisValue, joystick: pollingJoystickIndex, axis: input.index)
                     let rawMag = min(abs(axisValue), 1.0)
                     // Apply inner/outer deadzone remap before the curve so
                     // the curve operates on the post-deadzone normalized
@@ -2112,6 +2459,13 @@ class MappingEngine: ObservableObject {
                     // same finger+axis all read the same motion.
                     var delta = TouchpadService.shared.peekDelta(finger: finger, axis: tpAxis)
                     if binding?.invertAxis == true { delta = -delta }
+                    // The finger's movement since the last poll, turned into
+                    // a rate by the time that poll actually took, so a late
+                    // poll does not arrive as a lurch. Lightly filtered like
+                    // the sticks: touch sampling is coarse and a finger
+                    // never moves in a straight line at one speed.
+                    delta = delta / frameScale
+                    delta = smoothedAxis(delta, joystick: pollingJoystickIndex, axis: 300 + finger * 2 + (tpAxis == .x ? 0 : 1))
                     // Filter by requested half-axis: + means motion in the
                     // positive direction counts, motion in the other direction
                     // is ignored. This lets users bind "swipe right" → mouse
@@ -2129,30 +2483,76 @@ class MappingEngine: ObservableObject {
                     magnitude = abs(signedMagnitude)
                 }
 
-                // Motion (gyro / accel) feeds the analog mouse path the same
-                // way touchpad delta does. A positive gyro-Y while bound to
-                // mouse-X+ moves the cursor right; the binding's invertAxis
-                // flag flips the polarity.
+                // Motion moves the pointer by the angle the controller turned
+                // this poll, not by its rate. Pixels = radians x gain, so a
+                // tilt and its reverse cancel exactly and the pointer comes
+                // back to where it started, however fast either half was.
+                // A positive gyro Y bound to mouse-X+ moves the pointer right;
+                // the binding's invertAxis flag flips the polarity.
                 if useVariable, input.type == .motion,
                    let channel = input.motionChannel,
-                   var motionValue = state.motion[channel] {
-                    if binding?.invertAxis == true { motionValue = -motionValue }
-                    // Gyro ratchet held: the controller can be re-aimed
-                    // without moving the cursor.
-                    if currentSlotMotionMuted { motionValue = 0 }
+                   let rate = state.motion[channel] {
+                    var angle: Float
+                    var correction: Float = 0
+                    var pointing = false
+                    if !currentSlotMotionMuted,
+                       let pending = pendingTilt(group: pollingJoystickIndex, channel: channel, state: state) {
+                        // Position control: send whatever offset is still
+                        // owed. The row that owns this sign of movement
+                        // sends it and records it as emitted; the other
+                        // row then sees nothing left to do this poll.
+                        pointing = true
+                        angle = binding?.invertAxis == true ? -pending : pending
+                    } else {
+                        angle = state.motionAngle[channel] ?? (rate * frameScale / 120)
+                        correction = state.motionCorrection[channel] ?? 0
+                        if binding?.invertAxis == true { angle = -angle; correction = -correction }
+                    }
+                    if pointing {
+                        // Half-axis ownership, then book the emitted share.
+                        switch input.axisDirection {
+                        case .positive: if angle < 0 { angle = 0 }
+                        case .negative: if angle > 0 { angle = 0 }
+                        case .none: break
+                        }
+                        if angle != 0 {
+                            let signedPending = binding?.invertAxis == true ? -angle : angle
+                            pitchAnchors[anchorKey(pollingJoystickIndex, channel)]?.emitted += signedPending
+                        }
+                        signedMagnitude = angle * 160 * Float(speed)
+                        magnitude = abs(signedMagnitude)
+                    } else if currentSlotMotionMuted {
+                        // Gyro ratchet held: re-aim without moving the pointer.
+                        // For pitch the anchor moves with the controller so
+                        // release does not snap back.
+                        signedMagnitude = 0; magnitude = 0
+                        pitchAnchorReset = true
+                    } else {
+                    // Tightening (the standard gyro-aim treatment for a hand
+                    // that is never perfectly still): below the row's
+                    // deadzone the movement is scaled down smoothly in
+                    // proportion to how slow it is, so tremor barely moves
+                    // the pointer while a deliberate slow tilt still does.
+                    // Nothing is cut outright except pure sensor noise.
+                    let tightenBelow = max(0.005, binding?.deadzone ?? 0.05)
+                    if abs(rate) < 0.005 {
+                        angle = 0
+                    } else if abs(rate) < tightenBelow {
+                        angle *= abs(rate) / tightenBelow
+                    }
+                    // The accelerometer anchor's share goes through as is.
+                    angle += correction
                     // Filter by half-axis like we do for touchpad.
                     switch input.axisDirection {
-                    case .positive: if motionValue < 0 { motionValue = 0 }
-                    case .negative: if motionValue > 0 { motionValue = 0 }
+                    case .positive: if angle < 0 { angle = 0 }
+                    case .negative: if angle > 0 { angle = 0 }
                     case .none: break
                     }
-                    // Gyro rotation rate is roughly radians/sec; tilt of a
-                    // controller during normal gameplay produces values up
-                    // to ~5 rad/s. Apply a moderate gain so a wrist twist
-                    // gives a useful cursor delta.
-                    let gain: Float = 8.0
-                    signedMagnitude = motionValue * gain
+                    // Same feel as before: at Speed 6 one radian of turn is
+                    // about 960 px, a degree about 17 px.
+                    signedMagnitude = angle * 160 * Float(speed)
                     magnitude = abs(signedMagnitude)
+                    }
                 }
 
                 // MIDI dials feed the analog mouse path the way a stick
@@ -2175,7 +2575,11 @@ class MappingEngine: ObservableObject {
                 }
 
                 let scaledSpeed: Float
-                if input.type == .touchpad || input.type == .motion {
+                if input.type == .motion {
+                    // Already whole pixels for this poll (angle x gain); no
+                    // further speed scaling. NaN guard as below.
+                    scaledSpeed = signedMagnitude.isFinite ? abs(signedMagnitude) : 0
+                } else if input.type == .touchpad {
                     // signedMagnitude already encodes direction + speed;
                     // mouseDirection picks which CGEvent axis it adds to.
                     // Guard against NaN/Inf: an uncalibrated DualSense
@@ -2188,14 +2592,24 @@ class MappingEngine: ObservableObject {
                     let raw = Float(speed) * magnitude
                     scaledSpeed = raw.isFinite ? raw : 0
                 }
-                // Accumulate into pendingMouseDelta. The poll loop flushes
-                // the total in a single CGEvent at the end of the frame so
-                // diagonal motion combines naturally.
-                switch (axis, dir) {
-                case (.horizontal, .positive): pendingMouseDeltaX += scaledSpeed
-                case (.horizontal, .negative): pendingMouseDeltaX -= scaledSpeed
-                case (.vertical, .positive): pendingMouseDeltaY += scaledSpeed
-                case (.vertical, .negative): pendingMouseDeltaY -= scaledSpeed
+                // Everything reaches the pump as a rate: sticks and dials by
+                // position, the gyroscope by angular rate, the touchpad by
+                // finger movement over the poll interval.
+                // The touchpad's displacement was turned into a rate above,
+                // so it takes the pump path too. Motion is the exception: it
+                // is an exact pixel delta for this poll and goes straight to
+                // the frame accumulator, so nothing between the sensor and
+                // the pointer can round a movement and its reverse apart.
+                let isRate = input.type != .motion
+                switch (axis, dir, isRate) {
+                case (.horizontal, .positive, false): pendingMotionDeltaX += scaledSpeed
+                case (.horizontal, .negative, false): pendingMotionDeltaX -= scaledSpeed
+                case (.vertical, .positive, false): pendingMotionDeltaY += scaledSpeed
+                case (.vertical, .negative, false): pendingMotionDeltaY -= scaledSpeed
+                case (.horizontal, .positive, true): pendingMouseRateX += scaledSpeed
+                case (.horizontal, .negative, true): pendingMouseRateX -= scaledSpeed
+                case (.vertical, .positive, true): pendingMouseRateY += scaledSpeed
+                case (.vertical, .negative, true): pendingMouseRateY -= scaledSpeed
                 }
 
             case .mouseWheel:
@@ -2207,6 +2621,7 @@ class MappingEngine: ObservableObject {
                 var magnitude: Float = 1.0
                 if useVariable, input.type == .axis, var axisValue = state.axes[input.index] {
                     if binding?.invertAxis == true { axisValue = -axisValue }
+                    axisValue = smoothedAxis(axisValue, joystick: pollingJoystickIndex, axis: input.index)
                     let rawMag = min(abs(axisValue), 1.0)
                     magnitude = remapMagnitude(rawMag, binding: binding)
                     if let curve = binding?.sensitivityCurve {
@@ -2229,17 +2644,27 @@ class MappingEngine: ObservableObject {
                     }
                 }
 
-                // Same NaN guard as the mouse-motion path above.
+                // Same NaN guard as the mouse-motion path above. Stick-driven
+                // scrolling is time-scaled like the pointer; a dial's value is
+                // a position, not a rate, and is left alone.
                 let rawScroll = Float(speed) * magnitude
                 // Clamp before Int32(): an absurd imported scroll speed would
                 // otherwise trap even though isFinite is true.
                 let scaledSpeed = rawScroll.isFinite
                     ? max(-1_000_000, min(1_000_000, rawScroll)) : 0
-                switch (axis, dir) {
-                case (.horizontal, .positive): pendingScrollDeltaX += scaledSpeed
-                case (.horizontal, .negative): pendingScrollDeltaX -= scaledSpeed
-                case (.vertical, .positive): pendingScrollDeltaY += scaledSpeed
-                case (.vertical, .negative): pendingScrollDeltaY -= scaledSpeed
+                // Every scroll source is a rate while it is active (a stick
+                // or dial by its position, a touchpad finger while it moves),
+                // and goes to the pump.
+                let scrollIsRate = true
+                switch (axis, dir, scrollIsRate) {
+                case (.horizontal, .positive, false): pendingScrollDeltaX += scaledSpeed
+                case (.horizontal, .negative, false): pendingScrollDeltaX -= scaledSpeed
+                case (.vertical, .positive, false): pendingScrollDeltaY += scaledSpeed
+                case (.vertical, .negative, false): pendingScrollDeltaY -= scaledSpeed
+                case (.horizontal, .positive, true): pendingScrollRateX += scaledSpeed
+                case (.horizontal, .negative, true): pendingScrollRateX -= scaledSpeed
+                case (.vertical, .positive, true): pendingScrollRateY += scaledSpeed
+                case (.vertical, .negative, true): pendingScrollRateY -= scaledSpeed
                 }
 
             case .absoluteVolume:
@@ -2327,7 +2752,8 @@ class MappingEngine: ObservableObject {
            joystickIndex < controllerService.connectedControllers.count {
             let controller = controllerService.connectedControllers[joystickIndex]
             let intensity = binding.hapticIntensity ?? 0.6
-            FeedbackService.shared.vibrate(controller: controller, intensity: intensity)
+            FeedbackService.shared.vibrate(controller: controller, intensity: intensity,
+                                           durationMs: binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)
         }
 
         if binding.speechEnabled == true {

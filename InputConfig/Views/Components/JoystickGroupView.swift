@@ -10,6 +10,8 @@ struct JoystickGroupView: View {
     let onRemoveBinding: (Int) -> Void
     let onDuplicateBinding: (Int) -> Void
     let onScanInput: (Int) -> Void
+    /// Scan for a row's chord control (the second input it must hold).
+    var onScanModifierInput: (Int) -> Void = { _ in }
     let onSortBindings: () -> Void
     let onDuplicate: () -> Void
     let onRemoveJoystick: () -> Void
@@ -23,7 +25,11 @@ struct JoystickGroupView: View {
 
     @EnvironmentObject var mappingEngine: MappingEngine
     @EnvironmentObject var controllerService: GameControllerService
+    /// The live sets that light a row, observed here and nowhere else.
+    @ObservedObject private var liveInputs = LiveInputStore.shared
+    @ObservedObject private var tapActivity = ChassisTapActivity.shared
     @ObservedObject private var rawHIDService = RawHIDGamepadService.shared
+    @ObservedObject private var deviceRegistry = HIDDeviceRegistry.shared
     @ObservedObject private var externalInput = ExternalInputDeviceService.shared
     /// The binding being dragged by its handle, if any.
     /// Live row-reorder state. Held as plain `@State` (not `@StateObject`) so
@@ -45,17 +51,26 @@ struct JoystickGroupView: View {
     /// never needs to trigger a redraw.
     @State private var rowHeights = RowFrameStore()
     @State private var preSortSnapshot: [BindingModel]?
-    /// Inline rename popover state for the "Custom name..." menu item.
+    /// Inline rename popover state for the "Custom name…" menu item.
     @State private var renamePopoverOpen: Bool = false
     @State private var renameDraft: String = ""
     /// Stick Settings popover: set the deadzone across every axis binding
     /// in this joystick in one move instead of expanding each row's Options.
     @State private var showStickSettings = false
+    @State private var newSectionPopoverOpen = false
+    @State private var newSectionName = ""
     @State private var bulkDeadzone: Double = 0.25
+
+    /// Space between binding boxes, and from the boxes to the group's edge.
+    static let rowGap: CGFloat = 6
+    static let rowInset: CGFloat = 8
 
     var body: some View {
         VStack(spacing: 0) {
             headerView
+                // Older presets were born with this placeholder as their
+                // tag; it is not a tag, so clear it on sight.
+                .onAppear { if joystick.tag == "Add bindings here" { joystick.tag = "" } }
 
             if joystick.isExpanded {
                 // Compute the per-slot extras snapshot ONCE per render and reuse
@@ -63,7 +78,7 @@ struct JoystickGroupView: View {
                 // under a lock, so calling it once per binding row turned the
                 // editor render into an O(rows) hot path (the biggest UI-lag
                 // contributor while a preset with many binds is open).
-                let extras = controllerService.extraButtonsSnapshot(for: joystickIndex)
+                let extras = controllerService.extraButtonsSnapshot(for: deviceSlot)
                 // Rows never display press state, but `pressed` participates
                 // in ExtraButton's Equatable, so passing the live snapshot
                 // re-rendered every picker-heavy row each time any extra
@@ -78,9 +93,41 @@ struct JoystickGroupView: View {
                 // Plain VStack on purpose: lazy rows re-triggered heavy
                 // layout bursts under rapid page-down scrolling. Eager rows
                 // measured freeze-proof and CPU-idle during wheel scrolling.
-                VStack(spacing: 2) {
+                // Column titles for the two boxes every row is built from.
+                // Positioned from the row's own column metrics so the words
+                // sit exactly over the boxes they name.
+                // The same bracket the home page draws over its showcase
+                // grid: one over the input columns, one over the outputs.
+                if !joystick.bindings.isEmpty {
+                    HStack(spacing: 0) {
+                        Color.clear.frame(width: Self.rowInset + BindingRowView.inputBracketLeading, height: 1)
+                        BracketHeader(title: "Input", font: .callout.weight(.semibold))
+                            .frame(width: BindingRowView.inputBracketWidth)
+                        Color.clear.frame(width: BindingRowView.outputBracketLeading
+                                          - BindingRowView.inputBracketLeading
+                                          - BindingRowView.inputBracketWidth, height: 1)
+                        BracketHeader(title: "Output", font: .callout.weight(.semibold))
+                        Color.clear.frame(width: BindingRowView.bracketTrailing + Self.rowInset, height: 1)
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                    .accessibilityHidden(true)
+                }
+                // Each binding is its own box with a gap between them, so a
+                // long preset reads as a stack of cards, not a wall of text.
+                VStack(spacing: Self.rowGap) {
                     ForEach(joystick.bindings.indices, id: \.self) { index in
                         let binding = joystick.bindings[index]
+                        // A heading above the first row of each run of rows
+                        // that share a section name.
+                        if let section = binding.section, !section.isEmpty,
+                           index == 0 || joystick.bindings[index - 1].section != section {
+                            SectionHeadingRow(
+                                name: section,
+                                onRename: { renameSection(startingAt: index, to: $0) },
+                                onAddRow: { addRow(toSectionStartingAt: index) },
+                                onDissolve: { dissolveSection(startingAt: index) })
+                        }
                         // Serialize the input once and reuse it across the three
                         // highlight membership checks (was rebuilt 3x per row).
                         let inputKey = binding.input.serialized
@@ -101,9 +148,10 @@ struct JoystickGroupView: View {
                             // engine's preset-aware set, whichever is firing.
                             // This works even with no preset active.
                             isHighlighted:
-                                mappingEngine.activeInputsPublished.contains(inputKey)
-                                || controllerService.rawActiveInputs.contains(inputKey)
-                                || externalInput.rawActiveInputs.contains(inputKey),
+                                liveInputs.active.contains(inputKey)
+                                || liveInputs.raw.contains(inputKey)
+                                || externalInput.rawActiveInputs.contains(inputKey)
+                                || tapActivity.activeKeys.contains(inputKey),
                             displayNumber: index + 1,
                             isPulsing: pulsingBindingID == binding.id,
                             // Named extras (paddles/FN/mute/Home) for the
@@ -112,7 +160,9 @@ struct JoystickGroupView: View {
                             // the service itself.
                             extraButtons: rowExtras,
                             availablePresets: availablePresets,
+                            slot: joystickIndex,
                             onScan: { onScanInput(index) },
+                            onScanModifier: { onScanModifierInput(index) },
                             onRemove: { onRemoveBinding(index) },
                             onDuplicate: { onDuplicateBinding(index) },
                             onDragChanged: { dy in dragRow(binding.id, at: index, by: dy) },
@@ -133,18 +183,47 @@ struct JoystickGroupView: View {
                         .modifier(RowDragLift(lift: rowDrag.lift(for: binding.id)))
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.horizontal, Self.rowInset)
+                .padding(.vertical, Self.rowGap)
                 // Suppress implicit transitions on row insertion/removal so
                 // scrolling does not trigger animation work for new rows.
                 .animation(nil, value: joystick.bindings.count)
                 .coordinateSpace(name: Self.listSpace)
+
+                // A fresh group: offer the whole device in one click, so a
+                // new preset does not have to be built one row at a time.
+                if joystick.bindings.isEmpty {
+                    let caps = scaffoldCapabilities
+                    VStack(spacing: 8) {
+                        Button {
+                            addScaffold(scaffoldControls)
+                        } label: {
+                            Label("Automatically insert available inputs", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.solid)
+                        .disabled(caps.isEmpty)
+                        .help("Adds a row for each input the device reports right now, grouped by part, each waiting for you to choose its output")
+                        Text(caps.isEmpty
+                             ? (caps.note ?? "Nothing to insert for this device.")
+                             : "InputConfig has detected \(caps.deviceArticle) \(caps.deviceName), which has \(caps.summary).")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 520)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 18)
+                    .padding(.bottom, 10)
+                }
 
                 Button(action: onAddBinding) {
                     HStack {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(.green)
                         Text("Add a new bind")
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -171,110 +250,216 @@ struct JoystickGroupView: View {
                 withAnimation { joystick.isExpanded.toggle() }
             } label: {
                 Image(systemName: joystick.isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 20)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(joystick.isExpanded ? "Collapse joystick group" : "Expand joystick group")
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
                     // Slot identity picker - tap to bind this slot to a
                     // specific detected device, or set a custom name.
-                    // Currently this view doesn't own the assignment
-                    // (slot index → device) so the picker primarily acts
-                    // on the human-readable name; future work threads
-                    // a real binding through, e.g. by storing the
-                    // selected device's persistentIdentifier in
-                    // JoystickMapping.
                     deviceMenu
-                    Text("#\(joystickIndex)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    if !(controllerName.contains("No controller") && isDeviceIndependentGroup) {
-                        Text(controllerName)
-                            .font(.caption2)
-                            .foregroundStyle(controllerName.contains("No controller") ? .red.opacity(0.6) : .secondary)
+                    // What the group is actually reading: the device picked
+                    // from the menu when it is connected, else the slot's
+                    // own controller. A slot with no controller says so
+                    // quietly, unless the group is MIDI / keyboard / mouse.
+                    if joystick.customName != nil, !deviceSubtitle.contains("No controller") {
+                        Text("· \(deviceSubtitle)")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else if controllerName.contains("No controller") && !isDeviceIndependentGroup {
+                        Text("· no controller in this slot")
+                            .font(.callout)
+                            .foregroundStyle(.red.opacity(0.7))
                             .lineLimit(1)
                     }
                 }
-                TextField("Tag / comment", text: $joystick.tag)
-                    .font(.caption)
+                TextField("What this device does in the preset (optional)", text: $joystick.tag)
+                    .font(.callout)
                     .textFieldStyle(.plain)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            HStack(spacing: 4) {
-                Button {
-                    preSortSnapshot = joystick.bindings
-                    onSortBindings()
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help("Sort bindings")
-                .accessibilityLabel("Sort bindings")
-
-                if preSortSnapshot != nil {
-                    Button {
-                        if let snapshot = preSortSnapshot {
-                            withAnimation { joystick.bindings = snapshot }
-                            preSortSnapshot = nil
-                        }
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Undo sort")
-                    .accessibilityLabel("Undo sort")
-                }
-
-                Button {
-                    // Open on the current value: seed from the first axis
-                    // binding that has an explicit deadzone set.
-                    if let dz = joystick.bindings.first(where: {
-                        $0.input.type == .axis && $0.deadzone != nil
-                    })?.deadzone {
-                        bulkDeadzone = Double(dz)
-                    }
-                    showStickSettings = true
-                } label: {
-                    Image(systemName: "dial.low")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help("Stick settings: set the deadzone for every axis binding at once")
-                .accessibilityLabel("Stick settings")
-                .accessibilityHint("Sets the deadzone for every axis binding in this joystick at once.")
+            // One quiet menu instead of a row of icons.
+            deviceActionsMenu
                 .popover(isPresented: $showStickSettings, arrowEdge: .bottom) {
                     stickSettingsPopover
                 }
-
-                CopyIconButton(action: onDuplicate,
-                               helpText: "Clone this joystick group",
-                               size: .caption)
-
-                Button(action: onRemoveJoystick) {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-                .help("Remove this joystick group")
-                .accessibilityLabel("Remove joystick group")
-            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.2))
+    }
+
+    // MARK: - Every control, in sections
+
+    /// What the slot's device reports right now, read through the services.
+    /// The slot whose device this group is set up for: the one picked from
+    /// the device menu when that device is connected, otherwise this
+    /// group's own position. Everything about the device (the inventory,
+    /// the inserted rows, the name under the header) follows this.
+    /// What sits under the name in the header: the connected device this
+    /// group reads, with what it offers, so switching device updates here
+    /// as well as in the rows.
+    private var deviceSubtitle: String {
+        let caps = scaffoldCapabilities
+        if caps.note != nil { return controllerName }
+        return caps.summary.isEmpty ? caps.deviceName : "\(caps.deviceName): \(caps.summary)"
+    }
+
+    private var deviceSlot: Int {
+        controllerService.effectiveSlot(for: joystick, groupIndex: joystickIndex)
+    }
+
+    private var scaffoldCapabilities: ControllerScaffold.DeviceCapabilities {
+        ControllerScaffold.capabilities(service: controllerService, slot: deviceSlot,
+                                        inputKind: joystick.inputKind)
+    }
+
+    private var scaffoldDeviceName: String { scaffoldCapabilities.deviceName }
+
+    private var scaffoldControls: [ControllerScaffold.Control] {
+        ControllerScaffold.controls(for: scaffoldCapabilities)
+    }
+
+    /// The inventory line under the prompt: what the device presents, and
+    /// why the list is short when it is.
+    private var scaffoldSummary: String {
+        let caps = scaffoldCapabilities
+        var text = caps.summary
+        if let note = caps.note { text = text.isEmpty ? note : text + ". " + note }
+        return text
+    }
+
+    /// Everything that used to be a row of icons on the header: inserting
+    /// inputs, sections, sorting, stick settings, duplicate, remove.
+    private var deviceActionsMenu: some View {
+        Menu {
+            Button("Automatically insert available inputs") { addScaffold(scaffoldControls) }
+                .disabled(scaffoldControls.isEmpty)
+            Menu("Insert one part") {
+                ForEach(ControllerScaffold.sections(of: scaffoldControls), id: \.self) { section in
+                    Button(section) { addScaffold(scaffoldControls.filter { $0.section == section }) }
+                }
+            }
+            .disabled(scaffoldControls.isEmpty)
+            Button("New section…") {
+                newSectionName = ""
+                newSectionPopoverOpen = true
+            }
+            Divider()
+            Button("Sort rows into sections") { sortIntoSections() }
+                .disabled(joystick.bindings.isEmpty)
+            Button("Sort rows by input") {
+                preSortSnapshot = joystick.bindings
+                onSortBindings()
+            }
+            .disabled(joystick.bindings.isEmpty)
+            if preSortSnapshot != nil {
+                Button("Undo sort") {
+                    if let snapshot = preSortSnapshot {
+                        withAnimation { joystick.bindings = snapshot }
+                        preSortSnapshot = nil
+                    }
+                }
+            }
+            Divider()
+            Button("Stick settings…") {
+                if let dz = joystick.bindings.first(where: {
+                    $0.input.type == .axis && $0.deadzone != nil
+                })?.deadzone {
+                    bulkDeadzone = Double(dz)
+                }
+                showStickSettings = true
+            }
+            Divider()
+            Button("Duplicate this input device", action: onDuplicate)
+            Button("Remove this input device", role: .destructive, action: onRemoveJoystick)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Insert inputs, sections, sorting, stick settings, duplicate, or remove")
+        .accessibilityLabel("Input device actions")
+        .popover(isPresented: $newSectionPopoverOpen, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("New section")
+                    .font(.callout.weight(.semibold))
+                TextField("e.g. Camera", text: $newSectionName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                    .onSubmit { commitNewSection() }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { newSectionPopoverOpen = false }
+                        .buttonStyle(.solidSecondaryCompact)
+                    Button("Add") { commitNewSection() }
+                        .buttonStyle(.solid)
+                        .disabled(newSectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private func addScaffold(_ controls: [ControllerScaffold.Control]) {
+        let rows = ControllerScaffold.bindings(for: controls, existing: joystick.bindings)
+        guard !rows.isEmpty else { return }
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { joystick.bindings.append(contentsOf: rows) }
+    }
+
+    private func sortIntoSections() {
+        preSortSnapshot = joystick.bindings
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { joystick.bindings = ControllerScaffold.grouped(joystick.bindings) }
+    }
+
+    /// A section is its rows, so a new one starts with one blank row.
+    private func commitNewSection() {
+        let name = newSectionName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        newSectionPopoverOpen = false
+        var row = BindingModel(input: InputEvent.button(0), outputs: [])
+        row.section = name
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { joystick.bindings.append(row) }
+    }
+
+    /// Indices of the run of rows sharing the section that starts at `start`.
+    private func sectionRun(startingAt start: Int) -> Range<Int> {
+        guard joystick.bindings.indices.contains(start) else { return start..<start }
+        let name = joystick.bindings[start].section
+        var end = start
+        while end < joystick.bindings.count, joystick.bindings[end].section == name { end += 1 }
+        return start..<end
+    }
+
+    private func renameSection(startingAt start: Int, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        for i in sectionRun(startingAt: start) { joystick.bindings[i].section = trimmed }
+    }
+
+    private func dissolveSection(startingAt start: Int) {
+        for i in sectionRun(startingAt: start) { joystick.bindings[i].section = nil }
+    }
+
+    private func addRow(toSectionStartingAt start: Int) {
+        let run = sectionRun(startingAt: start)
+        var row = BindingModel(input: InputEvent.button(0), outputs: [])
+        row.section = joystick.bindings[start].section
+        withAnimation { joystick.bindings.insert(row, at: run.upperBound) }
     }
 
     // MARK: - Stick settings (bulk deadzone)
@@ -354,7 +539,7 @@ struct JoystickGroupView: View {
     /// every input device the app knows about (GameController-framework
     /// controllers, raw HID gamepads, attached keyboards, attached
     /// mice) so the user can label this slot with the device they
-    /// want it to represent. "Set custom name..." opens an inline
+    /// want it to represent. "Set custom name…" opens an inline
     /// popover with a TextField for free-form labels.
     /// Pre-computed device lists pulled out of the Menu's MenuBuilder
     /// closure. Inline `let` + `filter` chains inside @ViewBuilder /
@@ -368,6 +553,59 @@ struct JoystickGroupView: View {
 
     private var rawHIDNames: [String] {
         rawHIDService.connectedGamepads.map(\.displayName)
+    }
+
+    private var steamConnected: Bool { controllerService.steamControllerSlot != nil }
+
+    /// One transport's devices from InputConfig ▸ Devices, each usable
+    /// from here: a gamepad already being read is picked as a controller;
+    /// one the app is not reading yet is connected by hand and picked; a
+    /// keyboard, mouse, or headset picks the matching Mac input path.
+    @ViewBuilder
+    private func transportSection(_ transport: HIDDeviceRegistry.Transport) -> some View {
+        let entries = deviceRegistry.entries(on: transport)
+        Section(transport.rawValue) {
+            if entries.isEmpty {
+                Text("No \(transport.rawValue) devices")
+            }
+            ForEach(entries) { entry in
+                if entry.adoptableKind != nil {
+                    if rawHIDService.isReading(vendorID: entry.vendorID, productID: entry.productID) {
+                        Button(entry.name) {
+                            joystick.customName = entry.name
+                            joystick.inputKind = .controller
+                        }
+                    } else {
+                        Button("Connect \(entry.name)") { connect(entry) }
+                    }
+                } else {
+                    switch entry.primaryKind {
+                    case .keyboard, .consumer:
+                        Button("\(entry.name) (keyboard input)") {
+                            joystick.customName = entry.name
+                            joystick.inputKind = .keyboard
+                        }
+                    case .pointer:
+                        Button("\(entry.name) (mouse input)") {
+                            joystick.customName = entry.name
+                            joystick.inputKind = .mouse
+                        }
+                    default:
+                        Text(entry.name)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Open the device by hand (same as InputConfig ▸ Devices) and point
+    /// this slot at it.
+    private func connect(_ entry: HIDDeviceRegistry.Entry) {
+        if let device = deviceRegistry.adoptableDevice(for: entry) {
+            rawHIDService.adopt(device)
+        }
+        joystick.customName = entry.name
+        joystick.inputKind = .controller
     }
 
     private var keyboardNames: [String] {
@@ -386,7 +624,11 @@ struct JoystickGroupView: View {
                 joystick.inputKind = .auto
             }
             Divider()
+            // Everything the app can hear from, by where it comes from.
             Section("Game controllers") {
+                if connectedControllerNames.isEmpty && rawHIDNames.isEmpty && !steamConnected {
+                    Text("None connected")
+                }
                 ForEach(Array(connectedControllerNames.enumerated()),
                         id: \.offset) { _, name in
                     Button(name) {
@@ -401,22 +643,49 @@ struct JoystickGroupView: View {
                         joystick.inputKind = .controller
                     }
                 }
-            }
-            Section("Keyboards") {
-                ForEach(Array(keyboardNames.enumerated()),
-                        id: \.offset) { _, name in
-                    Button(name) {
-                        joystick.customName = name
-                        joystick.inputKind = .keyboard
+                if steamConnected {
+                    Button("Steam Controller") {
+                        joystick.customName = "Steam Controller"
+                        joystick.inputKind = .controller
                     }
                 }
             }
-            Section("Mice") {
-                ForEach(Array(mouseNames.enumerated()),
-                        id: \.offset) { _, name in
-                    Button(name) {
-                        joystick.customName = name
-                        joystick.inputKind = .mouse
+            transportSection(.bluetooth)
+            transportSection(.usb)
+            if !deviceRegistry.entries(on: .other).isEmpty {
+                transportSection(.other)
+            }
+            Section("Keyboard and mouse") {
+                // The event taps hear every keyboard and mouse, so these
+                // are always here, connected or not.
+                Button("This Mac's keyboard (any keyboard)") {
+                    joystick.customName = "Keyboard"
+                    joystick.inputKind = .keyboard
+                }
+                Button("This Mac's mouse or trackpad (any mouse)") {
+                    joystick.customName = "Mouse"
+                    joystick.inputKind = .mouse
+                }
+            }
+            Section("Screen") {
+                // The display as an input: screen regions the pointer
+                // enters. Listed as its own device so a screen preset is
+                // never labelled with whichever controller is plugged in.
+                Button("This Mac's displays (screen regions)") {
+                    joystick.customName = "Screen"
+                    joystick.inputKind = .screen
+                }
+            }
+            Section("MIDI") {
+                let sources = MIDIInputService.shared.connectedDevices()
+                if sources.isEmpty {
+                    Text("No MIDI sources connected")
+                } else {
+                    ForEach(sources) { source in
+                        Button(source.name) {
+                            joystick.customName = source.name
+                            joystick.inputKind = .midi
+                        }
                     }
                 }
             }
@@ -428,11 +697,11 @@ struct JoystickGroupView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(resolvedHeaderName)
-                    .font(.caption.weight(.medium))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(joystick.customName == nil ? .secondary : .primary)
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -518,7 +787,7 @@ struct JoystickGroupView: View {
 
         rowDrag.lift(for: id).y = translation
 
-        // Where the row's centre now sits, compared against every other row's
+        // Where the row's center now sits, compared against every other row's
         // measured position. Row tops and heights are read from the layout
         // itself, so a tall expanded row is handled the same as a short one.
         let centre = home.midY + translation
@@ -588,6 +857,13 @@ struct JoystickGroupView: View {
             else { return }
             joystick.bindings.move(fromOffsets: IndexSet(integer: from),
                                    toOffset: to > from ? to + 1 : to)
+            // A row dropped among other rows takes their section, so the
+            // headings stay one run per section.
+            if let landed = joystick.bindings.firstIndex(where: { $0.id == draggedID }) {
+                let above = landed > 0 ? joystick.bindings[landed - 1].section : nil
+                let below = landed + 1 < joystick.bindings.count ? joystick.bindings[landed + 1].section : nil
+                joystick.bindings[landed].section = landed > 0 ? above : below
+            }
         }
     }
 
@@ -629,7 +905,9 @@ private struct EquatableBindingRow: View, Equatable {
     let isPulsing: Bool
     let extraButtons: [GameControllerService.ExtraButton]
     let availablePresets: [(id: UUID, name: String)]
+    let slot: Int
     let onScan: () -> Void
+    let onScanModifier: () -> Void
     let onRemove: () -> Void
     let onDuplicate: () -> Void
     let onDragChanged: (CGFloat) -> Void
@@ -644,6 +922,7 @@ private struct EquatableBindingRow: View, Equatable {
             && l.displayNumber == r.displayNumber
             && l.isPulsing == r.isPulsing
             && l.extraButtons == r.extraButtons
+            && l.slot == r.slot
             && l.availablePresets.count == r.availablePresets.count
             && l.availablePresets.elementsEqual(r.availablePresets) {
                 $0.id == $1.id && $0.name == $1.name
@@ -654,6 +933,7 @@ private struct EquatableBindingRow: View, Equatable {
         BindingRowView(
             binding: $binding,
             onScan: onScan,
+            onScanModifier: onScanModifier,
             onRemove: onRemove,
             onDuplicate: onDuplicate,
             onDragChanged: onDragChanged,
@@ -662,7 +942,8 @@ private struct EquatableBindingRow: View, Equatable {
             displayNumber: displayNumber,
             isPulsing: isPulsing,
             extraButtons: extraButtons,
-            availablePresets: availablePresets
+            availablePresets: availablePresets,
+            slot: slot
         )
     }
 }
@@ -730,5 +1011,74 @@ private struct RowDragLift: ViewModifier {
                     radius: lift.lifted ? 8 : 0,
                     y: lift.lifted ? 4 : 0)
             .zIndex(lift.lifted ? 1 : 0)
+    }
+}
+
+
+/// The heading above a run of rows that share a section. Click the name to
+/// rename it; the plus adds a row to the section; the x lifts the heading
+/// off its rows (the rows stay).
+struct SectionHeadingRow: View {
+    let name: String
+    let onRename: (String) -> Void
+    let onAddRow: () -> Void
+    let onDissolve: () -> Void
+
+    @State private var editing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if editing {
+                TextField("Section name", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.callout.weight(.semibold))
+                    .focused($focused)
+                    .onSubmit { commit() }
+                    .onChange(of: focused) { _, f in if !f { commit() } }
+                    .frame(maxWidth: 240)
+            } else {
+                Button {
+                    draft = name
+                    editing = true
+                    DispatchQueue.main.async { focused = true }
+                } label: {
+                    Text(name)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Rename this section")
+            }
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 1)
+            Button(action: onAddRow) {
+                Image(systemName: "plus.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Add a row to this section")
+            Button(action: onDissolve) {
+                Image(systemName: "xmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove this heading (the rows stay)")
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Section \(name)")
+    }
+
+    private func commit() {
+        guard editing else { return }
+        editing = false
+        onRename(draft)
     }
 }

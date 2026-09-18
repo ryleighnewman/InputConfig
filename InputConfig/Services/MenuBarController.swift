@@ -197,11 +197,33 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Rebuild the status item glyph for the current running state AND the
     /// current menu bar appearance. Call whenever either changes.
-    private func refreshMenuBarImage() {
+    func refreshMenuBarImage() {
         guard let button = statusItem?.button else { return }
         let running = mappingEngine?.isRunning ?? false
         button.image = Self.makeMenuBarImage(running: running,
                                              appearance: button.effectiveAppearance)
+    }
+
+    /// The glyph the user picked in Settings ▸ General ▸ Dock & Menu Bar.
+    static var iconChoice: MenuBarIconChoice {
+        MenuBarIconChoice(rawValue: UserDefaults.standard.string(forKey: MenuBarIconChoice.storageKey) ?? "")
+            ?? .controller
+    }
+
+    /// The base artwork for the chosen icon, sized for the menu bar.
+    private static func baseImage(for choice: MenuBarIconChoice) -> (image: NSImage, size: NSSize)? {
+        if choice == .controller {
+            guard let base = NSImage(named: "ControllerGlyph") else { return nil }
+            return (base, NSSize(width: 26, height: 17.4))
+        }
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        guard let symbol = NSImage(systemSymbolName: choice.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return nil }
+        // Symbols vary in aspect; keep the height the bar expects and let
+        // the width follow.
+        let h: CGFloat = 17.4
+        let w = max(h, symbol.size.width * h / max(1, symbol.size.height))
+        return (symbol, NSSize(width: w.rounded(), height: h))
     }
 
     /// The menu bar glyph (the app's own controller artwork). Idle: template
@@ -213,8 +235,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// either way, like the way macOS menu bar icons adapt.
     private static func makeMenuBarImage(running: Bool,
                                          appearance: NSAppearance) -> NSImage? {
-        let size = NSSize(width: 26, height: 17.4)
-        guard let base = NSImage(named: "ControllerGlyph") else { return nil }
+        guard let (base, size) = baseImage(for: iconChoice) else { return nil }
         if running {
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let fill: NSColor = isDark
@@ -277,7 +298,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         // Make the popover key so its SwiftUI buttons receive clicks.
         pop.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -309,9 +330,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Lives here because this controller already holds app-lifetime
     /// references to the store and engine and performs the same activation
     /// work for menu clicks, so the feature works with the window closed.
-    func performAppAction(_ kind: AppActionKind, targetPresetID: UUID?) {
+    func performAppAction(_ kind: AppActionKind, targetPresetID: UUID?, sourceJoystick: Int = 0) {
         guard let store = presetStore, let engine = mappingEngine else { return }
+        ActivityLog.shared.event("Engine", "App action: \(kind.displayName)", slot: sourceJoystick)
         switch kind {
+        case .rezeroMotion:
+            // The controller that pressed the button gets its resting zero
+            // snapshotted, exactly like the editor's Quick Zero button. It
+            // should be at rest when this fires; a paddle or an unused
+            // button next to the aim stick is the usual home for it.
+            controllerService?.rezeroMotion(slot: sourceJoystick)
+            engine.reanchorMotion()
+        case .centerPointer:
+            InputSimulator.shared.centerPointerOnCurrentScreen()
+            engine.reanchorMotion()
         case .activatePreset:
             guard let id = targetPresetID,
                   let preset = store.presets.first(where: { $0.id == id }),
@@ -321,7 +353,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             store.activatePreset(preset)
             engine.start(with: preset)
         case .nextPreset, .previousPreset:
-            let usable = store.presets.filter { $0.isRunnable }
+            // Cycles within the active preset's folder, in sidebar order, so
+            // a button can step through the two or three layouts someone
+            // actually uses rather than every preset installed. An ungrouped
+            // preset, or none active, cycles through the whole list.
+            let active = store.presets.first { $0.id == store.activePresetId }
+            let pool: [Preset] = {
+                if let folder = active?.groupID {
+                    let inFolder = store.presets(in: folder).filter { $0.isRunnable }
+                    if inFolder.count > 1 { return inFolder }
+                }
+                return store.presets.filter { $0.isRunnable }
+            }()
+            let usable = pool
             guard !usable.isEmpty else { return }
             let step = (kind == .nextPreset) ? 1 : -1
             let nextIndex: Int
@@ -350,7 +394,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     // MARK: - Window actions
 
     @objc private func openMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         // Prefer a real main-capable window. The old predicate
         // (title match OR non-nil contentView) was true for nearly every
         // window, including panels and the status item's own window, so
@@ -373,12 +417,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     @objc private func openHelpGuides() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         HelpGuideWindowController.shared.show()
     }
 
@@ -416,7 +460,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func openTipJar() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         TipJarWindowController.shared.show()
     }
 
@@ -618,31 +662,70 @@ private struct MenuBarPopoverView: View {
     }
 
     /// Always present, whether or not anything is running, so it is in the
-    /// same place every time someone reaches for it.
+    /// same place every time someone reaches for it. Shows every way to
+    /// reach it right now: the shortcut, the controller hold, and any
+    /// control the active preset binds to it.
     private var emergencyStopButton: some View {
-        Button {
-            EmergencyStopService.shared.stop(reason: .menu)
+        let service = EmergencyStopService.shared
+        let shortcut = service.isEnabled ? service.spec.displayString : nil
+        var ways: [String] = []
+        if service.controllerHoldEnabled {
+            let name = BindingRowView.standardButtonLabels.first { $0.index == service.controllerButton }?.label
+                ?? "Button \(service.controllerButton)"
+            let secs = service.holdSeconds
+            ways.append("Hold \(name) \(secs == secs.rounded() ? String(Int(secs)) : String(secs)) s")
+        }
+        let presetWays = activePresetEmergencyInputs
+        if !presetWays.isEmpty {
+            ways.append("This preset: " + presetWays.joined(separator: ", "))
+        }
+        return Button {
+            service.stop(reason: .menu)
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "exclamationmark.octagon.fill")
                     .font(.system(size: 14))
-                Text("Emergency Stop")
-                    .font(.system(size: 12, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Emergency Stop")
+                        .font(.system(size: 12, weight: .semibold))
+                    if !ways.isEmpty {
+                        Text(ways.joined(separator: " \u{00B7} "))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
                 Spacer(minLength: 0)
-                Text(EmergencyStopService.shared.isEnabled
-                     ? EmergencyStopService.shared.spec.displayString : "")
-                    .font(.system(size: 11).monospaced())
-                    .foregroundStyle(.secondary)
+                if let shortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11).monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
             .foregroundStyle(.red)
             .padding(.horizontal, 11)
             .frame(maxWidth: .infinity)
-            .frame(height: 34)
+            .frame(height: ways.isEmpty ? 34 : 42)
             .innerWell(radius: 9)
             .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)
         .help("Stop the engine and release every held key, button, and note.")
+    }
+
+    /// Controls in the active preset that are bound to Emergency Stop, as
+    /// the labels the editor uses for them.
+    private var activePresetEmergencyInputs: [String] {
+        guard let preset = activePreset else { return [] }
+        return preset.joysticks.flatMap(\.bindings)
+            .filter { b in b.outputs.contains { $0.type == .appAction && $0.appActionKind == .emergencyStop } }
+            .map { b in
+                if b.input.type == .button,
+                   let std = BindingRowView.standardButtonLabels.first(where: { $0.index == b.input.index }) {
+                    return std.label
+                }
+                return b.input.displayName
+            }
     }
 
     private func squareButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
@@ -741,6 +824,52 @@ private struct MenuFooterIcon: View {
             Image(systemName: symbol).iconTint(tint)
         } else {
             Image(systemName: symbol).foregroundStyle(.secondary)
+        }
+    }
+}
+
+
+/// What sits in the menu bar. People use InputConfig for very different
+/// things (a game pad, a MIDI deck, an accessibility switch, a hearing aid),
+/// so the glyph can say which.
+enum MenuBarIconChoice: String, CaseIterable, Identifiable {
+    case controller, gamepad, arcade, dpad, keyboard, mouse, piano, note, tap, wheelchair, headphones, pointer
+
+    var id: String { rawValue }
+    static let storageKey = "InputConfig.menuBarIcon"
+
+    /// SF Symbol name; the default uses the app's own controller artwork.
+    var symbol: String {
+        switch self {
+        case .controller: return "gamecontroller"
+        case .gamepad: return "gamecontroller.fill"
+        case .arcade: return "arcade.stick.console.fill"
+        case .dpad: return "dpad.fill"
+        case .keyboard: return "keyboard.fill"
+        case .mouse: return "computermouse.fill"
+        case .piano: return "pianokeys"
+        case .note: return "music.note"
+        case .tap: return "hand.tap.fill"
+        case .wheelchair: return "figure.roll"
+        case .headphones: return "headphones"
+        case .pointer: return "cursorarrow.click.2"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .controller: return "InputConfig"
+        case .gamepad: return "Gamepad"
+        case .arcade: return "Arcade stick"
+        case .dpad: return "D-pad"
+        case .keyboard: return "Keyboard"
+        case .mouse: return "Mouse"
+        case .piano: return "Piano keys"
+        case .note: return "Music"
+        case .tap: return "Tap"
+        case .wheelchair: return "Accessibility"
+        case .headphones: return "Headphones"
+        case .pointer: return "Pointer"
         }
     }
 }

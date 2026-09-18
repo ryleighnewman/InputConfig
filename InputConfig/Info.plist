@@ -15,18 +15,6 @@
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
-		<string>es</string>
-		<string>fr</string>
-		<string>de</string>
-		<string>it</string>
-		<string>pt-BR</string>
-		<string>nl</string>
-		<string>ru</string>
-		<string>pl</string>
-		<string>ja</string>
-		<string>ko</string>
-		<string>zh-Hans</string>
-		<string>zh-Hant</string>
 	</array>
 	<key>CFBundleName</key>
 	<string>InputConfig</string>
@@ -40,8 +28,6 @@
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-	<key>NSAppSleepDisabled</key>
-	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>InputConfig reads input from wireless game controllers paired with your Mac.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

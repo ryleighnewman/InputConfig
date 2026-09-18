@@ -118,6 +118,21 @@ final class CrashRecoveryService: ObservableObject {
 
     /// Call whenever the user activates a different preset so the
     /// recovery file always reflects the latest "wanted" state.
+    /// Show the crash reports macOS kept for this app. The reports folder
+    /// is outside the sandbox, so it is opened through the Finder, and if
+    /// that is refused the Console app is opened instead, which lists the
+    /// same reports under Crash Reports.
+    static func openCrashReports() {
+        let reports = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        // The sandbox home is the container; strip it back to the real one.
+        let realHome = reports.path.replacingOccurrences(
+            of: "/Library/Containers/\(Bundle.main.bundleIdentifier ?? "")/Data", with: "")
+        if NSWorkspace.shared.open(URL(fileURLWithPath: realHome, isDirectory: true)) { return }
+        let console = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
+        NSWorkspace.shared.openApplication(at: console, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     func recordActivePreset(_ presetID: UUID?) {
         currentSession.activePresetID = presetID
         writeSentinel()

@@ -28,20 +28,19 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.4
+## What's new in 1.5
 
-- Tap the Mac: your MacBook's motion sensor turns a knock on the palm rest or the lid into an input. Double taps and triple taps are told apart, typing is ignored, and no hardware is needed at all
-- Emergency stop: one action that only ever stops. A system-wide shortcut, a two-second hold on Home / PS / Guide, or a menu bar button halts the engine and releases every held key, button, and note
-- Per-preset shortcuts: give any preset its own system-wide key that switches to it, and press it again to stop it
-- Chords: a binding can require a second button held, so one control does different things depending on what is held with it
-- Gyro ratcheting: Pause Motion While Held stops motion aim while a button is down, so you can re-aim the controller without dragging the cursor
-- Start Dictation as a System Function, plus a new Accessibility group: Speak Selection, Zoom On / Off, Zoom In, and Zoom Out
-- The fn / Globe key in both of its roles: hold it as a modifier for shortcuts like Globe + E, or press Globe on its own for emoji and dictation
-- The scan button now detects modifier keys pressed on their own, including Shift, Control, Option, Command, fn / Globe, right Command, and F16 to F19
-- Presets reorder by dragging and move between folders, and the order you set sticks
-- The binding editor scrolls and expands smoothly, and rows reorder by dragging the handle: the row lifts, follows the pointer, and the list opens a gap where it will land
-- Presets that use only the trackpad, a cursor region, or a Mac tap now work without a game controller connected
-- Two new built-in presets: Tap the Mac and Anki
+- Tap the Mac now works on M1 Pro, M1 Max, and M1 Ultra MacBook Pros as well as M2 and later, counts up to five taps, and has a live calibration plot in the Options of any tap row
+- Your Mac is an input: every key, including modifiers and media keys, plus clicks, scroll gestures, and Force Touch on the trackpad or mouse can be mapped, with live Keyboard and Mouse & Trackpad templates in the Live Visualizer
+- Screen regions are their own input: draw an area of any display and it fires while the pointer is inside it, with a Screen template that shows the display, its regions, and the live pointer
+- The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, zoom, a choice of background, and every control clickable
+- The editor has a search field, section headings, Automatically insert available inputs, and a device menu listing every controller, Bluetooth and USB device, this Mac's keyboard and mouse, and MIDI source
+- Chords can hold up to three controls, and accessories plugged into a PlayStation Access Controller or Xbox Adaptive Controller are picked up as inputs
+- Gyro pointing follows the controller's tilt like a laser pointer, Motion Calibration is one simple sheet with a 3D controller model, and pointer motion runs smoothly on a timer of its own
+- Rumble on a DualSense Edge is much stronger, its strength setting works, and vibration has a Duration slider
+- New presets: One-Stick Driving, Access Controller, Keyboard Deck, Trackpad & Mouse, Modifier Holds, Double Click Deck, Cursor Regions, Hold & Double-Tap, Keyboard & Mouse Input, Shortcuts & Apps, and Touchpad Zones
+- The sidebar splits into My Presets and Built-in Presets, every Feature Showcase opens its preset, Help is rewritten, and the activity log shows everything the app does
+- Fixes: a crash on first launch, the pointer walking off target with two displays, lone modifier keys invisible to apps, mouse buttons 3 and up hanging the app, and touchpad zones lost between presets
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
@@ -51,24 +50,26 @@ Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the la
 
 Open InputConfig and everything it can do is on one screen. Controllers, keyboards,
 mice, trackpads, and MIDI gear go in; keys, mouse, macros, MIDI, system functions,
-and Siri Shortcuts come out. Hundreds of presets ship with it, sorted into folders
-you can name and colour.
+and Siri Shortcuts come out. Forty-two presets ship with it, sorted into folders you
+can name and colour, and the Smart Preset Maker draws on a library of more than 450
+games and apps.
 
 ![Press anything to bind it](Marketing/posters/02-scan.jpg)
 
 Scanning maps any input the instant you touch it. No manual codes, no guesswork,
 and it works for controllers, MIDI gear, and your Mac's own keyboard and trackpad.
 
-![Map any button to anything](Marketing/posters/03-map.jpg)
+![Fine-tune every binding](Marketing/posters/03-advanced.jpg)
 
-Every button, trigger, stick, key, and knob can send a key, a click, mouse motion,
-scroll, a macro, MIDI, or a system function, across every device you own at once.
+One press can send a key, a click, a MIDI note, and a spoken phrase at once, then
+repeat while held, send Return on a double tap, run a two-step macro, and rumble,
+with every timing set right in the row.
 
-![Fine-tune every binding](Marketing/posters/04-advanced.jpg)
+![Your Mac is an input, too](Marketing/posters/04-mac-inputs.jpg)
 
-Turbo, macros, hold and double-tap actions, haptics, and spoken phrases are all
-available on a single control at the same time, with repeat counts and timing
-windows tuned right in the row.
+Every key on the keyboard, every click, scroll gesture, and Force Touch on the
+trackpad or mouse, any area of the screen, and a knock on the palm rest can all be
+scanned and mapped like a controller button.
 
 ![Built for accessibility](Marketing/posters/05-accessibility.jpg)
 
@@ -77,24 +78,24 @@ brakes, and shifts from one control, and it outputs keyboard and mouse, so it wo
 in games that never planned for it. Built with the PlayStation Access Controller
 and other adaptive hardware in mind.
 
-![Send MIDI, run your Mac](Marketing/posters/06-outputs.jpg)
+![Send MIDI in and out](Marketing/posters/06-outputs.jpg)
 
-One pad press can change the volume, skip a track, dim the display, open Mission
-Control, lock the screen, or run a whole Siri Shortcut. Every binding shows exactly
-what it sends.
+Play notes into your DAW through a virtual MIDI port, or let a MIDI keyboard or knob
+box drive the Mac itself: volume, tracks, brightness, Mission Control, a Siri
+Shortcut. Every binding shows exactly what it sends.
 
 ![See every input, live](Marketing/posters/07-visualizer.jpg)
 
 The Live Visualizer mirrors your controller and your MIDI gear in real time. Sticks,
-triggers, keys, and knobs light up as you play, and clicking any control jumps
-straight to its mapping.
+triggers, keys, and knobs light up as you play, clicking any control jumps straight
+to its binding, and Edit Layout rearranges the map to match how you hold the pad.
 
 ![Touchpad support, done right](Marketing/posters/08-touchpad.jpg)
 
 Calibrate a controller touchpad so swipes feel uniform, then carve it into tap zones
-that fire their own bindings, with multiple fingers tracked independently.
+that fire their own bindings, with two fingers tracked independently.
 
-![Dial in the deadzone, aim with precision](Marketing/posters/09-precision.jpg)
+![Deadzones, dialed in](Marketing/posters/09-precision.jpg)
 
 Tune the inner and outer deadzone on every stick and trigger with a live plot, so
 drift disappears and full travel stays. Bind gyroscope rotation to the mouse for
@@ -102,8 +103,7 @@ motion aim in any app, with live sensor readings and a resting-zero calibration.
 
 ![Open source, yours](Marketing/posters/10-about.jpg)
 
-No accounts, no tracking, no locked features. Built by one person who needed it,
-shaped by the community that uses it.
+No accounts, no tracking, no locked features. Built by one person who needed it.
 
 ## How it compares
 
@@ -132,14 +132,17 @@ tools. Check for yourself before you switch.
 
 - Every button, trigger, joystick, and D-pad on any MFi or HID-compatible gamepad
 - DualSense Edge extras: both back paddles, both FN buttons, and the mute button, over USB and Bluetooth
-- Controller touchpads: cursor control, multi-finger tracking, tap regions, and gestures, with per-pad calibration
-- Gyroscope, accelerometer, and absolute attitude on motion-capable controllers
+- Controller touchpads: cursor control, two-finger tracking, tap zones, one-finger and two-finger taps, with per-pad calibration
+- Gyroscope, accelerometer, and absolute attitude on Sony controllers (DualSense, DualShock 4)
 - MIDI notes and pads, CC knobs, sliders, and pedals, the pitch wheel, channel aftertouch, and Program Change, from any MIDI device over USB or Bluetooth
 - Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from centre, like a stick), and Turn (a nudge per step of rotation, built for endless encoders)
 - Per-binding MIDI channel and device filters, so two keyboards stay independent
-- Your Mac keyboard, a second keyboard, and extra mouse buttons as inputs, captured per device
-- Force Touch trackpad pressure and Force Click
-- Cursor regions: areas of the screen that act as inputs when the pointer enters
+- Your Mac keyboard as an input: every key, including Shift, Control, Option, Command, Caps Lock, fn, and the brightness, media, and volume keys, plus a second keyboard, captured per device
+- Your mouse and trackpad as inputs: every button, double click, scroll in four directions, scroll gestures, Force Touch pressure, and Force Click
+- Tap the Mac: knock on the palm rest and the MacBook's motion sensor fires any output, single to quintuple taps, with a live calibration plot
+- Screen regions: areas of any display that act as inputs while the pointer is inside them, per display or on every display
+- Bluetooth headset and hearing aid buttons as media keys
+- Switches, pedals, and sticks plugged into a PlayStation Access Controller or Xbox Adaptive Controller
 - Stick regions: directional zones on any stick with their own bindings
 
 ### Outputs
@@ -149,8 +152,8 @@ tools. Check for yourself before you switch.
 - Mouse buttons, analog mouse motion, smooth scrolling, and single scroll steps
 - Macro sequences with custom timing, chord steps that hold one key while tapping others, and interrupt-on-release
 - MIDI out to your DAW through a virtual port: notes with velocity, CC, pitch bend, Program Change, and transport (start, stop, continue)
-- Spoken phrases through the Mac speakers or the controller's own speaker
-- Haptic feedback with adjustable strength
+- Spoken phrases, in the system voice or any installed voice
+- Haptic feedback with adjustable strength and duration
 - App actions: switch presets, jump to a specific preset, pause and resume output, all from the controller
 
 ### System functions
@@ -168,6 +171,7 @@ tools. Check for yourself before you switch.
 - Toggle mode: press once to latch, press again to release
 - Turbo with an adjustable rate, and repeat counts with custom delays
 - Hold actions and double-tap actions, each with their own outputs and timing windows
+- Chords: a row can require up to three controls held together, each chosen from the menu or scanned
 - Inner and outer deadzones with a live visual calibrator on every stick and trigger
 - Axis inversion and three sensitivity curves: linear, smooth, aggressive
 - Variable sensitivity: trigger pressure and stick depth scale the output speed
@@ -176,8 +180,8 @@ tools. Check for yourself before you switch.
 
 ### Presets
 
-- Hundreds of built-in presets: adaptive controllers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and Mac apps
-- Smart Preset Maker builds a tailored preset from a few questions
+- 42 built-in presets: the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
+- Smart Preset Maker builds a tailored preset from a few questions, from a library of more than 450 games, apps, and workflows, and can add a touchpad-as-trackpad, gyro fine aim, and trigger rumble
 - Folders with names and colours, and unlimited presets of your own
 - Per-app auto-switch: presets activate themselves when their app comes to the front
 - Per-preset automation: launch an app or URL on activate, confine the cursor, auto-recenter, hide the pointer
@@ -188,29 +192,28 @@ tools. Check for yourself before you switch.
 ### Live Visualizer
 
 - A real-time mirror of every connected device, one panel per slot
-- Switchable layouts per slot: controller, keyboard, touchpad, mouse, or MIDI instrument, with auto-detection from the bindings
+- Switchable layouts per slot: controller, keyboard, mouse and trackpad, controller touchpad, screen regions, or MIDI instrument, with auto-detection from the bindings
 - The MIDI instrument: a seven-octave velocity-shaded keyboard, a named dial for every knob (Mod Wheel, Cutoff, Sustain and the rest), knob-mode badges, pitch bend and aftertouch meters, a 16-channel activity strip, and a rolling event log
 - Click any control to jump straight to its binding in the editor
-- Drag-to-rearrange widget layouts, saved per controller model, plus zoom and pan
+- Edit Layout to drag controls into the arrangement you hold the pad in, saved per controller model, plus zoom, pan, and four backgrounds
 
 ### Accessibility
 
 - One-stick driving: steer, accelerate, brake, and shift from a single stick
 - App-wide text size, bold text, reduced transparency, and reduced motion, layered on top of the system settings
-- VoiceOver support in the scan overlay and binding editor
-- Built-in presets for the PlayStation Access Controller and adaptive setups
+- VoiceOver support throughout, including the Live Visualizer spoken in plain words
+- Built-in presets for the PlayStation Access Controller: Access Controller runs the whole desktop from one stick and eight sockets, and One-Stick Driving drives a whole car from one stick
 - Deadzone and sensitivity tuning that matters for tremor and limited range of motion
 
 ### The app
 
 - Light bar colors per preset with a full RGB picker, brightness control, and an RGB cycle, over USB and Bluetooth
 - Battery level and connection state for every controller
-- Lifetime usage statistics, kept entirely on your Mac
 - A changelog inside the app and a What's New popup after updates
-- More than twenty built-in help guides and a guided Quick Start tour
-- Menu bar control with the running version, plus Dock-only and menu-bar-only modes
-- Adjustable polling rate from 30 to 240 Hz, with an automatic battery saver
-- Available in 12 languages
+- 42 built-in help guides, the same pages as inputconfig.com, and a guided Quick Start tour
+- Menu bar control with a choice of twelve icons, plus Dock-only and menu-bar-only modes
+- An activity log of everything the app does, with a one-file report ready to send
+- Adjustable polling rate: 60, 120, 180, or 240 Hz, with an automatic battery saver
 - Sandboxed, no network access, no telemetry
 
 100% free.
@@ -255,13 +258,14 @@ This is one. InputConfig is free with nothing locked, and the source is public u
 
 **Can I use a controller instead of a keyboard and mouse entirely?**
 Yes, that is the point. There are built-in presets for desktop navigation, web browsing,
-and media control, plus presets built for adaptive controllers. You can map cursor zones,
+and media control, plus presets built for adaptive controllers. You can map screen regions,
 type whole phrases from one button, and switch presets automatically per app.
 
 **Does it work with the PlayStation Access Controller or the Xbox Adaptive Controller?**
-Yes, along with anything else that presents as an MFi or HID gamepad. There are presets
-built for adaptive setups, and one-stick driving lets a single stick handle steering,
-throttle, braking, and gear changes. Accessibility is why the app exists, not an
+Yes, along with anything else that presents as an MFi or HID gamepad, and the switches,
+pedals, and sticks plugged into their ports are inputs too. The Access Controller preset
+runs the whole desktop from one stick and eight sockets, and One-Stick Driving lets a
+single stick handle steering, throttle, braking, and gear changes. Accessibility is why the app exists, not an
 afterthought.
 
 **Do I need drivers?**
@@ -280,6 +284,7 @@ nothing.
 
 - macOS 14.0 or later
 - Accessibility permission (for keyboard and mouse simulation)
+- Tap the Mac needs a MacBook with M2 or later, or an M1 Pro, M1 Max, or M1 Ultra
 
 ## Building
 

@@ -1,54 +1,63 @@
 import SwiftUI
 import AppKit
 
-/// Lets the user define rectangular regions on the macOS display that
-/// `.cursorRegion` bindings can target. Mirrors the layout and
-/// interaction model of `TouchpadCalibrationView`'s region editor so
-/// the two systems feel like the same thing applied to different
-/// input surfaces:
+/// Editor for a preset's screen regions: rectangles on a display that a
+/// Screen region input fires from while the pointer is inside, whatever is
+/// moving the pointer (the Mac's trackpad, a mouse, a stick, the gyro).
 ///
-///   - Explicit Add Region drawing mode (drag only consumed while in
-///     drawing mode; no accidental sliver regions from stray clicks).
-///   - Motionless canvas. Cursor position is shown as a small text
-///     readout below the canvas instead of a live indicator that
-///     constantly redraws the plane.
-///   - Side-by-side layout: canvas on the left, region list on the
-///     right with rename/delete in an ellipsis menu.
-///   - Region count cap (16 to match touchpad).
+/// This is deliberately not the touchpad editor. A touchpad zone is a place
+/// on a controller's own pad, read from its fingers; a screen region is a
+/// place on a display, read from the pointer. The two used to share one
+/// sheet with the Mac's trackpad listed as a kind of touchpad, which is how
+/// they came to be confused.
+///
+/// A region belongs either to every display or to one particular display,
+/// chosen here. A region for the built-in screen is silent on an external
+/// monitor and is drawn in that screen's own shape.
+///
+/// Mirrors the interaction model of the touchpad editor: an explicit Add
+/// drawing mode, a motionless canvas with a small live pointer dot, canvas
+/// on the left and the region list on the right, sixteen regions at most.
 struct CursorRegionsView: View {
     @ObservedObject private var svc = CursorRegionService.shared
     @ObservedObject private var externalInput = ExternalInputDeviceService.shared
 
-    /// Drives the live cursor dot while this view is visible, since the
-    /// service's continuous tracking only runs for an active preset. Stored
-    /// once so re-renders do not recreate the subscription.
+    /// Drives the live pointer dot while this view is visible.
     private let cursorPollTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
-    /// Name of the display the cursor is currently on. Regions are
-    /// normalized per screen, so this is the distinction the map needs on
-    /// multi-display setups.
-    @State private var currentScreenName: String = NSScreen.main?.localizedName ?? "Display"
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - State
 
-    @State private var selectedRegionID: UUID?
+    /// The display the canvas represents and new regions belong to. Nil
+    /// is "every display": the canvas then follows the pointer's display.
+    @State private var chosenDisplay: DisplayKey?
 
+    @State private var selectedRegionID: UUID?
     @State private var drawingNewRegion = false
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
-
     @State private var renamingRegionID: UUID?
     @State private var renamingText: String = ""
 
     private static let maxRegions = 16
 
-    /// Live region list read from the @MainActor service. Sourcing
-    /// directly from the @Published `regions` array (rather than
-    /// duplicating into a local @State) keeps actor isolation clean
-    /// and lets the UI react to external changes (e.g. binding row
-    /// scanner adding a region) without a separate refresh.
     private var regions: [TouchpadRegion] { svc.regions }
+
+    /// The display the canvas is showing right now.
+    private var shownDisplay: DisplayKey? { chosenDisplay ?? svc.currentDisplay }
+
+    /// Regions that count on the shown display: every-display ones plus
+    /// that display's own.
+    private var regionsOnCanvas: [TouchpadRegion] {
+        regions.filter { $0.display == nil || $0.display == shownDisplay }
+    }
+
+    /// The pointer dot is only true when the pointer is on the display the
+    /// canvas shows.
+    private var pointerIsOnShownDisplay: Bool {
+        chosenDisplay == nil || chosenDisplay == svc.currentDisplay
+    }
 
     // MARK: - Body
 
@@ -56,23 +65,26 @@ struct CursorRegionsView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             mainContent
-            footer
         }
         .padding(20)
         .frame(width: 760, height: 560)
-        // Drive the live cursor dot. CursorRegionService only samples the
-        // pointer while something is tracking (permission-free
-        // NSEvent.mouseLocation poll), so start it while this editor is
-        // open and stop it on close.
         .onAppear { CursorRegionService.shared.beginTracking() }
         .onDisappear { CursorRegionService.shared.endTracking() }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Cursor Regions")
-                .font(.title2.weight(.semibold))
-            Text("Draw rectangles on screen. A binding fires while the cursor is inside one. Regions scale with your display.")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "rectangle.dashed")
+                    .foregroundStyle(.tint)
+                Text("Screen Regions")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.solidCompact)
+                    .keyboardShortcut(.defaultAction)
+            }
+            Text("Areas of a display. A binding fires while the pointer is inside one, whatever moves the pointer. A region belongs to every display or to one of them; zones on a controller's touchpad are a different input, in Touchpad Setup.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -84,12 +96,7 @@ struct CursorRegionsView: View {
     private var mainContent: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(drawingNewRegion
-                     ? "Click and drag on the screen preview to draw the new region."
-                     : "Click Add Region, then drag on the screen preview to create one.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                displayRow
 
                 regionsPanel
                     .aspectRatio(canvasAspectRatio, contentMode: .fit)
@@ -100,10 +107,11 @@ struct CursorRegionsView: View {
                         dragStart = nil
                         dragCurrent = nil
                     } label: {
-                        Label("Add Region", systemImage: "plus.rectangle")
+                        Label("Add region", systemImage: "plus.rectangle")
                     }
                     .buttonStyle(.solidSecondaryCompact)
                     .disabled(drawingNewRegion || regions.count >= Self.maxRegions)
+                    .help(drawingNewRegion ? "Drag on the display preview to draw it" : "Draw a new region on the display shown")
 
                     if drawingNewRegion {
                         Button("Cancel") {
@@ -132,16 +140,62 @@ struct CursorRegionsView: View {
         }
     }
 
-    private var footer: some View {
-        HStack {
-            Text("Tip: bind to a region from the binding editor by setting input type to Cursor Region.")
+    /// Which display the canvas shows and new regions belong to.
+    private var displayRow: some View {
+        HStack(spacing: 10) {
+            Text("Display")
+                .font(.subheadline)
+            Menu {
+                Button {
+                    chosenDisplay = nil
+                } label: {
+                    if chosenDisplay == nil { Label("Every display", systemImage: "checkmark") } else { Text("Every display") }
+                }
+                Divider()
+                ForEach(svc.attachedDisplays) { d in
+                    Button {
+                        chosenDisplay = d.key
+                    } label: {
+                        if chosenDisplay == d.key { Label(d.key.name, systemImage: "checkmark") } else { Text(d.key.name) }
+                    }
+                }
+                // Displays that regions refer to but are not attached now.
+                let absent = storedDisplays.filter { !svc.isDisplayAttached($0) }
+                if !absent.isEmpty {
+                    Divider()
+                    ForEach(absent, id: \.self) { d in
+                        Button {
+                            chosenDisplay = d
+                        } label: {
+                            Text("\(d.name) (not connected)")
+                        }
+                    }
+                }
+            } label: {
+                Text(chosenDisplay.map { $0.name } ?? "Every display")
+            }
+            .fixedSize()
+            .help("New regions belong to this display. Every display means the same area of whichever screen the pointer is on.")
+            Text(displayHint)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Done") { dismiss() }
-                .buttonStyle(.solid)
-                .keyboardShortcut(.cancelAction)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
+    }
+
+    private var displayHint: String {
+        if let d = chosenDisplay {
+            return svc.isDisplayAttached(d) ? "regions here fire only on this display" : "not connected; shown at a guessed shape"
+        }
+        return svc.screenCount > 1 ? "the same area on any of \(svc.screenCount) displays" : "the same area on any display"
+    }
+
+    /// Every display any region refers to.
+    private var storedDisplays: [DisplayKey] {
+        var out: [DisplayKey] = []
+        for r in regions { if let d = r.display, !out.contains(d) { out.append(d) } }
+        return out
     }
 
     // MARK: - Canvas
@@ -152,7 +206,7 @@ struct CursorRegionsView: View {
                 RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.25))
                 RoundedRectangle(cornerRadius: 10).stroke(Color.mint.opacity(0.6), lineWidth: 1.5)
 
-                ForEach(regions) { region in
+                ForEach(regionsOnCanvas) { region in
                     let isPressed = svc.isRegionPressed(region.id)
                     let isSelected = region.id == selectedRegionID
                     let rect = CGRect(
@@ -165,7 +219,8 @@ struct CursorRegionsView: View {
                         .fill(color.opacity(isPressed ? 0.65 : (isSelected ? 0.45 : 0.25)))
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
-                                .stroke(color, lineWidth: isSelected ? 2 : 1)
+                                .stroke(color, style: StrokeStyle(lineWidth: isSelected ? 2 : 1,
+                                                                  dash: region.display == nil ? [] : [5, 3]))
                         )
                         .overlay(
                             Text(region.name)
@@ -180,37 +235,30 @@ struct CursorRegionsView: View {
                         .frame(width: rect.width, height: rect.height)
                         .position(x: rect.midX, y: rect.midY)
                         .onTapGesture {
-                            if !drawingNewRegion {
-                                selectedRegionID = region.id
-                            }
+                            if !drawingNewRegion { selectedRegionID = region.id }
                         }
+                        .help(region.display == nil ? "\(region.name): every display" : "\(region.name): \(region.display!.name) only")
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("Region \(region.name)")
                         .accessibilityValue(canvasRegionValue(region, isPressed: isPressed))
                         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
                 }
 
-                // Live cursor dot: shows where the pointer is RIGHT NOW in
-                // the same normalized space the regions hit-test against,
-                // so placing and sizing regions stops being guesswork.
-                Circle()
-                    .fill(Color.white)
-                    .overlay(Circle().stroke(Color.mint, lineWidth: 1.5))
-                    .frame(width: 9, height: 9)
-                    .shadow(radius: 1)
-                    .position(x: svc.cursorNormalized.x * geo.size.width,
-                              y: svc.cursorNormalized.y * geo.size.height)
-                    .allowsHitTesting(false)
-                    .onReceive(cursorPollTimer) { _ in
-                        svc.pollCursorOnce()
-                        ExternalInputDeviceService.shared.ensurePressureMetricsMonitor()
-                        let loc = NSEvent.mouseLocation
-                        currentScreenName = NSScreen.screens.first(where: { $0.frame.contains(loc) })?.localizedName
-                            ?? NSScreen.main?.localizedName ?? "Display"
-                    }
+                // Live pointer dot, in the same normalised space the regions
+                // hit-test against, only when the pointer is on this display.
+                if pointerIsOnShownDisplay {
+                    Circle()
+                        .fill(Color.white)
+                        .overlay(Circle().stroke(Color.mint, lineWidth: 1.5))
+                        .frame(width: 9, height: 9)
+                        .shadow(radius: 1)
+                        .position(x: svc.cursorNormalized.x * geo.size.width,
+                                  y: svc.cursorNormalized.y * geo.size.height)
+                        .allowsHitTesting(false)
+                }
 
-                // Which display the map and dot currently represent.
-                Text(currentScreenName)
+                // Which display the canvas represents.
+                Text(shownDisplay?.name ?? "Display")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.85))
                     .padding(.horizontal, 7)
@@ -221,9 +269,8 @@ struct CursorRegionsView: View {
                     .allowsHitTesting(false)
 
                 // Live Force Touch pressure while pressing the Mac trackpad
-                // over this window: the gauge fills with force, and "Deep"
-                // marks a stage-2 Force Click. Bindable as Pressure and
-                // Deep Press inputs on the Mouse input type.
+                // over this window, bindable as Pressure and Deep Press on
+                // the Mouse input type.
                 HStack(spacing: 5) {
                     Image(systemName: "hand.tap.fill")
                         .font(.caption2)
@@ -267,6 +314,10 @@ struct CursorRegionsView: View {
             .contentShape(Rectangle())
             .gesture(drawGesture(size: geo.size),
                      including: drawingNewRegion ? .gesture : .none)
+            .onReceive(cursorPollTimer) { _ in
+                svc.pollCursorOnce()
+                ExternalInputDeviceService.shared.ensurePressureMetricsMonitor()
+            }
         }
     }
 
@@ -274,7 +325,7 @@ struct CursorRegionsView: View {
 
     private var regionsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Defined Regions")
+            Text("Regions")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
@@ -312,9 +363,15 @@ struct CursorRegionsView: View {
                 .accessibilityLabel("Rename region")
                 .onExitCommand { cancelRename() }
             } else {
-                Text(region.name)
-                    .font(.body)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(region.name)
+                        .font(.body)
+                        .lineLimit(1)
+                    Text(displayTag(for: region))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
                 Spacer()
             }
             if isPressed {
@@ -327,6 +384,20 @@ struct CursorRegionsView: View {
                 Button("Rename") {
                     renamingRegionID = region.id
                     renamingText = region.name
+                }
+                Menu("Display") {
+                    Button {
+                        setDisplay(nil, for: region.id)
+                    } label: {
+                        if region.display == nil { Label("Every display", systemImage: "checkmark") } else { Text("Every display") }
+                    }
+                    ForEach(svc.attachedDisplays) { d in
+                        Button {
+                            setDisplay(d.key, for: region.id)
+                        } label: {
+                            if region.display == d.key { Label(d.key.name, systemImage: "checkmark") } else { Text(d.key.name) }
+                        }
+                    }
                 }
                 Button("Delete", role: .destructive) {
                     deleteRegion(region.id)
@@ -348,10 +419,17 @@ struct CursorRegionsView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedRegionID = region.id
+            // Jump the canvas to the display this region lives on.
+            if let d = region.display, d != chosenDisplay { chosenDisplay = d }
         }
-        .accessibilityLabel("Select region \(region.name)")
+        .accessibilityLabel("Select region \(region.name), \(displayTag(for: region))")
         .accessibilityValue(isPressed ? "Active" : "")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func displayTag(for region: TouchpadRegion) -> String {
+        guard let d = region.display else { return "Every display" }
+        return svc.isDisplayAttached(d) ? d.name : "\(d.name) (not connected)"
     }
 
     // MARK: - Drawing
@@ -370,7 +448,6 @@ struct CursorRegionsView: View {
                 let normMaxX = max(0, min(1, Double(max(start.x, end.x) / size.width)))
                 let normMinY = max(0, min(1, Double(min(start.y, end.y) / size.height)))
                 let normMaxY = max(0, min(1, Double(max(start.y, end.y) / size.height)))
-                // Reject accidentally tiny regions.
                 if (normMaxX - normMinX) > 0.04 && (normMaxY - normMinY) > 0.04 {
                     addRegion(minX: normMinX, maxX: normMaxX,
                               minY: normMinY, maxY: normMaxY)
@@ -386,9 +463,16 @@ struct CursorRegionsView: View {
         let name = "Region \(count + 1)"
         let colorIndex = count % TouchpadRegion.colorPalette.count
         let region = TouchpadRegion(name: name, minX: minX, maxX: maxX,
-                                     minY: minY, maxY: maxY, colorIndex: colorIndex)
+                                     minY: minY, maxY: maxY, colorIndex: colorIndex,
+                                     display: chosenDisplay)
         svc.upsert(region)
         selectedRegionID = region.id
+    }
+
+    private func setDisplay(_ key: DisplayKey?, for id: UUID) {
+        guard var region = svc.region(with: id) else { return }
+        region.display = key
+        svc.upsert(region)
     }
 
     private func deleteRegion(_ id: UUID) {
@@ -406,58 +490,39 @@ struct CursorRegionsView: View {
         renamingText = ""
     }
 
-    /// Discards an in-progress rename without committing. Wired to
-    /// Escape via `.onExitCommand` on the rename text field.
     private func cancelRename() {
         renamingRegionID = nil
         renamingText = ""
     }
 
-    /// Spoken value for a canvas region: its normalized position and
-    /// size plus whether it is currently pressed, so VoiceOver conveys
-    /// the same information sighted users read off the drawn rectangle.
     private func canvasRegionValue(_ region: TouchpadRegion, isPressed: Bool) -> String {
         let x = Int(region.minX * 100)
         let y = Int(region.minY * 100)
         let w = Int((region.maxX - region.minX) * 100)
         let h = Int((region.maxY - region.minY) * 100)
-        var value = "Positioned at \(x) percent across, \(y) percent down, \(w) by \(h) percent of the display"
-        if isPressed {
-            value += ", active"
-        }
+        var value = "Positioned at \(x) percent across, \(y) percent down, \(w) by \(h) percent of the display, \(displayTag(for: region))"
+        if isPressed { value += ", active" }
         return value
     }
 
     // MARK: - Helpers
 
-    /// Primary screen aspect ratio. Used so the preview rectangle
-    /// reflects actual screen proportions instead of guessing.
+    /// The shape of the display the canvas shows: the chosen one's, or the
+    /// pointer's, or 16:10 for a display that is not attached.
     private var canvasAspectRatio: CGFloat {
-        guard let screen = NSScreen.main, screen.frame.height > 0 else { return 16.0 / 10.0 }
-        return screen.frame.width / screen.frame.height
+        if let d = chosenDisplay {
+            return svc.attachedDisplays.first(where: { $0.key == d })?.aspect ?? 16.0 / 10.0
+        }
+        return svc.currentScreenAspect
     }
 
-    /// Compact text readout of the live cursor position. Lives below
-    /// the canvas (not on it) so the canvas itself stays motionless
-    /// during editing.
     private var cursorReadout: String {
+        guard pointerIsOnShownDisplay else { return "Pointer on another display" }
         let p = svc.cursorNormalized
-        return String(format: "Cursor: %.0f%%, %.0f%%", p.x * 100, p.y * 100)
+        return String(format: "Pointer: %.0f%%, %.0f%%", p.x * 100, p.y * 100)
     }
 
     private func paletteColor(at index: Int) -> Color {
-        let palette = TouchpadRegion.colorPalette
-        let name = palette[index % palette.count]
-        switch name {
-        case "mint": return .mint
-        case "cyan": return .cyan
-        case "pink": return .pink
-        case "orange": return .orange
-        case "yellow": return .yellow
-        case "purple": return .purple
-        case "indigo": return .indigo
-        case "green": return .green
-        default: return .gray
-        }
+        regionPaletteColor(at: index)
     }
 }

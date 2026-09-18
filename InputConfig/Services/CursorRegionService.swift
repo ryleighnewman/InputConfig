@@ -24,10 +24,75 @@ final class CursorRegionService: ObservableObject {
 
     @Published private(set) var regions: [TouchpadRegion] = []
 
-    /// Normalised cursor position in [0, 1] × [0, 1] across the *primary*
-    /// display. Updated whenever a `.mouseMoved` CGEvent arrives via
-    /// `ExternalInputDeviceService`. (0, 0) is top-left.
+    /// Normalised cursor position in [0, 1] × [0, 1] across whichever
+    /// display the cursor is currently on, not the primary one, so a
+    /// region means the same corner of whatever screen you are pointing
+    /// at. (0, 0) is top-left.
     @Published private(set) var cursorNormalized: CGPoint = .zero
+
+    /// The display the cursor is on right now, so a map of these regions
+    /// can be drawn in that screen's real shape and named. Regions are
+    /// normalised per display, so the same region follows the pointer from
+    /// the built-in screen to an external one.
+    @Published private(set) var currentScreenName: String = ""
+    /// Width divided by height of that display.
+    @Published private(set) var currentScreenAspect: CGFloat = 16.0 / 10.0
+    /// How many displays are attached, so the map can say when a region
+    /// applies to more than one.
+    @Published private(set) var screenCount: Int = 1
+
+    /// The display the pointer is on right now, by stable identity.
+    @Published private(set) var currentDisplay: DisplayKey?
+
+    /// One display that is attached right now.
+    struct AttachedDisplay: Identifiable, Hashable {
+        var key: DisplayKey
+        var aspect: CGFloat
+        var isMain: Bool
+        var id: String { key.name + "\(key.vendor)-\(key.model)-\(key.serial)" }
+    }
+    /// Every display attached right now, main first. Refreshed whenever
+    /// macOS reports a display change.
+    @Published private(set) var attachedDisplays: [AttachedDisplay] = []
+
+    /// A stable key for a screen, from the panel's hardware identity.
+    static func key(for screen: NSScreen) -> DisplayKey {
+        let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        let id = CGDirectDisplayID(number)
+        return DisplayKey(vendor: CGDisplayVendorNumber(id), model: CGDisplayModelNumber(id),
+                          serial: CGDisplaySerialNumber(id), name: screen.localizedName)
+    }
+
+    func refreshDisplays() {
+        let list = NSScreen.screens.map { screen in
+            AttachedDisplay(key: Self.key(for: screen),
+                            aspect: screen.frame.height > 0 ? screen.frame.width / screen.frame.height : 16.0 / 10.0,
+                            isMain: screen == NSScreen.main)
+        }
+        if list != attachedDisplays { attachedDisplays = list }
+        screenCount = list.count
+    }
+
+    func isDisplayAttached(_ key: DisplayKey) -> Bool {
+        attachedDisplays.contains { $0.key == key }
+    }
+
+    /// True when the region counts on the display the pointer is on: it
+    /// belongs to every display, or to this one.
+    func regionApplies(_ region: TouchpadRegion) -> Bool {
+        regionApplies(region, on: currentDisplay)
+    }
+
+    /// The same question for a chosen display rather than the pointer's.
+    func regionApplies(_ region: TouchpadRegion, on display: DisplayKey?) -> Bool {
+        guard let d = region.display else { return true }
+        return d == display
+    }
+
+    func aspect(of display: DisplayKey?) -> CGFloat? {
+        guard let display else { return nil }
+        return attachedDisplays.first { $0.key == display }?.aspect
+    }
 
     private static let regionsKey = "InputConfig.cursorRegions.v1"
 
@@ -43,8 +108,19 @@ final class CursorRegionService: ObservableObject {
     private var pollTimer: Timer?
     private var trackingRetainCount = 0
 
+    /// True while something is actually sampling the cursor. Anything that
+    /// tests a screen region must check this first: with no sampler running
+    /// the last known position is stale, and a region would light for where
+    /// the pointer used to be.
+    var isTracking: Bool { trackingRetainCount > 0 }
+
     private init() {
         loadRegions()
+        refreshDisplays()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshDisplays() }
+        }
         // Seed cursor position from the current mouse location so a binding
         // can fire from the very first poll, before tracking starts.
         // NSEvent.mouseLocation is screen coords (origin bottom-left).
@@ -121,6 +197,8 @@ final class CursorRegionService: ObservableObject {
     func isRegionPressed(_ id: UUID) -> Bool {
         guard let r = region(with: id) else { return false }
         guard r.maxX > r.minX && r.maxY > r.minY else { return false }
+        // A region drawn for one display is silent on every other.
+        guard regionApplies(r) else { return false }
         let p = cursorNormalized
         return p.x >= CGFloat(r.minX) && p.x <= CGFloat(r.maxX)
             && p.y >= CGFloat(r.minY) && p.y <= CGFloat(r.maxY)
@@ -155,6 +233,14 @@ final class CursorRegionService: ObservableObject {
         guard let screen = screen else { return }
         let frame = screen.frame
         guard frame.width > 0, frame.height > 0 else { return }
+        let name = screen.localizedName
+        let aspect = frame.width / frame.height
+        let count = NSScreen.screens.count
+        if name != currentScreenName { currentScreenName = name }
+        if abs(aspect - currentScreenAspect) > 0.001 { currentScreenAspect = aspect }
+        if count != screenCount { screenCount = count }
+        let key = Self.key(for: screen)
+        if key != currentDisplay { currentDisplay = key }
         let nx = (point.x - frame.minX) / frame.width
         let nyFromTop: CGFloat
         if originIsBottomLeft {
@@ -178,16 +264,24 @@ final class CursorRegionService: ObservableObject {
     // MARK: - Persistence
 
     private func loadRegions() {
-        guard let data = UserDefaults.standard.data(forKey: Self.regionsKey),
-              let decoded = try? JSONDecoder().decode([TouchpadRegion].self, from: data) else {
-            return
-        }
-        regions = decoded
+        // The working set starts empty; a preset fills it when it runs or
+        // is edited. (Before 1.5 this read an app-wide list from defaults.)
+        regions = []
     }
 
-    private func persistRegions() {
-        if let data = try? JSONEncoder().encode(regions) {
-            UserDefaults.standard.set(data, forKey: Self.regionsKey)
-        }
+    /// Regions belong to presets (`Preset.cursorRegions`); the preset
+    /// captures the working set on Save, so nothing is written here.
+    private func persistRegions() { }
+
+    /// Make these the regions in play.
+    func load(_ newRegions: [TouchpadRegion]) {
+        regions = newRegions
+    }
+
+    /// Regions the app kept app-wide before 1.5, for the migration.
+    static func legacyAppWideRegions() -> [TouchpadRegion] {
+        guard let data = UserDefaults.standard.data(forKey: regionsKey),
+              let decoded = try? JSONDecoder().decode([TouchpadRegion].self, from: data) else { return [] }
+        return decoded
     }
 }

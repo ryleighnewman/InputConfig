@@ -108,6 +108,7 @@ struct StatsView: View {
                             titleVisibility: .visible) {
             Button("Reset Everything", role: .destructive) {
                 StatsService.shared.resetAll()
+                service.refresh()
             }
             Button("Cancel", role: .cancel) { }
         } message: {

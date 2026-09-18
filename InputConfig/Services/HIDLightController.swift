@@ -175,6 +175,150 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// Current solid color to re-assert and the high-rate timer that does it.
     /// Both are touched only on `queue`.
     private var holdColor: (r: UInt8, g: UInt8, b: UInt8)?
+    /// Rumble rides in the same output report as the light bar. Two writers
+    /// with separate Bluetooth sequence counters make the controller drop
+    /// packets, which is why the app's 60 Hz light hold silenced the rumble
+    /// gamecontrollerd was sending: the buzz only played once the app quit
+    /// and the contention stopped. One writer, one sequence, no contention.
+    private var rumble: (strong: UInt8, weak: UInt8, until: CFAbsoluteTime)?
+    #if DEBUG
+    /// Which vibration flags the report claims, for measuring on a pad:
+    /// 0 the shipped default (the older compatible-vibration flag with
+    /// haptics select, and nothing else), 1 the same, 2 the newer
+    /// improved-rumble flag instead. Measured on a DualSense Edge, Sep 18
+    /// 2026, ten variants back to back with a preset running: the newer
+    /// flag flattened the motors so 100% felt like 20%; the older flag
+    /// alone was much stronger and scaled. It is not set any more.
+    nonisolated(unsafe) static var debugVibrationMode = 0
+    /// Which motors carry the level: 0 both, 1 the strong (left) motor
+    /// only, 2 the weak (right) motor only.
+    nonisolated(unsafe) static var debugMotorMask = 0
+    #endif
+    /// Whether the report also claims the pad's newer "improved rumble"
+    /// mode (valid_flag2 bit 0x04) alongside the classic one. Per model,
+    /// from what each pad measured: the plain DualSense (0x0CE6) keeps
+    /// both, the report that has worked on it all along; the DualSense
+    /// Edge (0x0DF2) gets the classic flag alone, because on the Edge the
+    /// newer mode flattened the motors so 100% felt like 20% (Sep 18 2026,
+    /// ten-variant rig). The debug mode forces it either way.
+    private func improvedRumble(pid: Int32) -> Bool {
+        if vibrationMode == 1 { return false }
+        if vibrationMode == 2 { return true }
+        return pid != 0x0DF2
+    }
+
+    private var motorMask: Int {
+        #if DEBUG
+        return Self.debugMotorMask
+        #else
+        return 0
+        #endif
+    }
+    private var vibrationMode: Int {
+        #if DEBUG
+        return Self.debugVibrationMode
+        #else
+        return 0
+        #endif
+    }
+    /// One last all-zero write is needed to stop the motors.
+    private var rumbleNeedsStop = false
+
+    /// True when this controller's report stream belongs to us, so
+    /// FeedbackService knows to route the buzz here instead of CHHaptics.
+    var ownsAnyDualSense: Bool {
+        var owns = false
+        queue.sync { owns = !devices.isEmpty }
+        return owns
+    }
+
+    #if DEBUG
+    /// Let go of the controller completely, so another process has the
+    /// output report stream to itself. For the buzz test only.
+    func closeForTest() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.holdTimer?.cancel(); self.holdTimer = nil
+            self.holdColor = nil
+            self.closeLocked()   // stops the motors before letting go
+        }
+    }
+    #endif
+
+    /// Stop writing for a moment. Two processes writing output reports to
+    /// one DualSense fight; this hands the stream to whoever else wants it.
+    private var quietUntil: CFAbsoluteTime = 0
+    func pauseWrites(forMs ms: Int) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.quietUntil = CFAbsoluteTimeGetCurrent() + Double(ms) / 1000
+            // macOS repaints the light bar itself while it is driving the
+            // haptics, so the held colour has to be taken straight back the
+            // moment the pause ends. Waiting for the next heartbeat would
+            // leave the system's colour showing for up to a second, which
+            // reads as the light changing every time a row buzzes.
+            self.queue.asyncAfter(deadline: .now() + .milliseconds(ms + 20)) { [weak self] in
+                guard let self = self, self.holdColor != nil else { return }
+                self.burstLocked()
+            }
+        }
+    }
+
+    /// Vibrate a Sony pad through the report we already own.
+    /// `intensity` 0...1, `durationMs` clamped to something short.
+    /// What the last vibrate call asked for, for the debug dump.
+    nonisolated(unsafe) static var debugLastVibrate: String = "none"
+
+    func vibrate(intensity: Float, durationMs: Int) {
+        let level = UInt8(max(0, min(1, intensity)) * 255)
+        let seconds = Double(max(40, min(2000, durationMs))) / 1000
+        Self.debugLastVibrate = "intensity=\(intensity) level=\(level) ms=\(durationMs) at=\(Date())"
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            if self.devices.isEmpty { self.reopenLocked() }
+            guard !self.devices.isEmpty else { return }
+            self.rumble = (strong: level, weak: level, until: CFAbsoluteTimeGetCurrent() + seconds)
+            self.rumbleNeedsStop = true
+            self.writeLocked(red: self.holdColor?.r ?? 0, green: self.holdColor?.g ?? 0,
+                             blue: self.holdColor?.b ?? 0, brightness: self.holdColor == nil ? 0 : 2)
+            self.ensureTickerLocked()
+        }
+    }
+
+    /// A slow heartbeat, not a 60 Hz re-assert. Writing every frame meant
+    /// this app and the system's own controller daemon were both pushing
+    /// output reports at the pad: the light visibly flickered and the
+    /// daemon's rumble packets were lost among ours, so a buzz was only
+    /// felt once this app stopped writing. One write per second keeps the
+    /// colour without owning the stream.
+    /// Ten writes over the next 200 ms, so a colour change takes hold at once.
+    private func burstLocked() {
+        for i in 1...10 {
+            queue.asyncAfter(deadline: .now() + .milliseconds(i * 20)) { [weak self] in
+                guard let self = self, let c = self.holdColor else { return }
+                self.writeLocked(red: c.r, green: c.g, blue: c.b, brightness: 2)
+            }
+        }
+    }
+
+    private func ensureTickerLocked() {
+        guard holdTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .milliseconds(1000), repeating: .milliseconds(1000), leeway: .milliseconds(200))
+        t.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let hasColor = self.holdColor != nil
+            let hasRumble = self.rumble != nil || self.rumbleNeedsStop
+            guard hasColor || hasRumble else {
+                self.holdTimer?.cancel(); self.holdTimer = nil; return
+            }
+            let c = self.holdColor
+            self.writeLocked(red: c?.r ?? 0, green: c?.g ?? 0, blue: c?.b ?? 0,
+                             brightness: c == nil ? 0 : 2)
+        }
+        holdTimer = t
+        t.resume()
+    }
     private var holdTimer: DispatchSourceTimer?
 
     /// Reusable output-report buffers, one per controller report layout.
@@ -225,31 +369,33 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// rate even when the app is backgrounded and the main run loop is throttled.
     /// Call again to change the held color; call `stopHold()` to end it.
     func startHold(red: UInt8, green: UInt8, blue: UInt8) {
+        Task { @MainActor in AppActivity.shared.retain("light") }
         queue.async { [weak self] in
             guard let self = self else { return }
             self.holdColor = (red, green, blue)
             if self.devices.isEmpty { self.reopenLocked() }
             self.writeLocked(red: red, green: green, blue: blue, brightness: 2)  // immediate
-            guard self.holdTimer == nil else { return }
-            let t = DispatchSource.makeTimerSource(queue: self.queue)
-            // 60 Hz is one re-assert per display frame - visually identical
-            // to the old 5 ms cadence at a third of the USB/BT bus traffic
-            // and CPU (this loop runs the whole time a preset holds a color).
-            t.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
-            t.setEventHandler { [weak self] in
-                guard let self = self, let c = self.holdColor else { return }
-                self.writeLocked(red: c.r, green: c.g, blue: c.b, brightness: 2)
-            }
-            self.holdTimer = t
-            t.resume()
+            // A short burst wins the colour, then the slow heartbeat holds it.
+            // The system's controller daemon repaints the LED around a focus
+            // change, so the first fraction of a second is the only moment
+            // that needs repeated writes; keeping that rate up afterwards is
+            // what made the light flicker and swallowed the rumble.
+            self.burstLocked()
+            self.ensureTickerLocked()
         }
     }
 
     func stopHold() {
+        Task { @MainActor in AppActivity.shared.release("light") }
         queue.async { [weak self] in
-            self?.holdTimer?.cancel()
-            self?.holdTimer = nil
-            self?.holdColor = nil
+            guard let self = self else { return }
+            self.holdColor = nil
+            // The ticker stops itself once nothing is held and no rumble is
+            // playing, so a buzz mid-release still finishes.
+            if self.rumble == nil && !self.rumbleNeedsStop {
+                self.holdTimer?.cancel()
+                self.holdTimer = nil
+            }
         }
     }
 
@@ -282,19 +428,121 @@ final class InProcessLightWriter: @unchecked Sendable {
             }
             devices.append((dev, pid, isBT))
         }
+        // A pad can arrive already buzzing, left that way by a crash or by a
+        // previous run that let go mid-pulse. Silence it on the way in.
+        if !devices.isEmpty { stopMotorsLocked() }
+    }
+
+    /// Force the motors to zero right now. A DualSense holds the last motor
+    /// level it was given until something tells it otherwise, so letting go
+    /// of the device with a buzz in flight leaves it rumbling forever with
+    /// nobody left to stop it. This ignores the quiet window and the timer
+    /// on purpose: a stop must never be the write that gets skipped.
+    private func stopMotorsLocked() {
+        guard !devices.isEmpty else { return }
+        let saved = quietUntil
+        quietUntil = 0
+        rumble = nil
+        rumbleNeedsStop = true
+        writeLocked(red: 0, green: 0, blue: 0, brightness: 0, touchLight: false)
+        rumbleNeedsStop = false
+        quietUntil = saved
+    }
+
+    /// Quit path: stop the motors and let go of the pads before the process
+    /// exits. Synchronous, because an async hop does not survive termination
+    /// and the pad would be left buzzing with nothing able to stop it.
+    func shutdownSynchronously() {
+        queue.sync {
+            holdTimer?.cancel(); holdTimer = nil
+            holdColor = nil
+            if devices.isEmpty { reopenLocked() }
+            closeLocked()
+        }
+    }
+
+    #if DEBUG
+    /// What this writer is holding right now, for the debug readout.
+    var debugState: String {
+        let mode: String
+        #if DEBUG
+        mode = " mode=\(Self.debugVibrationMode)"
+        #else
+        mode = ""
+        #endif
+        _ = mode
+        var out = ""
+        queue.sync {
+            let c = holdColor.map { "(\($0.r),\($0.g),\($0.b))" } ?? "none"
+            let quiet = max(0, quietUntil - CFAbsoluteTimeGetCurrent())
+            out = "devices=\(devices.count) holdColor=\(c) ticker=\(holdTimer != nil) "
+                + "quietFor=\(String(format: "%.2f", quiet))s rumble=\(rumble != nil)"
+        }
+        out += "\nlastVibrate: \(Self.debugLastVibrate)\nlastPath: \(FeedbackService.debugLastPath)"
+        return out
+    }
+    #endif
+
+    /// Stop any buzz this app, or a previous run of it, left running.
+    func stopMotors() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            if self.devices.isEmpty { self.reopenLocked() } else { self.stopMotorsLocked() }
+        }
     }
 
     private func closeLocked() {
+        stopMotorsLocked()
         for d in devices { IOHIDDeviceClose(d.dev, 0) }
         devices.removeAll()
     }
 
-    private func writeLocked(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8) {
+    /// `touchLight` false sends the motor fields without claiming the light
+    /// bar. Every output report says which fields it owns, and a report that
+    /// claims the light bar sets it, so a write that only meant to stop the
+    /// motors would also blank the LED.
+    private func writeLocked(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8,
+                             touchLight: Bool = true) {
+        if CFAbsoluteTimeGetCurrent() < quietUntil { return }
+        // Motor levels for this write, and whether the report should claim
+        // the vibration fields at all.
+        var strong: UInt8 = 0, weak: UInt8 = 0
+        var touchMotors = false
+        if let r = rumble {
+            if CFAbsoluteTimeGetCurrent() < r.until {
+                strong = r.strong; weak = r.weak; touchMotors = true
+            } else {
+                rumble = nil                 // expired: one zero write stops it
+                touchMotors = true
+            }
+        } else if rumbleNeedsStop {
+            touchMotors = true
+            rumbleNeedsStop = false
+        }
         for d in devices {
             let isDS = Self.dualSensePIDs.contains(d.pid)
             if isDS && !d.isBT {
-                bufDualSenseUSB[0] = 0x02; bufDualSenseUSB[2] = 0x04; bufDualSenseUSB[39] = 0x06; bufDualSenseUSB[42] = 0x02
-                bufDualSenseUSB[43] = brightness; bufDualSenseUSB[45] = red; bufDualSenseUSB[46] = green; bufDualSenseUSB[47] = blue
+                bufDualSenseUSB[0] = 0x02
+                bufDualSenseUSB[2] = touchLight ? 0x04 : 0x00   // valid_flag1: light bar
+                // valid_flag2: light setup, plus the newer vibration path only
+                // when this report is actually carrying motor values. Claiming
+                // vibration on every light write cancels the buzz the system
+                // is in the middle of playing.
+                bufDualSenseUSB[39] = (touchLight ? 0x02 : 0x00) | (touchMotors && improvedRumble(pid: d.pid) ? 0x04 : 0x00)
+                bufDualSenseUSB[42] = touchLight ? 0x02 : 0x00
+                // valid_flag0: bit 0 claims the two motor bytes that follow,
+                // and bit 1 is haptics select, which switches the pad out of
+                // audio haptics and back onto the classic motors. Without
+                // that second bit the motor values are accepted and ignored:
+                // measured on a DualSense, the same report buzzes with it and
+                // does nothing without it.
+                bufDualSenseUSB[1] = touchMotors ? (vibrationMode == 2 ? 0x02 : 0x03) : 0x00
+                bufDualSenseUSB[3] = touchMotors && motorMask != 1 ? weak : 0
+                bufDualSenseUSB[4] = touchMotors && motorMask != 2 ? strong : 0
+                bufDualSenseUSB[43] = touchLight ? brightness : 0
+                bufDualSenseUSB[45] = touchLight ? red : 0
+                bufDualSenseUSB[46] = touchLight ? green : 0
+                bufDualSenseUSB[47] = touchLight ? blue : 0
                 IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x02, bufDualSenseUSB, bufDualSenseUSB.count)
             } else if isDS && d.isBT {
                 // 78-byte BT report: [0]=0x31, [1]=sequence<<4, [2]=0x10 tag,
@@ -308,17 +556,33 @@ final class InProcessLightWriter: @unchecked Sendable {
                 sequenceTag = (sequenceTag &+ 1) & 0x0F
                 bufDualSenseBT[1] = sequenceTag << 4
                 bufDualSenseBT[2] = 0x10
-                bufDualSenseBT[4] = 0x04                       // valid_flag1: lightbar control
-                bufDualSenseBT[41] = 0x02                      // valid_flag2: lightbar setup
-                bufDualSenseBT[44] = 0x02                      // lightbar_setup: light on
-                bufDualSenseBT[45] = brightness
-                bufDualSenseBT[47] = red; bufDualSenseBT[48] = green; bufDualSenseBT[49] = blue
+                bufDualSenseBT[3] = touchMotors ? (vibrationMode == 2 ? 0x02 : 0x03) : 0x00  // valid_flag0: vibration + haptics select
+                bufDualSenseBT[5] = touchMotors && motorMask != 1 ? weak : 0     // motor right (weak)
+                bufDualSenseBT[6] = touchMotors && motorMask != 2 ? strong : 0   // motor left (strong)
+                bufDualSenseBT[4] = touchLight ? 0x04 : 0x00   // valid_flag1: lightbar control
+                // valid_flag2: lightbar setup, plus the newer vibration path
+                // when this report carries motor values.
+                bufDualSenseBT[41] = (touchLight ? 0x02 : 0x00) | (touchMotors && improvedRumble(pid: d.pid) ? 0x04 : 0x00)
+                bufDualSenseBT[44] = touchLight ? 0x02 : 0x00  // lightbar_setup: light on
+                bufDualSenseBT[45] = touchLight ? brightness : 0
+                bufDualSenseBT[47] = touchLight ? red : 0
+                bufDualSenseBT[48] = touchLight ? green : 0
+                bufDualSenseBT[49] = touchLight ? blue : 0
                 let crc = Self.crc32(prefix: [0xA2], buffer: bufDualSenseBT, range: 0..<74)
                 bufDualSenseBT[74] = UInt8(crc & 0xFF); bufDualSenseBT[75] = UInt8((crc >> 8) & 0xFF)
                 bufDualSenseBT[76] = UInt8((crc >> 16) & 0xFF); bufDualSenseBT[77] = UInt8((crc >> 24) & 0xFF)
                 IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x31, bufDualSenseBT, bufDualSenseBT.count)
             } else if Self.ds4PIDs.contains(d.pid) && !d.isBT {
-                bufDS4USB[0] = 0x05; bufDS4USB[1] = 0x07; bufDS4USB[6] = red; bufDS4USB[7] = green; bufDS4USB[8] = blue
+                bufDS4USB[0] = 0x05
+                // Bit 0 rumble, bit 1 LED colour, bit 2 LED blink: claim
+                // only the fields this write carries. Claiming rumble on
+                // every light frame cancelled any buzz within a frame.
+                bufDS4USB[1] = (touchLight ? 0x06 : 0x00) | (touchMotors ? 0x01 : 0x00)
+                bufDS4USB[6] = touchLight ? red : 0
+                bufDS4USB[7] = touchLight ? green : 0
+                bufDS4USB[8] = touchLight ? blue : 0
+                bufDS4USB[4] = touchMotors ? weak : 0
+                bufDS4USB[5] = touchMotors ? strong : 0
                 IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x05, bufDS4USB, bufDS4USB.count)
             } else if Self.ds4PIDs.contains(d.pid) && d.isBT {
                 // 78-byte DS4 BT report per DS4Windows / hid-sony: header
@@ -326,8 +590,13 @@ final class InProcessLightWriter: @unchecked Sendable {
                 // [4]=0x04, RGB at [8..10], CRC over [0..73] at [74..77].
                 // Same shifted-fields + misplaced-CRC bug as the DualSense
                 // BT path; fixed from documentation (no DS4 on hand).
-                bufDS4BT[0] = 0x11; bufDS4BT[1] = 0xC0; bufDS4BT[2] = 0xA0; bufDS4BT[3] = 0xF7; bufDS4BT[4] = 0x04
-                bufDS4BT[8] = red; bufDS4BT[9] = green; bufDS4BT[10] = blue
+                bufDS4BT[0] = 0x11; bufDS4BT[1] = 0xC0; bufDS4BT[2] = 0xA0; bufDS4BT[4] = 0x04
+                bufDS4BT[6] = touchMotors ? weak : 0
+                bufDS4BT[7] = touchMotors ? strong : 0
+                bufDS4BT[3] = (touchLight ? 0xF6 : 0xF0) | (touchMotors ? 0x01 : 0x00)
+                bufDS4BT[8] = touchLight ? red : 0
+                bufDS4BT[9] = touchLight ? green : 0
+                bufDS4BT[10] = touchLight ? blue : 0
                 let crc = Self.crc32(prefix: [0xA2], buffer: bufDS4BT, range: 0..<74)
                 bufDS4BT[74] = UInt8(crc & 0xFF); bufDS4BT[75] = UInt8((crc >> 8) & 0xFF)
                 bufDS4BT[76] = UInt8((crc >> 16) & 0xFF); bufDS4BT[77] = UInt8((crc >> 24) & 0xFF)

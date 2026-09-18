@@ -278,28 +278,27 @@ struct DeadzoneCalibrationView: View {
                             .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
                     )
 
-                // Inner deadzone band (bottom - input ignored)
-                Rectangle()
-                    .fill(Color.red.opacity(0.18))
-                    .frame(width: barWidth, height: barHeight * inner)
-
-                // Outer saturation band (top - input clamps to 100%)
-                if outer < 0.99 {
-                    Rectangle()
-                        .fill(Color.green.opacity(0.18))
-                        .frame(width: barWidth, height: barHeight * (1 - outer))
-                        .offset(y: -(barHeight * outer))
-                }
-
-                // Active fill above the inner deadzone. Deliberately
-                // translucent: at full opacity this bar painted straight over
-                // the red inner-deadzone band, so the moment you pulled the
-                // trigger the very thing you are calibrating disappeared.
+                // The live fill sits under the two bands, so pulling the
+                // trigger never covers the inner and outer deadzones you
+                // are setting; the bands stay readable on top of it.
                 let belowInner = pulled <= inner
                 Rectangle()
                     .fill(Color.accentColor.opacity(belowInner ? 0.30 : 0.55))
                     .frame(width: barWidth, height: barHeight * pulled)
                     .animation(.easeOut(duration: 0.08), value: pulled)
+
+                // Inner deadzone band (bottom - input ignored)
+                Rectangle()
+                    .fill(Color.red.opacity(0.22))
+                    .frame(width: barWidth, height: barHeight * inner)
+
+                // Outer saturation band (top - input clamps to 100%)
+                if outer < 0.99 {
+                    Rectangle()
+                        .fill(Color.green.opacity(0.22))
+                        .frame(width: barWidth, height: barHeight * (1 - outer))
+                        .offset(y: -(barHeight * outer))
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .frame(width: barWidth, height: barHeight)

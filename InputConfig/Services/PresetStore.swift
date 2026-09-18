@@ -60,6 +60,18 @@ class PresetStore: ObservableObject {
             return
         }
         groups = loaded.sorted { $0.sortOrder < $1.sortOrder }
+        // One-time: installs from before the flag existed mark the shipped
+        // folders by their original names. A folder the user has since
+        // renamed simply stays under My Presets, which is where they put it.
+        let flaggedKey = "InputConfig.groups.builtInFlagged"
+        if !UserDefaults.standard.bool(forKey: flaggedKey) {
+            let shipped = Set(ExamplePresets.groupOrder)
+            for i in groups.indices where shipped.contains(groups[i].name) {
+                groups[i].isBuiltIn = true
+            }
+            UserDefaults.standard.set(true, forKey: flaggedKey)
+            saveGroups()
+        }
     }
 
     private func saveGroups() {
@@ -142,22 +154,128 @@ class PresetStore: ObservableObject {
         saveGroups()
     }
 
-    /// Delete a group. Presets that referenced it become ungrouped.
+    /// Delete a folder into the trash: the folder, every folder inside it,
+    /// and every preset in any of them go together as one trash entry, so
+    /// Put Back restores the whole thing where it was.
     func deleteGroup(_ groupID: UUID) {
-        // Promote any child folders up to the deleted folder's parent so they
-        // aren't orphaned (and stay visible) rather than vanishing with it.
-        let removedParent = groups.first(where: { $0.id == groupID })?.parentID
-        groups.removeAll { $0.id == groupID }
-        for index in groups.indices where groups[index].parentID == groupID {
-            groups[index].parentID = removedParent
+        guard let root = groups.first(where: { $0.id == groupID }) else { return }
+        var subtree = [root]
+        var queue = [root.id]
+        while let parent = queue.popLast() {
+            for child in groups where child.parentID == parent {
+                subtree.append(child)
+                queue.append(child.id)
+            }
         }
+        let ids = Set(subtree.map(\.id))
+        let inside = presets.filter { $0.groupID.map(ids.contains) ?? false }
+        if inside.contains(where: { $0.id == activePresetId }) {
+            deactivateAll()
+        }
+        // The trash copy is written and confirmed on disk BEFORE any preset
+        // file is removed. The old order deleted first and wrote the undo
+        // envelope after, with the write itself allowed to fail quietly, so
+        // a full disk or a bad encode meant every preset in the folder was
+        // gone with nothing to put back. If the copy cannot be written the
+        // folder stays where it is and the user is told.
+        let entry = DeletedFolder(id: root.id, name: root.name, deletedAt: Date(),
+                                  groups: subtree, presets: inside)
+        guard writeDeletedFolder(entry) else {
+            ActivityLog.shared.error("Presets", "Could not move folder \(root.name) to the trash: the trash copy could not be written, so nothing was deleted")
+            return
+        }
+        for preset in inside {
+            presets.removeAll { $0.id == preset.id }
+            try? FileManager.default.removeItem(at: presetsDirectory.appendingPathComponent(preset.filename))
+        }
+        groups.removeAll { ids.contains($0.id) }
+        saveGroups()
+        deletedFolders.insert(entry, at: 0)
+        ActivityLog.shared.post(.event, "Presets", "Folder \(root.name) moved to the trash with \(inside.count) preset\(inside.count == 1 ? "" : "s")")
+    }
+
+    /// A folder in the trash: its subtree of folders and the presets that
+    /// were inside, kept whole so it can be put back as it was.
+    struct DeletedFolder: Identifiable, Codable {
+        let id: UUID
+        let name: String
+        let deletedAt: Date
+        let groups: [PresetGroup]
+        let presets: [Preset]
+    }
+
+    /// Folders the user has deleted, newest first. Each is one file under
+    /// `trash/folders/`.
+    @Published var deletedFolders: [DeletedFolder] = []
+
+    private var trashFoldersDirectory: URL {
+        let dir = trashDirectory.appendingPathComponent("folders", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func deletedFolderFile(_ entry: DeletedFolder) -> URL {
+        trashFoldersDirectory.appendingPathComponent("\(entry.id.uuidString).json")
+    }
+
+    /// Returns false if the trash copy did not make it to disk, so the
+    /// caller can refuse to delete anything.
+    @discardableResult
+    private func writeDeletedFolder(_ entry: DeletedFolder) -> Bool {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            let data = try encoder.encode(entry)
+            let url = deletedFolderFile(entry)
+            try data.write(to: url, options: .atomic)
+            return FileManager.default.fileExists(atPath: url.path)
+        } catch {
+            NSLog("PresetStore.writeDeletedFolder: \(error)")
+            return false
+        }
+    }
+
+    private func loadDeletedFolders() {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: trashFoldersDirectory, includingPropertiesForKeys: nil) else { return }
+        var loaded: [DeletedFolder] = []
+        for url in files where url.pathExtension == "json" {
+            if let data = try? Data(contentsOf: url),
+               let entry = try? JSONDecoder().decode(DeletedFolder.self, from: data) {
+                loaded.append(entry)
+            }
+        }
+        deletedFolders = loaded.sorted { $0.deletedAt > $1.deletedAt }
+    }
+
+    /// Put a trashed folder back: its folders where they were (top level if
+    /// the parent is gone), then its presets.
+    func restoreDeletedFolder(_ entry: DeletedFolder) {
+        guard deletedFolders.contains(where: { $0.id == entry.id }) else { return }
+        deletedFolders.removeAll { $0.id == entry.id }
+        try? FileManager.default.removeItem(at: deletedFolderFile(entry))
+
+        for group in entry.groups where !groups.contains(where: { $0.id == group.id }) {
+            groups.append(group)
+        }
+        let known = Set(groups.map(\.id))
+        for index in groups.indices {
+            if let parent = groups[index].parentID, !known.contains(parent) {
+                groups[index].parentID = nil
+            }
+        }
+        groups.sort { $0.sortOrder < $1.sortOrder }
         saveGroups()
 
-        // Presets that lived directly in the deleted folder become ungrouped.
-        for index in presets.indices where presets[index].groupID == groupID {
-            presets[index].groupID = nil
-            savePresetToDisk(presets[index])
+        for preset in entry.presets where !presets.contains(where: { $0.id == preset.id }) {
+            savePreset(preset)
         }
+        ActivityLog.shared.post(.event, "Presets", "Folder \(entry.name) put back")
+    }
+
+    /// Permanently delete a trashed folder and everything that was in it.
+    func permanentlyDeleteFolder(_ entry: DeletedFolder) {
+        deletedFolders.removeAll { $0.id == entry.id }
+        try? FileManager.default.removeItem(at: deletedFolderFile(entry))
     }
 
     func toggleGroupExpanded(_ groupID: UUID) {
@@ -202,6 +320,28 @@ class PresetStore: ObservableObject {
     /// Top-level folders (no parent), in display order.
     var topLevelGroups: [PresetGroup] {
         groups.filter { $0.parentID == nil }.sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    /// The user's own top-level folders, listed under My Presets.
+    var userTopLevelGroups: [PresetGroup] { topLevelGroups.filter { !$0.isBuiltIn } }
+    /// The shipped top-level folders, listed under Built-in Presets.
+    var builtInTopLevelGroups: [PresetGroup] { topLevelGroups.filter { $0.isBuiltIn } }
+
+    /// Reorder within one of the two sidebar lists. The moved folders take
+    /// the sort slots that list already occupies, in the new order, so the
+    /// other list is untouched.
+    func moveTopLevelGroups(builtIn: Bool, fromOffsets source: IndexSet, toOffset destination: Int) {
+        var subset = builtIn ? builtInTopLevelGroups : userTopLevelGroups
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < subset.count })
+        guard !valid.isEmpty else { return }
+        let slots = subset.map(\.sortOrder).sorted()
+        subset.move(fromOffsets: valid, toOffset: min(max(destination, 0), subset.count))
+        for (i, g) in subset.enumerated() {
+            if let idx = groups.firstIndex(where: { $0.id == g.id }) {
+                groups[idx].sortOrder = slots[i]
+            }
+        }
+        saveGroups()
     }
 
     /// Direct child folders of the given folder, in display order.
@@ -357,6 +497,8 @@ class PresetStore: ObservableObject {
         var loaded: [Preset] = []
 
         // Load native format presets
+        JoystickMapping.droppedRowsDuringDecode = 0
+        var unreadable: [String] = []
         if let files = try? FileManager.default.contentsOfDirectory(at: presetsDirectory, includingPropertiesForKeys: nil) {
             for file in files where file.pathExtension == "json" {
                 do {
@@ -367,8 +509,36 @@ class PresetStore: ObservableObject {
                     // Log instead of silently swallowing so a corrupt or
                     // schema-mismatched file is diagnosable rather than vanishing.
                     NSLog("PresetStore.loadPresets: skipping \(file.lastPathComponent): \(error)")
+                    unreadable.append(file.lastPathComponent)
                 }
             }
+        }
+        // Say so where the user can see it. A preset that quietly disappears
+        // from the sidebar reads as data loss; a line in the activity log
+        // with the file name reads as something that can be fixed.
+        if !unreadable.isEmpty {
+            ActivityLog.shared.error("Presets", "\(unreadable.count) preset file\(unreadable.count == 1 ? "" : "s") could not be read and \(unreadable.count == 1 ? "was" : "were") left in place: \(unreadable.joined(separator: ", "))")
+        }
+        let dropped = JoystickMapping.droppedRowsDuringDecode
+        if dropped > 0 {
+            ActivityLog.shared.warning("Presets", "\(dropped) binding row\(dropped == 1 ? "" : "s") from a newer version of InputConfig could not be read by this build and \(dropped == 1 ? "was" : "were") skipped")
+            JoystickMapping.droppedRowsDuringDecode = 0
+        }
+
+        // A group whose rows are all screen regions but which was pinned to
+        // the Touchpad template (there was no Screen template before 1.5)
+        // is moved to Screen, once, and written back.
+        for i in loaded.indices {
+            var changed = false
+            for g in loaded[i].joysticks.indices {
+                let group = loaded[i].joysticks[g]
+                if group.inputKind == .touchpad, !group.bindings.isEmpty,
+                   group.bindings.allSatisfy({ $0.input.type == .cursorRegion }) {
+                    loaded[i].joysticks[g].inputKind = .screen
+                    changed = true
+                }
+            }
+            if changed { savePresetToDisk(loaded[i]) }
         }
 
         // De-duplicate by preset id. Two on-disk files can end up sharing an
@@ -483,7 +653,8 @@ class PresetStore: ObservableObject {
                     name: groupName,
                     sortOrder: sortIndex,
                     color: ExamplePresets.groupDefaultColors[groupName],
-                    parentID: parentID
+                    parentID: parentID,
+                    isBuiltIn: true
                 )
                 groups.append(group)
                 sortIndex += 1
@@ -524,6 +695,22 @@ class PresetStore: ObservableObject {
         }
         if didColorBackfill { saveGroups() }
         if !didApplyV2 { defaults.set(true, forKey: colorVersionKey) }
+
+        // One-shot: the shipped Anki preset carried three paragraphs of
+        // notes and a paragraph-long slot tag in 1.4. Installs that still
+        // have that exact text (never edited) get the short 1.5 version.
+        let ankiTrimKey = "InputConfig.trimmedAnkiNotes.v1"
+        if !defaults.bool(forKey: ankiTrimKey) {
+            for i in presets.indices where presets[i].name == "Anki"
+                && presets[i].notes.hasPrefix("Anki from a controller.") {
+                let fresh = ExamplePresets.anki
+                presets[i].notes = fresh.notes
+                presets[i].tag = fresh.tag
+                if presets[i].joysticks.count == 1 { presets[i].joysticks[0].tag = fresh.joysticks[0].tag }
+                savePresetToDisk(presets[i])
+            }
+            defaults.set(true, forKey: ankiTrimKey)
+        }
 
         // Step 2: seed any missing example preset. Assign its group based on
         // ExamplePresets.groupAssignments + the current group list.
@@ -574,6 +761,8 @@ class PresetStore: ObservableObject {
                        let groupID = groupIDsByName[groupName] {
                         copy.groupID = groupID
                     }
+                    ExamplePresets.fillShippedNotes(&copy)
+                    ExamplePresets.fillShippedSections(&copy)
                     savePreset(copy)
                 }
                 seededNames.insert(example.name)
@@ -582,6 +771,89 @@ class PresetStore: ObservableObject {
             if ledgerDirty { defaults.set(Array(seededNames).sorted(), forKey: ledgerKey) }
             defaults.set(true, forKey: exampleSeedKey)
             defaults.set(currentBuild, forKey: seedBuildKey)
+        }
+
+        // One-shot: shipped presets used to arrive with no notes and no row
+        // notes, so the layout had to be worked out from the key codes. Fill
+        // in the shipped text wherever an installed copy still has none;
+        // anything the user wrote stays. Keyed by name, so a renamed preset
+        // is left alone too.
+        let notesKey = "InputConfig.shippedNotesFilled.v1"
+        if !defaults.bool(forKey: notesKey) {
+            // Two shipped layouts were wrong and are replaced outright when
+            // the installed copy still carries the wrong rows: Media
+            // Controller sent key codes that no key has (nothing happened),
+            // and Web Browsing sent Command comma and Command period where
+            // the bracket keys were meant. Edited copies do not match and
+            // are left alone.
+            for i in presets.indices {
+                let p = presets[i]
+                let codes = Set(p.joysticks.flatMap { $0.bindings.flatMap { $0.outputs.compactMap(\.keyCode) } })
+                let fresh: Preset?
+                if p.name == "Media Controller", !codes.isDisjoint(with: [232, 233, 234, 235, 237, 238, 128, 129, 130, 131]) {
+                    fresh = ExamplePresets.all.first { $0.name == "Media Controller" }
+                } else if p.name == "Web Browsing", codes.contains(54) || codes.contains(55) {
+                    fresh = ExamplePresets.all.first { $0.name == "Web Browsing" }
+                } else {
+                    fresh = nil
+                }
+                if let fresh {
+                    presets[i].joysticks = fresh.joysticks
+                    presets[i].tag = fresh.tag
+                    savePresetToDisk(presets[i])
+                }
+            }
+            for i in presets.indices where ExamplePresets.groupAssignments[presets[i].name] != nil {
+                if ExamplePresets.fillShippedNotes(&presets[i]) {
+                    savePresetToDisk(presets[i])
+                }
+            }
+            defaults.set(true, forKey: notesKey)
+        }
+
+        // One-shot: shipped presets get their rows under section headings
+        // (Left stick, Buttons, D-pad...) now that the editor has sections.
+        // Only copies with no sections at all are touched, so anything the
+        // user organised themselves stays as they left it.
+        let sectionsKey = "InputConfig.shippedSectionsFilled.v1"
+        if !defaults.bool(forKey: sectionsKey) {
+            for i in presets.indices where ExamplePresets.groupAssignments[presets[i].name] != nil {
+                if ExamplePresets.fillShippedSections(&presets[i]) {
+                    savePresetToDisk(presets[i])
+                }
+            }
+            defaults.set(true, forKey: sectionsKey)
+        }
+
+        // One-shot: regions used to be one app-wide list per kind. Each
+        // preset now carries its own, so hand every region a preset refers
+        // to over to that preset. A region no preset refers to is left in
+        // the old list, unused.
+        let regionsKey = "InputConfig.regionsPerPreset.v1"
+        if !defaults.bool(forKey: regionsKey) {
+            let legacyTouchpad = TouchpadService.legacyAppWideRegions()
+            let legacyCursor = CursorRegionService.legacyAppWideRegions()
+            let legacyStick = StickRegionService.legacyAppWideRegions()
+            for i in presets.indices {
+                let refs = presets[i].referencedRegionIDs
+                var changed = false
+                for r in legacyTouchpad where refs.touchpad.contains(r.id)
+                    && !presets[i].touchpadRegions.contains(where: { $0.id == r.id }) {
+                    presets[i].touchpadRegions.append(r); changed = true
+                }
+                for r in legacyCursor where refs.cursor.contains(r.id)
+                    && !presets[i].cursorRegions.contains(where: { $0.id == r.id }) {
+                    presets[i].cursorRegions.append(r); changed = true
+                }
+                for (stick, list) in legacyStick {
+                    for r in list where refs.stick.contains(r.id)
+                        && !(presets[i].stickRegions["\(stick)"] ?? []).contains(where: { $0.id == r.id }) {
+                        presets[i].stickRegions["\(stick)", default: []].append(r); changed = true
+                    }
+                }
+                if changed { savePresetToDisk(presets[i]) }
+            }
+            defaults.set(true, forKey: regionsKey)
         }
 
         // Step 3 (self-heal): make sure every built-in example preset that
@@ -810,7 +1082,11 @@ class PresetStore: ObservableObject {
     // MARK: - CRUD
 
     func createPreset() -> Preset {
-        let preset = Preset(name: "New Preset", joysticks: [JoystickMapping(tag: "Add bindings here")])
+        var preset = Preset(name: "New Preset", joysticks: [JoystickMapping(tag: "")])
+        // The newest preset goes to the top of My Presets, where the New
+        // Preset button is, so it is never hidden below the built-ins.
+        let minOrder = presets(in: nil).compactMap(\.sortOrder).min() ?? 1
+        preset.sortOrder = minOrder - 1
         savePreset(preset)
         return preset
     }
@@ -921,6 +1197,8 @@ class PresetStore: ObservableObject {
     /// folder is wiped along with the in-memory list.
     func emptyTrash() {
         recentlyDeleted.removeAll()
+        deletedFolders.removeAll()
+        try? FileManager.default.removeItem(at: trashFoldersDirectory)
         if let files = try? FileManager.default.contentsOfDirectory(at: trashDirectory,
                                                                      includingPropertiesForKeys: nil) {
             for f in files { try? FileManager.default.removeItem(at: f) }
@@ -983,6 +1261,7 @@ class PresetStore: ObservableObject {
         }
         recentlyDeleted = loaded.sorted { $0.deletedAt > $1.deletedAt }
         pruneTrash()
+        loadDeletedFolders()
     }
 
     func duplicatePreset(_ preset: Preset) -> Preset {

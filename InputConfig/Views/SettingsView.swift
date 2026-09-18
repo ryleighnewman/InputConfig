@@ -1,5 +1,6 @@
 #if os(macOS)
 import SwiftUI
+import AVFoundation
 import GameController
 import Carbon.HIToolbox
 
@@ -28,7 +29,7 @@ struct SettingsView: View {
     @AppStorage("InputConfig.showDockIcon") private var showDockIcon = true
     /// Mirrors the key ContentView reads to pin the developer activity log
     /// under the detail pane. Off by default so the shipping UI stays clean.
-    @AppStorage("InputConfig.showDebugLog") private var showDebugLog = false
+    @AppStorage("InputConfig.showDebugLog") private var showDebugLog = true
     /// Drives the system-wide "toggle most recent preset" hotkey. Same key
     /// AppState reads at launch to decide whether to register the chord.
     @AppStorage(GlobalHotKeyService.enabledDefaultsKey) private var globalHotkeyEnabled = false
@@ -43,6 +44,7 @@ struct SettingsView: View {
         EmergencyStopService.defaultHoldSeconds
     /// Bumped when the chord changes so the warning line re-evaluates.
     @State private var panicSpecRevision = 0
+    @State private var showingResetConfirm = false
 
     @AppStorage(FrontmostAppWatcher.enabledDefaultsKey) private var autoSwitchEnabled = false
 
@@ -68,19 +70,17 @@ struct SettingsView: View {
     /// The live press log, observed here (not via the controller service) so
     /// its per-press updates re-render only this sheet, never the root window.
     @ObservedObject private var pressLog = PhysicalPressLogStore.shared
-    @State private var showingCursorRegions = false
 
     // App-level accessibility preferences (Settings > General > Accessibility).
     @AppStorage("InputConfig.a11y.textSize") private var a11yTextSize = 0
     @AppStorage("InputConfig.a11y.boldText") private var a11yBoldText = false
     @AppStorage("InputConfig.a11y.reduceTransparency") private var a11yReduceTransparency = false
     @AppStorage("InputConfig.a11y.reduceMotion") private var a11yReduceMotion = false
-    @State private var showingStickRegions = false
 
     enum SettingsTab: String, CaseIterable, Identifiable {
         case general = "General"
         case advanced = "Advanced"
-        case controllers = "Controllers"
+        case controllers = "Devices"
         case about = "About"
 
         var id: String { rawValue }
@@ -125,18 +125,10 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .sheet(isPresented: $showingCursorRegions) {
-            CursorRegionsView()
-                .glassBackground()
-        }
-        .sheet(isPresented: $showingStickRegions) {
-            StickRegionsView()
-                .glassBackground()
-        }
         // macOS Form needs more room. With sections containing descriptions
         // and toggles, 500 px clips the labels and right column. Widening
         // keeps multi-line descriptions readable.
-        .frame(width: 620, height: 520)
+        .frame(minWidth: 620, idealWidth: 620, minHeight: 520, idealHeight: 520)
     }
 
     // MARK: - General
@@ -147,7 +139,7 @@ struct SettingsView: View {
         // getting squeezed into Form's narrow two-column layout.
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                section(title: "Accessibility Permission") {
+                section(title: "Accessibility permission") {
                     HStack(spacing: 8) {
                         Image(systemName: accessibility.isTrusted ? "circle.fill" : "exclamationmark.triangle.fill")
                             .font(accessibility.isTrusted ? .system(size: 9) : .body)
@@ -159,7 +151,7 @@ struct SettingsView: View {
                     }
                     .onAppear { accessibility.refresh() }
 
-                    Text("InputConfig uses macOS Accessibility to send the keyboard and mouse actions you map to your controller. That is what lets a game controller operate macOS and your apps. It is used only to perform the mappings you set up. If you bind your Mac keyboard or mouse as an input source, the app reads those events solely to trigger your mappings; nothing is ever logged or sent anywhere.")
+                    Text("Accessibility access is how InputConfig sends the keys and clicks you map. It is used only for your mappings; nothing is logged or sent anywhere.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -171,18 +163,19 @@ struct SettingsView: View {
                             Button("Open Accessibility Settings") { accessibility.openSystemSettings() }
                                 .buttonStyle(.solidSecondaryCompact)
                         }
-                        Text("Click Grant Access, then turn on InputConfig under System Settings, Privacy and Security, Accessibility. This updates automatically once you do.")
+                        Text("Click Grant Access, then turn on InputConfig under Privacy and Security, Accessibility.")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
-                section(title: "Accessibility") {
+                section(title: "Text and motion") {
                     HStack(spacing: 10) {
                         Text("Text Size")
                             .font(.callout)
                         Picker("", selection: $a11yTextSize) {
+                            Text("Small").tag(-1)
                             Text("Default").tag(0)
                             Text("Large").tag(1)
                             Text("Extra Large").tag(2)
@@ -190,42 +183,47 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        .frame(maxWidth: 340)
+                        .frame(maxWidth: 400)
                         .accessibilityLabel("Text size")
                         Spacer()
                     }
-                    Text("Scales every label, button, and row in the app. Layouts reflow to fit.")
+                    Text("Scales all text in the app. macOS has no system-wide text size that apps like this one can follow, so it is set here.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Toggle("Bold Text", isOn: $a11yBoldText)
+                    Toggle("Bold text", isOn: $a11yBoldText)
                         .toggleStyle(.switch)
-                    Text("Renders all text at a heavier weight for stronger contrast against the background.")
+                    Text("Heavier text for more contrast.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Toggle("Reduce Transparency", isOn: $a11yReduceTransparency)
+                    Toggle("Reduce transparency", isOn: $a11yReduceTransparency)
                         .toggleStyle(.switch)
-                    Text("Replaces the frosted-glass window and sheet backgrounds with solid ones, so text never sits over whatever is behind the window.")
+                    Text("Solid window backgrounds instead of frosted glass.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Toggle("Reduce Motion", isOn: $a11yReduceMotion)
+                    Toggle("Reduce motion", isOn: $a11yReduceMotion)
                         .toggleStyle(.switch)
-                    Text("Stops the decorative animations - welcome-screen demos, the About glow, sliding transitions - without touching the live visualizer's real data.")
+                    Text("Turns off decorative animation. Live data still moves.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Text("InputConfig always honors the system-wide settings in System Settings > Accessibility as well. These switches apply to this app only.")
+                    Text("The Mac's own Accessibility settings are honoured too. These apply to this app only.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                }
+
+                section(title: "Spoken feedback voice") {
+                    SpeechVoicePicker()
                 }
 
                 section(title: "Startup") {
                     LaunchAtLoginToggleView()
                 }
 
-                section(title: "Dock & Menu Bar") {
+                section(title: "Dock & menu bar") {
                     Toggle("Show Dock icon", isOn: $showDockIcon)
                         .onChange(of: showDockIcon) { _, newValue in
                             // See-saw: turning one off while the other is
@@ -247,13 +245,25 @@ struct SettingsView: View {
                             MenuBarController.shared.setVisible(newValue)
                         }
 
-                    Text("Keep at least one of these on so you can always reach InputConfig. Hiding the Dock icon makes it a menu bar-only app (no Dock icon, no top menu bar); hiding the menu bar icon keeps it in the Dock. Turning one off while the other is already off switches the other back on.")
+                    Text("One of these always stays on so you can reach the app. With the Dock icon off, InputConfig lives in the menu bar only.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    // The menu bar glyph: pick the one that says what you
+                    // use the app for. Turns green while a preset runs
+                    // whichever you choose.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Menu bar icon")
+                        MenuBarIconPicker()
+                        Text("Turns green while a preset is running, whichever you pick.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
                 }
 
-                section(title: "Keyboard Shortcut") {
+                section(title: "Keyboard shortcut") {
                     Toggle("Universal shortcut to toggle the most recent preset",
                            isOn: $globalHotkeyEnabled)
                         .onChange(of: globalHotkeyEnabled) { _, on in
@@ -268,14 +278,14 @@ struct SettingsView: View {
                                 GlobalHotKeyService.shared.disable()
                             }
                         }
-                    Text("Press \(GlobalHotKeyService.shared.shortcutDescription) anywhere to turn your most recently used preset on or off, even while another app is in front. Works system-wide and needs no extra permission. If another app already uses this shortcut, the switch turns itself back off.")
+                    Text("\(GlobalHotKeyService.shared.shortcutDescription) turns your last-used preset on or off from any app. If another app owns the shortcut, this switches itself off.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                section(title: "Emergency Stop") {
-                    Text("One action that only ever stops. It halts the engine, lets go of every key, button, and note being held, and gives the pointer back. It never turns a preset on, so it is safe to hit when you are not sure what is happening.")
+                section(title: "Emergency stop") {
+                    Text("Turns the active preset off and lets go of every key, mouse button, and note the app was holding. It does not turn the controller off or restart anything. It exists for the moment a preset is sending keys or moving the pointer and you cannot get to the app's Stop button: the pointer is confined, a stick is pushing it, or a key is stuck down. One press from the keyboard or a hold on the controller, and the Mac is yours again.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -299,13 +309,13 @@ struct SettingsView: View {
                         Spacer()
                     }
                     if EmergencyStopService.shared.spec.stealsATypingKey {
-                        Label("This key will stop working for typing everywhere on the Mac. A function key avoids that.",
+                        Label("This key will no longer type anywhere on the Mac. A function key avoids that.",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("A single key is allowed. F13 or another function key is a good choice, because nothing else uses it and it is reachable with one hand.")
+                    Text("A single key works too. A function key like F13 is ideal: unused and one-handed.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -314,7 +324,7 @@ struct SettingsView: View {
                     Divider()
 
                     Toggle("Hold a button on the controller", isOn: $panicControllerEnabled)
-                    Text("This is the one that matters when a preset has taken over the keyboard and mouse: the controller in your hands is still a way out. It works no matter what the preset maps this button to.")
+                    Text("Works whatever the preset maps this button to, so the controller in your hand is always a way out. Holding it does nothing else; a normal press still does what the preset says.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -335,6 +345,8 @@ struct SettingsView: View {
                             Text("1.5 seconds").tag(1.5)
                             Text("2 seconds").tag(2.0)
                             Text("3 seconds").tag(3.0)
+                            Text("4 seconds").tag(4.0)
+                            Text("5 seconds").tag(5.0)
                         }
                         .labelsHidden()
                         .frame(width: 130)
@@ -342,7 +354,7 @@ struct SettingsView: View {
                     }
                     .disabled(!panicControllerEnabled)
 
-                    Text("You can also give any single control an Emergency Stop output in the binding editor, and the menu bar has a button for it.")
+                    Text("The menu bar shows the current shortcut and hold. Any control can also be bound to Emergency Stop in the editor.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -361,10 +373,10 @@ struct SettingsView: View {
     private var advancedTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                section(title: "Automatic Preset Switching") {
+                section(title: "Automatic preset switching") {
                     Toggle("Switch presets when the front app changes",
                            isOn: $autoSwitchEnabled)
-                    Text("Presets can list apps in their Automation & Gaming Utilities panel; when one of those apps comes to the front, its preset activates by itself, and your previous preset comes back when you leave. Nothing switches unless a preset opts in.")
+                    Text("A preset that lists apps (Automation panel) activates when one of them comes to the front, and the previous preset returns when you leave.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -373,14 +385,14 @@ struct SettingsView: View {
                 section(title: "Reliability") {
                     Toggle("Restore active preset after a crash",
                            isOn: $crashRecovery.sessionRestoreEnabled)
-                    Text("If the app exits unexpectedly, the next launch will re-activate the preset that was active before the crash. If a second crash happens within 90 seconds, recovery is skipped so a bad preset can't trap you in a restart loop. Force quitting from Activity Monitor behaves the same as a crash: your last active preset will come back.")
+                    Text("After a crash or force quit, the next launch brings back the preset that was active. A second crash within 90 seconds skips this so a bad preset cannot trap you.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Toggle("Detect freezes and save diagnostics",
                            isOn: $freezeWatchdog.enabled)
-                    Text("A background watchdog pings the main thread once a second. If the app stops responding for more than 15 seconds the freeze is logged and your active preset is force-saved, so even if you have to force quit while frozen, the next launch will restore it.")
+                    Text("If the app freezes for 15 seconds, the freeze is logged and the active preset is saved, so a force quit loses nothing.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -398,16 +410,28 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
+                        Spacer()
+                        // The reports macOS writes when an app crashes or is
+                        // killed. Shown once there is a reason to look.
+                        if crashRecovery.didRecoverPreviousSession || crashRecovery.lastFreezeAt != nil {
+                            Button {
+                                CrashRecoveryService.openCrashReports()
+                            } label: {
+                                Label("Open Crash Reports", systemImage: "doc.text.magnifyingglass")
+                            }
+                            .buttonStyle(.solidSecondaryCompact)
+                            .help("The reports macOS kept for InputConfig, in the Console app")
+                        }
                     }
 
-                    Toggle("Show developer activity log", isOn: $showDebugLog)
-                    Text("Pins a live log of controller and mapping activity to the bottom of the main window. Handy while troubleshooting; off by default so the window stays clean.")
+                    Toggle("Show the activity log", isOn: $showDebugLog)
+                    Text("The live log at the bottom of the main window: controllers, presets, presses, permissions, and anything that fails. Its Save Report button makes a file to send with a bug report.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                section(title: "Polling Rate") {
+                section(title: "Polling rate") {
                     Toggle(isOn: $autoPollByPower) {
                         Label("Auto-switch on power source",
                               systemImage: "battery.100.bolt")
@@ -445,7 +469,7 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                             .onChange(of: pollHzOnBattery) { _, _ in mappingEngine.applyPollRate() }
                         }
-                        Text("The engine switches between these rates the moment macOS reports a power-source change. Pick a lower rate for battery to stretch session time without restarting.")
+                        Text("Switches the moment the Mac changes power source. A lower battery rate stretches a session.")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -509,7 +533,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.orange)
                                 .font(.caption)
                                 .accessibilityHidden(true)
-                            Text("Sacrifices battery life and CPU. Higher rates can also cause UI hitches in the binding editor while a preset is active. Drop back to 120 Hz if the app feels sluggish.")
+                            Text("Costs battery and CPU, and can make the editor hitch while a preset runs. Use 120 Hz if the app feels sluggish.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -520,7 +544,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.blue)
                                 .font(.caption)
                                 .accessibilityHidden(true)
-                            Text("Lower rate saves battery but may add noticeable latency on fast-twitch inputs like rapid-fire and gyro aim.")
+                            Text("Saves battery; rapid-fire and gyro aim may feel a touch slower.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -528,16 +552,16 @@ struct SettingsView: View {
                     }
                 }
 
-                section(title: "System Performance") {
+                section(title: "System performance") {
                     SystemStatsPanel()
                 }
 
-                section(title: "Gaming Utilities (Global Defaults)") {
+                section(title: "Gaming utilities (global defaults)") {
                     GamingUtilitiesPanel()
                 }
 
-                section(title: "Data & Storage") {
-                    Text("Every preset, group, snapshot, statistic, calibration, and touchpad region is stored inside the app's sandbox container in Application Support and the Preferences plist. App Store updates only replace the app bundle; this container is left untouched, so nothing you've configured is lost on update.")
+                section(title: "Data & storage") {
+                    Text("Everything you configure lives in the app's container in Application Support. Updates never touch it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -557,6 +581,29 @@ struct SettingsView: View {
                             importBackup()
                         }
                         .buttonStyle(.solidSecondaryCompact)
+                    }
+                }
+
+                section(title: "Reset") {
+                    Text("Puts every setting back to how the app shipped: appearance, poll rate, emergency stop, cursor utilities, calibration. Presets, folders, and backups stay.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Reset Settings to Default…") {
+                        showingResetConfirm = true
+                    }
+                    .buttonStyle(.solidSecondaryCompact)
+                    .confirmationDialog("Reset all settings to their defaults?",
+                                        isPresented: $showingResetConfirm,
+                                        titleVisibility: .visible) {
+                        Button("Reset Settings", role: .destructive) {
+                            AppSettingsReset.resetToDefaults()
+                            mappingEngine.applyPollRate()
+                            panicSpecRevision += 1
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Presets and folders are not touched.")
                     }
                 }
             }
@@ -669,50 +716,28 @@ struct SettingsView: View {
         // how they get carried by Export Backup; missing entries silently
         // reset when the user restores on a new Mac. Grouped roughly
         // by subsystem for readability.
-        let exportedKeys: [String] = [
-            // Touchpad
-            "InputConfig.touchpadCalibration.v1",
-            "InputConfig.touchpadRegions.v1",
-            "InputConfig.touchpadActiveDevice.v2",
-            // Cursor / stick regions
-            "InputConfig.cursorRegions.v1",
-            "InputConfig.stickRegions.v1",
-            // Cursor guard (gaming utilities)
-            "CursorGuard.edgeConfine",
-            "CursorGuard.edgeBufferPx",
-            "CursorGuard.autoRecenter",
-            "CursorGuard.recenterIntervalMs",
-            "CursorGuard.hideWhileRunning",
-            "CursorGuard.sensitivity",
-            // Engine poll rate
-            "InputConfig.pollHz",
-            "InputConfig.autoPollHzByPower",
-            "InputConfig.pollHzOnAC",
-            "InputConfig.pollHzOnBattery",
-            // UI
-            "InputConfig.showMenuBarIcon",
-            "InputConfig.debugLogExpanded",
-            "VirtualController.scale",
-            // External input
-            "InputConfig.externalInput.excludeBuiltIn",
-            // Update + session
-            "InputConfig.updateCheck.enabled",
-            "InputConfig.updateCheck.dismissedVersions",
-            "InputConfig.sessionRestore.enabled",
-            "InputConfig.freezeWatchdog.enabled",
-            // Misc
-            "InputConfig.tipCount",
-            "InputConfig.seededExampleGroups.v1",
-            "InputConfig.seededExamples.v1",
-            "InputConfig.seededExampleNames.v1",
-            "InputConfig.appliedDefaultGroupColors.v2",
+        // Every setting the app owns, found by prefix in its own defaults
+        // domain rather than listed by hand. The hand-kept list had drifted:
+        // the emergency-stop and panic hotkeys, the global activate hotkey,
+        // auto-switch, the manual HID devices, the accessibility text
+        // settings and more were all missing, so restoring on a new Mac
+        // silently dropped the kill switch. A few keys are machine-local
+        // and skipped on purpose.
+        let skipped: Set<String> = [
+            "InputConfig.lastActivatedPresetId", "InputConfig.recovery.lastFreezeAt",
+            "InputConfig.TestBench", "InputConfig.midiSourceUniqueID",
         ]
+        let exportedKeys: [String] = defaults.dictionaryRepresentation().keys
+            .filter { key in
+                AppSettingsReset.prefixes.contains(where: { key.hasPrefix($0) }) && !skipped.contains(key)
+            }
+            .sorted()
         for key in exportedKeys {
             if let v = defaults.object(forKey: key) {
                 // Encode Data values as base64 strings for JSON portability.
                 if let d = v as? Data {
-                    prefs[key] = d.base64EncodedString()
-                } else {
+                    prefs[key] = ["__data": d.base64EncodedString()]
+                } else if JSONSerialization.isValidJSONObject([v]) {
                     prefs[key] = v
                 }
             }
@@ -812,8 +837,13 @@ struct SettingsView: View {
         if let prefs = envelope["userDefaults"] as? [String: Any] {
             let defaults = UserDefaults.standard
             for (key, value) in prefs {
-                if dataKeys.contains(key), let str = value as? String, let data = Data(base64Encoded: str) {
+                // Data values travel as base64 under a marker so any key can
+                // carry one, not only the handful the old list knew about.
+                if let dict = value as? [String: Any], let str = dict["__data"] as? String,
+                   let data = Data(base64Encoded: str) {
                     defaults.set(data, forKey: key)
+                } else if dataKeys.contains(key), let str = value as? String, let data = Data(base64Encoded: str) {
+                    defaults.set(data, forKey: key)   // backups written before 1.5
                 } else {
                     defaults.set(value, forKey: key)
                 }
@@ -830,7 +860,7 @@ struct SettingsView: View {
         // leaving a huge gap between the header and a floating empty state.
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                section(title: "Connected Controllers") {
+                section(title: "Connected devices") {
                     HStack {
                         Spacer()
                         Button {
@@ -862,45 +892,21 @@ struct SettingsView: View {
                 }
 
                 if !hasAnyController {
-                    section(title: "How to Connect") {
+                    section(title: "How to connect") {
                         connectionTipsView
                     }
                 }
 
-                section(title: "Cursor Regions") {
-                    Text("Draw zones on screen and bind them as Cursor Region inputs. Works with any pointer, including the built-in trackpad.")
+                // Screen regions and stick zones belong to a preset, and
+                // are drawn from that preset's editor. The editors that used
+                // to open from here worked on the shared working set and
+                // saved to nothing: every zone drawn was gone at the next
+                // launch, and a binding made against it dangled for good.
+                section(title: "Screen regions and stick zones") {
+                    Text("Zones belong to a preset. Open a preset, choose Edit, and draw screen regions or stick zones from a row's Options; they are saved with that preset.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    HStack {
-                        Button("Open Cursor Regions Editor…") {
-                            showingCursorRegions = true
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        Text("\(CursorRegionService.shared.allRegions().count) defined")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                section(title: "Stick Regions") {
-                    Text("Bind diagonals and quadrants on a stick as one input, instead of combining two axis half-bindings. Each stick has its own set.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack {
-                        Button("Open Stick Regions Editor…") {
-                            showingStickRegions = true
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        let leftCount = StickRegionService.shared.regions(forStick: 0).count
-                        let rightCount = StickRegionService.shared.regions(forStick: 1).count
-                        Text("\(leftCount) left / \(rightCount) right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
 
             }
@@ -942,7 +948,7 @@ struct SettingsView: View {
                             }
                             Spacer()
                         }
-                        Text("macOS does not expose this controller through its game controller framework, so InputConfig reads it directly over HID. It still works for mapping. If it does not respond inside a preset, try switching it to a mode macOS reads natively - see the Help menu for your model.")
+                        Text("macOS does not see this controller natively, so InputConfig reads it over HID. If it does not respond in a preset, switch it to a mode macOS reads; see Help for your model.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1070,7 +1076,7 @@ struct SettingsView: View {
                             DisclosureGroup("All detected buttons") {
                                 let buttonNames = Array(controller.physicalInputProfile.buttons.keys).sorted()
                                 if buttonNames.isEmpty {
-                                    Text("No physical buttons reported by this controller.")
+                                    Text("No physical buttons.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 } else {
@@ -1128,7 +1134,6 @@ struct SettingsView: View {
         ScrollView {
             VStack(spacing: 18) {
                 aboutHero
-                aboutChangelogRow
                 aboutStory
                 aboutSourceAndSupport
                 aboutCommunityRow
@@ -1161,85 +1166,59 @@ struct SettingsView: View {
 
     // MARK: About rows (mirrors YapToText's About page)
 
-    /// The hero: the app icon breathing over a soft accent glow, then the
-    /// name, version, and tagline. Same treatment as YapToText's About.
+    /// The hero, one compact row: the icon, then the name, the version with
+    /// the changelog button beside it, and the tagline.
     private var aboutHero: some View {
-        VStack(spacing: 12) {
-            TimelineView(.animation(minimumInterval: 1.0 / 10.0, paused: AppA11y.reduceMotion)) { timeline in
-                let t = timeline.date.timeIntervalSinceReferenceDate
-                let glow = 0.5 + 0.5 * sin(t * 0.8)
-                ZStack {
-                    Circle()
-                        .fill(Color.accentColor.opacity(0.14 + 0.10 * glow))
-                        .frame(width: 116, height: 116)
-                        .blur(radius: 28)
-                    if let appIcon = NSApp.applicationIconImage {
-                        Image(nsImage: appIcon)
-                            .resizable()
-                            .frame(width: 96, height: 96)
-                    }
+        HStack(alignment: .center, spacing: 14) {
+            if let appIcon = NSApp.applicationIconImage {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .frame(width: 64, height: 64)
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("InputConfig").font(.title2.weight(.semibold))
+                HStack(spacing: 8) {
+                    Text("Version \(bundleShortVersion) (\(bundleBuildNumber))")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("View Changelog") { showChangelog = true }
+                        .buttonStyle(.solidSecondaryCompact)
+                        .accessibilityLabel("View changelog, current version \(Changelog.currentVersion)")
+                        .popover(isPresented: $showChangelog, arrowEdge: .bottom) {
+                            changelogPopover
+                        }
                 }
-                .frame(width: 110, height: 110)
+                Text(storeSafe("A free accessibility tool that maps any input device to anything on your Mac.",
+                               "An accessibility tool that maps any input device to anything on your Mac."))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(spacing: 4) {
-                Text("InputConfig").font(.largeTitle)
-                Text("Version \(bundleShortVersion) (\(bundleBuildNumber))")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            Text("A free accessibility tool that maps any input device to anything on your Mac.")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 380)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var aboutChangelogRow: some View {
-        aboutCard {
-            Button { showChangelog = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "sparkles")
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 22)
-                    Text("View Changelog")
-                        .font(.callout)
-                    Spacer(minLength: 0)
-                    Text(Changelog.currentVersion)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                    Image(systemName: "chevron.right")
-                        .imageScale(.small)
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .popover(isPresented: $showChangelog, arrowEdge: .bottom) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("What's new").font(.headline)
-                    ForEach(Changelog.entries) { entry in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(entry.version).font(.subheadline.weight(.semibold))
-                            ForEach(entry.points, id: \.self) { point in
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text("\u{2022}").foregroundStyle(.secondary)
-                                    Text(point).font(.callout)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
+    private var changelogPopover: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("What's new").font(.headline)
+                ForEach(Changelog.entries) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(entry.version).font(.subheadline.weight(.semibold))
+                        ForEach(entry.points, id: \.self) { point in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
+                                Text(point).font(.callout)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
                 }
-                .padding(16)
-                .frame(width: 380, alignment: .leading)
             }
-            .frame(maxHeight: 460)
+            .padding(16)
+            .frame(width: 380, alignment: .leading)
         }
-        .accessibilityLabel("View changelog, current version \(Changelog.currentVersion)")
+        .frame(maxHeight: 460)
     }
 
     private var aboutStory: some View {
@@ -1253,7 +1232,8 @@ struct SettingsView: View {
                 Text("The mapping tools out there were either expensive, missing important features, or not really built for the people using them.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("So I made the input mapper of my dreams: free, endlessly customizable, and happy to treat any device - a game controller, a MIDI keyboard, a spare mouse - as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know.")
+                Text(storeSafe("So I made the input mapper of my dreams: free, endlessly customizable, and happy to treat any device - a game controller, a MIDI keyboard, a spare mouse - as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know.",
+                               "So I made the input mapper of my dreams: open, endlessly customizable, and happy to treat any device - a game controller, a MIDI keyboard, a spare mouse - as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know."))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1302,7 +1282,8 @@ struct SettingsView: View {
                 Image(systemName: "heart.fill")
                     .foregroundStyle(.pink)
                     .frame(width: 22)
-                Text("Free forever. A tip is never expected, but would truly mean the world.")
+                Text(storeSafe("Free forever. A tip is never expected, but would truly mean the world.",
+                               "A tip is never expected, but would truly mean the world."))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 10)
@@ -1367,6 +1348,93 @@ struct SettingsView: View {
 
 /// Self-contained toggle for the Launch at Login setting. Pulled out so
 /// the Settings tab doesn't need to track the LoginItemService directly.
+/// Reset Settings to Default. Clears the app's preference keys, so every
+/// @AppStorage and every service that reads UserDefaults falls back to its
+/// built-in default. Records are kept: what has been seeded and migrated,
+/// the tip count, the last-seen version, the MIDI port's identity, the
+/// per-preset region layouts, and window positions.
+enum AppSettingsReset {
+    static let prefixes = ["InputConfig.", "CursorGuard.", "suppressAccessibilityIntro"]
+    private static let kept: Set<String> = [
+        "InputConfig.lastSeenVersion", "InputConfig.tipCount", "InputConfig.midiSourceUniqueID",
+        "InputConfig.lastExampleSeedBuild", "InputConfig.appliedDefaultGroupColors.v2",
+        "InputConfig.groups.builtInFlagged", "InputConfig.trimmedAnkiNotes.v1",
+        "InputConfig.shippedSectionsFilled.v1",
+        // One-shot migration flags. Dropping these on a settings reset
+        // re-armed the shipped-notes backfill, which replaces the bindings
+        // of every shipped preset with the shipped layout on next launch.
+        "InputConfig.shippedNotesFilled.v1", "InputConfig.regionsPerPreset.v1",
+        "InputConfig.lastActivatedPresetId", "InputConfig.recovery.lastFreezeAt",
+        "InputConfig.cursorRegions.v1", "InputConfig.stickRegions.v1", "InputConfig.touchpadRegions.v1",
+        "InputConfig.TestBench",
+    ]
+    private static let keptPrefixes = ["InputConfig.seededExample", "InputConfig.review."]
+
+    static func isSetting(_ key: String) -> Bool {
+        guard prefixes.contains(where: { key.hasPrefix($0) }) else { return false }
+        if kept.contains(key) { return false }
+        return !keptPrefixes.contains(where: { key.hasPrefix($0) })
+    }
+
+    @MainActor
+    static func resetToDefaults() {
+        let defaults = UserDefaults.standard
+        guard let bundle = Bundle.main.bundleIdentifier,
+              let domain = defaults.persistentDomain(forName: bundle) else { return }
+        let keys = domain.keys.filter(isSetting)
+        for key in keys { defaults.removeObject(forKey: key) }
+        ActivityLog.shared.post(.event, "Settings", "Settings reset to defaults (\(keys.count) keys)")
+    }
+}
+
+/// The voice that reads a binding's spoken phrase. Default is the Mac's own
+/// System Voice from Accessibility, Spoken Content, so a voice chosen there
+/// (a premium male voice, for instance) carries into the app. Any installed
+/// voice can be picked instead, so the feedback voice can differ from the
+/// reading voice.
+struct SpeechVoicePicker: View {
+    @AppStorage(FeedbackService.voiceKey) private var voiceID = ""
+    @State private var voices: [AVSpeechSynthesisVoice] = []
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Voice")
+                .font(.callout)
+            Picker("", selection: $voiceID) {
+                Text("System voice (Accessibility, Spoken Content)").tag("")
+                Divider()
+                ForEach(voices, id: \.identifier) { v in
+                    Text(label(v)).tag(v.identifier)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 420)
+            .accessibilityLabel("Spoken feedback voice")
+            Button("Preview") {
+                FeedbackService.shared.speak("Copy. Paste. Undo.")
+            }
+            .buttonStyle(.solidSecondaryCompact)
+            Spacer()
+        }
+        Text("Reads the phrase on any row with Speak turned on. System voice follows the Mac's Spoken Content setting; pick a different one here if the reading voice and the command voice should not sound alike. Enhanced and premium voices are the ones installed under Spoken Content, System Voice, Manage Voices.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        .onAppear { voices = FeedbackService.installedVoices() }
+    }
+
+    private func label(_ v: AVSpeechSynthesisVoice) -> String {
+        let quality: String
+        switch v.quality {
+        case .premium: quality = " (Premium)"
+        case .enhanced: quality = " (Enhanced)"
+        default: quality = ""
+        }
+        let lang = Locale.current.localizedString(forIdentifier: v.language) ?? v.language
+        return "\(v.name)\(quality), \(lang)"
+    }
+}
+
 struct LaunchAtLoginToggleView: View {
     @StateObject private var service = LoginItemService.shared
 
@@ -1375,7 +1443,7 @@ struct LaunchAtLoginToggleView: View {
         // left-aligns its label cleanly when the label is a plain Text.
         // Description text goes underneath as a separate Form row so it
         // takes the full width and does not get truncated by the column.
-        Toggle("Launch at Login", isOn: launchAtLoginBinding)
+        Toggle("Launch at login", isOn: launchAtLoginBinding)
             .toggleStyle(.switch)
         Text("Open InputConfig automatically when you log in to macOS.")
             .font(.caption)
@@ -1399,7 +1467,7 @@ struct LaunchAtLoginToggleView: View {
 // MARK: - Changelog
 
 /// The in-app release notes: one entry per version, newest first. The About
-/// tab's View Changelog row opens this list. Add a new entry here as part of
+/// tab's View Changelog button opens this list. Add a new entry here as part of
 /// preparing each release.
 enum Changelog {
     struct Entry: Identifiable {
@@ -1416,6 +1484,53 @@ enum Changelog {
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.5", points: [
+            "Tap the Mac is now enhanced with additional compatibility on more MacBooks",
+            "Quadruple and quintuple taps are now available in the binding editor",
+            "Tap the Mac: Calibrate Taps is now in the Options of any tap row. Knock on the chassis and watch each strike to set the firmness threshold with a slider",
+            "Your Mac is now an official input: every key on the keyboard and every click, scroll, and Force Touch on the mouse or trackpad can be mapped",
+            "The Live Visualizer's Keyboard and Mouse & Trackpad templates are live: press a key or click and it lights on the diagram",
+            "Four new presets for the Mac's own devices: Keyboard Deck, Trackpad & Mouse, Modifier Holds, and Double Click Deck, each with a home page showcase",
+            "Screen regions are now their own input: draw an area of any display and it fires while the pointer is inside it",
+            "The Live Visualizer has a Screen template showing the display, its regions, and the live pointer",
+            "Zones and regions now belong to the preset they were drawn in",
+            "The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, a condensed layout, zoom, and a choice of background",
+            "Every control in the Live Visualizer is clickable and opens its row in the editor",
+            "The editor has a search field that finds any row by input, output, section, or note",
+            "Rows sit under section headings, and Automatically insert available inputs adds a row for every control the device has",
+            "The device menu lists everything the app can hear from: controllers, Bluetooth and USB devices, this Mac's keyboard and mouse, and MIDI sources",
+            "A row's Options panel is laid out as boxes, with the input side on the left and the output side on the right",
+            "The output menu now lists your Shortcuts, applications, presets, and every key by group",
+            "Chords can hold up to three controls, chosen from the menu or scanned",
+            "Accessories plugged into a PlayStation Access Controller or Xbox Adaptive Controller are picked up as inputs",
+            "Bluetooth headset and hearing aid buttons can be mapped as media keys",
+            "Gyro pointing follows the controller's tilt like a laser pointer, and the gyro zero learns itself",
+            "Motion Calibration is one simple sheet with a 3D controller model and a Re-zero button you can assign",
+            "Pointer motion from a stick, touchpad, or gyro is smooth, and the touchpad no longer lags while the Live Visualizer is open",
+            "Touchpad Mouse works, with one-finger tap, two-finger tap, and double tap as inputs",
+            "Rumble on a DualSense Edge is much stronger, its strength setting works, and vibration has a Duration slider",
+            "New presets: One-Stick Driving, Access Controller, Cursor Regions, Hold & Double-Tap, Keyboard & Mouse Input, Shortcuts & Apps, and Touchpad Zones",
+            "Every built-in preset now carries notes on every row",
+            "The Smart Preset Maker can add touchpad-as-trackpad, gyro fine aim, and trigger rumble",
+            "Every Feature Showcase opens its preset, with arrows to step through them",
+            "The sidebar splits into My Presets and Built-in Presets, with coloured folder outlines and Move to Group",
+            "Help is rewritten: shorter, plainer, and current, with every guide's steps in the app",
+            "First launch opens with a welcome and the ways to reach out",
+            "Settings: choose the menu bar icon, a spoken feedback voice, Next and Previous Preset, and Reset Settings",
+            "The activity log shows everything the app does, pops out into its own window, and can save a report",
+            "The emergency stop releases held keys, silences the motors, and stops any haptic",
+            "VoiceOver speaks the Live Visualizer in plain words, and Reduce Motion applies immediately",
+            "The app naps when idle and reads nothing from a controller nobody is looking at",
+            "Fixed a crash on the first launch of a fresh install or after an update",
+            "Fixed the pointer walking off target with two displays of different heights",
+            "Fixed lone modifier keys being invisible to apps, and modifiers left held after quick presses",
+            "Fixed mouse buttons 3 and up hanging the app",
+            "Fixed the Speed sliders, Confine cursor, Recenter, and Hide cursor doing nothing while a preset ran",
+            "Fixed touchpad zones being lost or copied between presets",
+            "Fixed a fixed-point click forgetting its point on relaunch",
+            "Presets saved by a newer version still open in an older one, and an unreadable preset is named in the log",
+            "Export Backup carries every setting, and the privacy policy says nothing is transmitted",
+        ]),
         Entry(version: "1.4", points: [
             "Tap the Mac. Your MacBook has a motion sensor, and InputConfig can now feel you knock on the case. Double tap or triple tap the palm rest or the lid to fire any output. It is the first input that needs no hardware at all: no controller, no MIDI device, nothing plugged in",
             "Taps are told apart by counting: two taps close together are a double, three are a triple, and a pause starts a new count. Typing is ignored on purpose, so working at the keyboard never sets it off",
@@ -1453,7 +1568,7 @@ enum Changelog {
             "Fixed: the release notes you are reading now did not appear for people who already had the app installed, so earlier updates arrived silently",
         ]),
         Entry(version: "1.3", points: [
-            "Knob modes for MIDI dials: Dial mode treats the centre of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at centre",
+            "Knob modes for MIDI dials: Dial mode treats the center of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at centre",
             "Turn mode fires a nudge for every few steps of rotation, clockwise or counterclockwise, built for volume, brightness, and stepped scrolling",
             "Both modes work with the sensitivity curves, deadzone settings, and variable speed the analog sticks already use",
             "System volume as a fader: a new output that makes the Mac's volume follow a knob, the pitch wheel, aftertouch, or a controller trigger 1-to-1",
@@ -1558,7 +1673,7 @@ struct WhatsNewView: View {
             HStack {
                 Spacer()
                 Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.solid)
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -1586,7 +1701,7 @@ struct WhatsNewView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(points.prefix(10), id: \.self) { point in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\u{2022}").foregroundStyle(.secondary)
+                        Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
                         Text(point).font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1638,7 +1753,7 @@ struct HotKeyRecorderField: View {
             recording ? stop() : start()
         } label: {
             Text(recording
-                 ? (needsModifier ? "Add \u{2318} \u{2325} \u{2303} or \u{21E7}" : "Press a key...")
+                 ? (needsModifier ? "Add \u{2318} \u{2325} \u{2303} or \u{21E7}" : "Press a key…")
                  : current.displayString)
                 .font(.body.monospaced())
                 .frame(minWidth: 130)
@@ -1690,3 +1805,61 @@ struct HotKeyRecorderField: View {
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
     }
 }
+
+
+/// A row of the menu bar glyphs to choose from; the chosen one wears a ring.
+struct MenuBarIconPicker: View {
+    @AppStorage(MenuBarIconChoice.storageKey) private var choiceRaw: String = MenuBarIconChoice.controller.rawValue
+
+    private var choice: MenuBarIconChoice { MenuBarIconChoice(rawValue: choiceRaw) ?? .controller }
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+            ForEach(MenuBarIconChoice.allCases) { option in
+                Button {
+                    choiceRaw = option.rawValue
+                    MenuBarController.shared.refreshMenuBarImage()
+                } label: {
+                    Group {
+                        if option == .controller, let glyph = NSImage(named: "ControllerGlyph") {
+                            Image(nsImage: glyph)
+                                .renderingMode(.template)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 22, height: 15)
+                        } else {
+                            Image(systemName: option.symbol)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(choice == option ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(choice == option ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help(option.label)
+                .accessibilityLabel("\(option.label) menu bar icon")
+                .accessibilityAddTraits(choice == option ? .isSelected : [])
+            }
+        }
+    }
+}
+
+#if DEBUG
+/// Marketing capture only: App Store screenshots may not call the app
+/// "free", so the About page swaps those lines while the
+/// `inputconfig.debug.nofree` toggle is on. Release builds always show
+/// the normal copy.
+@MainActor private func storeSafe(_ normal: String, _ storeCopy: String) -> String {
+    DebugMarketing.shared.noFree ? storeCopy : normal
+}
+#else
+@MainActor private func storeSafe(_ normal: String, _ storeCopy: String) -> String { normal }
+#endif

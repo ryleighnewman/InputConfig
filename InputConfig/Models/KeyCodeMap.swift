@@ -19,6 +19,15 @@ struct KeyCodeMap {
     /// Virtual keycode the Globe tap reports as. Measured, not inferred.
     static let globeVirtualKey = 179
 
+    /// The MacBook top-row keys that arrive as ordinary key events with
+    /// virtual keycodes of their own rather than as media keys: Spotlight
+    /// (vk 177), Dictation (vk 176), and Focus / Do Not Disturb (vk 178).
+    /// Mission Control (vk 160) and Launchpad (vk 131) reuse the codes the
+    /// output side already has for them, 304 and 303.
+    static let spotlightKeyCode = 314
+    static let dictationKeyCode = 315
+    static let focusKeyCode = 316
+
     struct KeyEntry: Identifiable {
         let id: Int
         let code: Int
@@ -143,13 +152,16 @@ struct KeyCodeMap {
             KeyEntry(code: 305, name: "Keyboard Light Down", group: "Special Keys"),
             KeyEntry(code: 306, name: "Keyboard Light Up", group: "Special Keys"),
             KeyEntry(code: KeyCodeMap.globeKeyCode, name: "Globe Key (Emoji)", group: "Special Keys"),
-            KeyEntry(code: 307, name: "Rewind Track", group: "Special Keys"),
-            KeyEntry(code: 308, name: "Play Audio Track", group: "Special Keys"),
-            KeyEntry(code: 309, name: "Fast Forward Track", group: "Special Keys"),
+            KeyEntry(code: 307, name: "Previous Track / Rewind", group: "Special Keys"),
+            KeyEntry(code: 308, name: "Play / Pause", group: "Special Keys"),
+            KeyEntry(code: 309, name: "Next Track / Fast Forward", group: "Special Keys"),
             KeyEntry(code: 310, name: "Mute Sound", group: "Special Keys"),
             KeyEntry(code: 311, name: "Volume Up", group: "Special Keys"),
             KeyEntry(code: 312, name: "Volume Down", group: "Special Keys"),
             KeyEntry(code: 313, name: "Eject", group: "Special Keys"),
+            KeyEntry(code: KeyCodeMap.spotlightKeyCode, name: "Spotlight Key", group: "Special Keys"),
+            KeyEntry(code: KeyCodeMap.dictationKeyCode, name: "Dictation Key", group: "Special Keys"),
+            KeyEntry(code: KeyCodeMap.focusKeyCode, name: "Focus / Do Not Disturb Key", group: "Special Keys"),
         ])
 
         return keys
@@ -188,6 +200,7 @@ struct KeyCodeMap {
     /// HID usage code to macOS virtual key code mapping (for CGEvent)
     /// This maps the HID codes used in presets to the macOS virtual key codes needed for CGEvent
     static let hidToVirtualKeyCode: [Int: Int] = [
+        spotlightKeyCode: 177, dictationKeyCode: 176, focusKeyCode: 178,
         4: 0x00,   // A
         5: 0x0B,   // B
         6: 0x08,   // C

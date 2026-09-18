@@ -169,11 +169,77 @@ final class RawHIDGamepadService: ObservableObject {
 
     // MARK: - Device lifecycle
 
-    private func handleDeviceAttached(_ device: IOHIDDevice) {
-        if isClaimedByGameControllerFramework(device) { return }
+    // MARK: - Manual connection (InputConfig ▸ Devices)
 
-        guard let info = readDeviceInfo(device) else { return }
-        if openDevices[info.locationID] != nil { return }
+    /// True when this exact device object is open and being read.
+    func isOpen(_ device: IOHIDDevice) -> Bool {
+        openDevices.values.contains { $0.device === device }
+    }
+
+    /// True when a gamepad with this vendor and product is being read,
+    /// whichever interface object it was opened through.
+    func isReading(vendorID: Int32, productID: Int32) -> Bool {
+        connectedGamepads.contains { $0.vendorID == vendorID && $0.productID == productID }
+    }
+
+    /// Connect a device the user picked from the Devices menu. Skips the
+    /// "leave it to the GameController framework" check, and when neither
+    /// a profile nor the descriptor parser can describe the reports, reads
+    /// them raw: every bit of the report becomes a button, so the scanner
+    /// still finds whichever bit a control flips.
+    @discardableResult
+    func adopt(_ device: IOHIDDevice, remember: Bool = true) -> Bool {
+        let opened = handleDeviceAttached(device, forced: true)
+        if let info = readDeviceInfo(device) {
+            if opened {
+                if remember {
+                    HIDDeviceRegistry.remember(vendorID: info.vendorID, productID: info.productID, true)
+                }
+                ActivityLog.shared.info("Devices", "Connected \(info.productName) (\(info.transport)) by hand")
+            } else if !isOpen(device) && openDevices[info.locationID] == nil {
+                ActivityLog.shared.error("Devices", "Could not open \(info.productName); another app or driver may hold it")
+            }
+        }
+        return opened
+    }
+
+    /// Stop reading a device the user connected by hand and forget it.
+    func release(_ device: IOHIDDevice) {
+        if let info = readDeviceInfo(device) {
+            HIDDeviceRegistry.remember(vendorID: info.vendorID, productID: info.productID, false)
+            ActivityLog.shared.info("Devices", "Disconnected \(info.productName)")
+        }
+        handleDeviceDetached(device)
+    }
+
+    /// Stop reading every open interface of this vendor/product and forget
+    /// the manual connection.
+    func release(vendorID: Int32, productID: Int32) {
+        HIDDeviceRegistry.remember(vendorID: vendorID, productID: productID, false)
+        for gamepad in openDevices.values where gamepad.vendorID == vendorID && gamepad.productID == productID {
+            ActivityLog.shared.info("Devices", "Disconnected \(gamepad.productName)")
+            handleDeviceDetached(gamepad.device)
+        }
+    }
+
+    /// Called by `HIDDeviceRegistry` when any HID device leaves. Devices
+    /// outside this service's gamepad filter were opened through the
+    /// registry's device object, so only the registry sees them go.
+    func deviceWentAway(_ device: IOHIDDevice) {
+        guard isOpen(device) else { return }
+        handleDeviceDetached(device)
+    }
+
+    /// Returns true when the device ended up open and reading.
+    @discardableResult
+    private func handleDeviceAttached(_ device: IOHIDDevice, forced: Bool = false) -> Bool {
+        guard let info = readDeviceInfo(device) else { return false }
+        // A device the user connected by hand before is treated as forced
+        // every time it comes back.
+        let forced = forced || HIDDeviceRegistry.isRemembered(vendorID: info.vendorID, productID: info.productID)
+        if !forced && isClaimedByGameControllerFramework(device) { return false }
+
+        if openDevices[info.locationID] != nil { return false }
 
         // First pass: hand-coded profile lookup. Covers the common
         // controllers we care about (8BitDo, Xbox 360 wired, Logitech,
@@ -203,6 +269,28 @@ final class RawHIDGamepadService: ObservableObject {
             }
         }
 
+        // Last resort for a manual connection: no layout at all, so read
+        // the report as a bit field. reportSize 1 lets any report length
+        // through the decoder's guard; bits past the payload are skipped.
+        if profile == nil && forced {
+            let declared = (IOHIDDeviceGetProperty(device, kIOHIDMaxInputReportSizeKey as CFString) as? NSNumber)?.intValue ?? 8
+            let bits = max(8, min(declared, 16)) * 8
+            let raw = ControllerProfile.GenericLayout(
+                buttonBitOffsets: Array(0..<bits),
+                axisByteOffsets: [], axisByteWidths: [], axisIsSignedFlags: [],
+                hatByteOffset: nil, triggerByteOffsets: [],
+                reportSize: 1, hasReportID: false)
+            profile = ControllerProfile(
+                identifier: "raw-hid-\(info.vendorID)-\(info.productID)",
+                displayName: info.productName,
+                vendorID: info.vendorID,
+                productMatches: [.exact(info.productID)],
+                layout: .generic(raw),
+                physicalButtonNames: (0..<bits).map { "Bit \($0)" }
+            )
+            ActivityLog.shared.warning("Devices", "\(info.productName) has no readable layout; reading its reports bit by bit")
+        }
+
         if profile == nil {
             let undef = UnidentifiedDevice(
                 id: info.locationID,
@@ -219,7 +307,7 @@ final class RawHIDGamepadService: ObservableObject {
             if !unidentifiedDevices.contains(undef) {
                 unidentifiedDevices.append(undef)
             }
-            return
+            return false
         }
 
         // Open the device. Pass kIOHIDOptionsTypeNone so other consumers
@@ -227,7 +315,7 @@ final class RawHIDGamepadService: ObservableObject {
         // same device. Empirically this is what we need for 8BitDo
         // controllers to work alongside system controller agents.
         let openResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard openResult == kIOReturnSuccess else { return }
+        guard openResult == kIOReturnSuccess else { return false }
 
         // A DualShock 3 on USB stays silent until the host sends the
         // Sixaxis "operational mode" feature report (ID 0xF4). Without
@@ -287,6 +375,8 @@ final class RawHIDGamepadService: ObservableObject {
                                        CFRunLoopMode.commonModes.rawValue)
 
         connectedGamepads.append(gamepad)
+        unidentifiedDevices.removeAll { $0.id == info.locationID }
+        return true
     }
 
     private func handleDeviceDetached(_ device: IOHIDDevice) {

@@ -70,8 +70,32 @@ final class InputSimulator: @unchecked Sendable {
                 // Cmd+C (Cmd held, then C pressed) fired C as a bare key because
                 // the C event carried no modifier flags, so combo outputs like
                 // Copy, the screenshot shortcuts, and Cmd+Shift+Z did nothing.
-                let flags = currentModifierFlags()
-                if !flags.isEmpty { event.flags = flags }
+                var flags = currentModifierFlags()
+                // The bits CoreGraphics gave this key on its own (fn and
+                // numeric-pad for the arrows and the keypad) are kept; every
+                // other bit is written explicitly below. An event whose flags
+                // are left unset inherits the HID system state, which after
+                // a synthesized arrow still carries fn and numeric-pad, so a
+                // Delete that followed an arrow became forward delete and a
+                // Return became keypad Enter.
+                let keyOwnBits = keyOwnFlagBits(virtualCode)
+                if modifierFlags(for: hidCode) != nil {
+                    // A modifier pressed on its own goes out as flagsChanged,
+                    // which is what a physical keyboard sends. Posted as a
+                    // keyDown it never reached apps that watch for a lone
+                    // Option or Command tap (IME voice toggles, switchers).
+                    // The flags are written explicitly, with the device bit
+                    // that tells left Option from right, so the event matches
+                    // the physical key it stands for.
+                    event.type = .flagsChanged
+                    flags.formUnion(deviceModifierBits())
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                } else {
+                    flags.formUnion(keyOwnBits)
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                }
                 taggedPost(event)
             }
         } else {
@@ -92,8 +116,23 @@ final class InputSimulator: @unchecked Sendable {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
                 // Carry the still-held modifiers so releasing the letter of a
                 // chord (e.g. the C of Cmd+C) does not read as a bare key-up.
-                let flags = currentModifierFlags()
-                if !flags.isEmpty { event.flags = flags }
+                var flags = currentModifierFlags()
+                let keyOwnBits = keyOwnFlagBits(virtualCode)
+                if modifierFlags(for: hidCode) != nil {
+                    // The release of a lone modifier: flagsChanged again, and
+                    // the flags are written even when empty. Left unset, the
+                    // event inherited the HID system state, where the key was
+                    // still down, so apps saw two presses and no release.
+                    event.type = .flagsChanged
+                    flags.formUnion(deviceModifierBits())
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                } else {
+                    // Written even when empty, for the same reason as above.
+                    flags.formUnion(keyOwnBits)
+                    flags.insert(.maskNonCoalesced)
+                    event.flags = flags
+                }
                 taggedPost(event)
             }
         } else {
@@ -156,6 +195,40 @@ final class InputSimulator: @unchecked Sendable {
     /// `pressedKeys`. Applied to every synthesized key event so chords such as
     /// Cmd+C, Cmd+Shift+3, and Option+[ register with their modifiers instead
     /// of firing as bare keys.
+    /// A source with no state of its own, used only to ask CoreGraphics which
+    /// flag bits a key carries by itself (fn and numeric-pad for the arrows,
+    /// fn for Home and End, numeric-pad for the keypad). Read off an event
+    /// made with the real source, those bits are mixed with whatever the HID
+    /// system state happens to hold, which is the pollution being avoided.
+    private let probeSource = CGEventSource(stateID: .privateState)
+
+    private func keyOwnFlagBits(_ virtualCode: Int) -> CGEventFlags {
+        guard let e = CGEvent(keyboardEventSource: probeSource, virtualKey: CGKeyCode(virtualCode), keyDown: true) else { return [] }
+        return e.flags.intersection([.maskSecondaryFn, .maskNumericPad])
+    }
+
+    /// The left/right device bits (the NX_DEVICE*KEYMASK values) for every
+    /// modifier currently held, so a synthesized right Option carries the
+    /// same bit a physical right Option does. Only flagsChanged events need
+    /// them; ordinary key events carry the plain masks.
+    private func deviceModifierBits() -> CGEventFlags {
+        var bits: CGEventFlags = []
+        for code in pressedKeys {
+            switch code {
+            case 224: bits.insert(CGEventFlags(rawValue: 0x0001))   // left control
+            case 228: bits.insert(CGEventFlags(rawValue: 0x2000))   // right control
+            case 225: bits.insert(CGEventFlags(rawValue: 0x0002))   // left shift
+            case 229: bits.insert(CGEventFlags(rawValue: 0x0004))   // right shift
+            case 226: bits.insert(CGEventFlags(rawValue: 0x0020))   // left option
+            case 230: bits.insert(CGEventFlags(rawValue: 0x0040))   // right option
+            case 227: bits.insert(CGEventFlags(rawValue: 0x0008))   // left command
+            case 231: bits.insert(CGEventFlags(rawValue: 0x0010))   // right command
+            default: break
+            }
+        }
+        return bits
+    }
+
     private func currentModifierFlags() -> CGEventFlags {
         var flags: CGEventFlags = []
         for code in pressedKeys {
@@ -200,68 +273,127 @@ final class InputSimulator: @unchecked Sendable {
 
     // MARK: - Mouse Button Simulation
 
-    func mouseButtonDown(_ button: Int) {
-        guard !pressedMouseButtons.contains(button) else { return }
-        // `NSScreen.main` can be nil during sleep/wake transitions and
-        // fast-user-switching, and CGMouseButton(rawValue:) returns nil
-        // for buttons outside 0...31. Either case used to force-unwrap
-        // and crash the entire mapping engine mid-binding; now both
-        // fall back gracefully.
-        guard let screenHeight = NSScreen.main?.frame.height,
-              let cgButton = cgMouseButton(for: button) else { return }
-        pressedMouseButtons.insert(button)
+    /// The height of the primary display, the one whose origin is (0, 0).
+    /// `NSEvent.mouseLocation` is in the global bottom-left space anchored to
+    /// that display, so the flip to CoreGraphics' top-left space must use its
+    /// height. `NSScreen.main` is the screen with the key window, which on a
+    /// second display of a different height put the flip off by the
+    /// difference and walked the pointer to the top edge on every re-sync.
+    /// The display rectangles in CoreGraphics (top-left origin) space.
+    private func displayRectsCG() -> [CGRect] {
+        guard let h = primaryScreenHeight else { return [] }
+        return NSScreen.screens.map { sc in
+            let f = sc.frame
+            return CGRect(x: f.origin.x, y: h - f.origin.y - f.height, width: f.width, height: f.height)
+        }
+    }
 
+    /// `point` if some display contains it; otherwise the point pulled back
+    /// onto the edge of the display that held `previous` (or the nearest).
+    private func clampedToDisplays(_ point: CGPoint, from previous: CGPoint) -> CGPoint {
+        let rects = displayRectsCG()
+        guard !rects.isEmpty else { return point }
+        if rects.contains(where: { $0.contains(point) }) { return point }
+        let home = rects.first(where: { $0.contains(previous) }) ?? rects.min(by: {
+            hypot($0.midX - point.x, $0.midY - point.y) < hypot($1.midX - point.x, $1.midY - point.y)
+        })!
+        return CGPoint(x: min(max(point.x, home.minX), home.maxX - 1),
+                       y: min(max(point.y, home.minY), home.maxY - 1))
+    }
+
+    private var primaryScreenHeight: CGFloat? {
+        (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.screens.first)?.frame.height
+    }
+
+    /// Put the pointer at a fixed screen point (CoreGraphics coordinates,
+    /// origin top-left) before a click, for auto-click rows parked on a
+    /// button on screen. Posts a real move event so the app under the
+    /// pointer sees the pointer arrive, then warps so the click lands there.
+    func placePointer(atX x: Double, y: Double) {
+        let point = CGPoint(x: x, y: y)
+        if let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
+                              mouseCursorPosition: point, mouseButton: .left) {
+            taggedPost(move)
+        }
+        CGWarpMouseCursorPosition(point)
+        trackedCursor = point
+    }
+
+    /// Move the pointer to the centre of whichever screen it is on, for the
+    /// Center Pointer app action.
+    func centerPointerOnCurrentScreen() {
+        let loc = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(loc, $0.frame, false) })
+            ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen, let h = primaryScreenHeight else { return }
+        let f = screen.frame
+        // AppKit is bottom-up; CG is top-down from the primary display.
+        placePointer(atX: f.midX, y: h - f.midY)
+    }
+
+    /// Buttons this simulator can post: 0 left, 1 right, 2 middle, 3 to
+    /// 31 the extra buttons a gaming mouse has. Anything else, including a
+    /// negative index from a hand-edited preset, is refused up front rather
+    /// than converted, since `UInt32(-1)` traps.
+    private static func isPostableMouseButton(_ index: Int) -> Bool {
+        (0...31).contains(index)
+    }
+
+    func mouseButtonDown(_ button: Int) {
+        // Every early return must release the lock. An earlier version
+        // returned with it held for any button past 2 (or with no screen
+        // during sleep), which hung the pointer pump and then every later
+        // press, and left the emergency stop unable to run.
+        guard Self.isPostableMouseButton(button) else { return }
+        mouseLock.lock()
+        let alreadyDown = pressedMouseButtons.contains(button)
+        if !alreadyDown { pressedMouseButtons.insert(button) }
+        mouseLock.unlock()
+        guard !alreadyDown else { return }
+
+        // The screen list can be empty during sleep and wake; post from a
+        // zero-height screen rather than skip, so the press still reaches
+        // the front app and matches the release that will follow.
+        let screenHeight = primaryScreenHeight ?? 0
         let location = NSEvent.mouseLocation
         let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-
-        let eventType: CGEventType
-        switch button {
-        case 0: eventType = .leftMouseDown
-        case 1: eventType = .rightMouseDown
-        default: eventType = .otherMouseDown
-        }
-
-        if let event = CGEvent(mouseEventSource: eventSource, mouseType: eventType,
-                               mouseCursorPosition: cgPoint, mouseButton: cgButton) {
-            taggedPost(event)
-        }
+        postMouseButton(button, down: true, at: cgPoint)
     }
 
     func mouseButtonUp(_ button: Int) {
-        guard pressedMouseButtons.contains(button) else { return }
-        guard let cgButton = cgMouseButton(for: button) else { return }
-        // Always release. NSScreen.main can be nil during sleep/wake and fast
-        // user switching; if we bailed on that the button would stay physically
-        // down. Fall back to a zero-height screen so the up event still posts
-        // and our pressed-state stays consistent.
-        pressedMouseButtons.remove(button)
+        guard Self.isPostableMouseButton(button) else { return }
+        mouseLock.lock()
+        let wasDown = pressedMouseButtons.remove(button) != nil
+        mouseLock.unlock()
+        guard wasDown else { return }
 
-        let screenHeight = NSScreen.main?.frame.height ?? 0
+        // Always release, even with no screen, so a button never stays
+        // physically down past a sleep.
+        let screenHeight = primaryScreenHeight ?? 0
         let location = NSEvent.mouseLocation
         let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-
-        let eventType: CGEventType
-        switch button {
-        case 0: eventType = .leftMouseUp
-        case 1: eventType = .rightMouseUp
-        default: eventType = .otherMouseUp
-        }
-
-        if let event = CGEvent(mouseEventSource: eventSource, mouseType: eventType,
-                               mouseCursorPosition: cgPoint, mouseButton: cgButton) {
-            taggedPost(event)
-        }
+        postMouseButton(button, down: false, at: cgPoint)
     }
 
-    /// Map a InputConfig logical mouse-button index to CGMouseButton.
-    /// Returns nil for indices that don't have a CGMouseButton equivalent
-    /// instead of force-unwrapping; the caller drops the event.
-    private func cgMouseButton(for index: Int) -> CGMouseButton? {
-        switch index {
-        case 0: return .left
-        case 1: return .right
-        default: return CGMouseButton(rawValue: UInt32(index))
+    /// One button event. Left and right have their own event types; every
+    /// other button is an "other" event carrying its number in the
+    /// button-number field, which is how CoreGraphics addresses the extra
+    /// buttons on a gaming mouse. Only 0, 1 and 2 exist as CGMouseButton
+    /// values, so the old code could not represent button 3 at all.
+    private func postMouseButton(_ button: Int, down: Bool, at point: CGPoint) {
+        let type: CGEventType
+        let cgButton: CGMouseButton
+        switch button {
+        case 0: type = down ? .leftMouseDown : .leftMouseUp;   cgButton = .left
+        case 1: type = down ? .rightMouseDown : .rightMouseUp; cgButton = .right
+        default: type = down ? .otherMouseDown : .otherMouseUp; cgButton = .center
         }
+        guard let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                                  mouseCursorPosition: point, mouseButton: cgButton) else { return }
+        if button >= 2 {
+            event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
+        }
+        taggedPost(event)
     }
 
     // MARK: - Mouse Motion Simulation
@@ -276,20 +408,46 @@ final class InputSimulator: @unchecked Sendable {
     private var trackedAt: TimeInterval = 0
     private var trackedFrames = 0
     private var cachedScreenHeight: CGFloat = 0
+    /// Guards the tracked-cursor state and the pressed-button set, which the
+    /// motion pump reads from its own thread while the main thread presses
+    /// and releases buttons.
+    private let mouseLock = NSLock()
 
     func moveMouse(deltaX: Int, deltaY: Int) {
+        mouseLock.lock(); defer { mouseLock.unlock() }
         let now = ProcessInfo.processInfo.systemUptime
         trackedFrames &+= 1
-        if trackedCursor == nil || now - trackedAt > 0.1 || trackedFrames % 8 == 0 {
+        if trackedCursor == nil || now - trackedAt > 0.1 {
             let location = NSEvent.mouseLocation
-            if let h = NSScreen.main?.frame.height { cachedScreenHeight = h }
+            if let h = primaryScreenHeight { cachedScreenHeight = h }
             if cachedScreenHeight == 0 { cachedScreenHeight = 1080 }
             trackedCursor = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
+        } else if trackedFrames % 16 == 0, let tracked = trackedCursor {
+            // Periodic check against the real pointer. Adopt it only when it
+            // has clearly moved on its own (the user touched the mouse, or a
+            // screen edge stopped us); a difference of a pixel or two is
+            // just the window server not having applied the last events yet,
+            // and snapping to it every eighth frame put a visible hitch in
+            // otherwise smooth motion.
+            let location = NSEvent.mouseLocation
+            if let h = primaryScreenHeight { cachedScreenHeight = h }
+            let real = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
+            // The window server applies posted moves a little behind the
+            // pump's 240 Hz, so the real pointer can trail by a few steps
+            // without anything being wrong; only a clearly larger gap means
+            // the pointer was moved by something else or stopped at an edge.
+            if abs(real.x - tracked.x) > 64 || abs(real.y - tracked.y) > 64 {
+                trackedCursor = real
+            }
         }
         trackedAt = now
         var point = trackedCursor ?? .zero
         point.x += CGFloat(deltaX)
         point.y += CGFloat(deltaY)
+        // Keep the tracked point on a display. Without this it runs on past
+        // the edge while the real pointer sits at it, and the eventual resync
+        // makes the pointer bounce back in from the edge.
+        point = clampedToDisplays(point, from: trackedCursor ?? point)
         trackedCursor = point
 
         // A move while a mapped button is held must be a drag event, or
@@ -297,12 +455,13 @@ final class InputSimulator: @unchecked Sendable {
         // happen: the system does not promote a plain move into a drag.
         let type: CGEventType
         let button: CGMouseButton
+        var otherNumber: Int?
         if pressedMouseButtons.contains(0) {
             type = .leftMouseDragged; button = .left
         } else if pressedMouseButtons.contains(1) {
             type = .rightMouseDragged; button = .right
-        } else if let other = pressedMouseButtons.first, let cg = cgMouseButton(for: other) {
-            type = .otherMouseDragged; button = cg
+        } else if let other = pressedMouseButtons.first {
+            type = .otherMouseDragged; button = .center; otherNumber = other
         } else {
             type = .mouseMoved; button = .left
         }
@@ -311,6 +470,7 @@ final class InputSimulator: @unchecked Sendable {
                                mouseCursorPosition: point, mouseButton: button) {
             event.setIntegerValueField(.mouseEventDeltaX, value: Int64(deltaX))
             event.setIntegerValueField(.mouseEventDeltaY, value: Int64(deltaY))
+            if let n = otherNumber { event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(n)) }
             taggedPost(event)
         }
     }
@@ -337,24 +497,29 @@ final class InputSimulator: @unchecked Sendable {
     // MARK: - Release All
 
     func releaseAll() {
-        for key in pressedKeys {
-            if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[key] {
-                if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
-                    taggedPost(event)
-                }
-            } else {
-                // Media / special keys live outside the virtual-key map; route
-                // them through the systemDefined path so they release too and
-                // don't stick down after stop() or pause.
-                postSpecialKey(key, keyDown: false)
-            }
+        // Every key goes out through keyUp, the one place that knows how to
+        // release a modifier: a bare key-up event for Command or Shift
+        // inherits the HID state where the key is still down, so the system
+        // kept seeing the modifier held after the emergency stop, a sleep,
+        // or a disconnect. Snapshot first, since keyUp mutates the set.
+        // Held modifiers are released last so a letter in a chord is
+        // released as the letter of that chord, the way a hand would do it.
+        let held = pressedKeys.sorted { a, b in
+            let aMod = modifierFlags(for: a) != nil
+            let bMod = modifierFlags(for: b) != nil
+            return !aMod && bMod
         }
+        for key in held { keyUp(key) }
         pressedKeys.removeAll()
 
-        for button in pressedMouseButtons {
+        // Snapshot under the lock, then release each through mouseButtonUp,
+        // which posts the up event and drops the button from the set itself.
+        mouseLock.lock()
+        let heldButtons = pressedMouseButtons
+        mouseLock.unlock()
+        for button in heldButtons {
             mouseButtonUp(button)
         }
-        pressedMouseButtons.removeAll()
     }
 
     #if DEBUG
@@ -441,7 +606,14 @@ final class AccessibilityPermissionService: ObservableObject {
     /// Re-read the current trust state, publishing only on change.
     func refresh() {
         let now = AXIsProcessTrusted()
-        if now != isTrusted { isTrusted = now }
+        if now != isTrusted {
+            isTrusted = now
+            if now {
+                ActivityLog.shared.info("Permissions", "Accessibility access granted")
+            } else {
+                ActivityLog.shared.error("Permissions", "Accessibility access is missing: no key or mouse output can be sent until it is granted in System Settings, Privacy & Security, Accessibility")
+            }
+        }
     }
 
     /// Show the standard macOS "allow Accessibility" prompt, open the
@@ -459,10 +631,21 @@ final class AccessibilityPermissionService: ObservableObject {
     /// Open System Settings directly to Privacy & Security -> Accessibility,
     /// and start polling for the user to toggle us on.
     func openSystemSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
+        // The modern (Ventura+) pane URL, with the classic one as a fallback.
+        let modern = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility")!
+        if !NSWorkspace.shared.open(modern),
+           let classic = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(classic)
         }
         startPolling()
+    }
+
+    /// Reveal the running copy of the app in the Finder, so it can be
+    /// dragged into the Accessibility list when the switch will not stick.
+    /// `Bundle.main` is wherever this build lives, so it is right for the
+    /// App Store copy in Applications and for a development build alike.
+    func revealAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
     }
 
     /// Poll the trust state for up to ~2 minutes (TCC changes aren't
@@ -663,10 +846,12 @@ final class EmergencyStopService: @unchecked Sendable {
     /// and the three modifiers keep it clear of anything an app or game binds.
     static let defaultSpec = HotKeySpec(keyCode: UInt32(kVK_ANSI_Period),
                                         modifiers: UInt32(controlKey | optionKey | cmdKey))
-    /// Home / PS / Guide. Almost never mapped, and present on every
-    /// mainstream controller.
-    static let defaultControllerButton = 10
-    static let defaultHoldSeconds = 2.0
+    /// Back / Share / View / Minus: on every mainstream controller, rarely
+    /// mapped, and never held down in a game. Home / PS is avoided because
+    /// macOS Game Mode can swallow it before the app sees it.
+    static let defaultControllerButton = 8
+    /// Long enough that no game action ever holds the button this long.
+    static let defaultHoldSeconds = 3.0
 
     private var token: UInt32?
     private(set) var isRegistered = false
@@ -739,7 +924,10 @@ final class EmergencyStopService: @unchecked Sendable {
         let s = spec
         guard let t = HotKeyCenter.shared.register(keyCode: s.keyCode, modifiers: s.modifiers,
                                                    action: { EmergencyStopService.shared.stop(reason: .hotkey) })
-        else { return false }
+        else {
+            ActivityLog.shared.warning("Emergency stop", "The shortcut \(s.displayString) is taken by another app; the keyboard emergency stop is off")
+            return false
+        }
         token = t
         isRegistered = true
         return true
@@ -774,9 +962,13 @@ final class EmergencyStopService: @unchecked Sendable {
             NotificationCenter.default.post(name: Self.stoppedNotification,
                                             object: nil,
                                             userInfo: ["reason": reason.rawValue])
-            // 2. Let go of everything we are holding down.
+            // 2. Let go of everything we are holding down, including the
+            //    controller's motors and any light this app is holding: a
+            //    stop that leaves a pad buzzing is not a stop.
             InputSimulator.shared.releaseAll()
             MIDIService.shared.releaseAllNotes()
+            InProcessLightWriter.shared.stopMotors()
+            MainActor.assumeIsolated { FeedbackService.shared.clearHapticEngines() }
             // 3. Give the pointer back. CursorGuardService is main-actor
             //    isolated and this block only ever runs on the main thread.
             MainActor.assumeIsolated {
@@ -784,6 +976,7 @@ final class EmergencyStopService: @unchecked Sendable {
                 CursorGuardService.shared.forceShowCursor()
             }
             NSLog("InputConfig: emergency stop (\(reason.rawValue))")
+            ActivityLog.shared.warning("Emergency stop", "Stopped everything: \(reason.rawValue)")
         }
         if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
@@ -989,6 +1182,33 @@ final class SystemVolumeService: @unchecked Sendable {
 /// shortcuts (Mission Control, Launchpad, Spotlight, lock screen,
 /// screenshot), and automation (Siri Shortcuts, opening apps and URLs).
 /// Everything here is App Sandbox safe.
+/// The Shortcuts and Applications lists, kept ready so a menu never has to
+/// wait for them. Refreshed in the background when an editor row appears.
+@MainActor
+final class SystemListsCache: ObservableObject {
+    static let shared = SystemListsCache()
+    @Published fileprivate(set) var shortcuts: [String] = []
+    @Published fileprivate(set) var apps: [String] = []
+    fileprivate var loading = false
+    fileprivate var loadedAt = Date.distantPast
+
+    private init() {}
+
+    func refreshIfStale() {
+        guard !loading, Date().timeIntervalSince(loadedAt) > 30 else { return }
+        loading = true
+        SystemActionService.shared.loadLists { shortcuts, apps in
+            MainActor.assumeIsolated {
+                let cache = SystemListsCache.shared
+                cache.shortcuts = shortcuts
+                cache.apps = apps
+                cache.loadedAt = Date()
+                cache.loading = false
+            }
+        }
+    }
+}
+
 final class SystemActionService: @unchecked Sendable {
     nonisolated(unsafe) static let shared = SystemActionService()
     private init() {}
@@ -1226,6 +1446,37 @@ final class SystemActionService: @unchecked Sendable {
     private var cachedShortcuts: [String] = []
     private var shortcutsFetchedAt: Date = .distantPast
 
+    /// Applications the user can name in an Open App output: everything in
+    /// the Applications folders plus whatever is running right now. Cached
+    /// briefly because a menu asks for it on every open.
+    private var cachedApps: [String] = []
+    private var appsFetchedAt = Date.distantPast
+    func installedApps() -> [String] {
+        shortcutsLock.lock()
+        let fresh = Date().timeIntervalSince(appsFetchedAt) < 30
+        let cached = cachedApps
+        shortcutsLock.unlock()
+        if fresh, !cached.isEmpty { return cached }
+        var names = Set<String>()
+        let fm = FileManager.default
+        for dir in ["/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities",
+                    NSHomeDirectory() + "/Applications"] {
+            guard let items = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for item in items where item.hasSuffix(".app") {
+                names.insert(String(item.dropLast(4)))
+            }
+        }
+        for app in NSWorkspace.shared.runningApplications {
+            if let n = app.localizedName, !n.isEmpty { names.insert(n) }
+        }
+        let sorted = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        shortcutsLock.lock()
+        cachedApps = sorted
+        appsFetchedAt = Date()
+        shortcutsLock.unlock()
+        return sorted
+    }
+
     func installedShortcuts() -> [String] {
         shortcutsLock.lock()
         let fresh = Date().timeIntervalSince(shortcutsFetchedAt) < 10
@@ -1253,6 +1504,19 @@ final class SystemActionService: @unchecked Sendable {
             return names
         } catch {
             return cached
+        }
+    }
+
+    /// Read the two lists off the main thread. Both are slow: the Shortcuts
+    /// list runs `shortcuts list` as a subprocess, and the app list walks the
+    /// Applications folders. Calling either while SwiftUI is building a menu
+    /// blocked the main thread inside a view update and could re-enter it,
+    /// which aborts the update outright. The menus read this cache instead.
+    func loadLists(_ done: @escaping @Sendable ([String], [String]) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let shortcuts = self.installedShortcuts()
+            let apps = self.installedApps()
+            DispatchQueue.main.async { done(shortcuts, apps) }
         }
     }
 

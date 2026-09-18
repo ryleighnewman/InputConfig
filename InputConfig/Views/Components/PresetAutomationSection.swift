@@ -801,7 +801,7 @@ struct DriveModeSection: View {
     private func axisReadout(_ label: String, _ index: Int) -> some View {
         let v = axisValues[index] ?? 0
         return HStack(spacing: 8) {
-            Text(label).font(.caption2).frame(width: 116, alignment: .leading)
+            Text(label).font(.caption2).frame(minWidth: 116, alignment: .leading)
             ProgressView(value: Double(min(abs(v), 1)))
                 .frame(width: 84)
             Text(String(format: "%+.2f", v))
@@ -827,7 +827,7 @@ struct DriveModeSection: View {
                            _ lo: Double, _ hi: Double, _ fmt: String, _ scale: Double,
                            _ a11y: String) -> some View {
         HStack(spacing: 8) {
-            Text(label).font(.caption).frame(width: 120, alignment: .leading)
+            Text(label).font(.caption).frame(minWidth: 120, alignment: .leading)
             Slider(value: value, in: lo...hi).controlSize(.small)
                 .accessibilityLabel(a11y)
                 .accessibilityValue(String(format: fmt, value.wrappedValue * scale))

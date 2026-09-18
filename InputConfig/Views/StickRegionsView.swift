@@ -47,7 +47,7 @@ struct StickRegionsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Stick Regions")
+            Text("Stick zones")
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Text("Draw zones on a stick's X/Y plane. A binding fires while the stick is pushed into the zone. Good for binding diagonals as one input.")
@@ -124,7 +124,7 @@ struct StickRegionsView: View {
 
     private var footer: some View {
         HStack {
-            Text("Tip: bind to a stick region from the binding editor by setting input type to Stick Region.")
+            Text("Tip: bind to a zone from the binding editor by setting the input type to Stick zone.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()

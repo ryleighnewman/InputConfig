@@ -447,7 +447,7 @@ final class TestBenchService: ObservableObject {
                detail: "Each guide must have a unique id")
 
         let allHaveContent = guides.allSatisfy {
-            !$0.title.isEmpty && !$0.summary.isEmpty && !$0.sections.isEmpty
+            !$0.title.isEmpty && !$0.intro.isEmpty && !$0.sections.isEmpty
         }
         record("Help Guides", "All guides have content", pass: allHaveContent,
                detail: "Title, summary, and at least one section required")

@@ -10,122 +10,81 @@ struct GamingUtilitiesPanel: View {
     @ObservedObject private var guardSvc = CursorGuardService.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("These are global defaults used when a preset doesn't set its own. Per-preset overrides live in the preset editor's Automation & Gaming Utilities panel - that's the right place for game-specific choices. Nothing here changes macOS-wide settings.")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Defaults for presets that do not set their own; a preset's Automation & Gaming Utilities panel overrides them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // --- Edge confine ---
-            VStack(alignment: .leading, spacing: 4) {
-                Toggle(isOn: $guardSvc.edgeConfineEnabled) {
-                    Label("Confine cursor away from screen edges",
-                          systemImage: "rectangle.inset.filled")
-                }
-                if guardSvc.edgeConfineEnabled {
-                    HStack {
-                        Text("Buffer:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: $guardSvc.edgeBufferPx, in: 1...200, step: 1) {
-                            EmptyView()
-                        }
-                        Text("\(Int(guardSvc.edgeBufferPx)) px")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 56, alignment: .trailing)
+            // Confine: the toggle, then its margin on the line below.
+            Toggle(isOn: $guardSvc.edgeConfineEnabled) {
+                Label("Keep the pointer off the screen edges", systemImage: "rectangle.inset.filled")
+            }
+            if guardSvc.edgeConfineEnabled {
+                sliderRow("Margin", value: $guardSvc.edgeBufferPx, range: 1...200, step: 1,
+                          text: "\(Int(guardSvc.edgeBufferPx)) px")
+            }
+
+            // Recenter
+            Toggle(isOn: $guardSvc.autoRecenterEnabled) {
+                Label("Recenter the pointer on a timer", systemImage: "arrow.triangle.2.circlepath")
+            }
+            if guardSvc.autoRecenterEnabled {
+                HStack(spacing: 10) {
+                    sliderRow("Every", value: $guardSvc.recenterIntervalMs, range: 50...2000, step: 10,
+                              text: "\(Int(guardSvc.recenterIntervalMs)) ms")
+                    Button {
+                        guardSvc.warpToAnchor()
+                    } label: {
+                        Label("Now", systemImage: "scope")
                     }
-                    Text("FPS / 3D games keep reading mouse delta even when the cursor is parked at the screen edge - they don't, but they should. This forces the cursor inside by the buffer distance.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .buttonStyle(.solidSecondaryCompact)
+                    .help("Move the pointer to the center of the screen it is on")
                 }
             }
 
-            Divider()
-
-            // --- Auto-recenter ---
-            VStack(alignment: .leading, spacing: 4) {
-                Toggle(isOn: $guardSvc.autoRecenterEnabled) {
-                    Label("Auto-recenter cursor",
-                          systemImage: "arrow.triangle.2.circlepath")
-                }
-                if guardSvc.autoRecenterEnabled {
-                    HStack {
-                        Text("Interval:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: $guardSvc.recenterIntervalMs, in: 50...2000, step: 10) {
-                            EmptyView()
-                        }
-                        Text("\(Int(guardSvc.recenterIntervalMs)) ms")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 64, alignment: .trailing)
-                    }
-                    HStack {
-                        Spacer()
-                        Button {
-                            guardSvc.warpToAnchor()
-                        } label: {
-                            Label("Recenter now", systemImage: "scope")
-                        }
-                        .buttonStyle(.solidSecondaryCompact)
-                        .help("Teleport the cursor to the centre of the current screen.")
-                    }
-                    Text("Periodically teleports the cursor to the centre of whichever screen it's on. Pair with edge-confine for games whose camera stops moving when the cursor hits an edge.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Divider()
-
-            // --- Cursor hide while engine running ---
+            // Hide
             Toggle(isOn: $guardSvc.hideCursorWhileEngineRunning) {
-                Label("Hide system cursor while a preset is active",
-                      systemImage: "cursorarrow.slash")
+                Label("Hide the pointer while a preset runs", systemImage: "cursorarrow.slash")
             }
-            Text("When you start a preset, the floating cursor disappears - the controller is driving input anyway, so the visible cursor is just noise. Restored on stop or app quit.")
+
+            // Speed
+            Label("Pointer speed for stick and gyro motion", systemImage: "speedometer")
+            sliderRow("Speed", value: $guardSvc.sensitivityMultiplier, range: 0.1...5.0, step: 0.05,
+                      text: String(format: "×%.2f", guardSvc.sensitivityMultiplier))
+
+            Text("Games that read mouse movement stop turning when the pointer reaches an edge; keeping it off the edges and recentering it keep the camera moving. The speed multiplies every Mouse Motion row and leaves the Mac's own pointer speed alone.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Divider()
-
-            // --- Sensitivity multiplier (currently informational) ---
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Label("Cursor sensitivity multiplier",
-                          systemImage: "speedometer")
-                        .font(.callout)
-                    Spacer()
-                    Text(String(format: "×%.2f", guardSvc.sensitivityMultiplier))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $guardSvc.sensitivityMultiplier, in: 0.1...5.0, step: 0.05) {
-                    EmptyView()
-                }
-                Text("Applied on top of macOS's tracking speed. Affects only the cursor warp engine uses for binding 'Mouse move' outputs; doesn't touch your system pointer-speed slider.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            // Quick status banner so the user can confirm the service
-            // is wired up to the engine.
             if guardSvc.engineActive {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(.green)
-                    Text("Engine is active. Cursor tools above are live.")
+                    Text("A preset is running; these are live.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.top, 4)
             }
         }
+    }
+
+    /// Label, slider, value: one indented line under its toggle, the same
+    /// shape for every slider on the panel.
+    private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>,
+                           step: Double, text: String) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 52, alignment: .leading)
+            Slider(value: value, in: range, step: step) { EmptyView() }
+            Text(text)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .trailing)
+        }
+        .padding(.leading, 26)
     }
 }

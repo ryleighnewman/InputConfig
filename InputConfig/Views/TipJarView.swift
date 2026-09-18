@@ -22,7 +22,9 @@ struct TipJarView: View {
     /// standard Apple EULA; the Privacy link must match the Privacy Policy URL
     /// set in App Store Connect.
     private static let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
-    private static let privacyPolicyURL = URL(string: "https://github.com/ryleighnewman/InputConfig/blob/main/PRIVACY.md")!
+    /// The same page App Store Connect lists as the privacy policy, so the
+    /// in-app link and the listing agree.
+    private static let privacyPolicyURL = URL(string: "https://inputconfig.com/privacy")!
 
     var body: some View {
         VStack(spacing: 16) {
@@ -33,7 +35,7 @@ struct TipJarView: View {
             recurringToggle
 
             if service.isLoading {
-                ProgressView("Loading tip options...")
+                ProgressView("Loading tip options…")
                     .padding(.vertical, 40)
             } else if displayedProducts.isEmpty {
                 emptyState
@@ -61,6 +63,17 @@ struct TipJarView: View {
             Button("You're welcome", role: .cancel) {}
         } message: {
             Text("Your support means a lot. InputConfig will keep getting better because of it.")
+        }
+        // Every failure the service records is shown here: a tip that did
+        // not go through, a purchase that could not be verified, a restore
+        // that failed. Dismissing clears it.
+        .alert("Something went wrong", isPresented: Binding(
+            get: { service.lastError != nil },
+            set: { if !$0 { service.lastError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(service.lastError ?? "")
         }
     }
 
@@ -325,7 +338,12 @@ struct TipJarView: View {
             let succeeded = try await service.purchase(product)
             if succeeded { showingThanks = true }
         } catch {
-            // Errors are surfaced through service.lastError
+            // Say what happened. A tip that fails silently looks like a
+            // charge that vanished, and a Restore that does nothing visible
+            // is a routine App Review rejection.
+            if service.lastError == nil {
+                service.lastError = "The tip did not go through: \(error.localizedDescription)"
+            }
             await service.loadProducts()
         }
     }
@@ -348,7 +366,7 @@ final class TipJarWindowController {
     func show() {
         if let window = window {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return
         }
         let hosting = NSHostingController(rootView: TipJarView()
@@ -357,14 +375,17 @@ final class TipJarWindowController {
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "Donate to InputConfig"
         newWindow.setContentSize(NSSize(width: 520, height: 640))
-        // .fullSizeContentView lets the blur reach under the transparent
-        // titlebar so the top bar isn't see-through to the desktop.
-        newWindow.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
-        newWindow.titlebarAppearsTransparent = true
+        // A standard, opaque title bar, like every other window in the app.
+        // The transparent-title-bar arrangement relied on the content's
+        // blur extending up under the bar, and SwiftUI stops its content at
+        // the safe area, so the bar showed the desktop straight through it
+        // with the window's top highlight line floating over that.
+        newWindow.styleMask = [.titled, .closable, .miniaturizable]
+        newWindow.titlebarAppearsTransparent = false
         newWindow.center()
         newWindow.isReleasedWhenClosed = false
         window = newWindow
         newWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }

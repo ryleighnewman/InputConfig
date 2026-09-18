@@ -115,21 +115,29 @@ final class CursorGuardService: ObservableObject {
         applyHideState()
     }
 
-    // Effective values: preset override > global toggle.
+    // Effective values: a preset can switch a utility on for itself, and
+    // the global toggle switches it on for every preset. Either is enough.
+    // The preset's fields are plain Bools that default to off, so "the
+    // preset never said" and "the preset said off" look identical; treating
+    // the preset as an override meant every running preset silently
+    // switched off whatever the user had turned on in Settings, which is
+    // why Confine, Recenter and Hide Cursor never engaged while a preset
+    // ran. The preset's own numbers apply only when the preset turned the
+    // utility on; otherwise the global numbers do.
     private var effectiveConfineEnabled: Bool {
-        presetOverride?.confineCursor ?? edgeConfineEnabled
+        (presetOverride?.confineCursor ?? false) || edgeConfineEnabled
     }
     private var effectiveBufferPx: Double {
-        presetOverride?.confineBufferPx ?? edgeBufferPx
+        presetOverride?.confineCursor == true ? (presetOverride?.confineBufferPx ?? edgeBufferPx) : edgeBufferPx
     }
     private var effectiveRecenterEnabled: Bool {
-        presetOverride?.autoRecenterCursor ?? autoRecenterEnabled
+        (presetOverride?.autoRecenterCursor ?? false) || autoRecenterEnabled
     }
     private var effectiveRecenterIntervalMs: Double {
-        presetOverride?.autoRecenterIntervalMs ?? recenterIntervalMs
+        presetOverride?.autoRecenterCursor == true ? (presetOverride?.autoRecenterIntervalMs ?? recenterIntervalMs) : recenterIntervalMs
     }
     private var effectiveHideCursor: Bool {
-        presetOverride?.hideCursorWhileActive ?? hideCursorWhileEngineRunning
+        (presetOverride?.hideCursorWhileActive ?? false) || hideCursorWhileEngineRunning
     }
 
     // MARK: - Engine integration
@@ -244,7 +252,10 @@ final class CursorGuardService: ObservableObject {
         guard let screen = screenForCursor(),
               let pos = cursorPositionTopLeft() else { return }
         let frame = screenRectTopLeft(screen)
-        let buf = CGFloat(effectiveBufferPx)
+        // A buffer past half the screen makes the two clamps disagree and
+        // warps the pointer off screen sixty times a second. The slider
+        // stops at 200, but a preset file can carry any number.
+        let buf = max(0, min(CGFloat(effectiveBufferPx), frame.width / 2 - 1, frame.height / 2 - 1))
         var nx = pos.x, ny = pos.y, changed = false
         if nx < frame.minX + buf { nx = frame.minX + buf; changed = true }
         if nx > frame.maxX - buf { nx = frame.maxX - buf; changed = true }

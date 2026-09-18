@@ -58,6 +58,21 @@ struct ControllerState {
     /// Joy-Con). nil otherwise. Channel-keyed Float so MappingEngine can
     /// treat them like axis values.
     var motion: [MotionChannel: Float] = [:]
+    /// Radians the controller actually turned around each gyro axis since
+    /// the previous poll, summed from every sensor sample (drift removed).
+    /// The pointer path uses this, not the rate, so a movement and its
+    /// exact reverse cancel to zero no matter how fast either was.
+    var motionAngle: [MotionChannel: Float] = [:]
+    /// Extra radians this poll from the accelerometer anchor on pitch: the
+    /// amount the fused estimate moved beyond what the gyro reported. The
+    /// pointer path adds it untouched (no tightening, no gate), so the
+    /// pointer always ends where the controller's real angle says.
+    var motionCorrection: [MotionChannel: Float] = [:]
+    /// Absolute tilt in radians, fused gyro + accelerometer, keyed by the
+    /// gyro channel that rotates about that axis: `.gyroX` is pitch (nose
+    /// up positive), `.gyroY` is roll (right side down positive). The
+    /// pointing path positions the pointer from these.
+    var motionAbsolute: [MotionChannel: Float] = [:]
 
     /// Pre-size the backing dictionaries so the per-frame population in the
     /// 120 Hz poll loop (and the 30 Hz raw-input refresh) does not repeatedly
@@ -100,6 +115,59 @@ final class PhysicalPressLogStore: ObservableObject {
     }
 }
 
+/// Holds an NSProcessInfo activity while anything needs full-rate timers
+/// in the background, and drops it the moment nothing does.
+@MainActor
+final class AppActivity {
+    static let shared = AppActivity()
+    private var reasons: Set<String> = []
+    private var token: NSObjectProtocol?
+    private init() {}
+
+    func retain(_ reason: String) {
+        reasons.insert(reason)
+        guard token == nil else { return }
+        token = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Keeping controller input and light timers at full rate")
+    }
+
+    func release(_ reason: String) {
+        reasons.remove(reason)
+        guard reasons.isEmpty, let t = token else { return }
+        ProcessInfo.processInfo.endActivity(t)
+        token = nil
+    }
+
+    /// The engine announces itself through notifications; follow them.
+    func observeEngine() {
+        NotificationCenter.default.addObserver(forName: MappingEngine.didStartNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.retain("engine") }
+        }
+        NotificationCenter.default.addObserver(forName: MappingEngine.didStopNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.release("engine") }
+        }
+    }
+}
+
+/// The two live-input sets the editor lights its rows from, kept away
+/// from the service and engine objects that the whole window observes.
+/// Publishing them from those objects re-rendered the root view, the
+/// sidebar and the log on every input edge: with frosted layers that
+/// meant the main thread waiting on the WindowServer while the engine's
+/// own poll timer, which shares that thread, fired late. That was the
+/// touchpad lag whenever the visualizer was on screen. Only the editor's
+/// row list observes this store.
+@MainActor
+final class LiveInputStore: ObservableObject {
+    static let shared = LiveInputStore()
+    /// Raw controller activity: buttons, axes, hats, zones and gestures.
+    @Published var raw: Set<String> = []
+    /// What the running preset considers active, 10 Hz at most.
+    @Published var active: Set<String> = []
+    private init() {}
+}
+
 /// Manages game controller detection and input reading
 @MainActor
 class GameControllerService: ObservableObject {
@@ -122,7 +190,11 @@ class GameControllerService: ObservableObject {
     /// currently pressed / deflected across *any* connected controller.
     /// Refreshed at 10 Hz independent of the mapping engine, so the editor's
     /// binding row highlight works even when no preset is running.
-    @Published var rawActiveInputs: Set<String> = []
+    /// Not published here on purpose: see LiveInputStore. The store gets
+    /// the same value on every change.
+    var rawActiveInputs: Set<String> = [] {
+        didSet { LiveInputStore.shared.raw = rawActiveInputs }
+    }
 
     /// When true, the Quick Tour has injected a synthetic DualSense
     /// Edge entry into `controllerDetails[0]` so the visualizer can
@@ -209,6 +281,9 @@ class GameControllerService: ObservableObject {
 
     #if DEBUG
     @Published private(set) var marketingFakeActive = false
+    /// Marketing capture: hold a trigger and two buttons on the synthetic
+    /// pad (inputconfig.debug.fakepress toggles it). DEBUG only.
+    var marketingFakePress = false
     /// DEBUG / marketing-capture only: inject two clean-named synthetic
     /// controllers (a DualSense Edge in slot 0, a PlayStation Access Controller
     /// in slot 1) so App Store screenshots show a populated sidebar and a
@@ -316,18 +391,23 @@ class GameControllerService: ObservableObject {
             // native list (if any) takes priority over our static names.
             if slot < connectedControllers.count {
                 let c = connectedControllers[slot]
-                let isDualSense = (c.vendorName ?? "").lowercased().contains("dualsense")
-                    || c.productCategory.lowercased().contains("dualsense")
+                let nameBlob = ((c.vendorName ?? "") + " " + c.productCategory).lowercased()
+                let isDualSense = nameBlob.contains("dualsense")
+                let isEdge = nameBlob.contains("edge")
                 if isDualSense {
                     let supplement = DualSenseSupplementService.shared.anySupplementalButtons()
                     let existingIndices = Set(out.map(\.index))
-                    let supplementNames: [Int: String] = [
-                        15: "Microphone / Mute",
-                        16: "Left Paddle",
-                        17: "Right Paddle",
-                        20: "FN 1 (Left Function)",
-                        21: "FN 2 (Right Function)",
-                    ]
+                    // Every DualSense has the mute button. Only the Edge has
+                    // paddles and FN buttons; listing them on a plain
+                    // DualSense made the automatic layout offer controls the
+                    // pad does not have.
+                    var supplementNames: [Int: String] = [15: "Microphone / Mute"]
+                    if isEdge {
+                        supplementNames[16] = "Left Paddle"
+                        supplementNames[17] = "Right Paddle"
+                        supplementNames[20] = "FN 1 (Left Function)"
+                        supplementNames[21] = "FN 2 (Right Function)"
+                    }
                     for (idx, name) in supplementNames where !existingIndices.contains(idx) {
                         let pressed = (supplement[idx] ?? 0) > 0.5
                         out.append(ExtraButton(label: name, index: idx, pressed: pressed))
@@ -369,6 +449,11 @@ class GameControllerService: ObservableObject {
     }
 
     func extraAxesSnapshot(for slot: Int) -> [ExtraAxis] {
+        if let extras = cachedExtraAxes[slot], !extras.isEmpty {
+            return extras.map { axis, index, name in
+                ExtraAxis(label: name, index: index, value: axis.value)
+            }
+        }
         if let gamepad = rawHIDGamepadSlots[slot] {
             let state = gamepad.state
             let extraKeys = state.axes.keys.filter { $0 > 5 }.sorted()
@@ -419,9 +504,6 @@ class GameControllerService: ObservableObject {
     private var rawActivePollTimer: Timer?
     private var scanCallback: ((InputEvent) -> Void)?
     private var cancellables = Set<AnyCancellable>()
-    /// Held for the app's lifetime to keep App Nap from throttling the light
-    /// re-assert timers while the app is in the background.
-    private var appActivityToken: NSObjectProtocol?
 
     init() {
         // Apple normally suppresses the Home / PS button event when an app
@@ -430,13 +512,12 @@ class GameControllerService: ObservableObject {
         // the window has key focus.
         GCController.shouldMonitorBackgroundEvents = true
 
-        // Keep the light-assertion timers (solid hold + RGB cycle) running at
-        // full rate when we are not the foreground app. Without this, App Nap
-        // throttles background timers, so on an app switch the system's default
-        // controller LED color flashes through before we re-assert ours.
-        appActivityToken = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiatedAllowingIdleSystemSleep],
-            reason: "Keep the controller light color asserted")
+        // App Nap is held off only while there is a reason: a preset
+        // running, or a light colour being held. Both need their timers at
+        // full rate in the background. Asserting it for the whole process
+        // lifetime, as before, kept the app out of App Nap with no
+        // controller, no preset and no window.
+        AppActivity.shared.observeEngine()
 
         setupControllerNotifications()
         refreshControllers()
@@ -446,9 +527,35 @@ class GameControllerService: ObservableObject {
         // physical Steam Controller appears, then disables lizard mode and
         // starts streaming raw input reports. Re-running detection at 2 Hz
         // updates the virtual slot's ControllerInfo as the helper connects.
+        startRawActiveInputsPolling()
+
+        // Everything below is a bus walk, a subprocess, or a system
+        // client, and none of it is needed for the first frame. It ran
+        // synchronously inside this init, which runs inside the app's
+        // state construction before the window exists, so launch waited
+        // on an IOKit enumeration, a CoreMIDI client, a fork and exec and
+        // three HID opens. Deferred one turn, so the window is up first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            MainActor.assumeIsolated { self?.startBusServices() }
+        }
+
+        // If a previous run force-quit during the Quick Tour, the
+        // synthetic DualSense Edge entry could still be sitting at
+        // slot 0 in memory we just initialized. Clean it up before
+        // any UI binds to controllerDetails.
+        clearStaleTutorialFakeIfNeeded()
+    }
+
+    /// The services that talk to the bus and the system, started after
+    /// the first frame. See init.
+    private func startBusServices() {
+        // Spin up the Steam Controller helper so the device is detected
+        // immediately on plug-in. The helper does nothing until a physical
+        // Steam Controller appears, then disables lizard mode and starts
+        // streaming raw input reports. Re-running detection at 2 Hz
+        // updates the virtual slot's ControllerInfo as the helper connects.
         SteamControllerService.shared.retain()
         startSteamControllerWatch()
-        startRawActiveInputsPolling()
 
         // Boot the raw HID gamepad layer. Covers controllers that
         // Apple's GameController framework doesn't see (8BitDo Ultimate
@@ -456,33 +563,30 @@ class GameControllerService: ObservableObject {
         // DualShock 3, generic XInput controllers).
         RawHIDGamepadService.shared.start()
         startRawHIDGamepadWatch()
+        startAccessoryWatch()
+        // Everything else on the bus, for the InputConfig ▸ Devices menu.
+        HIDDeviceRegistry.shared.start()
 
         // DualSense / DualSense Edge supplement. Apple's framework
         // surfaces the standard DualSense buttons but NOT the Edge's
         // exclusive ones (left/right paddle, FN1/FN2, mute). We open
         // the device a second time in non-seize mode and parse those
         // bits out of the raw report, then merge them into the
-        // matching slot's ControllerState below.
+        // matching slot's ControllerState.
         DualSenseSupplementService.shared.start()
 
         // MIDI input. Opens one CoreMIDI client and connects to every
         // source, so a MIDI keyboard / pad controller is bindable the
-        // same way a gamepad is. Started here rather than lazily so the
-        // binding editor can list devices and Scan can capture a key
-        // press without the user first activating a MIDI preset.
+        // same way a gamepad is. Started for the session so the binding
+        // editor can list devices and Scan can capture a key press
+        // without the user first activating a MIDI preset.
         MIDIInputService.shared.start()
 
-        // Open the in-process LED writer up front so focus-change
-        // re-asserts and the RGB cycle can write instantly, without
-        // spawning the helper subprocess. It's re-enumerated on each
-        // controller connect/disconnect via refreshControllers().
+        // Open the in-process LED writer so focus-change re-asserts and
+        // the RGB cycle can write instantly, without spawning the helper
+        // subprocess. It's re-enumerated on each controller
+        // connect/disconnect via refreshControllers().
         InProcessLightWriter.shared.open()
-
-        // If a previous run force-quit during the Quick Tour, the
-        // synthetic DualSense Edge entry could still be sitting at
-        // slot 0 in memory we just initialized. Clean it up before
-        // any UI binds to controllerDetails.
-        clearStaleTutorialFakeIfNeeded()
     }
 
     deinit {
@@ -554,12 +658,25 @@ class GameControllerService: ObservableObject {
             forName: .GCControllerDidDisconnect,
             object: nil, queue: .main
         ) { [weak self] note in
-            let name = (note.object as? GCController)?.vendorName ?? "Controller"
+            let gone = note.object as? GCController
+            let name = gone?.vendorName ?? "Controller"
+            // Identity only crosses to the main actor: the object itself
+            // is not needed there, just which one it was.
+            let goneID = gone.map { ObjectIdentifier($0) }
             Task { @MainActor in
                 guard let self = self else { return }
                 let stillConnected = !GCController.controllers().isEmpty
                 StatsService.shared.controllerDisconnected(
                     name: name, anyStillConnected: stillConnected)
+                if let goneID {
+                    // Per-controller state keyed by object identity goes
+                    // with the controller. Left behind, a later pad can be
+                    // handed the same identity and inherit a stale haptic
+                    // engine or a non-zero gyro accumulator, which shows up
+                    // as no buzz or a one-time aim jump on reconnect.
+                    FeedbackService.shared.forgetController(id: goneID)
+                    self.forgetMotionState(id: goneID)
+                }
                 self.scheduleRefresh()
             }
         }
@@ -624,6 +741,7 @@ class GameControllerService: ObservableObject {
             if rgbCycleActive[slot] == true { rgbActiveByIdentity.insert(key) }
         }
 
+        let previousNames = controllerNames
         connectedControllers = GCController.controllers()
         controllerNames.removeAll()
         controllerDetails.removeAll()
@@ -671,6 +789,19 @@ class GameControllerService: ObservableObject {
                 }
             }
         }
+        // Arrivals and departures, for the activity log. Compared by name
+        // per slot, which is what the user sees in the sidebar.
+        for (slot, name) in controllerNames where previousNames[slot] != name {
+            let info = controllerDetails[slot]
+            var caps: [String] = []
+            if info?.supportsMotion == true { caps.append("motion") }
+            if info?.hasLight == true { caps.append("light bar") }
+            if info?.hasTouchpad == true { caps.append("touchpad") }
+            ActivityLog.shared.info("Controllers", "Connected \(name) in slot \(slot)" + (caps.isEmpty ? "" : " (" + caps.joined(separator: ", ") + ")"), slot: slot)
+        }
+        for (slot, name) in previousNames where controllerNames[slot] != name {
+            ActivityLog.shared.warning("Controllers", "Disconnected \(name) from slot \(slot)", slot: slot)
+        }
         // Re-base the Steam and raw-HID virtual slots onto the new MFi slot
         // count and re-publish their metadata on this same main-actor turn.
         // refreshControllers just wiped controllerNames/controllerDetails and
@@ -715,7 +846,13 @@ class GameControllerService: ObservableObject {
             hasBattery: controller.battery != nil,
             batteryLevel: batteryLevel,
             batteryState: batteryState,
-            buttonCount: profile.buttons.count,
+            // Real buttons only: the touchpad's finger components, thumbstick
+            // and D-pad composites are not buttons a person can bind, and
+            // counting them made a plain DualSense look like it had 34, which
+            // the automatic layout then filled in with paddles.
+            buttonCount: profile.buttons.keys.filter { name in
+                !Self.ignoredProfileNames.contains(where: { name.contains($0) })
+            }.count,
             axisCount: profile.axes.count,
             supportsMotion: controller.motion != nil,
             connectedAt: Date(),
@@ -725,6 +862,292 @@ class GameControllerService: ObservableObject {
             physicalButtonNames: buttonNames,
             brand: ControllerTypeDetector.detect(controller)
         )
+    }
+
+    /// Angle turned since the engine last read a controller, per controller,
+    /// summed from every sensor sample as it arrives. The poll loop runs at
+    /// 120 Hz but a Bluetooth controller delivers motion in bursts, so
+    /// reading `rotationRate` at poll time sees only the latest sample and
+    /// misses the rest of a fast flick. Integrating in the sensor callback
+    /// makes the pointer travel a distance that depends only on how far the
+    /// controller turned, not on how quickly.
+    private struct GyroAccumulator {
+        var angle = SIMD3<Float>(repeating: 0)   // radians since last drain
+        var lastSample: CFTimeInterval = 0
+        var lastDrain: CFTimeInterval = 0
+        var samples = 0
+        /// Raw rate averaged over roughly the last half second, for re-zero
+        /// (one sample is too noisy to zero on) and drift learning.
+        var mean = SIMD3<Float>(repeating: 0)
+        /// How much the raw rate wobbles around that mean (same time
+        /// constant). Small wobble plus 1 g on the accelerometer means the
+        /// controller is physically still, whatever the current bias says.
+        var jitter = SIMD3<Float>(repeating: 0)
+        /// When the controller was last judged to be moving.
+        var lastMotion: CFTimeInterval = 0
+        /// Largest |rate| seen per axis since the debug readout last asked.
+        var peak = SIMD3<Float>(repeating: 0)
+    }
+
+    #if DEBUG
+    /// Peak |rate| per axis since the last call, for the debug readout.
+    func debugTakePeakRate(for controller: GCController) -> SIMD3<Float> {
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        let id = ObjectIdentifier(controller)
+        let p = gyroAccumulators[id]?.peak ?? .zero
+        gyroAccumulators[id]?.peak = .zero
+        return p
+    }
+    #endif
+    private var gyroAccumulators: [ObjectIdentifier: GyroAccumulator] = [:]
+    private let gyroLock = NSLock()
+
+    #if DEBUG
+    /// Total sensor callbacks seen for a controller, for the debug readout.
+    func debugGyroSampleCount(for controller: GCController) -> Int {
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        return gyroTotalSamples[ObjectIdentifier(controller)] ?? 0
+    }
+    private var gyroTotalSamples: [ObjectIdentifier: Int] = [:]
+    #endif
+
+    private func installGyroIntegrator(_ motion: GCMotion, for controller: GCController) {
+        let key = ObjectIdentifier(controller)
+        gyroLock.lock()
+        if gyroAccumulators[key] == nil { gyroAccumulators[key] = GyroAccumulator() }
+        gyroLock.unlock()
+        motion.valueChangedHandler = { [weak self] m in
+            guard let self, m.hasRotationRate else { return }
+            let now = CACurrentMediaTime()
+            let r = m.rotationRate
+            self.gyroLock.lock()
+            var acc = self.gyroAccumulators[key] ?? GyroAccumulator()
+            // First sample after a pause has no interval to integrate over;
+            // clamp long gaps so a stall does not land as one giant step.
+            let dt = acc.lastSample == 0 ? 0 : min(0.05, now - acc.lastSample)
+            let sample = SIMD3(Float(r.x), Float(r.y), Float(r.z))
+            acc.angle += sample * Float(dt)
+            acc.peak = SIMD3(max(acc.peak.x, abs(sample.x)), max(acc.peak.y, abs(sample.y)), max(acc.peak.z, abs(sample.z)))
+            // EMA with a 0.5 s time constant.
+            let alpha = dt > 0 ? Float(1 - exp(-dt / 0.5)) : 1
+            acc.mean += (sample - acc.mean) * alpha
+            let dev = SIMD3(abs(sample.x - acc.mean.x), abs(sample.y - acc.mean.y), abs(sample.z - acc.mean.z))
+            acc.jitter += (dev - acc.jitter) * alpha
+            acc.lastSample = now
+            acc.samples += 1
+            self.gyroAccumulators[key] = acc
+            #if DEBUG
+            self.gyroTotalSamples[key, default: 0] += 1
+            #endif
+            self.gyroLock.unlock()
+        }
+    }
+
+    /// Pitch (rotation about the controller's X axis) with an absolute
+    /// reference. The gyro integral alone can only be as good as the samples
+    /// it saw, and a hard slam can outrun the sensor; the accelerometer,
+    /// however, always knows which way is down once the controller is still.
+    /// This fuses the two: the gyro carries the motion, and whenever the
+    /// controller is quiet the estimate eases onto the accelerometer's
+    /// angle, so "back to flat" always means "back to zero" in the end. The
+    /// sign relating the two is learned from the first real movement rather
+    /// than assumed, so a differently mounted sensor still works.
+    private struct AxisFusion {
+        var estimate: Float = 0          // radians, fused
+        var gyroOnly: Float = 0          // radians, gyro integral alone
+        var lastAccelAngle: Float = 0
+        var lastGyroOnly: Float = 0
+        var correlation: Float = 0
+        /// +1 from the measured frame (X right, Y forward, Z up out of the
+        /// face, right-handed): nose up makes both the gyro X integral and
+        /// the accelerometer pitch positive; right side down does the same
+        /// for gyro Y and accelerometer roll. Flipped only if real movement
+        /// proves otherwise.
+        var sign: Float = 1
+        var seeded = false
+        var lastCorrectedRate = SIMD3<Float>(repeating: 0)
+    }
+    private struct FusionKey: Hashable { let controller: ObjectIdentifier; let channel: MotionChannel }
+    private var axisFusion: [FusionKey: AxisFusion] = [:]
+    static let motionRezeroedNotification = Notification.Name("InputConfig.motionRezeroed")
+
+    /// The accelerometer's angle for a tilt axis, from the gravity direction
+    /// it reports (down, in the controller's frame; (0, 0, -1) when flat).
+    /// Rotation rate about gravity, positive when the pad turns clockwise
+    /// seen from above (pointing right). Nil when the accelerometer is not
+    /// reading gravity cleanly, in which case the caller uses the pad's own
+    /// Z rate, which is the same thing for a pad held flat.
+    private func worldYawRate(gx: Float, gy: Float, gz: Float, motion: GCMotion) -> Float? {
+        var g: SIMD3<Float>
+        if motion.hasGravityAndUserAcceleration {
+            g = SIMD3(Float(motion.gravity.x), Float(motion.gravity.y), Float(motion.gravity.z))
+        } else {
+            let a = motion.acceleration
+            g = SIMD3(Float(a.x), Float(a.y), Float(a.z))
+            let mag = (g * g).sum().squareRoot()
+            guard mag.isFinite, abs(mag - 1) < 0.15 else { return nil }
+        }
+        let mag = (g * g).sum().squareRoot()
+        guard mag.isFinite, mag > 0.5 else { return nil }
+        g /= mag
+        // Gravity points down. Turning right is clockwise from above, which is
+        // a negative rotation about up, so a positive rotation about down.
+        let rate = gx * g.x + gy * g.y + gz * g.z
+        return rate.isFinite ? rate : nil
+    }
+
+    private static func accelAngle(_ channel: MotionChannel, ax: Float, ay: Float, az: Float) -> Float {
+        switch channel {
+        case .gyroX: return atan2(-ay, (ax * ax + az * az).squareRoot())   // pitch: nose up +
+        case .gyroY: return atan2(ax, (ay * ay + az * az).squareRoot())    // roll: right side down +
+        default: return 0
+        }
+    }
+
+    #if DEBUG
+    func debugPitchFusion(for controller: GCController) -> String {
+        let id = ObjectIdentifier(controller)
+        guard let f = axisFusion[FusionKey(controller: id, channel: .gyroX)] else { return "fusion: none" }
+        let r = axisFusion[FusionKey(controller: id, channel: .gyroY)]
+        let key = MotionCalibrationService.identityKey(for: controller)
+        let cal = MotionCalibrationService.shared.calibration(forKey: key)
+        return String(format: "fusion: pitch sign=%+.0f est=%.4f gyroOnly=%.4f accel=%.4f | roll sign=%+.0f est=%.4f gyroOnly=%.4f accel=%.4f | corrected x=%+.4f y=%+.4f z=%+.4f | stored drift x=%.5f y=%.5f z=%.5f",
+                      f.sign, f.estimate, f.gyroOnly, f.lastAccelAngle,
+                      r?.sign ?? 0, r?.estimate ?? 0, r?.gyroOnly ?? 0, r?.lastAccelAngle ?? 0,
+                      f.lastCorrectedRate.x, f.lastCorrectedRate.y, f.lastCorrectedRate.z,
+                      cal?.gyroDriftX ?? 0, cal?.gyroDriftY ?? 0, cal?.gyroDriftZ ?? 0)
+    }
+    #endif
+
+    /// Fused tilt about one axis this poll: the gyro's own change, the extra
+    /// correction from the accelerometer, and the absolute angle. Nil
+    /// without an accelerometer. A complementary filter that runs
+    /// continuously whenever the accelerometer is reading gravity and not
+    /// the hand, so there is no lump after a movement stops: it eases in
+    /// over a few tenths of a second and never steps more than about a
+    /// degree per poll.
+    private func fuseTilt(_ channel: MotionChannel, controller: GCController, motion: GCMotion,
+                          gyroRate: Float, interval: Float,
+                          corrected: SIMD3<Float>) -> (gyro: Float, correction: Float, absolute: Float)? {
+        let a = motion.acceleration
+        let ax = Float(a.x), ay = Float(a.y), az = Float(a.z)
+        let mag = (ax * ax + ay * ay + az * az).squareRoot()
+        guard mag.isFinite, mag > 0.2 else { return nil }
+        let key = FusionKey(controller: ObjectIdentifier(controller), channel: channel)
+        var f = axisFusion[key] ?? AxisFusion()
+        f.lastCorrectedRate = corrected
+        let accelAngle = Self.accelAngle(channel, ax: ax, ay: ay, az: az)
+        let gravityOnly = abs(mag - 1) < 0.1
+        let gyroDelta = gyroRate * interval
+        f.gyroOnly += gyroDelta
+        f.estimate += gyroDelta
+        if !f.seeded {
+            f.lastAccelAngle = accelAngle; f.lastGyroOnly = f.gyroOnly; f.seeded = true
+            f.estimate = f.sign * accelAngle
+        }
+        if gravityOnly {
+            let dA = max(-0.2, min(0.2, accelAngle - f.lastAccelAngle))
+            let dG = max(-0.2, min(0.2, f.gyroOnly - f.lastGyroOnly))
+            f.correlation = max(-1, min(1, f.correlation + dA * dG))
+            if f.correlation < -0.05 { f.sign = -1 } else if f.correlation > 0.05 { f.sign = 1 }
+        }
+        f.lastAccelAngle = accelAngle; f.lastGyroOnly = f.gyroOnly
+        var correction: Float = 0
+        if gravityOnly, abs(gyroRate) < 1.5 {
+            let tau: Float = abs(gyroRate) < 0.05 ? 0.2 : 0.6
+            let k = 1 - expf(-interval / tau)
+            correction = (f.sign * accelAngle - f.estimate) * k
+            correction = max(-0.02, min(0.02, correction))
+            f.estimate += correction
+        }
+        axisFusion[key] = f
+        return (gyroDelta, correction, f.estimate)
+    }
+
+    /// Drop the gyro accumulator and fusion state of a controller that left.
+    func forgetMotionState(id: ObjectIdentifier) {
+        gyroLock.lock(); gyroAccumulators.removeValue(forKey: id); gyroLock.unlock()
+        for channel in MotionChannel.allCases {
+            axisFusion.removeValue(forKey: FusionKey(controller: id, channel: channel))
+        }
+    }
+
+    /// The raw rate averaged over the last half second, or the instantaneous
+    /// value when no samples have arrived yet.
+    private func meanRawGyroRate(for controller: GCController) -> SIMD3<Float>? {
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        guard let acc = gyroAccumulators[ObjectIdentifier(controller)], acc.samples >= 0, acc.lastSample > 0 else { return nil }
+        return acc.mean
+    }
+
+    /// Below this drift-corrected rate (rad/s, about 0.6 degrees per second)
+    /// a controller counts as lying still. Shared with the engine's rest gate.
+    static let motionRestLimit: Float = 0.01
+
+    /// Drift learning: once the controller has been still for a second, ease
+    /// the stored zero toward what it is reading, so slow sensor wander never
+    /// becomes pointer creep and nobody has to recalibrate.
+    private func learnGyroDrift(controller: GCController, motion: GCMotion,
+                                corrected g: SIMD3<Float>, interval: Float, key: String) {
+        let id = ObjectIdentifier(controller)
+        let now = CACurrentMediaTime()
+        let a = motion.acceleration
+        let mag = Float((a.x * a.x + a.y * a.y + a.z * a.z).squareRoot())
+        gyroLock.lock()
+        var acc = gyroAccumulators[id] ?? GyroAccumulator()
+        // Still means: the raw rate is steady (hand tremor and real motion
+        // both wobble it) and the accelerometer reads gravity and nothing
+        // else. Deliberately not "corrected rate is small", which a wrong
+        // bias would fail forever.
+        let steady = acc.jitter.x < 0.006 && acc.jitter.y < 0.006 && acc.jitter.z < 0.006
+        let onlyGravity = !mag.isFinite || abs(mag - 1) < 0.05
+        let still = steady && onlyGravity && acc.samples >= 0 && acc.lastSample > 0
+        if !still { acc.lastMotion = now }
+        if acc.lastMotion == 0 { acc.lastMotion = now }
+        let restingFor = now - acc.lastMotion
+        let mean = acc.mean
+        gyroAccumulators[id] = acc
+        gyroLock.unlock()
+        guard still, restingFor > 1.0 else { return }
+        // Ease the stored zero toward the steady raw reading: 10% per poll
+        // settles in a tenth of a second and also heals a zero that was
+        // taken while moving.
+        guard let cal = MotionCalibrationService.shared.calibration(forKey: key) else {
+            MotionCalibrationService.shared.quickZero(forKey: key, gyroX: mean.x, gyroY: mean.y, gyroZ: mean.z,
+                                                      accelX: 0, accelY: 0, accelZ: 0)
+            return
+        }
+        let k: Float = 0.1
+        MotionCalibrationService.shared.nudgeGyroDrift(dx: (mean.x - cal.gyroDriftX) * k,
+                                                      dy: (mean.y - cal.gyroDriftY) * k,
+                                                      dz: (mean.z - cal.gyroDriftZ) * k, forKey: key)
+    }
+
+    /// True when the controller has been physically still for the last
+    /// half second (steady gyro, 1 g on the accelerometer).
+    private func isPhysicallyStill(_ controller: GCController, motion: GCMotion) -> Bool {
+        let a = motion.acceleration
+        let mag = Float((a.x * a.x + a.y * a.y + a.z * a.z).squareRoot())
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        guard let acc = gyroAccumulators[ObjectIdentifier(controller)] else { return false }
+        return acc.jitter.x < 0.006 && acc.jitter.y < 0.006 && acc.jitter.z < 0.006
+            && (!mag.isFinite || abs(mag - 1) < 0.05)
+    }
+
+    /// The angle turned since the last drain (every sample counted) and the
+    /// length of that interval. `angle` is nil when no sample arrived, in
+    /// which case the caller integrates the instantaneous rate over the
+    /// interval instead.
+    private func drainGyro(for controller: GCController) -> (angle: SIMD3<Float>?, interval: Float) {
+        let key = ObjectIdentifier(controller)
+        let now = CACurrentMediaTime()
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        var acc = gyroAccumulators[key] ?? GyroAccumulator()
+        let interval = acc.lastDrain > 0 ? Float(min(0.1, max(1.0 / 1000.0, now - acc.lastDrain))) : 1.0 / 120.0
+        let angle: SIMD3<Float>? = acc.samples > 0 ? acc.angle : nil
+        acc.angle = .zero; acc.samples = 0; acc.lastDrain = now
+        gyroAccumulators[key] = acc
+        return (angle, interval)
     }
 
     /// Ask the controller's `GCMotion` to start reporting gyro and
@@ -741,6 +1164,7 @@ class GameControllerService: ObservableObject {
         // it's safe on controllers that auto-activate and required on the
         // ones that don't.
         motion.sensorsActive = true
+        installGyroIntegrator(motion, for: controller)
         #if DEBUG
         print("[GCS] Motion activated for \(controller.vendorName ?? "?")"
               + " manual=\(motion.sensorsRequireManualActivation)"
@@ -762,7 +1186,25 @@ class GameControllerService: ObservableObject {
             dualSenseSlots.insert(index)
         }
         guard let gamepad = controller.extendedGamepad else {
-            cachedExtraButtons[index] = []
+            // Profile-only devices (a solo Joy-Con, a remote, an adaptive
+            // board with no gamepad profile) get the same treatment as the
+            // extras on a gamepad: every button gets one stable index that
+            // the state read, Scan, the press log and the automatic layout
+            // all share. Known names take their standard index; anything
+            // else takes a dynamic index from 20 up, in name order. Before
+            // this, unknown names fell back to "digits in the name", which
+            // mapped SL, SR and every letter-named button onto A.
+            var result: [(GCControllerButtonInput, Int)] = []
+            var nextDynamic = 20
+            for (name, button) in controller.physicalInputProfile.buttons.sorted(by: { $0.key < $1.key }) {
+                if Self.ignoredProfileNames.contains(where: { name.contains($0) }) { continue }
+                if let known = Self.knownButtonMap[name] {
+                    result.append((button, known))
+                } else {
+                    result.append((button, nextDynamic)); nextDynamic += 1
+                }
+            }
+            cachedExtraButtons[index] = result
             return
         }
 
@@ -868,6 +1310,122 @@ class GameControllerService: ObservableObject {
         }
 
         cachedExtraButtons[index] = result
+
+        // Extra analogue inputs. An accessory plugged into an Access
+        // Controller or an Xbox Adaptive Controller (a third trigger, a
+        // pedal, a proportional joystick) shows up in the profile as an
+        // axis past the six a standard pad has. Give each one a stable
+        // index from 6 up so it can be read, drawn, and bound like any
+        // other axis.
+        let standardAxisNames: Set<String> = [
+            "Left Thumbstick X Axis", "Left Thumbstick Y Axis",
+            "Right Thumbstick X Axis", "Right Thumbstick Y Axis",
+            "Direction Pad X Axis", "Direction Pad Y Axis",
+        ]
+        var axisResult: [(GCControllerAxisInput, Int, String)] = []
+        var nextAxis = 6
+        for (name, axis) in controller.physicalInputProfile.axes.sorted(by: { $0.key < $1.key })
+        where !standardAxisNames.contains(name) {
+            // The touchpad's finger positions are axes too, with raw HID
+            // names on some controllers; they belong to the touchpad path,
+            // not to the accessory list.
+            let lower = (axis.localizedName ?? name).lowercased() + " " + name.lowercased()
+            if lower.contains("touchpad") { continue }
+            axisResult.append((axis, nextAxis, axis.localizedName ?? name))
+            nextAxis += 1
+        }
+        cachedExtraAxes[index] = axisResult
+        // The profile's shape is what tells us an accessory arrived or
+        // left; remember it so the watcher below can notice a change.
+        profileShape[index] = controller.physicalInputProfile.elements.count
+    }
+
+    /// Extra analogue inputs per slot, discovered from the profile.
+    private var cachedExtraAxes: [Int: [(GCControllerAxisInput, Int, String)]] = [:]
+    /// Element count per slot, to spot an accessory being plugged in or out.
+    private var profileShape: [Int: Int] = [:]
+
+    /// Accessories can be plugged into a controller that is already
+    /// connected: a switch into an Access Controller's expansion port, a
+    /// button or pedal into an Xbox Adaptive Controller. macOS sends no
+    /// notification for that, so the profile's element count is checked a
+    /// few times a second and the slot re-read when it changes. Cheap: one
+    /// integer compare per controller per tick.
+    private func startAccessoryWatch() {
+        guard accessoryWatchTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                for (index, controller) in self.connectedControllers.enumerated() {
+                    // A DualSense needs its motion sensors switched on by
+                    // hand, and anything else that opens the controller can
+                    // switch them off again, which reads as "the gyro
+                    // stopped working". Re-assert it while we are here.
+                    if let motion = controller.motion, !motion.sensorsActive {
+                        motion.sensorsActive = true
+                        self.installGyroIntegrator(motion, for: controller)
+                        ActivityLog.shared.info("Controllers",
+                            "Motion sensors re-enabled on \(controller.vendorName ?? "controller")")
+                    }
+                    let shape = controller.physicalInputProfile.elements.count
+                    guard self.profileShape[index] != shape else { continue }
+                    ActivityLog.shared.info("Controllers",
+                        "\(controller.vendorName ?? "Controller") changed shape (\(shape) inputs): re-reading its accessories")
+                    self.cacheExtraButtons(for: controller, at: index)
+                    self.controllerDetails[index] = self.buildControllerInfo(controller)
+                    // A scan in progress should hear the new control too.
+                    if self.isScanning { self.setupScanHandlers(for: controller, index: index) }
+                }
+            }
+        }
+        accessoryWatchTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    private var accessoryWatchTimer: Timer?
+
+    /// The slot a device with this name is connected to, if any. Picking a
+    /// device from an input device's menu names it; this is what turns that
+    /// name back into the controller whose inputs should be read for that
+    /// group, so choosing a DualSense on a group that was set up for an
+    /// Access Controller really does switch to the DualSense.
+    func slot(forDeviceNamed name: String) -> Int? {
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !wanted.isEmpty else { return nil }
+        for (slot, info) in controllerDetails where info.name.lowercased() == wanted { return slot }
+        for (slot, n) in controllerNames where n.lowercased() == wanted { return slot }
+        for (slot, info) in controllerDetails
+        where info.name.lowercased().contains(wanted) || wanted.contains(info.name.lowercased()) {
+            return slot
+        }
+        return nil
+    }
+
+    /// The controller an input device group should read. In order: the
+    /// device picked from its menu when that device is connected; then, if
+    /// the group binds motion or the touchpad and the controller at its own
+    /// position has neither, the connected controller that does (so a gyro
+    /// preset works when the gyro controller is not the first one plugged
+    /// in); otherwise the slot with the same number as the group.
+    func effectiveSlot(for mapping: JoystickMapping, groupIndex: Int) -> Int {
+        if let name = mapping.customName, let picked = slot(forDeviceNamed: name) {
+            return picked
+        }
+        let own = controllerDetails[groupIndex]
+        let usesMotion = mapping.bindings.contains { $0.input.type == .motion }
+        if usesMotion, own?.supportsMotion != true,
+           let capable = controllerDetails.filter({ $0.value.supportsMotion })
+            .keys.sorted().first {
+            return capable
+        }
+        let usesTouchpad = mapping.bindings.contains {
+            [.touchpad, .touchpadRegion, .touchpadGesture].contains($0.input.type)
+        }
+        if usesTouchpad, own?.hasTouchpad != true,
+           let capable = controllerDetails.filter({ $0.value.hasTouchpad })
+            .keys.sorted().first {
+            return capable
+        }
+        return groupIndex
     }
 
     func controllerName(at index: Int) -> String {
@@ -889,6 +1447,13 @@ class GameControllerService: ObservableObject {
     /// Set the controller's light bar color (DualSense, DualShock 4)
     func setControllerLight(at index: Int) {
         guard index < connectedControllers.count else { return }
+        // A running preset's colour outranks both the stored colour and the
+        // slot default, so reconnecting a controller cannot change the light
+        // out from under an active preset.
+        if let o = presetLightOverride {
+            applyTemporaryLight(at: index, red: o.r, green: o.g, blue: o.b, brightness: o.brightness)
+            return
+        }
         // Use stored custom color if set, otherwise use slot default
         if let custom = lightColors[index] {
             applyLight(at: index, red: custom.r, green: custom.g, blue: custom.b)
@@ -1102,6 +1667,46 @@ class GameControllerService: ObservableObject {
         return (r + m, g + m, bl + m)
     }
 
+    #if DEBUG
+    /// Every preset colour this session tried to apply, for the readout.
+    var debugTempLightLog: [String] = []
+    #endif
+
+    /// The colour the running preset asked for. While a preset is active
+    /// this is the truth for every light-capable slot: a controller that
+    /// connects or reconnects, a refresh, or a rainbow ending must all land
+    /// on this, not on the slot's default colour. Without it the default
+    /// (slot 0 is green) quietly replaced the preset's colour mid-session.
+    private(set) var presetLightOverride: (r: Float, g: Float, b: Float, brightness: UInt8?)?
+
+    /// Apply a preset's light colour to every light-capable slot and keep it
+    /// as the override until the preset stops. Safe to call with no
+    /// controller connected: the colour is applied when one arrives.
+    func applyPresetLight(red: Float, green: Float, blue: Float, brightness: UInt8?) {
+        presetLightOverride = (red, green, blue, brightness)
+        stopAllRGBCycles()
+        for slot in controllerDetails.keys where controllerDetails[slot]?.hasLight == true {
+            applyTemporaryLight(at: slot, red: red, green: green, blue: blue, brightness: brightness)
+        }
+    }
+
+    /// Slots currently showing a preset's temporary colour, so a stop can
+    /// put back exactly those and leave a general rainbow cycle alone.
+    private var temporaryLightSlots: Set<Int> = []
+
+    /// Put every slot that was showing a temporary colour back on its
+    /// stored general colour. Returns whether anything was reverted.
+    @discardableResult
+    func revertTemporaryLights() -> Bool {
+        presetLightOverride = nil
+        let slots = temporaryLightSlots
+        temporaryLightSlots.removeAll()
+        for slot in slots where slot < connectedControllers.count {
+            setControllerLight(at: slot)
+        }
+        return !slots.isEmpty
+    }
+
     /// Apply a light color WITHOUT storing it as the slot's default. Used by
     /// the mapping engine to flash a preset's chosen color while the preset
     /// is active; calling `setControllerLight(at:)` on stop restores the
@@ -1109,6 +1714,12 @@ class GameControllerService: ObservableObject {
     /// stored brightness for the duration; nil inherits.
     func applyTemporaryLight(at index: Int, red: Float, green: Float, blue: Float, brightness: UInt8? = nil) {
         guard index < connectedControllers.count else { return }
+        #if DEBUG
+        debugTempLightLog.append(String(format: "slot %d R%.0f G%.0f B%.0f", index, red * 255, green * 255, blue * 255))
+        if debugTempLightLog.count > 40 { debugTempLightLog.removeFirst(debugTempLightLog.count - 40) }
+        #endif
+        temporaryLightSlots.insert(index)
+        ActivityLog.shared.info("Light bar", String(format: "Preset colour on slot %d: R%.0f G%.0f B%.0f", index, red * 255, green * 255, blue * 255), slot: index)
         let bri = brightness ?? lightBrightness[index] ?? 2
         let scale: Float = switch bri {
         case 0: 0.0
@@ -1119,6 +1730,7 @@ class GameControllerService: ObservableObject {
         let g = UInt8(min(max(green * scale * 255, 0), 255))
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
         lastAppliedColor[index] = (r, g, b)
+        applyAppleLight(at: index, red: r, green: g, blue: b)
         // HOLD the color, don't fire one shot. macOS's controller daemon owns
         // the DualSense light bar and repaints it on its own loop, so a single
         // write is overwritten within milliseconds and the user sees nothing
@@ -1128,6 +1740,35 @@ class GameControllerService: ObservableObject {
         // stopHold happens on revert via setControllerLight, and when the last
         // controller disconnects.
         InProcessLightWriter.shared.startHold(red: r, green: g, blue: b)
+    }
+
+    /// Set the light through GameController's own light API as well as the
+    /// raw report. This is the part that matters while a buzz is playing:
+    /// macOS takes the controller's report stream to drive the haptics and
+    /// repaints the light bar itself, and no raw re-assert is fast enough to
+    /// win that. Told through its own API, it repaints our colour instead of
+    /// its own. The raw write stays as the fallback for pads it does not
+    /// cover, and paints the same colour, so the two cannot disagree.
+    private func applyAppleLight(at index: Int, red: UInt8, green: UInt8, blue: UInt8) {
+        // One writer per pad. When this app's own report writer owns a Sony
+        // pad, the light is already in that report, and asking the system's
+        // GCDeviceLight for the same colour hands the pad's output stream to
+        // the system, whose writes carry zeroed motor fields and stomp a
+        // rumble in progress. Measured on a DualSense Edge: the same motor
+        // bytes felt strong with no preset running and weak with one, and
+        // this call was the difference.
+        if InProcessLightWriter.shared.ownsAnyDualSense { return }
+        guard index < connectedControllers.count,
+              let light = connectedControllers[index].light else { return }
+        light.color = GCColor(red: Float(red) / 255, green: Float(green) / 255, blue: Float(blue) / 255)
+    }
+
+    /// Re-assert the colour a slot is meant to be showing. Called after a
+    /// haptic, which is when the system is most likely to have repainted.
+    func reassertLight(at index: Int) {
+        guard let c = lastAppliedColor[index] else { return }
+        applyAppleLight(at: index, red: c.0, green: c.1, blue: c.2)
+        InProcessLightWriter.shared.startHold(red: c.0, green: c.1, blue: c.2)
     }
 
     /// Apply the light color in-process via the shared LED writer, scaling by
@@ -1147,12 +1788,62 @@ class GameControllerService: ObservableObject {
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
         connectedControllers[index].playerIndex = .indexUnset
         lastAppliedColor[index] = (r, g, b)
+        applyAppleLight(at: index, red: r, green: g, blue: b)
         // Hand the color to the high-rate hold writer, which hammers it onto the
         // LED from its own background queue. macOS 26's gamecontrollerd repaints
         // the LED on focus changes and on a loop while we're foreground, so a
         // single write loses (the color only appeared after clicking away, when
         // the daemon let go). Hammering overwrites the daemon within a few ms.
         InProcessLightWriter.shared.startHold(red: r, green: g, blue: b)
+    }
+
+    // MARK: - Motion re-zero
+
+    /// Snapshot the controller's current motion reading as its resting
+    /// zero, the same as the editor's Quick Zero, with a short pulse so the
+    /// user knows it took. Returns false when the controller has no gyro.
+    @discardableResult
+    func rezeroMotion(slot: Int) -> Bool {
+        guard slot < connectedControllers.count else { return false }
+        let controller = connectedControllers[slot]
+        guard let motion = controller.motion, motion.hasRotationRate else {
+            ActivityLog.shared.warning("Motion", "Re-zero asked for slot \(slot) but it reports no gyroscope", slot: slot)
+            return false
+        }
+        ActivityLog.shared.info("Motion", "Re-zeroed \(controller.vendorName ?? "controller") in slot \(slot)", slot: slot)
+        let hasAccel = motion.hasGravityAndUserAcceleration
+        // The gyro zero is only taken from a controller that is physically
+        // still; a press mid-movement would store the movement as "rest"
+        // and the pointer would creep until the next zero. When it is not
+        // still, the pointer is still re-anchored (below, by the caller) and
+        // drift learning takes the zero the next time it settles.
+        if isPhysicallyStill(controller, motion: motion),
+           let g = meanRawGyroRate(for: controller) {
+            MotionCalibrationService.shared.quickZero(
+                forKey: MotionCalibrationService.identityKey(for: controller),
+                gyroX: g.x, gyroY: g.y, gyroZ: g.z,
+                accelX: hasAccel ? Float(motion.userAcceleration.x) : 0,
+                accelY: hasAccel ? Float(motion.userAcceleration.y) : 0,
+                accelZ: hasAccel ? Float(motion.userAcceleration.z) : 0)
+        } else {
+            ActivityLog.shared.info("Motion", "Re-zero: controller was moving, keeping the stored zero and re-anchoring the pointer", slot: slot)
+        }
+        FeedbackService.shared.vibrate(controller: controller, intensity: 0.35)
+        // A re-zero also snaps the fused pitch onto the accelerometer right
+        // now and tells the visualizer to start its orientation from here.
+        let acc = motion.acceleration
+        for channel in [MotionChannel.gyroX, .gyroY] {
+            let key = FusionKey(controller: ObjectIdentifier(controller), channel: channel)
+            if var f = axisFusion[key] {
+                f.estimate = f.sign * Self.accelAngle(channel, ax: Float(acc.x), ay: Float(acc.y), az: Float(acc.z))
+                axisFusion[key] = f
+            }
+        }
+        // Yaw has no reference to snap to: where the pad points now is zero.
+        axisFusion[FusionKey(controller: ObjectIdentifier(controller), channel: .gyroZ)] = nil
+        NotificationCenter.default.post(name: Self.motionRezeroedNotification, object: nil,
+                                        userInfo: ["slot": slot])
+        return true
     }
 
     // MARK: - Input Scanning
@@ -1183,12 +1874,18 @@ class GameControllerService: ObservableObject {
         MIDIInputService.shared.startScanning { [weak self] event in
             Task { @MainActor in self?.scanCallback?(event) }
         }
+        // Touchpad taps join Scan too, so a one-finger or two-finger tap on
+        // the pad is captured as its own input, distinct from the press.
+        TouchpadService.shared.scanGestureCallback = { [weak self] kind in
+            Task { @MainActor in self?.scanCallback?(InputEvent.touchpadGesture(kind)) }
+        }
     }
 
     func stopScanning() {
         isScanning = false
         scanCallback = nil
         MIDIInputService.shared.stopScanning()
+        TouchpadService.shared.scanGestureCallback = nil
         motionScanTimer?.invalidate()
         motionScanTimer = nil
         motionScanFiredThisGesture = false
@@ -1197,6 +1894,19 @@ class GameControllerService: ObservableObject {
         for controller in connectedControllers {
             removeScanHandlers(for: controller)
             installLiveInputHandler(for: controller)
+            // Scan teardown wipes every element handler; the touchpad feed
+            // lives on the pad's direction pads, so put it back explicitly.
+            if let slot = connectedControllers.firstIndex(where: { $0 === controller }) {
+                installTouchpadHandlers(for: controller, slot: slot)
+            }
+            // Scanning replaces the per-button handlers, which takes the
+            // press logger with it; without this the live press log in
+            // Settings, Devices stops recording after the first scan and
+            // never comes back.
+            pressLoggerWired.remove(ObjectIdentifier(controller))
+            if let slot = connectedControllers.firstIndex(where: { $0 === controller }) {
+                installPhysicalPressLogger(for: controller, slot: slot)
+            }
         }
     }
 
@@ -1284,7 +1994,13 @@ class GameControllerService: ObservableObject {
 
     /// Button names that are composites (D-pad, sticks), not individual buttons
     private static let ignoredProfileNames: [String] = [
-        "Direction Pad", "Left Thumbstick", "Right Thumbstick"
+        "Direction Pad", "Left Thumbstick", "Right Thumbstick",
+        // The touchpad's finger positions arrive as direction pads whose
+        // components are named "Touchpad 1 Up" and so on. They are finger
+        // contact, read by TouchpadService, not buttons: mapping them to
+        // index 13 made any touch look like the physical press and let a
+        // later component zero a real press in the same poll.
+        "Touchpad 1", "Touchpad 2"
     ]
 
     private func setupScanHandlers(for controller: GCController, index: Int) {
@@ -1371,6 +2087,20 @@ class GameControllerService: ObservableObject {
         }
         #endif
 
+        // --- Extra analogue inputs from an accessory ---
+        // An extra trigger, pedal, or proportional stick plugged into an
+        // adaptive controller reads like any other axis, so Scan captures
+        // it the same way: push it past halfway and the row is bound.
+        for (axis, axisIndex, _) in cachedExtraAxes[index] ?? [] {
+            axis.valueChangedHandler = { [weak self] _, value in
+                guard abs(value) > 0.5 else { return }
+                Task { @MainActor in
+                    self?.scanCallback?(InputEvent.axis(axisIndex,
+                                                        direction: value > 0 ? .positive : .negative))
+                }
+            }
+        }
+
         // --- D-pad ---
         gamepad.dpad.valueChangedHandler = { [weak self] _, xValue, yValue in
             Task { @MainActor in
@@ -1437,6 +2167,7 @@ class GameControllerService: ObservableObject {
         let profile = controller.physicalInputProfile
 
         for (name, button) in profile.buttons {
+            if Self.ignoredProfileNames.contains(where: { name.contains($0) }) { continue }
             // Capture the button's ObjectIdentifier outside the Task -
             // it's a Sendable value (just a pointer wrapper) where the
             // class reference itself is not Sendable and can't cross
@@ -1575,6 +2306,14 @@ class GameControllerService: ObservableObject {
             st.axes[3] = Float(sin(t * 1.6)) * 0.72
             st.axes[4] = Float((sin(t * 1.15) + 1) / 2)
             st.axes[5] = Float((cos(t * 0.95) + 1) / 2)
+            if marketingFakePress {
+                // Photographed "in use": right trigger pulled, Cross and R1
+                // down, left stick pushed up-right.
+                st.axes[5] = 0.85
+                st.buttons[0] = 1.0
+                st.buttons[5] = 1.0
+                st.axes[0] = 0.62; st.axes[1] = -0.7
+            }
             return st
         }
         #endif
@@ -1622,6 +2361,9 @@ class GameControllerService: ObservableObject {
             if let extras = cachedExtraButtons[index] {
                 for (button, btnIndex) in extras {
                     state.buttons[btnIndex] = button.value
+                    // Tell the tap detector when the pad is physically
+                    // pressed, so a click is never also reported as a tap.
+                    if btnIndex == 13 { TouchpadService.shared.setTouchpadButtonPressed(button.value > 0.5) }
                 }
             }
 
@@ -1649,6 +2391,15 @@ class GameControllerService: ObservableObject {
             state.axes[4] = gamepad.leftTrigger.value
             state.axes[5] = gamepad.rightTrigger.value
 
+            // Analogue inputs from an accessory (an extra trigger, a pedal,
+            // a proportional stick on an adaptive controller) sit past the
+            // standard six and are read the same way.
+            if let extras = cachedExtraAxes[index] {
+                for (axis, axisIndex, _) in extras {
+                    state.axes[axisIndex] = axis.value
+                }
+            }
+
             // --- Hat (D-pad) ---
             state.hats[0] = (gamepad.dpad.xAxis.value, gamepad.dpad.yAxis.value)
 
@@ -1675,14 +2426,59 @@ class GameControllerService: ObservableObject {
                     state.motion[.accelZ] = az
                 }
                 if motion.hasRotationRate {
+                    // The angle actually turned since the last poll (every
+                    // sensor sample counted) is the truth; the rate is its
+                    // average over the interval. See `GyroAccumulator`.
+                    let drained = drainGyro(for: controller)
+                    let rate = drained.angle.map { $0 / drained.interval }
+                        ?? SIMD3(Float(motion.rotationRate.x), Float(motion.rotationRate.y), Float(motion.rotationRate.z))
                     let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
-                        x: Float(motion.rotationRate.x),
-                        y: Float(motion.rotationRate.y),
-                        z: Float(motion.rotationRate.z),
+                        x: rate.x, y: rate.y, z: rate.z,
                         forKey: key)
                     state.motion[.gyroX] = gx
                     state.motion[.gyroY] = gy
-                    state.motion[.gyroZ] = gz
+                    state.motionAngle[.gyroX] = gx * drained.interval
+                    state.motionAngle[.gyroY] = gy * drained.interval
+                    // Gyro Z is "turn left or right": the rotation about
+                    // gravity, whatever way the pad is held, positive when
+                    // pointing right. Pointing a controller left and right is
+                    // a yaw, not a roll; a pointer driven from roll (gyro Y)
+                    // only saw the small sideways tilt that comes with it,
+                    // which is why left and right lagged behind up and down.
+                    // Measured about gravity rather than the pad's own Z so
+                    // a pad held nose-up still turns the pointer sideways.
+                    let yawRate = worldYawRate(gx: gx, gy: gy, gz: gz, motion: motion) ?? gz
+                    state.motion[.gyroZ] = yawRate
+                    state.motionAngle[.gyroZ] = yawRate * drained.interval
+                    // No gravity reference for yaw, so its absolute is the
+                    // integrated turn since the last re-zero; the learned
+                    // gyro zero keeps it from creeping.
+                    let yawKey = FusionKey(controller: ObjectIdentifier(controller), channel: .gyroZ)
+                    var yaw = axisFusion[yawKey] ?? AxisFusion()
+                    yaw.estimate += yawRate * drained.interval
+                    axisFusion[yawKey] = yaw
+                    state.motionAbsolute[.gyroZ] = yaw.estimate
+                    state.motionCorrection[.gyroZ] = 0
+                    // Pitch gets the accelerometer anchor; the pointer path
+                    // reads the fused change, so a slam the gyro could not
+                    // follow still ends with the pointer where "flat" was.
+                    let corrected = SIMD3(gx, gy, gz)
+                    if let fused = fuseTilt(.gyroX, controller: controller, motion: motion,
+                                            gyroRate: gx, interval: drained.interval, corrected: corrected) {
+                        state.motionAngle[.gyroX] = fused.gyro
+                        state.motionCorrection[.gyroX] = fused.correction
+                        state.motionAbsolute[.gyroX] = fused.absolute
+                        if !motion.hasAttitude { state.motion[.pitchAngle] = fused.absolute / (.pi / 2) }
+                    }
+                    if let fused = fuseTilt(.gyroY, controller: controller, motion: motion,
+                                            gyroRate: gy, interval: drained.interval, corrected: corrected) {
+                        state.motionAngle[.gyroY] = fused.gyro
+                        state.motionCorrection[.gyroY] = fused.correction
+                        state.motionAbsolute[.gyroY] = fused.absolute
+                        if !motion.hasAttitude { state.motion[.rollAngle] = fused.absolute / .pi }
+                    }
+                    learnGyroDrift(controller: controller, motion: motion, corrected: SIMD3(gx, gy, gz),
+                                   interval: drained.interval, key: key)
                 }
                 if motion.hasAttitude {
                     // Convert quaternion (x,y,z,w) to Euler roll/pitch/yaw.
@@ -1709,9 +2505,14 @@ class GameControllerService: ObservableObject {
             // to index 0, so anything scanned on these devices could never
             // fire at runtime.
             let profile = controller.physicalInputProfile
-            for (name, button) in profile.buttons {
-                let idx = Self.knownButtonMap[name] ?? extractButtonIndex(from: name)
-                state.buttons[idx] = button.value
+            if let cached = cachedExtraButtons[index], !cached.isEmpty {
+                // Same indices Scan and the layout use (see cacheExtraButtons).
+                for (button, idx) in cached { state.buttons[idx] = button.value }
+            } else {
+                for (name, button) in profile.buttons {
+                    let idx = Self.knownButtonMap[name] ?? extractButtonIndex(from: name)
+                    state.buttons[idx] = button.value
+                }
             }
             for (name, axis) in profile.axes {
                 let idx = extractAxisIndex(from: name)
@@ -1758,6 +2559,17 @@ class GameControllerService: ObservableObject {
         guard !pressLoggerWired.contains(identity) else { return }
         pressLoggerWired.insert(identity)
         let profile = controller.physicalInputProfile
+        // macOS eats the Home / PS / Guide button as a system gesture, so an
+        // app never sees it: Scan waits forever and no binding on it can
+        // fire. Asking for the gesture to be disabled hands the press to us
+        // instead. Done for every button that offers the setting, because
+        // the Share / Create button is treated the same way on some
+        // controllers, and the emergency-stop hold needs its button to
+        // arrive whatever the system would rather do with it.
+        for (name, button) in profile.buttons
+        where name.contains("Home") || name.contains("PS") || name.contains("Guide") {
+            button.preferredSystemGestureState = .disabled
+        }
         for (name, button) in profile.buttons {
             // Skip the composite "Direction Pad", thumbsticks, etc.
             if Self.ignoredProfileNames.contains(where: { name.contains($0) }) { continue }
@@ -1820,7 +2632,29 @@ class GameControllerService: ObservableObject {
     /// buttons / deflected axes / hat directions into the serialized strings
     /// the editor uses to match binding rows. Each detected input gets a
     /// 200 ms expiry so quick taps remain visible.
+    /// Who is reading the 30 Hz snapshot right now: the editor, the
+    /// visualizer, the motion calibrator, or the running engine (which
+    /// needs the touchpad feed this loop provides for pads macOS does not
+    /// give a typed Sony class). With none of them, and no scan, the loop
+    /// does nothing at all, so an idle app with a controller plugged in
+    /// costs nothing. It was doing the full read thirty times a second
+    /// for as long as any controller was connected.
+    private var liveConsumers: Set<String> = []
+    func retainLiveInput(_ reason: String) { liveConsumers.insert(reason) }
+    var debugLiveConsumers: [String] { liveConsumers.sorted() }
+    func releaseLiveInput(_ reason: String) { liveConsumers.remove(reason) }
+
     private func refreshRawActiveInputs() {
+        // Nobody reading: clear whatever derived state is left once, so no
+        // stale highlight or snapshot survives, then do nothing.
+        if liveConsumers.isEmpty, !isScanning {
+            if !rawActiveExpiry.isEmpty || !rawActiveInputs.isEmpty || !currentStates.isEmpty {
+                rawActiveExpiry.removeAll()
+                rawActiveInputs = []
+                currentStates = [:]
+            }
+            return
+        }
         // Fast path: when no input source is connected and there is no
         // lingering highlight state or visualizer snapshot left to clear,
         // there is nothing to read or update. Skipping the whole body means
@@ -1867,6 +2701,24 @@ class GameControllerService: ObservableObject {
             scratchSnapshots[slot] = state
             accumulate(into: &scratchFreshlyActive, state: state)
         }
+        // A controller's re-zero button (chosen in the Motion Calibration
+        // sheet) works with no preset running: a fresh press snapshots that
+        // controller's resting zero. Rising edge against the previous tick.
+        for i in connectedControllers.indices {
+            guard let state = scratchSnapshots[i],
+                  let btn = MotionCalibrationService.shared.rezeroButton(
+                      forKey: MotionCalibrationService.identityKey(for: connectedControllers[i])),
+                  (state.buttons[btn] ?? 0) > 0.5,
+                  (currentStates[i]?.buttons[btn] ?? 0) <= 0.5 else { continue }
+            rezeroMotion(slot: i)
+        }
+
+        // Regions are inputs too, and the editor lights a row from this
+        // same set. Without these, touching a zone on the pad lit it in
+        // the visualizer (which reads the services directly) while the
+        // row for that zone sat dark, which read as the zone not working.
+        accumulateRegions(into: &scratchFreshlyActive)
+
         // ControllerState isn't Equatable (its hat tuples can't auto-
         // derive it), so we always assign. Cost is negligible for 1-2
         // controllers at 30 Hz; copy is a single shallow Dict copy.
@@ -1950,15 +2802,36 @@ class GameControllerService: ObservableObject {
     /// `feedTouchpadFromController`). Dual writes are safe because
     /// TouchpadService.ingestGameControllerTouchpad locks the underlying
     /// state and the latest write wins.
+    #if DEBUG
+    /// What the touchpad handler install saw, per slot, for the debug readout.
+    var debugTouchpadInstall: [Int: String] = [:]
+    #endif
+
     private func installTouchpadHandlers(for controller: GCController, slot: Int) {
-        guard let pad = controller.extendedGamepad else { return }
+        guard let pad = controller.extendedGamepad else {
+            #if DEBUG
+            debugTouchpadInstall[slot] = "no extendedGamepad"
+            #endif
+            return
+        }
 
         if let ds = pad as? GCDualSenseGamepad {
             attachTouchpadHandlers(primary: ds.touchpadPrimary,
                                    secondary: ds.touchpadSecondary)
+            #if DEBUG
+            debugTouchpadInstall[slot] = "DualSense typed, handlers attached, primary handler set=\(ds.touchpadPrimary.valueChangedHandler != nil)"
+            #endif
         } else if let ds4 = pad as? GCDualShockGamepad {
             attachTouchpadHandlers(primary: ds4.touchpadPrimary,
                                    secondary: ds4.touchpadSecondary)
+            #if DEBUG
+            debugTouchpadInstall[slot] = "DualShock typed, handlers attached"
+            #endif
+        } else {
+            #if DEBUG
+            let dpads = Array(controller.physicalInputProfile.dpads.keys).sorted()
+            debugTouchpadInstall[slot] = "generic \(type(of: pad)); profile dpads: \(dpads)"
+            #endif
         }
     }
 
@@ -2075,6 +2948,38 @@ class GameControllerService: ObservableObject {
                  InputEvent.hat(i, direction: .right).serialized)
         hatKeyCache[i] = k
         return k
+    }
+
+    /// Zones and gestures that are live right now, in the same serialized
+    /// form a binding stores, so anything that highlights from
+    /// `rawActiveInputs` lights up for them as well: touchpad zones and
+    /// taps, stick zones, and screen regions while the cursor is sampled.
+    private func accumulateRegions(into set: inout Set<String>) {
+        let pad = TouchpadService.shared.snapshotRegions()
+        for id in pad.pressed { set.insert(InputEvent.touchpadRegion(id).serialized) }
+        for kind in TouchpadGestureKind.allCases where TouchpadService.shared.peekGesture(kind) {
+            set.insert(InputEvent.touchpadGesture(kind).serialized)
+        }
+        if CursorRegionService.shared.isTracking {
+            // The service decides, so a region that belongs to another
+            // display stays dark here exactly as it stays silent in the engine.
+            for r in CursorRegionService.shared.regions
+            where CursorRegionService.shared.isRegionPressed(r.id) {
+                set.insert(InputEvent.cursorRegion(r.id).serialized)
+            }
+        }
+        // Any connected stick counts: a zone belongs to the stick, not to a
+        // particular controller, so two pads mapping the same zone both
+        // light the row.
+        for (stick, list) in StickRegionService.shared.regionsByStick where !list.isEmpty {
+            for state in scratchSnapshots.values {
+                let x = Double(state.axes[stick * 2] ?? 0)
+                let y = Double(state.axes[stick * 2 + 1] ?? 0)
+                for r in list where r.contains(normalizedX: (x + 1) / 2, y: (y + 1) / 2) {
+                    set.insert(InputEvent.stickRegion(stickIndex: stick, id: r.id).serialized)
+                }
+            }
+        }
     }
 
     private func accumulate(into set: inout Set<String>, state: ControllerState) {

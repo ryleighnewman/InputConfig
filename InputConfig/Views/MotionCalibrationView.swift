@@ -39,6 +39,18 @@ struct MotionCalibrationView: View {
     /// is dismissed mid-capture (otherwise it kept ticking and persisted an
     /// abandoned calibration).
     @State private var captureTimer: Timer?
+    /// Re-zero section state. `rezeroButton` mirrors the persisted choice
+    /// for the selected controller; while `listeningForRezeroButton` the
+    /// 30 Hz tick assigns the first fresh press it sees. `observedSavedAt`
+    /// is the calibration timestamp last shown, so a change (from the
+    /// button, the Re-zero Now button, or a preset action) flashes a
+    /// confirmation for a couple of seconds.
+    @State private var rezeroButton: Int?
+    @State private var listeningForRezeroButton = false
+    @State private var pressedWhenListeningBegan: Set<Int> = []
+    @State private var observedSavedAt: Date?
+    @State private var rezeroFlashUntil: Date?
+    @State private var tick = 0
 
     private struct SampleVector {
         var gx: Float; var gy: Float; var gz: Float
@@ -48,67 +60,53 @@ struct MotionCalibrationView: View {
     private let captureDuration: Double = 2.5
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header pinned at top; body scrolls underneath so the sheet
-            // fits even inside the editor sheet on smaller screens.
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                controllerPicker
+        // The same shape as the deadzone sheets: icon and title with the
+        // actions on the right, one line of guidance, the picture, a rule,
+        // then the settings. The sheet hugs its content.
+        VStack(alignment: .leading, spacing: 14) {
+            header
+
+            Text("Sets the resting zero for the gyroscope and accelerometer so motion presets do not drift. Rest the controller on a flat surface first.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            controllerPicker
+
+            HStack {
+                Spacer(minLength: 0)
+                model
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 22)
-            .padding(.bottom, 8)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        liveReadings
-                            .id("live")
-
-                        Divider()
-
-                        instructions
-                            .id("instructions")
-
-                        captureSurface
-                            .id("capture")
-                    }
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 12)
-                }
-                .onChange(of: awaitingConfirmation) { _, newValue in
-                    // Click 1 -> scroll the How-to instructions into view
-                    // so the user sees them before confirming.
-                    if newValue {
-                        withAnimation(.easeOut(duration: 0.35)) {
-                            proxy.scrollTo("instructions", anchor: .top)
-                        }
-                    }
-                }
-                .onChange(of: captureInProgress) { _, newValue in
-                    // Click 2 -> capture started; scroll back to the live
-                    // readings so the user can watch the gyro/accel bars
-                    // hold steady while the controller stays flat.
-                    if newValue {
-                        withAnimation(.easeOut(duration: 0.35)) {
-                            proxy.scrollTo("live", anchor: .top)
-                        }
-                    }
-                }
-            }
+            readout
 
             Divider()
 
-            footerButtons
-                .padding(.horizontal, 22)
-                .padding(.vertical, 12)
+            rezeroRow
+            rezeroButtonRow
+            captureRow
         }
-        .frame(width: 560, height: 560)
+        .padding(20)
+        .frame(width: 520)
+        .onAppear {
+            if selectedKey == nil, let first = motionCapableControllers.first {
+                selectedKey = MotionCalibrationService.identityKey(for: first.controller)
+            }
+            controllerService.retainLiveInput("motion calibration")
+        }
+        .onDisappear {
+            controllerService.releaseLiveInput("motion calibration")
+            captureTimer?.invalidate()
+            captureTimer = nil
+            captureInProgress = false
+        }
         // Tick the integrated orientation at 30 Hz from the currently
         // selected controller's gyro rates so the 3D model HOLDS its
         // pose when the controller is still. Paused during capture so
         // the model stays at flat for the duration of calibration.
         .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
+            trackRezero()
             guard !captureInProgress,
                   let entry = selectedControllerEntry,
                   let motion = entry.controller.motion,
@@ -134,10 +132,14 @@ struct MotionCalibrationView: View {
         // Reset the integrated orientation whenever the user picks a
         // different controller so the model starts from neutral on the
         // new device.
-        .onChange(of: selectedKey) { _, _ in
+        .onChange(of: selectedKey) { _, key in
             integratedPitch = 0
             integratedYaw = 0
             integratedRoll = 0
+            listeningForRezeroButton = false
+            rezeroFlashUntil = nil
+            rezeroButton = key.flatMap { MotionCalibrationService.shared.rezeroButton(forKey: $0) }
+            observedSavedAt = key.flatMap { MotionCalibrationService.shared.calibration(forKey: $0)?.savedAt }
         }
     }
 
@@ -190,143 +192,69 @@ struct MotionCalibrationView: View {
     }
     #endif
 
+    /// The 3D model, driven by the controller's attitude when it has one
+    /// and by the integrated gyro otherwise, so it holds its pose at rest.
     @ViewBuilder
-    private var liveReadings: some View {
+    private var model: some View {
         if let entry = selectedControllerEntry, let motion = entry.controller.motion {
             TimelineView(.periodic(from: Date(), by: 1.0 / 30.0)) { _ in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "waveform.path.ecg")
-                            .foregroundStyle(.teal)
-                        Text("Live sensor readings")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        availabilityBadge(label: "active",
-                                          available: motion.sensorsActive)
-                        availabilityBadge(label: "gyro",
-                                          available: motion.hasRotationRate)
-                        availabilityBadge(label: "gravity",
-                                          available: motion.hasGravityAndUserAcceleration)
-                    }
-
-                    // 3D gyro model: artificial horizon ring with a tilting
-                    // controller silhouette. When the controller exposes
-                    // hasAttitude we use the real Euler angles; otherwise
-                    // we fall back to scaled gyro RATE values so the model
-                    // still visibly tilts when the user rotates the
-                    // controller (the rate-only fallback returns to neutral
-                    // when motion stops, which is fine for verifying that
-                    // input is reaching the app).
-                    HStack(spacing: 14) {
-                        let gx = motion.hasRotationRate ? Float(motion.rotationRate.x) : 0
-                        let gy = motion.hasRotationRate ? Float(motion.rotationRate.y) : 0
-                        let gz = motion.hasRotationRate ? Float(motion.rotationRate.z) : 0
-                        let attitude = motion.hasAttitude ? attitudeEuler(motion: motion) : nil
-                        // GCMotion convention: gyroX = pitch rate, gyroY =
-                        // yaw rate, gyroZ = roll rate. Use the integrated
-                        // orientation as a fallback when attitude isn't
-                        // available, so the model HOLDS its position when
-                        // the user puts the controller down instead of
-                        // snapping back to neutral.
-                        GyroVisualizationView(
-                            gyroX: gx,
-                            gyroY: gy,
-                            gyroZ: gz,
-                            rollAngle: attitude?.roll ?? integratedRoll,
-                            pitchAngle: attitude?.pitch ?? integratedPitch,
-                            yawAngle: attitude?.yaw ?? integratedYaw,
-                            mode: .regular
-                        )
-                        Spacer()
-                    }
-                    .padding(.vertical, 4)
-
-                    // If sensors require manual activation and aren't active,
-                    // try once more. Apple sometimes drops sensorsActive when
-                    // a controller re-pairs.
-                    if motion.sensorsRequireManualActivation && !motion.sensorsActive {
-                        Button {
-                            motion.sensorsActive = true
-                        } label: {
-                            Label("Activate motion sensors", systemImage: "bolt.fill")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.solidCompact)
-                    }
-
-                    if motion.hasRotationRate {
-                        sensorRow(label: "Gyro",
-                                  values: (Float(motion.rotationRate.x),
-                                           Float(motion.rotationRate.y),
-                                           Float(motion.rotationRate.z)),
-                                  scale: 5.0,
-                                  unit: "rad/s",
-                                  color: .teal)
-                    } else {
-                        Text("Gyroscope is not reporting. Try a wired connection, or re-pair the controller. Some Bluetooth pairings drop motion data.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    // Total acceleration (gravity + user motion). Even when
-                    // the controller is at rest this should read ~1 g in
-                    // whichever axis is pointing down. If THIS reads zero,
-                    // the accelerometer hardware isn't reporting at all.
-                    sensorRow(label: "Accel (total)",
-                              values: (Float(motion.acceleration.x),
-                                       Float(motion.acceleration.y),
-                                       Float(motion.acceleration.z)),
-                              scale: 2.0,
-                              unit: "g",
-                              color: .blue)
-
-                    // Gravity vector alone. Apple separates gravity from
-                    // user motion only when `hasGravityAndUserAcceleration`
-                    // is true.
-                    if motion.hasGravityAndUserAcceleration {
-                        sensorRow(label: "Gravity",
-                                  values: (Float(motion.gravity.x),
-                                           Float(motion.gravity.y),
-                                           Float(motion.gravity.z)),
-                                  scale: 1.2,
-                                  unit: "g",
-                                  color: .purple)
-
-                        sensorRow(label: "User accel",
-                                  values: (Float(motion.userAcceleration.x),
-                                           Float(motion.userAcceleration.y),
-                                           Float(motion.userAcceleration.z)),
-                                  scale: 1.5,
-                                  unit: "g",
-                                  color: .orange)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("How to read this:")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text("• At rest, Accel (total) should show ~1.0 g in one axis (the direction of gravity). User accel should be near 0.")
-                        Text("• Rotate the controller and watch the Gyro bars move. Shake it to see User accel respond.")
-                        Text("• If everything reads exactly 0, motion isn't being delivered. Try wired USB or re-pair Bluetooth.")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.08)))
+                let gx = motion.hasRotationRate ? Float(motion.rotationRate.x) : 0
+                let gy = motion.hasRotationRate ? Float(motion.rotationRate.y) : 0
+                let gz = motion.hasRotationRate ? Float(motion.rotationRate.z) : 0
+                let attitude = motion.hasAttitude ? attitudeEuler(motion: motion) : nil
+                GyroVisualizationView(
+                    gyroX: gx, gyroY: gy, gyroZ: gz,
+                    rollAngle: attitude?.roll ?? integratedRoll,
+                    pitchAngle: attitude?.pitch ?? integratedPitch,
+                    yawAngle: attitude?.yaw ?? integratedYaw,
+                    mode: .model
+                )
             }
         } else {
-            // Marketing capture only: stands in for the real panel, which needs
-            // a GCMotion a synthetic controller cannot provide. Compiled out
-            // of Release entirely.
             #if DEBUG
             if controllerService.debugMarketingFakeActive {
                 syntheticLiveReadings
+            } else {
+                noControllerNote
             }
+            #else
+            noControllerNote
             #endif
+        }
+    }
+
+    private var noControllerNote: some View {
+        Text("Connect a controller with motion sensors: DualSense, DualShock 4, Switch Pro or Joy-Con.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+    }
+
+    /// One line of live numbers. The bars and the gravity and user
+    /// acceleration rows are gone: three signed rates say whether the
+    /// gyro is alive, which is all this line is for.
+    @ViewBuilder
+    private var readout: some View {
+        if let entry = selectedControllerEntry, let motion = entry.controller.motion {
+            TimelineView(.periodic(from: Date(), by: 1.0 / 10.0)) { _ in
+                HStack(spacing: 10) {
+                    if motion.hasRotationRate {
+                        Text("gyro").foregroundStyle(.secondary)
+                        Text(String(format: "x %+.2f   y %+.2f   z %+.2f rad/s",
+                                    motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z))
+                            .monospacedDigit()
+                    } else {
+                        Text("The gyroscope is not reporting. Try a wired connection, or re-pair the controller.")
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    if motion.sensorsRequireManualActivation && !motion.sensorsActive {
+                        Button("Activate sensors") { motion.sensorsActive = true }
+                            .buttonStyle(.solidSecondaryCompact)
+                    }
+                }
+                .font(.caption)
+            }
         }
     }
 
@@ -397,22 +325,195 @@ struct MotionCalibrationView: View {
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: - Re-zero
+
+    /// The quick path. A full calibration averages a still controller for a
+    /// few seconds; re-zero takes the reading this instant. The controller
+    /// button makes it reachable mid-game without touching the Mac, and it
+    /// belongs to the controller, not a preset, so it works with any preset
+    /// running or none.
+    /// Label, control, status: the row shape every setting uses.
+    private var rezeroRow: some View {
+        HStack(spacing: 12) {
+            Text("Re-zero")
+                .frame(minWidth: 120, alignment: .leading)
+            Button("Re-zero now") { rezeroNow() }
+                .buttonStyle(.solidSecondaryCompact)
+                .disabled(selectedControllerEntry == nil || captureInProgress)
+            if let until = rezeroFlashUntil, until > Date() {
+                Label("Zeroed", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            } else if let at = observedSavedAt {
+                Text("last zeroed \(at.formatted(.relative(presentation: .named)))")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .font(.subheadline)
+        .animation(.easeOut(duration: 0.18), value: rezeroFlashUntil)
+    }
+
+    private var rezeroButtonRow: some View {
+        HStack(spacing: 12) {
+            Text("Re-zero button")
+                .frame(minWidth: 120, alignment: .leading)
+            Menu {
+                Button("None") { setRezeroButton(nil) }
+                Divider()
+                ForEach(rezeroButtonChoices, id: \.index) { choice in
+                    Button {
+                        setRezeroButton(choice.index)
+                    } label: {
+                        if choice.index == rezeroButton {
+                            Label(choice.label, systemImage: "checkmark")
+                        } else {
+                            Text(choice.label)
+                        }
+                    }
+                }
+            } label: {
+                Text(rezeroButton.map(rezeroButtonLabel) ?? "None")
+            }
+            .fixedSize()
+            .disabled(selectedControllerEntry == nil)
+
+            Button {
+                if listeningForRezeroButton {
+                    listeningForRezeroButton = false
+                } else if let slot = selectedControllerEntry?.slot {
+                    pressedWhenListeningBegan = Set(
+                        (controllerService.currentStates[slot]?.buttons ?? [:])
+                            .filter { $0.value > 0.5 }.keys)
+                    listeningForRezeroButton = true
+                }
+            } label: {
+                if listeningForRezeroButton {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.6)
+                        Text("Press a button\u{2026}")
+                    }
+                } else {
+                    Text("Press to assign")
+                }
+            }
+            .buttonStyle(.solidSecondaryCompact)
+            .disabled(selectedControllerEntry == nil)
+            Spacer()
+        }
+        .font(.subheadline)
+    }
+
+    /// Start, with what to do beside it; the progress takes the same
+    /// space while it runs, and the result the moment it is saved.
+    private var captureRow: some View {
+        HStack(spacing: 12) {
+            Text("Full calibration")
+                .frame(minWidth: 120, alignment: .leading)
+            Button("Start") { startCapture() }
+                .buttonStyle(.solidCompact)
+                .disabled(selectedKey == nil || captureInProgress)
+            if captureInProgress {
+                ProgressView(value: 1 - (captureRemaining / captureDuration))
+                    .frame(maxWidth: 160)
+                Text("hold still, \(Int(ceil(captureRemaining))) s")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            } else if let key = lastSavedKey, key == selectedKey {
+                Label("Saved", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Text(String(format: "rest it flat and untouched for %.1f seconds", captureDuration))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .font(.subheadline)
+    }
+
+    private var rezeroButtonChoices: [(index: Int, label: String)] {
+        var choices = BindingRowView.standardButtonLabels.filter { $0.index <= 12 }
+        if let slot = selectedControllerEntry?.slot {
+            for extra in controllerService.extraButtonsSnapshot(for: slot)
+            where !choices.contains(where: { $0.index == extra.index }) {
+                choices.append((extra.index, extra.label))
+            }
+        }
+        return choices
+    }
+
+    private func rezeroButtonLabel(_ index: Int) -> String {
+        rezeroButtonChoices.first(where: { $0.index == index })?.label ?? "Button \(index)"
+    }
+
+    private func setRezeroButton(_ index: Int?) {
+        guard let key = selectedKey else { return }
+        rezeroButton = index
+        listeningForRezeroButton = false
+        MotionCalibrationService.shared.setRezeroButton(index, forKey: key)
+    }
+
+    private func rezeroNow() {
+        guard let entry = selectedControllerEntry else { return }
+        if controllerService.rezeroMotion(slot: entry.slot) {
+            AccessibilityNotification.Announcement("Motion re-zeroed").post()
+        }
+    }
+
+    /// 30 Hz bookkeeping for the re-zero section: assign the button while
+    /// listening, and flash a confirmation whenever the stored zero changes.
+    private func trackRezero() {
+        tick &+= 1
+        guard let key = selectedKey else { return }
+        if listeningForRezeroButton, let slot = selectedControllerEntry?.slot {
+            let pressed = (controllerService.currentStates[slot]?.buttons ?? [:])
+                .filter { $0.value > 0.5 }.keys
+            if let fresh = pressed.first(where: { !pressedWhenListeningBegan.contains($0) }) {
+                setRezeroButton(fresh)
+            } else {
+                pressedWhenListeningBegan = Set(pressed)
+            }
+        }
+        let savedAt = MotionCalibrationService.shared.calibration(forKey: key)?.savedAt
+        if savedAt != observedSavedAt {
+            observedSavedAt = savedAt
+            if savedAt != nil, !captureInProgress {
+                rezeroFlashUntil = Date().addingTimeInterval(2)
+            }
+        } else if let until = rezeroFlashUntil, until <= Date() {
+            rezeroFlashUntil = nil
+        }
+    }
+
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack {
             Image(systemName: "gyroscope")
-                .font(.title)
-                .iconTint(.teal)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Motion Calibration")
-                    .font(.title2.weight(.semibold))
-                Text("Sets the resting gyroscope and accelerometer zero for each controller so motion-driven presets don't drift.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                .foregroundStyle(.tint)
+            Text("Motion Calibration")
+                .font(.headline)
             Spacer()
+            if let key = selectedKey, MotionCalibrationService.shared.isCalibrated(forKey: key) {
+                Button("Clear") {
+                    MotionCalibrationService.shared.clear(forKey: key)
+                    lastSavedKey = nil
+                }
+                .buttonStyle(.solidSecondaryCompact)
+                .disabled(captureInProgress)
+                .help("Forget this controller's stored zero")
+            }
+            Button {
+                showingHelp.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle")
+            }
+            .buttonStyle(.solidSecondaryCompact)
+            .help("How calibration works")
+            .popover(isPresented: $showingHelp, arrowEdge: .bottom) { help }
+            Button("Done") { dismiss() }
+                .buttonStyle(.solidCompact)
+                .keyboardShortcut(.defaultAction)
         }
     }
 
@@ -428,214 +529,65 @@ struct MotionCalibrationView: View {
         return result
     }
 
+    /// The controller being calibrated, on the heading line: a name when
+    /// there is one, a menu when there are several, and whether it has a
+    /// stored zero.
     @ViewBuilder
     private var controllerPicker: some View {
-        if motionCapableControllers.isEmpty, controllerService.debugMarketingFakeActive {
-            // Marketing capture: the synthetic controllers have no GCController
-            // behind them, so they cannot appear in motionCapableControllers.
-            // Render the row the picker would have shown.
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Controller")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Image(systemName: "largecircle.fill.circle")
-                        .foregroundStyle(Color.accentColor)
-                    Text(controllerService.controllerNames[0] ?? "Controller")
-                        .font(.body)
-                    Spacer()
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                    Text("Calibrated")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
-        } else if motionCapableControllers.isEmpty {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text("Connect a controller with motion sensors (DualSense, DualShock 4, Switch Pro, Joy-Con) to calibrate.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Controller")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                ForEach(motionCapableControllers, id: \.slot) { entry in
-                    let key = MotionCalibrationService.identityKey(for: entry.controller)
-                    let calibrated = MotionCalibrationService.shared.isCalibrated(forKey: key)
-                    Button {
-                        selectedKey = key
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: selectedKey == key ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(selectedKey == key ? Color.accentColor : Color.secondary)
-                            Text(entry.controller.vendorName ?? "Controller")
-                                .font(.body)
-                            Spacer()
-                            if calibrated {
-                                Label("Calibrated", systemImage: "checkmark.seal.fill")
-                                    .labelStyle(.titleAndIcon)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.green)
-                            } else {
-                                Label("Needs calibration", systemImage: "exclamationmark.triangle.fill")
-                                    .labelStyle(.titleAndIcon)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.orange)
+        let list = motionCapableControllers
+        if let entry = selectedControllerEntry ?? list.first {
+            let key = MotionCalibrationService.identityKey(for: entry.controller)
+            let calibrated = MotionCalibrationService.shared.isCalibrated(forKey: key)
+            HStack(spacing: 6) {
+                if list.count > 1 {
+                    Menu {
+                        ForEach(list, id: \.slot) { e in
+                            Button(e.controller.vendorName ?? "Controller") {
+                                selectedKey = MotionCalibrationService.identityKey(for: e.controller)
                             }
                         }
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(selectedKey == key ? Color.accentColor.opacity(0.10) : Color.secondary.opacity(0.05))
-                        )
+                    } label: {
+                        Text(entry.controller.vendorName ?? "Controller")
                     }
-                    .buttonStyle(.plain)
+                    .fixedSize()
+                } else {
+                    Text(entry.controller.vendorName ?? "Controller")
+                        .foregroundStyle(.secondary)
                 }
-            }
-            .onAppear {
-                if selectedKey == nil, let first = motionCapableControllers.first {
-                    selectedKey = MotionCalibrationService.identityKey(for: first.controller)
-                }
-            }
-            .onDisappear {
-                // Stop and discard any in-flight capture so a calibration the
-                // user walked away from is never finished or persisted.
-                captureTimer?.invalidate()
-                captureTimer = nil
-                captureInProgress = false
-            }
-        }
-    }
-
-    // MARK: - Instructions
-
-    @ViewBuilder
-    private var instructions: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("How to calibrate")
-                .font(.subheadline.weight(.semibold))
-            stepRow(number: 1, text: "Place the controller on a flat, level surface (a desk works well).")
-            stepRow(number: 2, text: "Make sure it's not vibrating - turn off rumble and don't touch the controller during capture.")
-            stepRow(number: 3, text: "Click Start. InputConfig records the resting gyro and accelerometer values for \(Int(captureDuration)) seconds.")
-            stepRow(number: 4, text: "The recorded zero is saved for this controller and used automatically by any motion-driven preset.")
-        }
-    }
-
-    private func stepRow(number: Int, text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("\(number).")
-                .font(.callout.monospaced())
-                .foregroundStyle(.tertiary)
-                .frame(width: 18)
-            Text(text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Capture surface
-
-    @ViewBuilder
-    private var captureSurface: some View {
-        if captureInProgress {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right.fill")
-                        .foregroundStyle(.teal)
-                    Text("Place the controller FLAT on a level surface and don't touch it.")
-                        .font(.callout.weight(.medium))
-                }
-                ProgressView(value: 1 - (captureRemaining / captureDuration))
-                    .frame(maxWidth: .infinity)
-                Text("Hold still… \(Int(ceil(captureRemaining))) s")
-                    .font(.callout.monospaced())
+                Circle().fill(calibrated ? Color.green : Color.orange).frame(width: 7, height: 7)
+                Text(calibrated ? "calibrated" : "not calibrated")
                     .foregroundStyle(.secondary)
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.teal.opacity(0.10)))
-        } else if let key = lastSavedKey, key == selectedKey {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                Text("Calibration saved. Motion bindings now use the corrected zero.")
-                    .font(.callout)
-                Spacer()
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else if controllerService.debugMarketingFakeActive {
+            HStack(spacing: 6) {
+                Text(controllerService.controllerNames[0] ?? "Controller").foregroundStyle(.secondary)
+                Circle().fill(Color.green).frame(width: 7, height: 7)
+                Text("calibrated").foregroundStyle(.secondary)
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.12)))
+            .font(.caption)
         }
+    }
+
+    @State private var showingHelp = false
+
+    private var help: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Calibrating motion")
+                .font(.headline)
+            Text("Re-zero takes the controller's reading right now as its resting zero: quick, and enough whenever motion starts to drift. A button on the controller can do the same; rest the controller, press it, and a short pulse confirms it. A paddle or a button you never use is the usual home for it.")
+            Text(String(format: "Full calibration records the resting gyro and accelerometer for %.1f seconds.", captureDuration) + " Put the controller on a flat, level surface, turn off rumble, and do not touch it until it finishes. The zero is saved for this controller and used by every motion preset.")
+            Text("The readout should move when you turn the controller and settle near zero when it rests. If it reads exactly zero whatever you do, motion is not reaching the app: try a wired connection or re-pair over Bluetooth.")
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(16)
+        .frame(width: 380)
     }
 
     // MARK: - Footer
-
-    @ViewBuilder
-    private var footerButtons: some View {
-        HStack {
-            if let key = selectedKey,
-               MotionCalibrationService.shared.isCalibrated(forKey: key) {
-                Button(role: .destructive) {
-                    MotionCalibrationService.shared.clear(forKey: key)
-                    lastSavedKey = nil
-                } label: {
-                    Label("Clear", systemImage: "trash")
-                }
-            }
-            Spacer()
-            if awaitingConfirmation && !captureInProgress {
-                Button("Cancel") {
-                    withAnimation { awaitingConfirmation = false }
-                }
-                .buttonStyle(.solidSecondary)
-                .keyboardShortcut(.cancelAction)
-            } else {
-                Button("Close") { dismiss() }
-                    .buttonStyle(.solidSecondary)
-                    .keyboardShortcut(.cancelAction)
-            }
-
-            // Two-step button:
-            //   - idle           -> "Start Calibration" (accent tint).
-            //                       First click scrolls the How-To into
-            //                       view and morphs the button to green.
-            //   - awaitingConfirm-> "Start Calibration" (green tint).
-            //                       Second click runs the capture and
-            //                       scrolls back to live readings.
-            //   - capturing      -> "Capturing..." progress.
-            Button {
-                if captureInProgress { return }
-                if !awaitingConfirmation {
-                    withAnimation { awaitingConfirmation = true }
-                } else {
-                    awaitingConfirmation = false
-                    startCapture()
-                }
-            } label: {
-                if captureInProgress {
-                    HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.6)
-                        Text("Capturing…")
-                    }
-                } else if awaitingConfirmation {
-                    Label("Start Calibration", systemImage: "checkmark.circle.fill")
-                } else {
-                    Label("Start Calibration", systemImage: "play.fill")
-                }
-            }
-            .buttonStyle(SolidButton(tint: awaitingConfirmation ? .green : .accentColor))
-            .disabled(selectedKey == nil || captureInProgress)
-            .animation(.easeOut(duration: 0.18), value: awaitingConfirmation)
-        }
-    }
 
     // MARK: - Capture logic
 
@@ -700,6 +652,7 @@ struct MotionCalibrationView: View {
         )
         MotionCalibrationService.shared.save(cal)
         lastSavedKey = key
+        observedSavedAt = cal.savedAt
         AccessibilityNotification.Announcement("Motion calibration saved").post()
     }
 }

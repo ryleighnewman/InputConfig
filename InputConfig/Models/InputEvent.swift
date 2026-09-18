@@ -59,12 +59,12 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
         case .axis: return "Axis"
         case .hat: return "Hat"
         case .touchpad: return "Touchpad"
-        case .touchpadRegion: return "Touchpad Region"
+        case .touchpadRegion: return "Touchpad zone"
         case .motion: return "Motion"
         case .extKey: return "Keyboard Key"
         case .extMouse: return "Mouse"
-        case .cursorRegion: return "Cursor Region"
-        case .stickRegion: return "Stick Region"
+        case .cursorRegion: return "Screen region"
+        case .stickRegion: return "Stick zone"
         case .touchpadGesture: return "Touchpad Gesture"
         case .chassisTap: return "Tap the Mac"
         case .midi: return "MIDI"
@@ -81,12 +81,21 @@ enum TouchpadGestureKind: String, Codable, CaseIterable, Identifiable {
     /// because it's instantly recognisable and doesn't conflict with
     /// scrolling / region taps.
     case twoFingerTap
+    /// One finger lands and lifts within ~300 ms with little movement
+    /// and without the pad being pressed down. Distinct from the
+    /// touchpad press (button 13), which is a physical click.
+    case oneFingerTap
+    /// Two one-finger taps in quick succession (the second lands within
+    /// 350 ms of the first lifting).
+    case doubleTap
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .twoFingerTap: return "Two-finger tap"
+        case .oneFingerTap: return "Touchpad tap (one finger)"
+        case .doubleTap: return "Touchpad double tap"
         }
     }
 }
@@ -189,6 +198,14 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
     case pressure
     /// Force Click (pressure stage 2): the deliberate deep press.
     case deepPress
+    /// Two clicks of the same button in quick succession, as macOS counts
+    /// them (a double tap with tap-to-click on a trackpad is the same
+    /// thing). Fires once, briefly, on the second click.
+    case doubleClick
+    /// Fingers are on the trackpad or Magic Mouse scrolling, from the
+    /// moment the gesture begins until the fingers lift and any momentum
+    /// runs out. A wheel mouse never reports this.
+    case scrollGesture
 
     var id: String { rawValue }
 
@@ -201,15 +218,21 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
         case .scrollY: return "Scroll Y"
         case .pressure: return "Pressure (Force Touch)"
         case .deepPress: return "Deep Press"
+        case .doubleClick: return "Double click"
+        case .scrollGesture: return "Scroll gesture"
         }
     }
 }
 
 /// Which motion-sensor channel a `.motion` input reads.
 ///
-///   .gyroX        - rotation around the controller's X axis (pitch up/down)
-///   .gyroY        - rotation around the Y axis (yaw left/right)
-///   .gyroZ        - rotation around the Z axis (roll left/right)
+///   .gyroX        - rotation around the controller's X axis (pitch): + is nose up
+///   .gyroY        - rotation around the Y axis (yaw): + is a turn to the right
+///   .gyroZ        - rotation around the Z axis (roll)
+///
+/// Signs were checked by hand on a DualSense through GCMotion on the Mac.
+/// The bundled presets bind gyroY + to pointer right (straight) and gyroX +
+/// to pointer up (crossed, since screen Y grows downward).
 ///   .accelX/Y/Z   - linear acceleration on the matching axis (gravity removed)
 ///   .rollAngle    - absolute attitude roll (Euler)
 ///   .pitchAngle   - absolute attitude pitch
@@ -377,7 +400,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
             // The region name lives in TouchpadService; we resolve it where
             // we have access (BindingRowView). The serialized id is enough
             // for storage but not human-friendly, so just show "Region".
-            return "Touchpad Region"
+            return "Touchpad zone"
         case .motion:
             let ch = motionChannel?.displayName ?? "Motion"
             let dir = axisDirection?.displayName ?? "+"
@@ -396,14 +419,18 @@ struct InputEvent: Codable, Hashable, Identifiable {
                 return "Trackpad Pressure"
             case .deepPress:
                 return "Trackpad Deep Press"
+            case .doubleClick:
+                return "Mouse Double Click \(index)"
+            case .scrollGesture:
+                return "Scroll Gesture"
             }
         case .cursorRegion:
             // Like `.touchpadRegion`, the human name lives in the
             // CursorRegionService and is resolved in the binding row.
-            return "Cursor Region"
+            return "Screen region"
         case .stickRegion:
             let stick = index == 1 ? "Right" : "Left"
-            return "\(stick) Stick Region"
+            return "\(stick) stick zone"
         case .touchpadGesture:
             return touchpadGestureKind?.displayName ?? "Touchpad Gesture"
         case .chassisTap:

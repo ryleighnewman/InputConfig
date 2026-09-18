@@ -116,6 +116,14 @@ struct BindingModel: Identifiable, Codable, Hashable {
     var toggleMode: Bool?        // Toggle on/off instead of hold
     var turboEnabled: Bool?      // Rapid fire mode
     var turboRate: Int?          // Turbo presses per second (default 10)
+    /// Auto-click settings on top of turbo. Interval in ms takes precedence
+    /// over `turboRate` when set (an auto-clicker thinks in ms, not Hz);
+    /// jitter adds a random +/- to every gap so the clicks are not perfectly
+    /// regular; maxCount stops the run after that many presses (0 or nil is
+    /// unlimited). All optional so old presets decode unchanged.
+    var turboIntervalMs: Int?
+    var turboJitterMs: Int?
+    var turboMaxCount: Int?
     var sensitivityCurve: SensitivityCurve?  // Response curve for analog inputs
     var repeatCount: Int?        // Times to repeat outputs (nil or <= 1 fires once; > 1 repeats that many times)
     var repeatDelayMs: Int?      // Delay between repeats in ms (default 100)
@@ -127,6 +135,10 @@ struct BindingModel: Identifiable, Codable, Hashable {
     // Feedback options
     var hapticEnabled: Bool?     // Vibrate the controller when this binding fires
     var hapticIntensity: Float?  // 0.0 to 1.0, default 0.6
+    /// How long the vibration lasts, in milliseconds. nil (or under 60 ms)
+    /// is the original short transient tap; longer values play a continuous
+    /// rumble of that length. Optional so old presets decode unchanged.
+    var hapticDurationMs: Int?
     var speechEnabled: Bool?     // Speak a phrase when this binding fires
     var speechText: String?      // Phrase to speak (defaults to the input name)
     var speechDestination: SpeechDestination?  // Where to play the speech
@@ -159,11 +171,39 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// people created or edited are never lost on upgrade.
     var note: String?
 
+    /// Section heading this row sits under in the editor ("Left stick",
+    /// "Buttons", or whatever the user named it). Rows with the same section
+    /// in a row share one heading; nil rows have none. Optional so older
+    /// preset files decode unchanged.
+    var section: String?
+
     /// Chord: when set, this row only fires while the modifier control is
     /// also held (Triangle + D-pad up). A plain row on the same input is
     /// suppressed while the chord is satisfied, so the two do not both
     /// fire. nil (every existing preset) keeps the plain behavior.
     var modifierInput: InputEvent?
+    /// Chords with more than one held control. A row can require up to three
+    /// controls held together; `modifierInput` stays as the first of them so
+    /// presets written before this field still load and still save readably.
+    var extraModifierInputs: [InputEvent]?
+
+    /// Every control this row needs held, in order. Empty means it fires on
+    /// its own.
+    var modifiers: [InputEvent] {
+        var out: [InputEvent] = []
+        if let first = modifierInput { out.append(first) }
+        out.append(contentsOf: extraModifierInputs ?? [])
+        return out
+    }
+
+    /// Replace the held-control list, keeping the first in `modifierInput`.
+    mutating func setModifiers(_ list: [InputEvent]) {
+        let capped = Array(list.prefix(BindingModel.maxModifiers))
+        modifierInput = capped.first
+        extraModifierInputs = capped.count > 1 ? Array(capped.dropFirst()) : nil
+    }
+
+    static let maxModifiers = 3
 
     init(input: InputEvent, outputs: [OutputAction] = []) {
         self.id = UUID()
@@ -173,10 +213,13 @@ struct BindingModel: Identifiable, Codable, Hashable {
 
     init(id: UUID = UUID(), input: InputEvent, outputs: [OutputAction],
          deadzone: Float? = nil, outerDeadzone: Float? = nil, invertAxis: Bool? = nil, toggleMode: Bool? = nil,
-         turboEnabled: Bool? = nil, turboRate: Int? = nil, sensitivityCurve: SensitivityCurve? = nil,
+         turboEnabled: Bool? = nil, turboRate: Int? = nil,
+         turboIntervalMs: Int? = nil, turboJitterMs: Int? = nil, turboMaxCount: Int? = nil,
+         sensitivityCurve: SensitivityCurve? = nil,
          repeatCount: Int? = nil, repeatDelayMs: Int? = nil,
          variableSensitivity: Bool? = nil,
          hapticEnabled: Bool? = nil, hapticIntensity: Float? = nil,
+         hapticDurationMs: Int? = nil,
          speechEnabled: Bool? = nil, speechText: String? = nil,
          speechDestination: SpeechDestination? = nil,
          macroSteps: [MacroStep]? = nil,
@@ -186,7 +229,9 @@ struct BindingModel: Identifiable, Codable, Hashable {
          doubleTapOutputs: [OutputAction]? = nil,
          doubleTapWindowMs: Int? = nil,
          modifierInput: InputEvent? = nil,
-         note: String? = nil) {
+         extraModifierInputs: [InputEvent]? = nil,
+         note: String? = nil,
+         section: String? = nil) {
         self.id = id
         self.input = input
         self.outputs = outputs
@@ -196,12 +241,16 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.toggleMode = toggleMode
         self.turboEnabled = turboEnabled
         self.turboRate = turboRate
+        self.turboIntervalMs = turboIntervalMs
+        self.turboJitterMs = turboJitterMs
+        self.turboMaxCount = turboMaxCount
         self.sensitivityCurve = sensitivityCurve
         self.repeatCount = repeatCount
         self.repeatDelayMs = repeatDelayMs
         self.variableSensitivity = variableSensitivity
         self.hapticEnabled = hapticEnabled
         self.hapticIntensity = hapticIntensity
+        self.hapticDurationMs = hapticDurationMs
         self.speechEnabled = speechEnabled
         self.speechText = speechText
         self.speechDestination = speechDestination
@@ -212,7 +261,9 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.doubleTapOutputs = doubleTapOutputs
         self.doubleTapWindowMs = doubleTapWindowMs
         self.modifierInput = modifierInput
+        self.extraModifierInputs = extraModifierInputs
         self.note = note
+        self.section = section
     }
 
     /// Full-fidelity copy with a fresh identity. The plain
@@ -228,10 +279,12 @@ struct BindingModel: Identifiable, Codable, Hashable {
         BindingModel(id: UUID(), input: input, outputs: outputs,
                      deadzone: deadzone, outerDeadzone: outerDeadzone, invertAxis: invertAxis,
                      toggleMode: toggleMode, turboEnabled: turboEnabled, turboRate: turboRate,
+                     turboIntervalMs: turboIntervalMs, turboJitterMs: turboJitterMs, turboMaxCount: turboMaxCount,
                      sensitivityCurve: sensitivityCurve,
                      repeatCount: repeatCount, repeatDelayMs: repeatDelayMs,
                      variableSensitivity: variableSensitivity,
                      hapticEnabled: hapticEnabled, hapticIntensity: hapticIntensity,
+                     hapticDurationMs: hapticDurationMs,
                      speechEnabled: speechEnabled, speechText: speechText,
                      speechDestination: speechDestination,
                      macroSteps: macroSteps,
@@ -241,7 +294,9 @@ struct BindingModel: Identifiable, Codable, Hashable {
                      doubleTapOutputs: doubleTapOutputs,
                      doubleTapWindowMs: doubleTapWindowMs,
                      modifierInput: modifierInput,
-                     note: note)
+                     extraModifierInputs: extraModifierInputs,
+                     note: note,
+                     section: section)
     }
 }
 
@@ -256,6 +311,7 @@ enum SlotInputKind: String, Codable, Hashable, CaseIterable {
     case touchpad   // touchpad surface + regions + finger trails
     case mouse      // bound mouse buttons / axes
     case midi       // MIDI instrument: keys, knobs, wheels, event log
+    case screen     // a display: screen regions the pointer enters
 }
 
 /// A joystick mapping group (one physical controller's bindings)
@@ -295,11 +351,47 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
-        self.tag = try c.decode(String.self, forKey: .tag)
-        self.bindings = try c.decode([BindingModel].self, forKey: .bindings)
-        self.isExpanded = try c.decode(Bool.self, forKey: .isExpanded)
+        self.tag = try c.decodeIfPresent(String.self, forKey: .tag) ?? ""
+        // Rows are decoded one at a time. A row this build cannot read,
+        // typically an input or output type added by a newer version, is
+        // dropped and counted rather than taking the whole preset with it.
+        // Before, one unknown enum value anywhere in the file threw out of
+        // the array decode and the preset silently vanished from the sidebar.
+        var rows: [BindingModel] = []
+        var dropped = 0
+        if var list = try? c.nestedUnkeyedContainer(forKey: .bindings) {
+            while !list.isAtEnd {
+                if let row = try? list.decode(BindingModel.self) {
+                    rows.append(row)
+                } else {
+                    _ = try? list.decode(AnyDecodable.self)   // skip the element
+                    dropped += 1
+                }
+            }
+        }
+        self.bindings = rows
+        if dropped > 0 { Self.droppedRowsDuringDecode += dropped }
+        self.isExpanded = try c.decodeIfPresent(Bool.self, forKey: .isExpanded) ?? true
         self.customName = try c.decodeIfPresent(String.self, forKey: .customName)
         self.inputKind = try c.decodeIfPresent(SlotInputKind.self, forKey: .inputKind) ?? .auto
+    }
+
+    /// Rows skipped by the last decode passes, for the store to report.
+    /// Reset by whoever reads it.
+    nonisolated(unsafe) static var droppedRowsDuringDecode = 0
+}
+
+/// Consumes any JSON value so an unreadable array element can be stepped
+/// over without knowing its shape.
+struct AnyDecodable: Decodable {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { return }
+        if (try? c.decode(Bool.self)) != nil { return }
+        if (try? c.decode(Double.self)) != nil { return }
+        if (try? c.decode(String.self)) != nil { return }
+        if (try? c.decode([AnyDecodable].self)) != nil { return }
+        _ = try c.decode([String: AnyDecodable].self)
     }
 }
 
@@ -507,6 +599,17 @@ struct Preset: Identifiable, Codable, Hashable {
     /// unless the user writes something. Codable-optional so older preset
     /// files decode without the field.
     var notes: String = ""
+
+    /// The regions this preset draws: zones on the DualSense touchpad, areas
+    /// of the screen for the pointer, and zones on each stick (keyed by stick
+    /// index as a string, "0" left and "1" right). They belong to the preset
+    /// and travel with it in the file. The region services only ever hold
+    /// the copies of the preset that is running or being edited.
+    var touchpadRegions: [TouchpadRegion] = []
+    var cursorRegions: [TouchpadRegion] = []
+    var stickRegions: [String: [TouchpadRegion]] = [:]
+    /// Written with every save; see `currentFormatVersion`.
+    var formatVersion: Int = Preset.currentFormatVersion
     /// Explicit position among its siblings (same folder, or ungrouped).
     ///
     /// `nil` means "this file predates manual ordering". Those presets fall
@@ -557,12 +660,19 @@ struct Preset: Identifiable, Codable, Hashable {
         case id, name, tag, joysticks, filename, isActive, createdAt, modifiedAt
         case groupID, notes, lightBarColor, lightBarBrightness, automation, driveConfig
         case sortOrder
+        case touchpadRegions, cursorRegions, stickRegions
         // Was missing here, so the synthesized encode(to:) silently dropped
         // every per-preset shortcut on save and init(from:) never read one
         // back. Setting a preset shortcut appeared to work and then did
         // nothing, because it never reached disk.
         case activateHotKey
+        case formatVersion
     }
+
+    /// The on-disk format this file was written in. Absent means 1. Read
+    /// so a later change of meaning has somewhere to branch, and so a much
+    /// newer file can be recognised instead of misread.
+    static let currentFormatVersion = 1
 
     /// Custom Codable init so older preset files without `notes`,
     /// `lightBarColor`, or `lightBarBrightness` keys still decode cleanly
@@ -571,12 +681,20 @@ struct Preset: Identifiable, Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
         self.name = try c.decode(String.self, forKey: .name)
-        self.tag = try c.decode(String.self, forKey: .tag)
-        self.joysticks = try c.decode([JoystickMapping].self, forKey: .joysticks)
-        self.filename = try c.decode(String.self, forKey: .filename)
-        self.isActive = try c.decode(Bool.self, forKey: .isActive)
-        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
-        self.modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
+        // Only the id and the name are genuinely required. Everything else
+        // has a sensible default, so a hand-edited file or one written by a
+        // build that stopped emitting a field still loads.
+        self.tag = try c.decodeIfPresent(String.self, forKey: .tag) ?? ""
+        self.joysticks = try c.decodeIfPresent([JoystickMapping].self, forKey: .joysticks) ?? []
+        self.filename = try c.decodeIfPresent(String.self, forKey: .filename) ?? "\(id.uuidString).json"
+        self.isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
+        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
+        let version = try c.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        self.formatVersion = Self.currentFormatVersion
+        if version > Self.currentFormatVersion {
+            NSLog("Preset \(name): written by a newer format (\(version)); reading what this build understands")
+        }
         self.groupID = try c.decodeIfPresent(UUID.self, forKey: .groupID)
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         self.lightBarColor = try c.decodeIfPresent(RGBLightColor.self, forKey: .lightBarColor)
@@ -586,6 +704,61 @@ struct Preset: Identifiable, Codable, Hashable {
         self.driveConfig = try c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)
         self.activateHotKey = try c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)
         self.sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        self.touchpadRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .touchpadRegions) ?? []
+        self.cursorRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .cursorRegions) ?? []
+        self.stickRegions = try c.decodeIfPresent([String: [TouchpadRegion]].self, forKey: .stickRegions) ?? [:]
+    }
+
+    // MARK: - Regions and the services
+
+    /// Hand this preset's regions to the services, which is what makes
+    /// them the ones the engine tests against and the editor shows.
+    /// Which preset's regions the shared services are holding right now.
+    /// The services are one working set shared by the running preset and
+    /// the editor, so whoever loaded last owns them. Capturing without
+    /// checking this wrote preset C's zones into preset A's file when a
+    /// hotkey switched presets while A's editor was open.
+    @MainActor
+    static var regionWorkingSetOwner: UUID?
+
+    @MainActor
+    func applyRegionsToServices() {
+        TouchpadService.shared.load(touchpadRegions)
+        CursorRegionService.shared.load(cursorRegions)
+        var byStick: [Int: [TouchpadRegion]] = [0: [], 1: []]
+        for (key, list) in stickRegions { if let i = Int(key) { byStick[i] = list } }
+        StickRegionService.shared.load(byStick)
+        Self.regionWorkingSetOwner = id
+    }
+
+    /// Take whatever the services hold back into this preset; the editor
+    /// calls it on Save after the region editors have been at work. Only
+    /// when the working set is still this preset's: if another preset was
+    /// loaded in the meantime, this preset keeps the regions it already
+    /// has rather than adopting a stranger's.
+    @MainActor
+    mutating func captureRegionsFromServices() {
+        guard Self.regionWorkingSetOwner == id else {
+            ActivityLog.shared.warning("Presets", "Kept \(name)'s own regions on save: another preset's regions were loaded in the meantime")
+            return
+        }
+        touchpadRegions = TouchpadService.shared.allRegions()
+        cursorRegions = CursorRegionService.shared.allRegions()
+        var keyed: [String: [TouchpadRegion]] = [:]
+        for (i, list) in StickRegionService.shared.regionsByStick where !list.isEmpty { keyed["\(i)"] = list }
+        stickRegions = keyed
+    }
+
+    /// Region ids the bindings refer to, by kind, for the migration that
+    /// moves old app-wide regions into the presets that use them.
+    var referencedRegionIDs: (touchpad: Set<UUID>, cursor: Set<UUID>, stick: Set<UUID>) {
+        var t = Set<UUID>(), c = Set<UUID>(), st = Set<UUID>()
+        for j in joysticks { for b in j.bindings {
+            if let id = b.input.touchpadRegionID { t.insert(id) }
+            if let id = b.input.cursorRegionID { c.insert(id) }
+            if let id = b.input.stickRegionID { st.insert(id) }
+        } }
+        return (t, c, st)
     }
 
     static func generateFilename() -> String {
@@ -861,21 +1034,29 @@ struct PresetGroup: Identifiable, Codable, Hashable {
     /// parent. Optional + lenient Codable so older saves (no `parentID`)
     /// load as flat top-level folders, exactly as before.
     var parentID: UUID?
+    /// True for the folders the app ships with. They sit under a Built-in
+    /// Presets heading in the sidebar; the user's own folders sit under My
+    /// Presets. Purely where the folder is listed: its presets are ordinary
+    /// files, edits stick, moving a preset out sticks, and updates never
+    /// touch them.
+    var isBuiltIn: Bool = false
 
     init(id: UUID = UUID(), name: String, sortOrder: Int = 0,
-         isExpanded: Bool = true, color: String? = nil, parentID: UUID? = nil) {
+         isExpanded: Bool = true, color: String? = nil, parentID: UUID? = nil,
+         isBuiltIn: Bool = false) {
         self.id = id
         self.name = name
         self.sortOrder = sortOrder
         self.isExpanded = isExpanded
         self.color = color
         self.parentID = parentID
+        self.isBuiltIn = isBuiltIn
     }
 
     /// Lenient Codable so older saves (which don't have a `color` or
     /// `parentID` key) still load. New saves write them when set.
     enum CodingKeys: String, CodingKey {
-        case id, name, sortOrder, isExpanded, color, parentID
+        case id, name, sortOrder, isExpanded, color, parentID, isBuiltIn
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -885,6 +1066,7 @@ struct PresetGroup: Identifiable, Codable, Hashable {
         self.isExpanded = (try? c.decode(Bool.self, forKey: .isExpanded)) ?? true
         self.color = try? c.decode(String.self, forKey: .color)
         self.parentID = try? c.decode(UUID.self, forKey: .parentID)
+        self.isBuiltIn = (try? c.decode(Bool.self, forKey: .isBuiltIn)) ?? false
     }
 
     /// Palette of named colors the user can pick from. Each entry maps

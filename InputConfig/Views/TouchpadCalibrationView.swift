@@ -52,6 +52,7 @@ struct TouchpadCalibrationView: View {
     /// TouchpadService.currentActiveDevice so the picker reopens to the
     /// user's last pick.
     @State private var activeDevice: TouchpadDevice = TouchpadService.shared.currentActiveDevice()
+    @State private var showScreenRegions = false
 
     // MARK: - Shared state
 
@@ -232,7 +233,12 @@ struct TouchpadCalibrationView: View {
             // keyboard focus / right after a click). Same pattern the
             // toolbar uses to suppress its focus rings.
             Menu {
-                ForEach(TouchpadDevice.allCases) { device in
+                // Controller pads only. The Mac's own trackpad moves the
+                // pointer and exposes no finger positions, so its areas are
+                // screen regions, a different thing with its own editor;
+                // offering it here as a "touchpad" is what made the two
+                // read as one muddled feature.
+                ForEach(TouchpadDevice.allCases.filter { !$0.usesCursorRegions }) { device in
                     Button {
                         activeDevice = device
                     } label: {
@@ -268,13 +274,25 @@ struct TouchpadCalibrationView: View {
             .focusEffectDisabled()
             .fixedSize()
             .accessibilityLabel("Which touchpad")
-            .accessibilityHint("Choose between DualSense, DualShock 4, or Mac Trackpad")
+            .accessibilityHint("Choose between DualSense and DualShock 4")
+            .onAppear {
+                // A stored choice from before the Mac trackpad left this
+                // sheet lands on a real touchpad.
+                if activeDevice.usesCursorRegions { activeDevice = .dualSense }
+            }
 
             Text(activeDeviceShortHint)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            Button("Screen regions\u{2026}") { showScreenRegions = true }
+                .buttonStyle(.solidSecondaryCompact)
+                .help("Areas of a display that fire while the pointer is inside them: for the Mac's trackpad, a mouse, or a stick moving the pointer")
+                .sheet(isPresented: $showScreenRegions) {
+                    CursorRegionsView()
+                        .glassBackground()
+                }
         }
     }
 
@@ -577,7 +595,7 @@ struct TouchpadCalibrationView: View {
         case .macTrackpad:
             return "Cursor zones on the Mac Trackpad. Draw rectangles on the screen preview, then bind each one to a key or button."
         case .dualSense, .dualShock4:
-            return "Tap zones on the controller touchpad. Bindings of type Touchpad Region fire while a finger is inside."
+            return "Zones on the controller's touchpad. A Touchpad zone input fires while a finger is inside one. Areas of the display are Screen regions, drawn in their own editor."
         }
     }
 
@@ -704,11 +722,11 @@ struct TouchpadCalibrationView: View {
 
     private var regionsList: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Defined Regions")
+            Text("This preset's regions")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             if regions.isEmpty {
-                Text("None yet.")
+                Text("None yet. Regions belong to the preset you are editing; drag on the pad to draw one.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -792,6 +810,8 @@ struct TouchpadCalibrationView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .accessibilityLabel("Region options for \(region.name)")
+            .help("Rename or delete \(region.name)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -1076,6 +1096,11 @@ struct TouchpadCalibrationView: View {
             }
         }
         preset.joysticks[0].bindings.append(newBinding)
+        // The region this binding points at must travel with it. The
+        // services only hold the working set; the preset file is what
+        // survives, and saving the binding without its region left a wire
+        // to a zone that did not exist after the next reload.
+        preset.captureRegionsFromServices()
         presetStore.presets[idx] = preset
         presetStore.savePreset(preset)
     }
@@ -1130,6 +1155,10 @@ struct TouchpadCalibrationView: View {
 
         regions = newRegions
         persistRegions()
+        // Sixteen bindings and their sixteen regions go to disk together.
+        // Saving the bindings alone restarted the engine, which reloaded
+        // the preset's old, empty region list over the grid just drawn.
+        preset.captureRegionsFromServices()
         presetStore.presets[idx] = preset
         presetStore.savePreset(preset)
 

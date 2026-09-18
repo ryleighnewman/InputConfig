@@ -242,6 +242,22 @@ enum MouseDirection: String, Codable, CaseIterable {
     case positive = "+"
     case negative = "-"
 
+    /// Presets are stored as "+" / "-", but a file that was hand-edited (or
+    /// written by an older tool) can carry the long spelling. Reading it
+    /// strictly would throw and quietly cost the binding its row, which
+    /// looks to a person like "this direction just stopped working", so the
+    /// long forms are accepted too.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        switch raw.lowercased() {
+        case "+", "positive": self = .positive
+        case "-", "negative": self = .negative
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Unknown mouse direction \(raw)"))
+        }
+    }
+
     var displayName: String {
         switch self {
         case .positive: return "+"
@@ -277,18 +293,28 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
     /// Stop everything now: halt the engine, release every held key, button
     /// and note, and deactivate the preset. Never starts anything.
     case emergencyStop = "estop"
+    /// Snapshot the pressing controller's current gyro and accelerometer
+    /// reading as its new resting zero, the same thing the editor's Quick
+    /// Zero button does, from a button you can reach mid-session.
+    case rezeroMotion = "rezero"
+    /// Put the pointer in the middle of the screen it is on. Pairs with
+    /// Re-zero Motion on the same button for gyro pointing: the controller
+    /// at rest becomes "pointer at centre" again in one press.
+    case centerPointer = "center"
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
         case .activatePreset: return "Activate Preset"
-        case .nextPreset: return "Next Preset"
-        case .previousPreset: return "Previous Preset"
+        case .nextPreset: return "Next Preset (in this folder)"
+        case .previousPreset: return "Previous Preset (in this folder)"
         case .deactivate: return "Deactivate"
         case .togglePauseOutputs: return "Pause / Resume Outputs"
         case .holdMuteMotion: return "Pause Motion While Held"
         case .emergencyStop: return "Emergency Stop (release everything)"
+        case .rezeroMotion: return "Re-zero Motion (this controller)"
+        case .centerPointer: return "Center Pointer on Screen"
         }
     }
 }
@@ -299,6 +325,12 @@ struct OutputAction: Codable, Hashable, Identifiable {
     var type: OutputType
     var keyCode: Int?
     var mouseButtonIndex: Int?
+    /// Optional fixed screen point for a mouse button output, in CoreGraphics
+    /// coordinates (origin top-left of the main display). When set the
+    /// pointer is moved there before the click, which is what an auto-clicker
+    /// parked on a button on screen needs. nil clicks wherever the pointer is.
+    var clickX: Double?
+    var clickY: Double?
     var mouseAxis: MouseAxis?
     var mouseDirection: MouseDirection?
     var speed: Int?
@@ -565,9 +597,12 @@ struct OutputAction: Codable, Hashable, Identifiable {
         }
     }
 
-    // Custom coding to handle UUID stability
+    // Custom coding to handle UUID stability. Every stored property must be
+    // listed: a property left out of a hand-written key set is silently
+    // never written, and `clickX` / `clickY` were exactly that, so a click
+    // parked on a screen point was shown in the row and lost on relaunch.
     enum CodingKeys: String, CodingKey {
-        case id, type, keyCode, mouseButtonIndex, mouseAxis, mouseDirection, speed
+        case id, type, keyCode, mouseButtonIndex, clickX, clickY, mouseAxis, mouseDirection, speed
         case midiNote, midiVelocity, midiCCNumber, midiCCValue, midiChannel
         case midiProgramNumber, midiTransport
         case text

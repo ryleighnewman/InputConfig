@@ -80,6 +80,11 @@ final class AppState: ObservableObject {
             }
         }
 
+        // Silence any controller left buzzing by an earlier run. A pad holds
+        // its last motor level indefinitely, so if a previous session ended
+        // mid-pulse the rumble is still going when this one starts.
+        InProcessLightWriter.shared.stopMotors()
+
         // Graceful shutdown. When the user quits, NSApplication posts
         // willTerminate one main-runloop tick before exit; observing it
         // here gives us a deterministic window to release controller
@@ -108,7 +113,7 @@ final class AppState: ObservableObject {
         // vanishing the moment the toggle is flipped. One runloop turn lets
         // the policy change land first.
         DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         }
     }
 
@@ -185,6 +190,14 @@ final class AppState: ObservableObject {
         //    we'd otherwise leave the cursor hidden until login - which
         //    looks indistinguishable from a frozen Mac.
         CursorGuardService.shared.forceShowCursor()
+        // 6. Stop every haptic pattern and shut the engines down. An engine
+        //    torn down by process exit instead of by stop() can leave the
+        //    controller buzzing after the app is gone.
+        FeedbackService.shared.clearHapticEngines()
+        // 7. Let go of the controllers with their motors at zero. A pad holds
+        //    the last motor level it was sent, so quitting mid-buzz would
+        //    otherwise leave it rumbling until it is unplugged.
+        InProcessLightWriter.shared.shutdownSynchronously()
     }
 }
 
@@ -321,14 +334,153 @@ enum AppA11y {
         UserDefaults.standard.bool(forKey: "InputConfig.a11y.reduceTransparency")
     }
 
-    /// Map the stored text-size step to a concrete Dynamic Type size.
-    static func typeSize(forStep step: Int) -> DynamicTypeSize {
+    /// Map the stored text-size step to a font scale. Dynamic Type sizes do
+    /// nothing on macOS (the text styles are fixed there), so Text Size is a
+    /// plain multiplier applied to every font in the app; see FontScaler.
+    static func scale(forStep step: Int) -> CGFloat {
         switch step {
-        case 1: return .xLarge
-        case 2: return .xxxLarge
-        case 3: return .accessibility1
-        default: return .large
+        case -1: return 0.9
+        case 1: return 1.15
+        case 2: return 1.3
+        case 3: return 1.5
+        default: return 1
         }
+    }
+}
+
+private struct AppTextScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
+extension EnvironmentValues {
+    /// Text Size from Settings, as a multiplier on every font.
+    var appTextScale: CGFloat {
+        get { self[AppTextScaleKey.self] }
+        set { self[AppTextScaleKey.self] = newValue }
+    }
+}
+
+private struct ScaledFontModifier: ViewModifier {
+    let font: Font
+    @Environment(\.appTextScale) private var scale
+    func body(content: Content) -> some View {
+        content.environment(\.font, FontScaler.scale(font, by: scale))
+    }
+}
+
+extension View {
+    /// Every `.font(...)` in the app resolves here rather than SwiftUI's
+    /// (a non-optional parameter wins overload resolution), so Text Size
+    /// in Settings reaches all of them. Same effect as SwiftUI's: it sets
+    /// the font in the environment, scaled.
+    nonisolated func font(_ font: Font) -> some View {
+        modifier(ScaledFontModifier(font: font))
+    }
+}
+
+/// Scales a SwiftUI `Font` by a factor, which is what Text Size in Settings
+/// needs and what `dynamicTypeSize` does not do on macOS (text styles are
+/// fixed there). Walks the font's private structure with `Mirror`: a text
+/// style becomes a system font of the style's size times the factor, a
+/// system font scales its size, and weight / bold / italic / monospaced
+/// modifiers are re-applied around the scaled base. Anything unrecognised
+/// comes back unchanged, so an OS change can only cost the scaling, never
+/// the text.
+enum FontScaler {
+    /// Resolved fonts per scale factor. The reflection below allocates and
+    /// walks private structure; done per font per body pass inside 30 and
+    /// 60 Hz timelines it was a measurable cost whenever Text Size was not
+    /// the default. The app uses a few dozen distinct fonts, so the cache
+    /// stays tiny. Fonts are Hashable, and the main thread is the only
+    /// caller.
+    nonisolated(unsafe) private static var cache: [CGFloat: [Font: Font]] = [:]
+
+    static func scale(_ font: Font, by factor: CGFloat) -> Font {
+        guard factor != 1 else { return font }
+        if let hit = cache[factor]?[font] { return hit }
+        let result = scaled(font, factor) ?? font
+        cache[factor, default: [:]][font] = result
+        return result
+    }
+
+    /// macOS sizes for each text style (Human Interface Guidelines).
+    private static func size(forStyle style: String) -> CGFloat? {
+        switch style {
+        case "largeTitle": return 26
+        case "title": return 22
+        case "title2": return 17
+        case "title3": return 15
+        case "headline": return 13
+        case "body": return 13
+        case "callout": return 12
+        case "subheadline": return 11
+        case "footnote": return 10
+        case "caption": return 10
+        case "caption2": return 10
+        default: return nil
+        }
+    }
+
+    private static func design(from any: Any?) -> Font.Design {
+        guard let any else { return .default }
+        switch String(describing: any) {
+        case "rounded": return .rounded
+        case "monospaced": return .monospaced
+        case "serif": return .serif
+        default: return .default
+        }
+    }
+
+    private static func weight(from any: Any?) -> Font.Weight? {
+        guard let any else { return nil }
+        guard let v = Mirror(reflecting: any).children.first(where: { $0.label == "value" })?.value as? CGFloat else { return nil }
+        let table: [(CGFloat, Font.Weight)] = [(-0.8, .ultraLight), (-0.6, .thin), (-0.4, .light), (0, .regular),
+                                               (0.23, .medium), (0.3, .semibold), (0.4, .bold), (0.56, .heavy), (0.62, .black)]
+        return table.min(by: { abs($0.0 - v) < abs($1.0 - v) })?.1
+    }
+
+    /// Unwraps an `Optional<Any>` seen through Mirror.
+    private static func unwrap(_ any: Any) -> Any? {
+        let m = Mirror(reflecting: any)
+        if m.displayStyle == .optional { return m.children.first?.value }
+        return any
+    }
+
+    private static func child(_ any: Any, _ label: String) -> Any? {
+        Mirror(reflecting: any).children.first(where: { $0.label == label })?.value
+    }
+
+    private static func scaled(_ font: Font, _ f: CGFloat) -> Font? {
+        guard let box = child(font, "provider"), let provider = child(box, "base") else { return nil }
+        let name = String(describing: type(of: provider))
+        if name == "TextStyleProvider" {
+            guard let style = child(provider, "style"), let base = size(forStyle: String(describing: style)) else { return nil }
+            let w = weight(from: child(provider, "weight").flatMap(unwrap))
+                ?? (String(describing: style) == "headline" ? .semibold : .regular)
+            return .system(size: (base * f).rounded(), weight: w, design: design(from: child(provider, "design").flatMap(unwrap)))
+        }
+        if name == "SystemProvider" {
+            guard let size = child(provider, "size") as? CGFloat else { return nil }
+            let w = weight(from: child(provider, "weight").flatMap(unwrap)) ?? .regular
+            return .system(size: (size * f).rounded(), weight: w, design: design(from: child(provider, "design").flatMap(unwrap)))
+        }
+        if name.hasPrefix("ModifierProvider<WeightModifier>") {
+            guard let base = child(provider, "base") as? Font, let inner = scaled(base, f),
+                  let mod = child(provider, "modifier"), let w = weight(from: child(mod, "weight")) else { return nil }
+            return inner.weight(w)
+        }
+        if name.hasPrefix("StaticModifierProvider<") {
+            guard let base = child(provider, "base") as? Font, let inner = scaled(base, f) else { return nil }
+            if name.contains("BoldModifier") { return inner.bold() }
+            if name.contains("ItalicModifier") { return inner.italic() }
+            if name.contains("MonospacedDigitModifier") { return inner.monospacedDigit() }
+            if name.contains("MonospacedModifier") { return inner.monospaced() }
+            if name.contains("SmallCapsModifier") { return inner.smallCaps() }
+            if name.contains("LowercaseSmallCapsModifier") { return inner.lowercaseSmallCaps() }
+            if name.contains("UppercaseSmallCapsModifier") { return inner.uppercaseSmallCaps() }
+            return nil
+        }
+        return nil
     }
 }
 
@@ -337,6 +489,20 @@ enum AppA11y {
 /// values (type size, legibility) flow into sheets and popovers on their
 /// own; the transaction gate is re-applied inside glassBackground so
 /// sheets get it too.
+/// The app's own Reduce Motion preference as an environment value, so a
+/// view that pauses its animation on it updates the moment the switch is
+/// flipped. Read as a static UserDefaults lookup it was invisible to
+/// SwiftUI: 27 timelines kept animating after the user turned it on.
+private struct AppReduceMotionKey: EnvironmentKey {
+    static let defaultValue = false
+}
+extension EnvironmentValues {
+    var appReduceMotion: Bool {
+        get { self[AppReduceMotionKey.self] }
+        set { self[AppReduceMotionKey.self] = newValue }
+    }
+}
+
 struct AccessibilityAdjustments: ViewModifier {
     @AppStorage("InputConfig.a11y.textSize") private var textSize = 0
     @AppStorage("InputConfig.a11y.boldText") private var boldText = false
@@ -344,7 +510,8 @@ struct AccessibilityAdjustments: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .dynamicTypeSize(AppA11y.typeSize(forStep: textSize))
+            .environment(\.appTextScale, AppA11y.scale(forStep: textSize))
+            .environment(\.appReduceMotion, reduceMotionPref)
             .environment(\.legibilityWeight, boldText ? .bold : nil)
             .transaction { txn in
                 if reduceMotionPref { txn.animation = nil }
@@ -357,10 +524,14 @@ struct AccessibilityAdjustments: ViewModifier {
 private struct WindowBackdrop: ViewModifier {
     @AppStorage("InputConfig.a11y.reduceTransparency") private var reduceTransparency = false
     func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
-        } else {
-            content.background(VisualEffectBackground(tintOpacity: 0.07).ignoresSafeArea())
+        // One modifier whichever way the switch sits: branching the view
+        // tree here remounted the whole window on every toggle.
+        content.background {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+            } else {
+                VisualEffectBackground(tintOpacity: 0.07).ignoresSafeArea()
+            }
         }
     }
 }
@@ -369,10 +540,19 @@ private struct WindowBackdrop: ViewModifier {
 private struct SheetBackdrop: ViewModifier {
     @AppStorage("InputConfig.a11y.reduceTransparency") private var reduceTransparency = false
     func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.presentationBackground { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
-        } else {
-            content.presentationBackground { VisualEffectBackground().ignoresSafeArea() }
+        // Same shape either way, so flipping Reduce Transparency from
+        // inside a sheet (Settings) restyles it instead of closing it.
+        content.presentationBackground {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+            } else {
+                // Frosted, but tinted with the window colour so what is
+                // behind the sheet (the home page's cards, a busy editor)
+                // never competes with the sheet's own text.
+                VisualEffectBackground()
+                    .overlay(Color(nsColor: .windowBackgroundColor).opacity(0.62))
+                    .ignoresSafeArea()
+            }
         }
     }
 }
@@ -723,9 +903,9 @@ struct GlassCTAButton: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        // Moderate glass-CTA metrics: a step up from SolidButton, but no
-        // fixed minimum width - the old hero sizing (H22/V11, minWidth 168)
-        // made the demo sheets' "Take me..." buttons read massive.
+        // Same metrics as the regular SolidButton, so a glass CTA sits in a
+        // row beside Close at the same height; only the glass and the weight
+        // set it apart. No fixed width: it hugs its label.
         configuration.label
             .font(.body.weight(.semibold))
             // Same inviolable-label rule as SolidButton: one line, no vertical
@@ -733,8 +913,8 @@ struct GlassCTAButton: ButtonStyle {
             .lineLimit(1)
             .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
             .liquidGlass(in: Capsule(), tint: tint, interactive: true)
             .contentShape(Capsule())
             .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1.0) : 0.4)
@@ -756,6 +936,9 @@ struct InputConfig: App {
                 .environmentObject(appState.controllerService)
                 .environmentObject(appState.mappingEngine)
                 .environmentObject(appState.eightBitDoDetector)
+                // The narrowest the window goes: the home screen's four
+                // showcase columns still read cleanly at this width.
+                .frame(minWidth: 1080, minHeight: 700)
                 .windowBackdrop()
                 .reduceMotionFriendly()
                 .appAccessibility()
@@ -781,6 +964,9 @@ struct InputConfig: App {
         }
         .defaultSize(width: 1300, height: 750)
         .commands {
+            // MARK: InputConfig menu - Devices: connect hardware by hand
+            DeviceCommands(controllerService: appState.controllerService)
+
             // MARK: File menu - preset creation + quick file actions
             CommandGroup(after: .newItem) {
                 Button("New Preset") {
@@ -863,13 +1049,17 @@ struct InputConfig: App {
 
                 Divider()
 
-                Button("Donate to InputConfig...") {
+                Button("Donate to InputConfig…") {
                     TipJarWindowController.shared.show()
+                }
+
+                Button("Rate InputConfig on the App Store") {
+                    NSWorkspace.shared.open(ReviewPromptService.writeReviewURL)
                 }
 
                 Divider()
 
-                Button("Test Bench (Diagnostics)...") {
+                Button("Test Bench (Diagnostics)…") {
                     TestBenchWindowController.shared.show()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .option, .shift])
@@ -956,6 +1146,7 @@ final class FrontmostAppWatcher {
             store.activatePreset(match)
             engine.start(with: match)
             lastAutoActivatedPresetID = match.id
+            ActivityLog.shared.info("Presets", "Auto-switched to \"\(match.name)\" because \(bundleID) came to the front")
         } else if let lastAuto = lastAutoActivatedPresetID {
             // Only unwind an ACTIVE auto switch; if the user changed presets
             // manually since, leave their choice alone.

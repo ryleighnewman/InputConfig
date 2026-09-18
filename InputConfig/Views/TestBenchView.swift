@@ -48,7 +48,7 @@ struct TestBenchView: View {
                         summary = "\(passed) passed · \(failed) failed"
                     }
                 } label: {
-                    Label(service.isRunning ? "Running..." : "Run All Tests",
+                    Label(service.isRunning ? "Running…" : "Run All Tests",
                           systemImage: service.isRunning ? "hourglass" : "play.fill")
                 }
                 .buttonStyle(.solid)
@@ -385,7 +385,7 @@ final class TestBenchWindowController {
     func show() {
         if let window = window {
             window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return
         }
         let hosting = NSHostingController(rootView: TestBenchView()
@@ -402,6 +402,6 @@ final class TestBenchWindowController {
         newWindow.isReleasedWhenClosed = false
         window = newWindow
         newWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }

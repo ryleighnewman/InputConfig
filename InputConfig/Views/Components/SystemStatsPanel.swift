@@ -13,117 +13,85 @@ struct SystemStatsPanel: View {
         let s = stats.current
         let c = stats.cumulative
         let p = stats.power
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Live resource usage. Updates once per second.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            // --- Snapshot tiles ---
-            HStack(spacing: 24) {
-                statTile(label: "CPU",
-                         value: String(format: "%.1f%%", s.smoothedCpuPercent),
-                         hint: "One core saturated = 100%",
-                         color: cpuTint(for: s.smoothedCpuPercent))
-                statTile(label: "Memory",
-                         value: String(format: "%.0f MB", s.residentMemoryMB),
-                         hint: "Resident set size",
-                         color: memoryTint(for: s.residentMemoryMB))
-                statTile(label: "Threads",
-                         value: "\(s.threadCount)",
-                         hint: "Live thread count",
-                         color: .secondary)
-                statTile(label: "Energy",
-                         value: "\(s.energyImpact)",
-                         hint: "Blended CPU + threads (0-100)",
-                         color: energyTint(for: s.energyImpact))
+        VStack(alignment: .leading, spacing: 10) {
+            // Live. A flow, so on a narrow sheet the values wrap to a
+            // second line instead of squeezing.
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Now")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 58, alignment: .leading)
+                CenteredFlow(spacing: 16, alignment: .leading) {
+                    stat("CPU", String(format: "%.1f%%", s.smoothedCpuPercent), cpuTint(for: s.smoothedCpuPercent))
+                    stat("Memory", String(format: "%.0f MB", s.residentMemoryMB), memoryTint(for: s.residentMemoryMB))
+                    stat("Threads", "\(s.threadCount)")
+                    stat("Energy", "\(s.energyImpact)", energyTint(for: s.energyImpact))
+                }
             }
-
-            // Mini CPU sparkline over the last minute. Drawn as a
-            // simple GeometryReader path - no shapes per sample, no
-            // per-frame allocations.
-            sparkline
-                .frame(height: 28)
 
             Divider()
 
-            // --- Session totals ---
-            HStack(spacing: 6) {
-                Text("Session totals")
-                    .font(.caption.weight(.semibold))
+            // Session totals, with the reset at the end.
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Session")
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .frame(minWidth: 58, alignment: .leading)
+                CenteredFlow(spacing: 16, alignment: .leading) {
+                    stat("Uptime", formatDuration(c.sessionUptime))
+                    stat("Avg CPU", String(format: "%.1f%%", c.averageCpuPercent), cpuTint(for: c.averageCpuPercent))
+                    stat("Peak CPU", String(format: "%.1f%%", c.peakCpuPercent), cpuTint(for: c.peakCpuPercent))
+                    stat("Peak memory", String(format: "%.0f MB", c.peakMemoryMB), memoryTint(for: c.peakMemoryMB))
+                    stat("Energy", formatEnergy(c.estimatedEnergyJoules))
+                    stat("Polls", formatBigNumber(c.controllerPollsCounted))
+                }
+                Spacer(minLength: 0)
                 Button("Reset") { stats.resetSessionStats() }
                     .buttonStyle(.solidSecondaryCompact)
                     .controlSize(.small)
-                    .help("Zero out session uptime, peaks, averages, and energy estimate.")
-            }
-            HStack(spacing: 24) {
-                statTile(label: "Uptime",
-                         value: formatDuration(c.sessionUptime),
-                         hint: "Since app launch / last reset",
-                         color: .secondary)
-                statTile(label: "Avg CPU",
-                         value: String(format: "%.1f%%", c.averageCpuPercent),
-                         hint: "Running mean of all samples",
-                         color: cpuTint(for: c.averageCpuPercent))
-                statTile(label: "Peak CPU",
-                         value: String(format: "%.1f%%", c.peakCpuPercent),
-                         hint: "Highest CPU% in session (100% = one core, like Activity Monitor)",
-                         color: cpuTint(for: c.peakCpuPercent))
-                statTile(label: "Peak Mem",
-                         value: String(format: "%.0f MB", c.peakMemoryMB),
-                         hint: "High-water mark",
-                         color: memoryTint(for: c.peakMemoryMB))
-            }
-            HStack(spacing: 24) {
-                statTile(label: "Energy used",
-                         value: formatEnergy(c.estimatedEnergyJoules),
-                         hint: "Coarse estimate, CPU × time",
-                         color: .secondary)
-                statTile(label: "Poll ticks",
-                         value: formatBigNumber(c.controllerPollsCounted),
-                         hint: "Controller frames since launch",
-                         color: .secondary)
-                Spacer(minLength: 0)
-                Spacer(minLength: 0)
+                    .help("Start the session totals over")
             }
 
-            // --- Power / battery ---
+            // Power, only on a laptop.
             if p.source != nil || p.batteryPercent != nil {
                 Divider()
-                Text("Power")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 24) {
-                    statTile(label: "Source",
-                             value: p.source ?? "Unknown",
-                             hint: "Mains or battery",
-                             color: powerSourceColor(p.source))
-                    if let pct = p.batteryPercent {
-                        statTile(label: "Battery",
-                                 value: "\(pct)%",
-                                 hint: p.batteryState ?? "",
-                                 color: batteryTint(for: pct))
-                    }
-                    if abs(p.batteryDeltaPercent) >= 0.5 {
-                        let delta = p.batteryDeltaPercent
-                        statTile(label: "Δ since start",
-                                 value: String(format: "%+.0f%%", -delta),
-                                 hint: "Negative = drained while running",
-                                 color: delta > 0 ? .orange : .green)
-                    }
-                    if let mins = p.minutesRemaining {
-                        statTile(label: "Time left",
-                                 value: "\(mins) min",
-                                 hint: "Est. to empty / full",
-                                 color: .secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Power")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 58, alignment: .leading)
+                    CenteredFlow(spacing: 16, alignment: .leading) {
+                        stat("Source", p.source ?? "Unknown", powerSourceColor(p.source))
+                        if let pct = p.batteryPercent {
+                            stat("Battery", "\(pct)%", batteryTint(for: pct))
+                        }
+                        if abs(p.batteryDeltaPercent) >= 0.5 {
+                            let delta = p.batteryDeltaPercent
+                            stat("Since start", String(format: "%+.0f%%", -delta), delta > 0 ? .orange : .green)
+                        }
+                        if let mins = p.minutesRemaining {
+                            stat("Time left", "\(mins) min")
+                        }
                     }
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
         .onAppear { stats.retain() }
         .onDisappear { stats.release() }
+    }
+
+    /// One label and one value, the same size everywhere on the panel.
+    private func stat(_ label: String, _ value: String, _ color: Color = .primary) -> some View {
+        HStack(spacing: 5) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(color)
+        }
+        .fixedSize()
     }
 
     // MARK: - Formatting
@@ -167,52 +135,6 @@ struct SystemStatsPanel: View {
     }
 
     @ViewBuilder
-    private func statTile(label: String, value: String, hint: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title3.monospacedDigit())
-                .foregroundStyle(color)
-            Text(hint)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var sparkline: some View {
-        GeometryReader { proxy in
-            let pts = stats.history
-            // Cap the y-scale at 100% by default; if any sample
-            // exceeded that (multi-core saturation), grow proportionally.
-            let maxVal = max(100.0, pts.map(\.smoothedCpuPercent).max() ?? 100)
-            let w = proxy.size.width
-            let h = proxy.size.height
-
-            ZStack(alignment: .bottomLeading) {
-                // Background
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.secondary.opacity(0.08))
-
-                // Path
-                if pts.count >= 2 {
-                    Path { p in
-                        let stepX = w / CGFloat(max(1, pts.count - 1))
-                        for (i, sample) in pts.enumerated() {
-                            let x = CGFloat(i) * stepX
-                            let y = h - CGFloat(sample.smoothedCpuPercent / maxVal) * h
-                            if i == 0 { p.move(to: CGPoint(x: x, y: y)) }
-                            else { p.addLine(to: CGPoint(x: x, y: y)) }
-                        }
-                    }
-                    .stroke(Color.accentColor, lineWidth: 1.5)
-                }
-            }
-        }
-    }
-
     private func cpuTint(for v: Double) -> Color {
         if v > 80 { return .red }
         if v > 40 { return .orange }
