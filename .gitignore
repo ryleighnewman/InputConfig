@@ -38,15 +38,10 @@ SteamControllerHelper/SteamControllerHelper
 
 # Release archive output
 build/
-# Marketing intermediates (only posters/ and README are published)
-Marketing/shots/
-Marketing/tools/
-Marketing/__pycache__/
 # Internal working notes (not published)
 RELEASE_PREP.md
 docs/
-Marketing/.stage_state/
 AUDIT-*.md
-Marketing/README-PIPELINE.md
-Marketing/features/
-Marketing/shots-guides/
+Marketing/*
+!Marketing/posters/
+scripts/* 2.py
