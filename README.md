@@ -15,7 +15,7 @@ Website and documentation: [inputconfig.com](https://inputconfig.com), with
 [help for every feature](https://inputconfig.com/help/), [guides](https://inputconfig.com/guides/),
 and [ready-made presets for 450+ games and apps](https://inputconfig.com/presets/).
 
-<a href="https://apps.apple.com/us/app/inputconfig/id6777759147?mt=12"><img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" alt="Download on the Mac App Store" height="56"></a>
+<a href="https://apps.apple.com/us/app/inputconfig/id6777759147?pt=128760092&amp;ct=github&amp;mt=12"><img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" alt="Download on the Mac App Store" height="56"></a>
 
 ## Overview
 
