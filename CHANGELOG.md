@@ -2,6 +2,7 @@
 
 ## 1.5
 
+- Tap the Mac is now enhanced with additional compatibility on more MacBooks
 - Quadruple and quintuple taps are now available in the binding editor
 - Tap the Mac: Calibrate Taps is now in the Options of any tap row. Knock on the chassis and watch each strike to set the firmness threshold with a slider
 - Your Mac is now an official input: every key on the keyboard and every click, scroll, and Force Touch on the mouse or trackpad can be mapped

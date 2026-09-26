@@ -30,7 +30,7 @@ and full MIDI gear all work as inputs too.
 
 ## What's new in 1.5
 
-- Tap the Mac now works on M1 Pro, M1 Max, and M1 Ultra MacBook Pros as well as M2 and later, counts up to five taps, and has a live calibration plot in the Options of any tap row
+- Tap the Mac is now enhanced with additional compatibility on more MacBooks, counts up to five taps, and has a live calibration plot in the Options of any tap row
 - Your Mac is an input: every key, including modifiers and media keys, plus clicks, scroll gestures, and Force Touch on the trackpad or mouse can be mapped, with live Keyboard and Mouse & Trackpad templates in the Live Visualizer
 - Screen regions are their own input: draw an area of any display and it fires while the pointer is inside it, with a Screen template that shows the display, its regions, and the live pointer
 - The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, zoom, a choice of background, and every control clickable
@@ -284,7 +284,7 @@ nothing.
 
 - macOS 14.0 or later
 - Accessibility permission (for keyboard and mouse simulation)
-- Tap the Mac needs a MacBook with M2 or later, or an M1 Pro, M1 Max, or M1 Ultra
+- Tap the Mac needs a MacBook: it uses the motion sensor inside, and desktop Macs have none
 
 ## Building
 
