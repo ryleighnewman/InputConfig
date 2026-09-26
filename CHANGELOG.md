@@ -30,7 +30,7 @@
 - Every built-in preset now carries notes on every row
 - The Smart Preset Maker can add touchpad-as-trackpad, gyro fine aim, and trigger rumble
 - Every Feature Showcase opens its preset, with arrows to step through them
-- The sidebar splits into My Presets and Built-in Presets, with coloured folder outlines and Move to Group
+- The sidebar splits into My Presets and Built-in Presets, with colored folder outlines and Move to Group
 - Help is rewritten: shorter, plainer, and current, with every guide's steps in the app
 - First launch opens with a welcome and the ways to reach out
 - Settings: choose the menu bar icon, a spoken feedback voice, Next and Previous Preset, and Reset Settings
@@ -80,30 +80,29 @@
 - The binding editor scrolls and expands smoothly. Moving the pointer across the list no longer makes every row redraw, and row measurements no longer feed back into the layout
 - Bindings can be reordered by dragging the handle on the left of each row. The row lifts and follows the pointer, the list opens a gap where it will land, and a row with its Options open folds them away while you drag it
 - A controller reconnecting over Bluetooth no longer shows up twice in the list
-- A Cancel button on the scan overlay, so a scan can be cancelled without a keyboard
+- A Cancel button on the scan overlay, so a scan can be canceled without a keyboard
 - The help guides have a search field, plus new guides for chords, ratcheting, and tapping the Mac
-- New built-in preset Anki in Desktop & Productivity: the face buttons rate flashcards, the bumpers undo and replay audio, stick clicks mark and bury, and the D-pad scrolls the card. Every row is labelled with its Anki action, and Anki is in the Smart Preset Maker's app list too
+- New built-in preset Anki in Desktop & Productivity: the face buttons rate flashcards, the bumpers undo and replay audio, stick clicks mark and bury, and the D-pad scrolls the card. Every row is labeled with its Anki action, and Anki is in the Smart Preset Maker's app list too
 - Fixed: the release notes you are reading now did not appear for people who already had the app installed, so earlier updates arrived silently
 
 ## 1.3
 
-- Knob modes for MIDI dials: Dial mode treats the centre of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at centre
+- Knob modes for MIDI dials: Dial mode treats the center of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at center
 - Turn mode fires a nudge for every few steps of rotation, clockwise or counterclockwise, built for volume, brightness, and stepped scrolling
 - Both modes work with the sensitivity curves, deadzone settings, and variable speed the analog sticks already use
 - System volume as a fader: a new output that makes the Mac's volume follow a knob, the pitch wheel, aftertouch, or a controller trigger 1-to-1
 - Turn Step setting per binding: Fine, Normal, Coarse, or Chunky nudge sensitivity for Turn mode
-- The volume fader only takes over once you actually move the control, so activating a preset never jumps the volume to wherever a knob was left
-- New built-in preset "MIDI: Knob Deck" in MIDI & Creative: volume fader on CC 7, Dial scrolling on the mod wheel, Turn arrow nudges, pedal click, and pad keys, ready to remap
-- A new welcome-screen card and demo for MIDI devices as input
-- System Function outputs: bind anything to volume up / down, mute, play / pause and track skip, screen brightness, Mission Control, Launchpad, Spotlight, lock screen, the screenshot toolbar, running a Siri Shortcut, or opening any app or URL
-- New built-in preset "MIDI: Media Deck": pads and knobs running media keys, stepped volume, and brightness
-- A What's New popup appears once after each update with that version's changes
-- The YapToText shoutout moved to the bottom of the welcome screen, with a one-click App Store link
+- The volume fader only takes over once you actually move the control, so activating a preset never jumps the volume
+- New built-in preset MIDI: Knob Deck and a new welcome-screen demo showing MIDI devices driving the Mac
+- System Function outputs: volume, mute, media keys, brightness, Mission Control, Launchpad, Spotlight, lock screen, screenshot, Siri Shortcuts, and opening any app or URL
+- New built-in preset MIDI: Media Deck - pads and knobs running media keys, volume steps, and brightness
+- A What's New popup after each update, so new features are never silently installed
+- The YapToText shoutout now lives at the bottom of the welcome screen with a one-click App Store link
 - An About button on the welcome screen opens the redesigned About page: the story behind the app, the changelog, source code, and support
-- A new Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion, layered on top of the system settings
-- MIDI is now a full Live Visualizer template, switchable from the layout picker and automatic for MIDI presets: a seven-octave velocity-shaded keyboard with octave labels and bound-note dots, a named dial for every knob (Mod Wheel, Cutoff, Sustain...), knob-mode badges, pitch bend and aftertouch meters, a 16-channel activity strip, and a rolling event log with velocities. Everything renders at rest before a device is even connected, and every key and knob still clicks through to its bindings
-- Five new welcome-screen feature cards - Siri Shortcuts, Keyboard & Mouse as Input, Hold & Double-Tap, Per-App Auto-Switch, and Cursor Regions - with the grid reordered by importance
-- The version number shows in the menu bar popover, matching YapToText
+- An Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion
+- MIDI is now a full Live Visualizer template: a seven-octave velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log - switchable like any layout and automatic for MIDI presets
+- Five new welcome-screen cards: Siri Shortcuts, Keyboard & Mouse as Input, Hold & Double-Tap, Per-App Auto-Switch, and Cursor Regions, ordered by importance
+- The version number now shows in the menu bar popover
 
 ## 1.2.1
 
@@ -119,8 +118,7 @@
 - MIDI devices can now be used as an input: bind notes, pads, knobs, the pitch wheel, the sustain pedal, and aftertouch to keys, clicks, macros, or anything else
 - DualSense Edge extra buttons: the back paddles, both FN buttons, and mute are now bindable like any other input, over Bluetooth and USB
 - Light bar colors now work over Bluetooth: preset colors, the RGB cycle, and brightness all reach the controller wirelessly
-- New help guides for MIDI input and the DualSense Edge extra buttons
-- A changelog you can read inside the app, from the welcome screen or About
+- A new DualSense Edge help guide covers binding the extra buttons
 - More reliable controller data reading behind the scenes, with an automatic fallback when a Bluetooth session goes quiet
 
 ## 1.1.1
@@ -130,15 +128,45 @@
 ## 1.1
 
 - 431 built-in presets, over 300 of them new: games, creative and productivity apps, and accessibility workflows including VoiceOver Navigation, Numeric Keypad, Menu Bar and Dock, Emulator, and Comic Reader
-- Much broader controller compatibility: DualShock 3, Logitech F-series in D mode, fight sticks, multi-mode pads, and wheels now connect through the rebuilt device support, with correct d-pad handling on far more controllers
+- Much broader controller compatibility: DualShock 3, Logitech F-series in D mode, fight sticks, multi-mode pads, and wheels, with correct d-pad handling on far more controllers
 - Keyboard shortcut outputs with modifiers (Cmd+C and friends) now fire as real combos
 - Fixed stuck mouse buttons after sleep, stuck MIDI controllers and pitch bend after stopping a preset, and edits to a running preset not applying until reactivation
 - Crash recovery now fully restores your active preset, including restarting the mapping engine
 - Macros: Toggle plus Macro works as documented, the editor shows macro state accurately, and duplicating a binding keeps every setting
 - VoiceOver: the input scan overlay announces itself and speaks what it detected, and the binding editor controls are labeled
-- Live Visualizer: the zoomed controller map now stays cleanly inside its panel
+- Live Visualizer: the zoomed controller map stays cleanly inside its panel
 - Faster and lighter: large reductions in per-frame work across the input path and the interface
 
 ## 1.0
 
-- Initial release
+- Initial release: map any controller, keyboard, or mouse to keyboard, mouse, MIDI, and more, anywhere on macOS
+- Preset system with groups, notes, per-preset light bar colors, and app auto-activation
+- Scan to bind: press any control and it maps instantly
+- Live Visualizer with customizable widget layout
+- Turbo, macros, hold and double-tap actions, haptics, and spoken feedback per binding
+- Touchpad calibration and regions, gyroscope aim, deadzone tuning, one-stick driving
+- MIDI notes, CC, and pitch bend outputs through a built-in virtual MIDI port
+
+## 1.2 (as JoystickConfig)
+
+- Support for controllers beyond Apple's framework: the app now reads raw HID gamepads directly, with a descriptor parser and a controller profile database
+- Your Mac's own keyboard and mouse can be used as input sources
+- Cursor regions and stick regions: fire bindings when the pointer or a stick enters a zone you draw
+- Crash recovery restores your active preset after an unexpected quit
+- Menu bar icon with quick preset switching
+- Freeze watchdog and cursor guard for a safer always-on experience
+
+## 1.1 (as JoystickConfig)
+
+- MIDI output: send notes, CC, and pitch bend to any music app through a built-in virtual port
+- Steam Controller support
+- Controller touchpad as a mouse, with calibration
+- Deadzone calibration with a live plot
+- Motion calibration for gyroscope presets
+- Usage statistics, a test bench for trying bindings, and Launch at Login
+
+## 1.0 (as JoystickConfig)
+
+- The original release: map a game controller to keyboard and mouse anywhere on macOS
+- Presets, the mapping engine, and scan to bind
+- DualSense light bar control and haptic feedback

@@ -51,7 +51,7 @@ Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the la
 Open InputConfig and everything it can do is on one screen. Controllers, keyboards,
 mice, trackpads, and MIDI gear go in; keys, mouse, macros, MIDI, system functions,
 and Siri Shortcuts come out. Forty-two presets ship with it, sorted into folders you
-can name and colour, and the Smart Preset Maker draws on a library of more than 450
+can name and color, and the Smart Preset Maker draws on a library of more than 450
 games and apps.
 
 ![Press anything to bind it](Marketing/posters/02-scan.jpg)
@@ -135,7 +135,7 @@ tools. Check for yourself before you switch.
 - Controller touchpads: cursor control, two-finger tracking, tap zones, one-finger and two-finger taps, with per-pad calibration
 - Gyroscope, accelerometer, and absolute attitude on Sony controllers (DualSense, DualShock 4)
 - MIDI notes and pads, CC knobs, sliders, and pedals, the pitch wheel, channel aftertouch, and Program Change, from any MIDI device over USB or Bluetooth
-- Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from centre, like a stick), and Turn (a nudge per step of rotation, built for endless encoders)
+- Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from center, like a stick), and Turn (a nudge per step of rotation, built for endless encoders)
 - Per-binding MIDI channel and device filters, so two keyboards stay independent
 - Your Mac keyboard as an input: every key, including Shift, Control, Option, Command, Caps Lock, fn, and the brightness, media, and volume keys, plus a second keyboard, captured per device
 - Your mouse and trackpad as inputs: every button, double click, scroll in four directions, scroll gestures, Force Touch pressure, and Force Click
@@ -182,7 +182,7 @@ tools. Check for yourself before you switch.
 
 - 42 built-in presets: the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
 - Smart Preset Maker builds a tailored preset from a few questions, from a library of more than 450 games, apps, and workflows, and can add a touchpad-as-trackpad, gyro fine aim, and trigger rumble
-- Folders with names and colours, and unlimited presets of your own
+- Folders with names and colors, and unlimited presets of your own
 - Per-app auto-switch: presets activate themselves when their app comes to the front
 - Per-preset automation: launch an app or URL on activate, confine the cursor, auto-recenter, hide the pointer
 - Import, export, and share presets, and convert them between controller types
