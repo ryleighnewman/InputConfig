@@ -16,6 +16,9 @@ struct BindingRowView: View {
     var onDragChanged: ((CGFloat) -> Void)? = nil
     var onDragEnded: (() -> Void)? = nil
     var isHighlighted: Bool = false
+    /// Some of the row's held controls ("Second control") are down, but not
+    /// everything it needs to fire. Lit orange instead of green.
+    var isPartiallyHeld: Bool = false
     /// 1-based position of this binding within its joystick group. Drives the
     /// "#N" chip at the start of every row so the Live Visualizer can refer
     /// to a specific row by number.
@@ -210,6 +213,12 @@ struct BindingRowView: View {
                     Image(systemName: "bolt.fill")
                         .font(.callout)
                         .iconTint(.green)
+                        .accessibilityHidden(true)
+                } else if isPartiallyHeld && differentiateWithoutColor {
+                    // Outline bolt: armed, not firing yet.
+                    Image(systemName: "bolt")
+                        .font(.callout)
+                        .iconTint(.orange)
                         .accessibilityHidden(true)
                 }
 
@@ -443,24 +452,23 @@ struct BindingRowView: View {
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHighlighted ? Color.green.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.45))
+                .fill(rowFill)
                 // Instant fade-in (so quick taps feel snappy), longer fade-out (so the
 // green dwell tracks the latched visibility period from
 // GameControllerService.rawActiveExpiry).
-.animation(isHighlighted ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
-           value: isHighlighted)
+.animation(isLit ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
+           value: isLit)
         )
         .overlay(
             // A hairline edge makes each row its own box even when the fill
             // is close to the sheet behind it.
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isHighlighted ? Color.green.opacity(0.4) : Color.primary.opacity(0.09),
-                              lineWidth: isHighlighted ? 1.5 : 1)
+                .strokeBorder(rowBorder, lineWidth: isLit ? 1.5 : 1)
                 // Instant fade-in (so quick taps feel snappy), longer fade-out (so the
 // green dwell tracks the latched visibility period from
 // GameControllerService.rawActiveExpiry).
-.animation(isHighlighted ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
-           value: isHighlighted)
+.animation(isLit ? .linear(duration: 0.0) : .easeOut(duration: 0.18),
+           value: isLit)
         )
         .overlay(
             // Jump-to-binding pulse: bright yellow ring that fades out
@@ -2491,6 +2499,21 @@ struct BindingRowView: View {
             get: { binding.doubleTapWindowMs ?? 300 },
             set: { binding.doubleTapWindowMs = max(100, min(2000, $0)) }
         )
+    }
+
+    /// Firing (green) or armed by some of its held controls (orange).
+    private var isLit: Bool { isHighlighted || isPartiallyHeld }
+
+    private var rowFill: Color {
+        if isHighlighted { return Color.green.opacity(0.18) }
+        if isPartiallyHeld { return Color.orange.opacity(0.14) }
+        return Color(nsColor: .controlBackgroundColor).opacity(0.45)
+    }
+
+    private var rowBorder: Color {
+        if isHighlighted { return Color.green.opacity(0.4) }
+        if isPartiallyHeld { return Color.orange.opacity(0.4) }
+        return Color.primary.opacity(0.09)
     }
 
     /// Arrow between the input and output columns. While the row is firing

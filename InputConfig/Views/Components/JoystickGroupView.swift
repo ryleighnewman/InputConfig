@@ -116,6 +116,9 @@ struct JoystickGroupView: View {
                 // Each binding is its own box with a gap between them, so a
                 // long preset reads as a stack of cards, not a wall of text.
                 VStack(spacing: Self.rowGap) {
+                    // Once per publish, not per row: the plain inputs a fully
+                    // held chord takes over, as the engine does.
+                    let claimed = chordClaimedInputs
                     ForEach(joystick.bindings.indices, id: \.self) { index in
                         let binding = joystick.bindings[index]
                         // A heading above the first row of each run of rows
@@ -128,9 +131,7 @@ struct JoystickGroupView: View {
                                 onAddRow: { addRow(toSectionStartingAt: index) },
                                 onDissolve: { dissolveSection(startingAt: index) })
                         }
-                        // Serialize the input once and reuse it across the three
-                        // highlight membership checks (was rebuilt 3x per row).
-                        let inputKey = binding.input.serialized
+                        let highlight = rowHighlight(binding, claimed: claimed)
                         // EquatableBindingRow instead of a bare BindingRowView:
                         // this view re-runs on EVERY activeInputsPublished /
                         // rawActiveInputs publish (up to 30 Hz while inputs
@@ -144,14 +145,8 @@ struct JoystickGroupView: View {
                         EquatableBindingRow(
                             binding: bindingAt(index),
                             snapshot: binding,
-                            // Light up against raw controller state OR the
-                            // engine's preset-aware set, whichever is firing.
-                            // This works even with no preset active.
-                            isHighlighted:
-                                liveInputs.active.contains(inputKey)
-                                || liveInputs.raw.contains(inputKey)
-                                || externalInput.rawActiveInputs.contains(inputKey)
-                                || tapActivity.activeKeys.contains(inputKey),
+                            isHighlighted: highlight == .firing,
+                            isPartiallyHeld: highlight == .partial,
                             displayNumber: index + 1,
                             isPulsing: pulsingBindingID == binding.id,
                             // Named extras (paddles/FN/mute/Home) for the
@@ -892,6 +887,48 @@ struct JoystickGroupView: View {
 /// EquatableView compares ONLY the value inputs below (the closures are
 /// deliberately excluded), so rows whose data and highlight state did not
 /// change skip body evaluation and keep their cached layout.
+// MARK: - Row highlight
+
+extension JoystickGroupView {
+    enum RowHighlight { case none, partial, firing }
+
+    /// Whether a control is down, against raw controller state OR the
+    /// engine's preset-aware set, so rows light even with no preset active.
+    private func isHeld(_ key: String) -> Bool {
+        liveInputs.active.contains(key)
+            || liveInputs.raw.contains(key)
+            || externalInput.rawActiveInputs.contains(key)
+            || tapActivity.activeKeys.contains(key)
+    }
+
+    /// Inputs of the chord rows that are fully held. A plain row on one of
+    /// these is suppressed by the engine, so it must not light either.
+    var chordClaimedInputs: Set<String> {
+        var claimed: Set<String> = []
+        for b in joystick.bindings where !b.modifiers.isEmpty {
+            let key = b.input.serialized
+            if isHeld(key), b.modifiers.allSatisfy({ isHeld($0.serialized) }) {
+                claimed.insert(key)
+            }
+        }
+        return claimed
+    }
+
+    /// Green when the row would fire. Orange when it needs held controls and
+    /// some of them are down but the row is not complete yet, so a chord
+    /// shows it is armed instead of looking like it fired.
+    func rowHighlight(_ b: BindingModel, claimed: Set<String>) -> RowHighlight {
+        let inputKey = b.input.serialized
+        let modifiers = b.modifiers
+        if modifiers.isEmpty {
+            return isHeld(inputKey) && !claimed.contains(inputKey) ? .firing : .none
+        }
+        let heldModifiers = modifiers.filter { isHeld($0.serialized) }.count
+        if heldModifiers == modifiers.count && isHeld(inputKey) { return .firing }
+        return heldModifiers > 0 ? .partial : .none
+    }
+}
+
 private struct EquatableBindingRow: View, Equatable {
     @SwiftUI.Binding var binding: BindingModel
     /// Value snapshot of the model captured by the parent at render time.
@@ -901,6 +938,7 @@ private struct EquatableBindingRow: View, Equatable {
     /// re-render the row.
     let snapshot: BindingModel
     let isHighlighted: Bool
+    let isPartiallyHeld: Bool
     let displayNumber: Int
     let isPulsing: Bool
     let extraButtons: [GameControllerService.ExtraButton]
@@ -919,6 +957,7 @@ private struct EquatableBindingRow: View, Equatable {
     nonisolated static func == (l: Self, r: Self) -> Bool {
         l.snapshot == r.snapshot
             && l.isHighlighted == r.isHighlighted
+            && l.isPartiallyHeld == r.isPartiallyHeld
             && l.displayNumber == r.displayNumber
             && l.isPulsing == r.isPulsing
             && l.extraButtons == r.extraButtons
@@ -939,6 +978,7 @@ private struct EquatableBindingRow: View, Equatable {
             onDragChanged: onDragChanged,
             onDragEnded: onDragEnded,
             isHighlighted: isHighlighted,
+            isPartiallyHeld: isPartiallyHeld,
             displayNumber: displayNumber,
             isPulsing: isPulsing,
             extraButtons: extraButtons,
