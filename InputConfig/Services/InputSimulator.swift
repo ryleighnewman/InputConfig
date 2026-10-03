@@ -63,7 +63,7 @@ final class InputSimulator: @unchecked Sendable {
         // it only ever decorates the keys pressed alongside it.
         if hidCode == KeyCodeMap.globeFnCode { return }
 
-        if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
+        if let virtualCode = KeyboardLayoutResolver.shared.virtualKeyCode(forHID: hidCode) {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: true) {
                 // Apply EVERY currently-held modifier, not just the case where
                 // this key is itself a modifier. Without this, a chord like
@@ -112,7 +112,7 @@ final class InputSimulator: @unchecked Sendable {
         // it only ever decorates the keys pressed alongside it.
         if hidCode == KeyCodeMap.globeFnCode { return }
 
-        if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
+        if let virtualCode = KeyboardLayoutResolver.shared.virtualKeyCode(forHID: hidCode) {
             if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
                 // Carry the still-held modifiers so releasing the letter of a
                 // chord (e.g. the C of Cmd+C) does not read as a bare key-up.
@@ -1071,6 +1071,101 @@ final class GlobalHotKeyService: @unchecked Sendable {
     func setEnabled(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Self.enabledDefaultsKey)
         if on { enable() } else { disable() }
+    }
+}
+
+/// Picks the virtual keycode a key output is sent as.
+///
+/// `KeyCodeMap.hidToVirtualKeyCode` is positional: it names the key that sits
+/// where "A" is on a US QWERTY keyboard. On any other layout that key types
+/// something else, so a binding labelled "A" typed "Q" on AZERTY. With
+/// "Follow keyboard layout" on (the default), letters, digits and punctuation
+/// are instead sent as whichever key types that character, unshifted, on the
+/// active layout. A character the layout has no unshifted key for (the digits
+/// on AZERTY, Latin letters on Cyrillic) keeps its positional key.
+final class KeyboardLayoutResolver: @unchecked Sendable {
+    nonisolated(unsafe) static let shared = KeyboardLayoutResolver()
+
+    static let enabledDefaultsKey = "InputConfig.followKeyboardLayout"
+
+    /// HID codes of the keys whose label is the character they type.
+    private static let characterHIDCodes = Array(4...39) + Array(45...56)
+
+    private let lock = NSLock()
+    /// HID code to the active layout's virtual keycode, for the keys that
+    /// differ from their positional code. Nil until first built.
+    private var overrides: [Int: Int]?
+
+    private init() {
+        // The Text Input Source APIs must run on the main thread (macOS
+        // asserts on it), while key output can come from any thread. So the
+        // table is only ever built on main, and output reads the cached copy.
+        if Thread.isMainThread {
+            rebuild()
+        } else {
+            DispatchQueue.main.async { self.rebuild() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuild() }
+    }
+
+    func virtualKeyCode(forHID hidCode: Int) -> Int? {
+        let positional = KeyCodeMap.hidToVirtualKeyCode[hidCode]
+        guard positional != nil, Self.isEnabled else { return positional }
+        lock.lock()
+        let override = overrides?[hidCode]
+        lock.unlock()
+        return override ?? positional
+    }
+
+    private static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledDefaultsKey) as? Bool ?? true
+    }
+
+    private func rebuild() {
+        let table = Self.buildOverrides()
+        lock.lock()
+        overrides = table
+        lock.unlock()
+    }
+
+    private static func buildOverrides() -> [Int: Int] {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return [:] }
+        let layoutData = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+
+        // What each character key types with no modifiers. The ISO key left
+        // of Z (vk 0x0A) is included: it carries "<" on AZERTY and others.
+        let candidateKeys = characterHIDCodes.compactMap { KeyCodeMap.hidToVirtualKeyCode[$0] } + [kVK_ISO_Section]
+        var typed: [Int: String] = [:]
+        layoutData.withUnsafeBytes { buffer in
+            guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return }
+            for vk in candidateKeys {
+                var deadKeyState: UInt32 = 0
+                var length = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                let status = UCKeyTranslate(layout, UInt16(vk), UInt16(kUCKeyActionDown), 0,
+                                            UInt32(LMGetKbdType()), OptionBits(1 << kUCKeyTranslateNoDeadKeysBit),
+                                            &deadKeyState, chars.count, &length, &chars)
+                if status == noErr, length > 0 {
+                    typed[vk] = String(utf16CodeUnits: chars, count: length).lowercased()
+                }
+            }
+        }
+
+        var result: [Int: Int] = [:]
+        for hid in characterHIDCodes {
+            guard let positional = KeyCodeMap.hidToVirtualKeyCode[hid] else { continue }
+            let character = KeyCodeMap.name(for: hid).lowercased()
+            // Already right where it is: leave it.
+            if typed[positional] == character { continue }
+            if let match = candidateKeys.first(where: { typed[$0] == character }) {
+                result[hid] = match
+            }
+        }
+        return result
     }
 }
 

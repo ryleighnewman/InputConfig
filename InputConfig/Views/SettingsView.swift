@@ -47,6 +47,9 @@ struct SettingsView: View {
     @State private var showingResetConfirm = false
 
     @AppStorage(FrontmostAppWatcher.enabledDefaultsKey) private var autoSwitchEnabled = false
+    /// Send keyboard outputs as the key that types their character on the
+    /// active layout (AZERTY, QWERTZ...) rather than the US QWERTY position.
+    @AppStorage(KeyboardLayoutResolver.enabledDefaultsKey) private var followKeyboardLayout = true
 
     /// Controller poll rate in Hz. Mirrors the `pollHz` UserDefaults key
     /// that `MappingEngine.start(with:)` reads when scheduling its poll
@@ -377,6 +380,14 @@ struct SettingsView: View {
                     Toggle("Switch presets when the front app changes",
                            isOn: $autoSwitchEnabled)
                     Text("A preset that lists apps (Automation panel) activates when one of them comes to the front, and the previous preset returns when you leave.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section(title: "Keyboard output") {
+                    Toggle("Follow keyboard layout", isOn: $followKeyboardLayout)
+                    Text("A key output types its label on your current layout, so \"A\" types A on AZERTY too. Turn off to send keys by their US QWERTY position instead, which keeps WASD-style game bindings in place.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
