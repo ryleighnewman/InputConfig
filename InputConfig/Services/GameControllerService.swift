@@ -171,7 +171,9 @@ final class LiveInputStore: ObservableObject {
 /// Manages game controller detection and input reading
 @MainActor
 class GameControllerService: ObservableObject {
-    @Published var connectedControllers: [GCController] = []
+    @Published var connectedControllers: [GCController] = [] {
+        didSet { refreshIgnoredSlots() }
+    }
     @Published var controllerNames: [Int: String] = [:]
     @Published var controllerDetails: [Int: ControllerInfo] = [:]
     // Not @Published: no view observes these (LED state is driven to hardware
@@ -488,14 +490,70 @@ class GameControllerService: ObservableObject {
     /// Slot index assigned to a connected Steam Controller. nil when no
     /// Steam Controller is currently reporting input. Always sits just past
     /// the last real MFi controller so presets keep their numbering.
-    @Published var steamControllerSlot: Int?
+    @Published var steamControllerSlot: Int? {
+        didSet { refreshIgnoredSlots() }
+    }
 
     /// Slot indices assigned to raw HID gamepads (8BitDo Ultimate 2C in
     /// XInput mode, Xbox 360 wired, Logitech F310/F710, generic XInput
     /// pads, DualShock 3 over USB, etc.). Each entry maps a controller
     /// slot index → `RawHIDGamepad`. Slots are allocated after Steam.
     /// See `syncRawHIDGamepadSlots()`.
-    @Published var rawHIDGamepadSlots: [Int: RawHIDGamepad] = [:]
+    @Published var rawHIDGamepadSlots: [Int: RawHIDGamepad] = [:] {
+        didSet { refreshIgnoredSlots() }
+    }
+
+    // MARK: Ignored devices
+
+    /// Devices the user switched off in the Live Visualizer. Their slot reads
+    /// as empty everywhere: the mapping engine, the editor highlight, the
+    /// visualizer and Scan. For a controller that reaches the Mac twice, or
+    /// one that should sit out a preset. Stored by device, not by slot,
+    /// since slots are handed out again on every reconnect.
+    static let ignoredDevicesKey = "InputConfig.ignoredInputDevices"
+
+    @Published private(set) var ignoredDeviceIDs: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: GameControllerService.ignoredDevicesKey) ?? [])
+
+    /// `ignoredDeviceIDs` resolved to the current slots, so the 120 Hz state
+    /// read is a set lookup and builds no strings.
+    private var ignoredSlots: Set<Int> = []
+
+    /// Stable name for whatever sits in a slot. Two identical controllers
+    /// share it, so switching one off switches off both.
+    func deviceIdentity(at slot: Int) -> String? {
+        if slot < connectedControllers.count {
+            let c = connectedControllers[slot]
+            return "gc:\(c.vendorName ?? "")|\(c.productCategory)"
+        }
+        if slot == steamControllerSlot { return "steam" }
+        if let pad = rawHIDGamepadSlots[slot] { return "hid:\(pad.vendorID):\(pad.productID)" }
+        return nil
+    }
+
+    func isSlotIgnored(_ slot: Int) -> Bool { ignoredSlots.contains(slot) }
+
+    func setSlotIgnored(_ slot: Int, _ ignored: Bool) {
+        guard let id = deviceIdentity(at: slot) else { return }
+        if ignored { ignoredDeviceIDs.insert(id) } else { ignoredDeviceIDs.remove(id) }
+        UserDefaults.standard.set(ignoredDeviceIDs.sorted(), forKey: Self.ignoredDevicesKey)
+        refreshIgnoredSlots()
+    }
+
+    private func refreshIgnoredSlots() {
+        guard !ignoredDeviceIDs.isEmpty else {
+            if !ignoredSlots.isEmpty { ignoredSlots = [] }
+            return
+        }
+        var slots = Set<Int>()
+        let candidates = Set(connectedControllers.indices)
+            .union(rawHIDGamepadSlots.keys)
+            .union(steamControllerSlot.map { [$0] } ?? [])
+        for slot in candidates {
+            if let id = deviceIdentity(at: slot), ignoredDeviceIDs.contains(id) { slots.insert(slot) }
+        }
+        ignoredSlots = slots
+    }
 
     private var pollTimer: Timer?
     private var detailsTimer: Timer?
@@ -2004,6 +2062,8 @@ class GameControllerService: ObservableObject {
     ]
 
     private func setupScanHandlers(for controller: GCController, index: Int) {
+        // An ignored device must not record bindings either.
+        if ignoredSlots.contains(index) { return }
         guard let gamepad = controller.extendedGamepad else {
             setupPhysicalProfileScanHandlers(for: controller, index: index)
             return
@@ -2317,6 +2377,8 @@ class GameControllerService: ObservableObject {
             return st
         }
         #endif
+        // Switched off in the Live Visualizer: the slot reads as empty.
+        if ignoredSlots.contains(index) { return nil }
         // Steam Controllers occupy the virtual slot just past the last
         // MFi controller. When a binding targets that slot we ask the
         // SteamControllerService for its synthesized ControllerState.

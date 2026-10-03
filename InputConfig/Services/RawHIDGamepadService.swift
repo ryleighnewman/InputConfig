@@ -2,6 +2,7 @@ import Foundation
 import IOKit
 import IOKit.hid
 import Combine
+import GameController
 
 /// Enumerates HID gamepads via IOKit and reads their input reports
 /// directly, bypassing Apple's GameController framework. This is how
@@ -516,7 +517,12 @@ final class RawHIDGamepadService: ObservableObject {
         if vid == 0x18D1 { return true }   // Google (Stadia)
         if vid == 0x1949 { return true }   // Amazon (Luna)
 
-        return false
+        // Any other brand: ask the framework itself. 8BitDo makes pads on
+        // both sides (the Ultimate 2C in XInput mode needs the raw path, the
+        // Pro 3 is a GameController pad), so a vendor rule cannot decide.
+        // The Pro 3 was read both ways, in two slots, and its M2 back button
+        // came through the raw slot as RB.
+        return GCController.supportsHIDDevice(device)
     }
 }
 

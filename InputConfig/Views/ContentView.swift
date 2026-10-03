@@ -4135,7 +4135,34 @@ struct PresetDetailView: View {
                     .fill(connected ? Color.green : Color.red.opacity(0.7))
                     .frame(width: 7, height: 7)
                     .accessibilityLabel(connected ? "Connected" : "Disconnected")
+                if controllerService.deviceIdentity(at: viz.slot) != nil {
+                    slotInputSwitch(viz.slot)
+                }
             }
+        }
+    }
+
+    /// Turns a device's input on or off. Off is for a controller that reaches
+    /// the Mac twice (two slots for one pad) or one that should sit out: its
+    /// slot then reads as empty for the engine, the editor and Scan. On is the
+    /// normal case, so only the switch shows; off is labelled.
+    @ViewBuilder
+    private func slotInputSwitch(_ slot: Int) -> some View {
+        let ignored = controllerService.isSlotIgnored(slot)
+        Toggle("Read input", isOn: Binding(
+            get: { !ignored },
+            set: { controllerService.setSlotIgnored(slot, !$0) }))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+            .hoverHelp(ignored
+                       ? "Input from this device is ignored. Turn on to use it again."
+                       : "Turn off to ignore this device, for example when one controller shows up in two slots.")
+            .accessibilityLabel("Read input from \(controllerService.controllerName(at: slot))")
+        if ignored {
+            Text("Ignored")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
         }
     }
 
