@@ -26,18 +26,37 @@ struct MouseDiagramView: View {
     /// Finger scrolling on a trackpad or Magic Mouse: none, fingers on, or
     /// coasting on momentum after they lift.
     var scrollGesture: ExternalInputDeviceService.ScrollGesture = .none
+    /// Makes a part the slot's rows use clickable: the host wraps it in its
+    /// inspector (the popover listing those rows, each a way to the editor)
+    /// for the kinds the part stands for, under the given name. Parts no
+    /// row uses stay as they are. nil leaves the whole diagram read-only.
+    var inspect: ((_ kinds: Set<String>, _ name: String, _ part: AnyView) -> AnyView)? = nil
+
+    /// A part wrapped for clicking when a row uses any of its kinds.
+    @ViewBuilder
+    private func clickable<Part: View>(_ kinds: Set<String>, _ name: String,
+                                       @ViewBuilder _ part: () -> Part) -> some View {
+        if let inspect, !kinds.isDisjoint(with: boundKinds) {
+            inspect(kinds, name, AnyView(part()))
+        } else {
+            part()
+        }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(spacing: 6) {
                 mouseBody
-                Text("Mouse").font(.caption2).foregroundStyle(.tertiary)
+                Text("Mouse").font(.caption2).foregroundStyle(.hint)
             }
             VStack(spacing: 6) {
-                trackpadBody
-                Text("Trackpad").font(.caption2).foregroundStyle(.tertiary)
-                scrollGestureChip
-                forceTouchGauge
+                // The trackpad clicks, double clicks, force clicks, and
+                // scrolls with two fingers, so it lists all of those rows.
+                clickable(["btn0", "btn1", "doubleClick", "pressure", "deepPress", "scrollGesture",
+                           "scrollUp", "scrollDown", "scrollLeft", "scrollRight"], "Trackpad") { trackpadBody }
+                Text("Trackpad").font(.caption2).foregroundStyle(.hint)
+                clickable(["scrollGesture"], "Scroll gesture") { scrollGestureChip }
+                clickable(["pressure", "deepPress"], "Force Touch") { forceTouchGauge }
             }
             legend
         }
@@ -110,55 +129,74 @@ struct MouseDiagramView: View {
             .stroke(Color.secondary.opacity(0.35), lineWidth: 0.5)
             .frame(width: 90, height: 140)
 
-            buttonRegion(active: pressedButtons.contains(0), bound: boundKinds.contains("btn0"))
-                .frame(width: 44, height: 60)
-                .clipShape(RoundedCorner(radius: 22, corners: [.topLeft]))
-                .position(x: 23, y: 32)
+            clickable(["btn0"], "Left click") {
+                buttonRegion(active: pressedButtons.contains(0), bound: boundKinds.contains("btn0"))
+                    .frame(width: 44, height: 60)
+                    .clipShape(RoundedCorner(radius: 22, corners: [.topLeft]))
+            }
+            .position(x: 23, y: 32)
 
-            buttonRegion(active: pressedButtons.contains(1), bound: boundKinds.contains("btn1"))
-                .frame(width: 44, height: 60)
-                .clipShape(RoundedCorner(radius: 22, corners: [.topRight]))
-                .position(x: 67, y: 32)
+            clickable(["btn1"], "Right click") {
+                buttonRegion(active: pressedButtons.contains(1), bound: boundKinds.contains("btn1"))
+                    .frame(width: 44, height: 60)
+                    .clipShape(RoundedCorner(radius: 22, corners: [.topRight]))
+            }
+            .position(x: 67, y: 32)
 
             // Scroll wheel with all four directions.
             VStack(spacing: 2) {
-                arrow("chevron.up", on: activeKinds.contains("scrollUp"), bound: boundKinds.contains("scrollUp"))
-                HStack(spacing: 2) {
-                    arrow("chevron.left", on: activeKinds.contains("scrollLeft"), bound: boundKinds.contains("scrollLeft"))
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(pressedButtons.contains(2)
-                                  ? Color.green.opacity(0.7)
-                                  : Color.secondary.opacity(boundKinds.contains("btn2") ? 0.3 : 0.12))
-                        RoundedRectangle(cornerRadius: 3)
-                            .stroke(pressedButtons.contains(2) ? Color.green : Color.secondary.opacity(0.4),
-                                    lineWidth: 0.5)
-                    }
-                    .frame(width: 8, height: 16)
-                    arrow("chevron.right", on: activeKinds.contains("scrollRight"), bound: boundKinds.contains("scrollRight"))
+                clickable(["scrollUp"], "Scroll up") {
+                    arrow("chevron.up", on: activeKinds.contains("scrollUp"), bound: boundKinds.contains("scrollUp"))
                 }
-                arrow("chevron.down", on: activeKinds.contains("scrollDown"), bound: boundKinds.contains("scrollDown"))
+                HStack(spacing: 2) {
+                    clickable(["scrollLeft"], "Scroll left") {
+                        arrow("chevron.left", on: activeKinds.contains("scrollLeft"), bound: boundKinds.contains("scrollLeft"))
+                    }
+                    clickable(["btn2"], "Middle click") {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(pressedButtons.contains(2)
+                                      ? Color.green.opacity(0.7)
+                                      : Color.secondary.opacity(boundKinds.contains("btn2") ? 0.3 : 0.12))
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(pressedButtons.contains(2) ? Color.green : Color.secondary.opacity(0.4),
+                                        lineWidth: 0.5)
+                        }
+                        .frame(width: 8, height: 16)
+                    }
+                    clickable(["scrollRight"], "Scroll right") {
+                        arrow("chevron.right", on: activeKinds.contains("scrollRight"), bound: boundKinds.contains("scrollRight"))
+                    }
+                }
+                clickable(["scrollDown"], "Scroll down") {
+                    arrow("chevron.down", on: activeKinds.contains("scrollDown"), bound: boundKinds.contains("scrollDown"))
+                }
             }
             .position(x: 45, y: 28)
 
             // Side buttons 4 and 5 on the left edge.
             ForEach([3, 4], id: \.self) { b in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(pressedButtons.contains(b)
-                          ? Color.green.opacity(0.8)
-                          : Color.secondary.opacity(boundKinds.contains("btn\(b)") ? 0.35 : 0.12))
-                    .frame(width: 5, height: 16)
-                    .position(x: 3, y: b == 3 ? 78 : 98)
+                clickable(["btn\(b)"], "Side button \(b + 1)") {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(pressedButtons.contains(b)
+                              ? Color.green.opacity(0.8)
+                              : Color.secondary.opacity(boundKinds.contains("btn\(b)") ? 0.35 : 0.12))
+                        .frame(width: 5, height: 16)
+                }
+                .position(x: 3, y: b == 3 ? 78 : 98)
             }
 
             // Motion ring at the bottom, lit on any move.
-            Circle()
-                .stroke(activeKinds.contains("move")
-                        ? Color.green
-                        : Color.secondary.opacity(boundKinds.contains("move") ? 0.4 : 0.15),
-                        lineWidth: 1.5)
-                .frame(width: 32, height: 32)
-                .position(x: 45, y: 105)
+            clickable(["move"], "Motion") {
+                Circle()
+                    .stroke(activeKinds.contains("move")
+                            ? Color.green
+                            : Color.secondary.opacity(boundKinds.contains("move") ? 0.4 : 0.15),
+                            lineWidth: 1.5)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Circle())
+            }
+            .position(x: 45, y: 105)
         }
         .frame(width: 90, height: 140)
     }
@@ -168,6 +206,7 @@ struct MouseDiagramView: View {
             .font(.system(size: 7, weight: .bold))
             .foregroundStyle(on ? Color.green : Color.secondary.opacity(bound ? 0.7 : 0.3))
             .frame(width: 10, height: 10)
+            .contentShape(Rectangle())
     }
 
     private func buttonRegion(active: Bool, bound: Bool) -> some View {
@@ -217,23 +256,46 @@ struct MouseDiagramView: View {
     /// bindings do not use that input.
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
-            legendItem(symbol: "1", label: "Left click", bound: boundKinds.contains("btn0"), on: pressedButtons.contains(0))
-            legendItem(symbol: "2", label: "Right click", bound: boundKinds.contains("btn1"), on: pressedButtons.contains(1))
-            legendItem(symbol: "3", label: "Middle click", bound: boundKinds.contains("btn2"), on: pressedButtons.contains(2))
-            legendItem(symbol: "4", label: "Side button 4", bound: boundKinds.contains("btn3"), on: pressedButtons.contains(3))
-            legendItem(symbol: "5", label: "Side button 5", bound: boundKinds.contains("btn4"), on: pressedButtons.contains(4))
-            legendItem(symbol: "▲▼", label: "Scroll up / down",
-                       bound: boundKinds.contains("scrollUp") || boundKinds.contains("scrollDown"),
-                       on: activeKinds.contains("scrollUp") || activeKinds.contains("scrollDown"))
-            legendItem(symbol: "◀▶", label: "Scroll left / right",
-                       bound: boundKinds.contains("scrollLeft") || boundKinds.contains("scrollRight"),
-                       on: activeKinds.contains("scrollLeft") || activeKinds.contains("scrollRight"))
-            legendItem(symbol: "↔︎", label: "Motion", bound: boundKinds.contains("move"), on: activeKinds.contains("move"))
-            legendItem(symbol: "2×", label: "Double click", bound: boundKinds.contains("doubleClick"), on: activeKinds.contains("doubleClick"))
-            legendItem(symbol: "≋", label: "Scroll gesture", bound: boundKinds.contains("scrollGesture"), on: scrollGesture != .none)
-            legendItem(symbol: "◉", label: "Force click",
-                       bound: boundKinds.contains("deepPress") || boundKinds.contains("pressure"),
-                       on: pressureStage >= 2)
+            // Each line a bound input names opens its rows too.
+            clickable(["btn0"], "Left click") {
+                legendItem(symbol: "1", label: "Left click", bound: boundKinds.contains("btn0"), on: pressedButtons.contains(0))
+            }
+            clickable(["btn1"], "Right click") {
+                legendItem(symbol: "2", label: "Right click", bound: boundKinds.contains("btn1"), on: pressedButtons.contains(1))
+            }
+            clickable(["btn2"], "Middle click") {
+                legendItem(symbol: "3", label: "Middle click", bound: boundKinds.contains("btn2"), on: pressedButtons.contains(2))
+            }
+            clickable(["btn3"], "Side button 4") {
+                legendItem(symbol: "4", label: "Side button 4", bound: boundKinds.contains("btn3"), on: pressedButtons.contains(3))
+            }
+            clickable(["btn4"], "Side button 5") {
+                legendItem(symbol: "5", label: "Side button 5", bound: boundKinds.contains("btn4"), on: pressedButtons.contains(4))
+            }
+            clickable(["scrollUp", "scrollDown"], "Scroll up and down") {
+                legendItem(symbol: "▲▼", label: "Scroll up / down",
+                           bound: boundKinds.contains("scrollUp") || boundKinds.contains("scrollDown"),
+                           on: activeKinds.contains("scrollUp") || activeKinds.contains("scrollDown"))
+            }
+            clickable(["scrollLeft", "scrollRight"], "Scroll left and right") {
+                legendItem(symbol: "◀▶", label: "Scroll left / right",
+                           bound: boundKinds.contains("scrollLeft") || boundKinds.contains("scrollRight"),
+                           on: activeKinds.contains("scrollLeft") || activeKinds.contains("scrollRight"))
+            }
+            clickable(["move"], "Motion") {
+                legendItem(symbol: "↔︎", label: "Motion", bound: boundKinds.contains("move"), on: activeKinds.contains("move"))
+            }
+            clickable(["doubleClick"], "Double click") {
+                legendItem(symbol: "2×", label: "Double click", bound: boundKinds.contains("doubleClick"), on: activeKinds.contains("doubleClick"))
+            }
+            clickable(["scrollGesture"], "Scroll gesture") {
+                legendItem(symbol: "≋", label: "Scroll gesture", bound: boundKinds.contains("scrollGesture"), on: scrollGesture != .none)
+            }
+            clickable(["deepPress", "pressure"], "Force click") {
+                legendItem(symbol: "◉", label: "Force click",
+                           bound: boundKinds.contains("deepPress") || boundKinds.contains("pressure"),
+                           on: pressureStage >= 2)
+            }
         }
         .font(.caption2)
     }
@@ -246,6 +308,7 @@ struct MouseDiagramView: View {
             Text(label)
                 .foregroundStyle(on ? Color.green : (bound ? Color.primary : Color.secondary))
         }
+        .contentShape(Rectangle())
     }
 }
 

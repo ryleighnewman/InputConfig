@@ -46,6 +46,13 @@ struct TapCalibrationView: View {
             readout
                 .animation(.easeOut(duration: 0.2), value: lastGesture?.at)
 
+            if isBlocked {
+                Text("macOS refused to switch the motion sensor on, so taps are heard only while another app keeps it running.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             thresholdControls
 
             Spacer(minLength: 0)
@@ -117,10 +124,20 @@ struct TapCalibrationView: View {
         }
     }
 
+    /// Blocked only when the wake was refused AND nothing is arriving. A
+    /// refused wake with reports still flowing (another app has the sensor
+    /// on) works fine and should not be painted red.
+    private var isBlocked: Bool {
+        guard let s = snapshot, s.running else { return false }
+        return s.wakeDenied && s.silence > 0.5
+    }
+
     private var statusChip: some View {
         let (text, color): (String, Color) = {
             guard let s = snapshot else { return ("Starting", .secondary) }
             if !s.running { return (s.error ?? "Sensor not available on this Mac", .red) }
+            if isBlocked { return ("Blocked by macOS", .red) }
+            if s.notResponding { return ("Sensor not responding on this Mac", .red) }
             if s.hz == 0 && s.silence < 1.5 { return ("Waking sensor", .orange) }
             if s.parked { return ("Sensor parked, waking", .orange) }
             return ("Listening", .green)
@@ -139,8 +156,8 @@ struct TapCalibrationView: View {
                     .foregroundStyle(.green)
                     .contentTransition(.opacity)
             } else {
-                Text("Knock to test")
-                    .foregroundStyle(.tertiary)
+                Text(ChassisTapService.shared.isAvailable ? "Knock to test" : "No motion sensor on this Mac")
+                    .foregroundStyle(.hint)
             }
             Spacer()
             Text("strongest")
@@ -165,7 +182,7 @@ struct TapCalibrationView: View {
         Canvas { ctx, size in
             let rect = CGRect(origin: .zero, size: size).insetBy(dx: 0, dy: 6)
             ctx.fill(Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 10),
-                     with: .color(.black.opacity(0.28)))
+                     with: .color(.black.opacity(0.18)))
 
             // Gridlines at decades.
             for g in [0.01, 0.1, 1.0] {
@@ -177,7 +194,13 @@ struct TapCalibrationView: View {
             }
 
             guard let s = snapshot, s.running else {
-                ctx.draw(Text("Waiting for the sensor").font(.callout).foregroundStyle(.secondary),
+                let waiting = ChassisTapService.shared.isAvailable ? "Waiting for the sensor" : "This Mac has no motion sensor"
+                ctx.draw(Text(waiting).font(.callout).foregroundStyle(.secondary),
+                         at: CGPoint(x: rect.midX, y: rect.midY))
+                return
+            }
+            if s.wakeDenied && s.samples.isEmpty {
+                ctx.draw(Text("macOS isn't letting InputConfig turn on the motion sensor").font(.callout).foregroundStyle(.secondary),
                          at: CGPoint(x: rect.midX, y: rect.midY))
                 return
             }
@@ -272,7 +295,7 @@ struct TapCalibrationView: View {
     private var legend: some View {
         HStack(spacing: 14) {
             legendItem(.green, "Counted as a tap")
-            legendItem(.gray, "Ring-down of a strike")
+            legendItem(.gray, "Ring-down or handling")
             legendItem(.red, "Too soon after a tap")
             legendItem(.yellow, "Ignored: typing or clicking")
             Spacer()

@@ -70,6 +70,9 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     private var engineRunningSince: Date?
     private var activePresetName: String?
     private var activePresetStartedAt: Date?
+    /// Each connected controller name, how many with that name are
+    /// connected, and when its time was last rolled into the totals.
+    private var controllerClocks: [String: (count: Int, since: Date)] = [:]
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -85,27 +88,45 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     func controllerConnected(name: String) {
         if connectedSince == nil { connectedSince = Date() }
+        rollControllerClocks()
+        var clock = controllerClocks[name] ?? (0, Date())
+        clock.count += 1
+        controllerClocks[name] = clock
         stats.controllerConnectionCount[name, default: 0] += 1
         markDirty()
     }
 
-    /// Called when the last controller disconnects.
+    /// Called when a controller disconnects.
     func controllerDisconnected(name: String, anyStillConnected: Bool) {
-        // Flush per-name time only if we know how long the last connection
-        // lasted. We don't track per-controller start, only the overall
-        // connectedSince - so apportion by an estimate: 0 here, the rolling
-        // accumulator continues until ALL are gone.
-        _ = name
-        if !anyStillConnected, let since = connectedSince {
-            let delta = Date().timeIntervalSince(since)
-            stats.totalConnectedTime += delta
-            recordDailyConnection(delta: delta)
-            connectedSince = nil
-            // Apportion this run's seconds to whatever controller name
-            // last connected: cheap approximation.
-            stats.controllerTimeByName[name, default: 0] += delta
+        // Each controller's own time, counted from when it connected (or
+        // the last flush). Before, only the seconds since the last flush
+        // reached one name, the last to disconnect.
+        rollControllerClocks()
+        if var clock = controllerClocks[name] {
+            clock.count -= 1
+            controllerClocks[name] = clock.count > 0 ? clock : nil
+        }
+        if !anyStillConnected {
+            controllerClocks.removeAll()
+            if let since = connectedSince {
+                let delta = Date().timeIntervalSince(since)
+                stats.totalConnectedTime += delta
+                recordDailyConnection(delta: delta)
+                connectedSince = nil
+            }
         }
         markDirty()
+    }
+
+    /// Add each connected controller's time since its clock last ran to
+    /// its total, and restart the clocks. Two pads with the same name
+    /// both count.
+    private func rollControllerClocks() {
+        let now = Date()
+        for (name, clock) in controllerClocks {
+            stats.controllerTimeByName[name, default: 0] += now.timeIntervalSince(clock.since) * Double(clock.count)
+            controllerClocks[name] = (clock.count, now)
+        }
     }
 
     func engineStarted(presetName: String) {
@@ -137,7 +158,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         // wiggles don't bloat the persistent file. Prune the bottom
         // quartile by count when we exceed the cap; the top-N readout
         // in StatsView still surfaces the meaningful inputs. Pruning
-        // is amortised: only runs once per N inserts past the cap.
+        // is amortized: only runs once per N inserts past the cap.
         if stats.inputPressCounts.count > Self.inputPressCountsHardCap {
             pruneInputPressCounts()
         }
@@ -214,10 +235,14 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     func resetAll() {
         stats = PersistentStats()
-        connectedSince = nil
-        engineRunningSince = nil
-        activePresetName = nil
-        activePresetStartedAt = nil
+        // Zero the totals but keep the clocks running from now: a
+        // controller that is still connected, or a preset still running,
+        // went on counting nothing until it was reconnected or restarted.
+        let now = Date()
+        if connectedSince != nil { connectedSince = now }
+        if engineRunningSince != nil { engineRunningSince = now }
+        if activePresetStartedAt != nil { activePresetStartedAt = now }
+        for (name, clock) in controllerClocks { controllerClocks[name] = (clock.count, now) }
         flushNow()
         // Publish right away so the open Statistics sheet shows the zeros
         // instead of waiting for the next dirty flush.
@@ -275,6 +300,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
             stats.totalEngineRunningTime += Date().timeIntervalSince(s)
             engineRunningSince = Date()
         }
+        rollControllerClocks()
         if let name = activePresetName, let s = activePresetStartedAt {
             stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
             activePresetStartedAt = Date()
@@ -309,6 +335,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
             stats.totalEngineRunningTime += Date().timeIntervalSince(s)
             engineRunningSince = Date()
         }
+        rollControllerClocks()
         if let name = activePresetName, let s = activePresetStartedAt {
             stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
             activePresetStartedAt = Date()
@@ -324,8 +351,13 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode(PersistentStats.self, from: data) else {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        guard let decoded = try? JSONDecoder().decode(PersistentStats.self, from: data) else {
+            // Unreadable: keep it beside the new file instead of letting
+            // the next flush write over the only copy of lifetime stats.
+            let aside = fileURL.deletingPathExtension()
+                .appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
+            try? FileManager.default.moveItem(at: fileURL, to: aside)
             return
         }
         stats = decoded

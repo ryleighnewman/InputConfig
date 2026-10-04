@@ -297,6 +297,9 @@ final class SystemStatsService: ObservableObject {
             next.source = str
         }
 
+        // Cleared first: when the system stops giving an estimate (just
+        // plugged in, calculating) the old one stayed on screen.
+        next.minutesRemaining = nil
         for src in sources {
             guard let info = IOPSGetPowerSourceDescription(blob, src)?
                 .takeUnretainedValue() as? [String: Any] else { continue }
@@ -349,40 +352,22 @@ final class SystemStatsService: ObservableObject {
         lastPowerSampleAt = 0
     }
 
-    /// Returns the process's CPU usage as a percentage of TOTAL system
-    /// capacity, where 100 means every core is fully loaded by us.
+    /// Returns the process's CPU usage in the Activity Monitor convention:
+    /// 100 means one core fully busy, so the value can pass 100 on
+    /// multicore work (clamped at cores times 100).
     ///
-    /// Previous implementation returned per-core percent (one core
-    /// saturated = 100, two cores = 200, ... up to NCPU × 100). That's
-    /// the raw value `task_thread_times_info` deltas naturally produce
-    /// because they sum CPU time across every running thread. Users
-    /// reading "200%" on an 8-core machine reasonably thought the
-    /// readout was broken; Activity Monitor uses the same convention
-    /// only inside its per-process column header, not the cumulative
-    /// load chart, so the convention was confusing here.
-    ///
-    /// Now we divide by the active processor count so 100% means "the
-    /// app is saturating every core". A still-tabbed-out InputConfig
-    /// is usually under 5%; with the engine running on a busy preset
-    /// it ticks up into the 10-15% range on M-series hardware.
+    /// Read with getrusage, which counts every thread the process has
+    /// run, including ones that have exited. TASK_THREAD_TIMES_INFO counts
+    /// only live threads, so a worker thread finishing made the total drop
+    /// and the next sample read low or zero.
     private func readCPUPercent(now: TimeInterval) -> Double {
-        var info = task_thread_times_info()
-        var count = mach_msg_type_number_t(MemoryLayout<task_thread_times_info>.size
-                                            / MemoryLayout<integer_t>.size)
-        let kr = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_,
-                          task_flavor_t(TASK_THREAD_TIMES_INFO),
-                          $0,
-                          &count)
-            }
-        }
-        guard kr == KERN_SUCCESS else { return current.cpuPercent }
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return current.cpuPercent }
 
-        let userSecs = Double(info.user_time.seconds)
-            + Double(info.user_time.microseconds) / 1_000_000.0
-        let sysSecs = Double(info.system_time.seconds)
-            + Double(info.system_time.microseconds) / 1_000_000.0
+        let userSecs = Double(usage.ru_utime.tv_sec)
+            + Double(usage.ru_utime.tv_usec) / 1_000_000.0
+        let sysSecs = Double(usage.ru_stime.tv_sec)
+            + Double(usage.ru_stime.tv_usec) / 1_000_000.0
         let totalCPU = userSecs + sysSecs
 
         defer {
@@ -432,7 +417,12 @@ final class SystemStatsService: ObservableObject {
         var count = mach_msg_type_number_t(0)
         let kr = task_threads(mach_task_self_, &list, &count)
         guard kr == KERN_SUCCESS, let list = list else { return 0 }
-        // Free the array IOKit allocated for us.
+        // Each entry is a send right to a thread port; not releasing them
+        // leaked one right per thread on every 1 Hz sample.
+        for i in 0..<Int(count) {
+            mach_port_deallocate(mach_task_self_, list[i])
+        }
+        // Free the array the kernel allocated for us.
         let size = vm_size_t(Int(count) * MemoryLayout<thread_act_t>.stride)
         vm_deallocate(mach_task_self_,
                       vm_address_t(UInt(bitPattern: OpaquePointer(list))),

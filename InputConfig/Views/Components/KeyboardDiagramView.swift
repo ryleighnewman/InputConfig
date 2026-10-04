@@ -14,6 +14,24 @@ struct KeyboardDiagramView: View {
     let boundKeyCodes: Set<Int>
     /// HID keycodes currently pressed - drawn green on top of the base.
     let pressedKeyCodes: Set<Int>
+    /// Makes a bound key clickable: the host wraps its tile in its
+    /// inspector (the popover listing the key's rows, each a way to the
+    /// editor) for the tile's codes, under the key's name. Keys no row uses
+    /// stay as they are. nil leaves the diagram read-only.
+    var inspect: ((_ codes: [Int], _ name: String, _ tile: AnyView) -> AnyView)? = nil
+
+    /// A tile wrapped for clicking when a row binds any of its codes. With
+    /// clicking on, the other tiles are hidden from VoiceOver, so it moves
+    /// between the bound keys alone.
+    @ViewBuilder
+    private func clickable<Tile: View>(codes: [Int], @ViewBuilder _ tile: () -> Tile) -> some View {
+        if let inspect, codes.contains(where: { boundKeyCodes.contains($0) }) {
+            let name = codes.first.map { KeyCodeMap.name(for: $0) } ?? "Key"
+            inspect(codes, name, AnyView(tile().accessibilityLabel(name)))
+        } else {
+            tile().accessibilityHidden(inspect != nil)
+        }
+    }
 
     /// Standard keyboard rows. Each tuple is (HID code, label, width
     /// multiplier where 1.0 = single key). nil HID means "spacer",
@@ -141,7 +159,7 @@ struct KeyboardDiagramView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Numpad")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                     ForEach(Self.numpadRows.indices, id: \.self) { rowIdx in
                         keyRow(Self.numpadRows[rowIdx])
                     }
@@ -151,13 +169,28 @@ struct KeyboardDiagramView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Extra keys")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                     ForEach(Self.extraRows.indices, id: \.self) { rowIdx in
                         keyRow(Self.extraRows[rowIdx])
                     }
                 }
             }
         }
+        // The tiles are drawings, so VoiceOver read nothing here. One
+        // element says which keys are held and which ones this slot binds,
+        // holding the bound keys as buttons when they can be clicked.
+        .accessibilityElement(children: inspect != nil && !boundKeyCodes.isEmpty ? .contain : .ignore)
+        .accessibilityLabel("Keyboard")
+        .accessibilityValue(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        func names(_ codes: Set<Int>) -> String {
+            codes.sorted().map { KeyCodeMap.name(for: $0) }.joined(separator: ", ")
+        }
+        let pressed = pressedKeyCodes.isEmpty ? "No keys pressed" : "Pressed: \(names(pressedKeyCodes))"
+        let bound = boundKeyCodes.isEmpty ? "no keys bound" : "bound: \(names(boundKeyCodes))"
+        return "\(pressed); \(bound)"
     }
 
     @ViewBuilder
@@ -206,16 +239,18 @@ struct KeyboardDiagramView: View {
     private func halfTile(hid: Int, label: String, mult: Double) -> some View {
         let pressed = pressedKeyCodes.contains(hid)
         let bound = boundKeyCodes.contains(hid)
-        return ZStack {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(pressed ? Color.green.opacity(0.85) : Color.secondary.opacity(bound ? 0.22 : 0.08))
-            RoundedRectangle(cornerRadius: 3)
-                .stroke(pressed ? Color.green : Color.secondary.opacity(bound ? 0.55 : 0.2), lineWidth: pressed ? 1.5 : 0.75)
-            Text(label)
-                .font(.system(size: 6, weight: pressed ? .semibold : .regular))
-                .foregroundStyle(pressed ? .white : (bound ? Color.primary : Color.secondary))
+        return clickable(codes: [hid]) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(pressed ? Color.green.opacity(0.85) : Color.secondary.opacity(bound ? 0.22 : 0.08))
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(pressed ? Color.green : Color.secondary.opacity(bound ? 0.55 : 0.2), lineWidth: pressed ? 1.5 : 0.75)
+                Text(label)
+                    .font(.system(size: 6, weight: pressed ? .semibold : .regular))
+                    .foregroundStyle(pressed ? .white : (bound ? Color.primary : Color.secondary))
+            }
+            .frame(width: keyUnit * CGFloat(mult), height: (keyUnit - 2) / 2)
         }
-        .frame(width: keyUnit * CGFloat(mult), height: (keyUnit - 2) / 2)
     }
 
     /// One tile. Lit when any of its codes is down, in full contrast when
@@ -224,7 +259,7 @@ struct KeyboardDiagramView: View {
     private func keyTile<Face: View>(codes: [Int], mult: Double, @ViewBuilder face: () -> Face) -> some View {
         let pressed = codes.contains { pressedKeyCodes.contains($0) }
         let bound = codes.contains { boundKeyCodes.contains($0) }
-        if true {
+        clickable(codes: codes) {
             ZStack {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(pressed ? Color.green.opacity(0.85)

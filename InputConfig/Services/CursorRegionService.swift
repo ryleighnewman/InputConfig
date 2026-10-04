@@ -15,7 +15,7 @@ import AppKit
 ///
 /// Same rectangle model (`TouchpadRegion`) is reused so the calibration
 /// UI and the binding editor can share most of their code. The only
-/// behavioural difference is the data source: where TouchpadService
+/// behavioral difference is the data source: where TouchpadService
 /// asks "is finger 0 inside Region X right now?" this service asks
 /// "is the cursor inside Region X right now?"
 @MainActor
@@ -24,7 +24,7 @@ final class CursorRegionService: ObservableObject {
 
     @Published private(set) var regions: [TouchpadRegion] = []
 
-    /// Normalised cursor position in [0, 1] × [0, 1] across whichever
+    /// Normalized cursor position in [0, 1] × [0, 1] across whichever
     /// display the cursor is currently on, not the primary one, so a
     /// region means the same corner of whatever screen you are pointing
     /// at. (0, 0) is top-left.
@@ -32,7 +32,7 @@ final class CursorRegionService: ObservableObject {
 
     /// The display the cursor is on right now, so a map of these regions
     /// can be drawn in that screen's real shape and named. Regions are
-    /// normalised per display, so the same region follows the pointer from
+    /// normalized per display, so the same region follows the pointer from
     /// the built-in screen to an external one.
     @Published private(set) var currentScreenName: String = ""
     /// Width divided by height of that display.
@@ -49,7 +49,7 @@ final class CursorRegionService: ObservableObject {
         var key: DisplayKey
         var aspect: CGFloat
         var isMain: Bool
-        var id: String { key.name + "\(key.vendor)-\(key.model)-\(key.serial)" }
+        var id: String { key.name + "\(key.vendor)-\(key.model)-\(key.serial)-\(key.uuid ?? "")" }
     }
     /// Every display attached right now, main first. Refreshed whenever
     /// macOS reports a display change.
@@ -59,8 +59,11 @@ final class CursorRegionService: ObservableObject {
     static func key(for screen: NSScreen) -> DisplayKey {
         let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
         let id = CGDirectDisplayID(number)
+        let uuid = CGDisplayCreateUUIDFromDisplayID(id).map {
+            CFUUIDCreateString(nil, $0.takeRetainedValue()) as String
+        }
         return DisplayKey(vendor: CGDisplayVendorNumber(id), model: CGDisplayModelNumber(id),
-                          serial: CGDisplaySerialNumber(id), name: screen.localizedName)
+                          serial: CGDisplaySerialNumber(id), name: screen.localizedName, uuid: uuid)
     }
 
     func refreshDisplays() {
@@ -180,13 +183,6 @@ final class CursorRegionService: ObservableObject {
 
     // MARK: - Hit testing
 
-    /// True iff the cursor is currently inside the region with the given
-    /// ID. Used by `MappingEngine.checkInput` for `.cursorRegion` inputs.
-    ///
-    /// Zero-width / zero-height regions are treated as never-pressed.
-    /// Otherwise the cursor sitting exactly on the line of a 0-area
-    /// "region" would flicker the binding on every sub-pixel jitter,
-    /// which is confusing UX rather than useful behaviour.
     /// One-shot cursor sample, for views (the Cursor Regions map) that want
     /// a live position dot while visible even when no preset is running the
     /// continuous tracking path.
@@ -194,7 +190,18 @@ final class CursorRegionService: ObservableObject {
         updateFromScreenPoint(NSEvent.mouseLocation, originIsBottomLeft: true)
     }
 
+    /// True iff the cursor is currently inside the region with the given
+    /// ID. Used by `MappingEngine.checkInput` for `.cursorRegion` inputs.
+    ///
+    /// Zero-width / zero-height regions are treated as never-pressed.
+    /// Otherwise the cursor sitting exactly on the line of a 0-area
+    /// "region" would flicker the binding on every sub-pixel jitter,
+    /// which is confusing UX rather than useful behavior.
+    ///
+    /// False while nobody is tracking: the last sampled position goes
+    /// stale, and a region under it would read as held forever.
     func isRegionPressed(_ id: UUID) -> Bool {
+        guard pollTimer != nil else { return false }
         guard let r = region(with: id) else { return false }
         guard r.maxX > r.minX && r.maxY > r.minY else { return false }
         // A region drawn for one display is silent on every other.
@@ -206,21 +213,15 @@ final class CursorRegionService: ObservableObject {
 
     // MARK: - Cursor tracking
 
-    /// Update from a CGEvent location (`event.location`) which is in
-    /// **top-left-origin** screen coordinates already.
-    func updateFromCGEventLocation(_ point: CGPoint) {
-        updateFromScreenPoint(point, originIsBottomLeft: false)
-    }
-
     /// Update from an NSEvent / NSScreen point (`NSEvent.mouseLocation`)
     /// which is in **bottom-left-origin** screen coordinates.
     ///
     /// Multi-display handling: the cursor lives in a single virtual
     /// coordinate space spanning every connected NSScreen. We look up
-    /// which screen actually contains the point and normalise against
+    /// which screen actually contains the point and normalize against
     /// THAT screen's frame, so a cursor on a secondary display still
     /// matches regions drawn at the user's primary-display
-    /// proportions. (Previously we always normalised against
+    /// proportions. (Previously we always normalized against
     /// NSScreen.main, so cursor regions silently failed on secondary
     /// monitors.) HiDPI: NSScreen.frame is already in points - same
     /// space as the NSEvent / CGEvent location - so no extra scaling
@@ -228,8 +229,8 @@ final class CursorRegionService: ObservableObject {
     private func updateFromScreenPoint(_ point: CGPoint, originIsBottomLeft: Bool) {
         // Pick the screen whose frame contains the cursor point. Fall
         // back to NSScreen.main so we never crash on display teardown.
-        let screen = NSScreen.screens.first { $0.frame.contains(point) }
-            ?? NSScreen.main
+        // Its top row included, a shared edge not (see CursorGuardService).
+        let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main
         guard let screen = screen else { return }
         let frame = screen.frame
         guard frame.width > 0, frame.height > 0 else { return }

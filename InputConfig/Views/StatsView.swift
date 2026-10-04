@@ -1,12 +1,8 @@
 import SwiftUI
 import Charts
 
-/// Lifetime statistics dashboard. Opened from the round chart icon in the
-/// main window toolbar. Everything shown here is local - no telemetry leaves
-/// the device.
-/// One tile's worth of detail. Each `bigTiles` cell instantiates a
-/// `StatTileView` with one of these and a click handler routes through
-/// to the StatsView's sheet.
+/// One tile's worth of detail. Each tile in the grid is a `StatTileView`
+/// built from one of these, and clicking it opens a `StatDetailPopover`.
 struct StatDetail: Identifiable {
     let id = UUID()
     let icon: String
@@ -14,13 +10,13 @@ struct StatDetail: Identifiable {
     let value: String
     let label: String
     /// Plain-English explanation of what the number actually counts. Shown
-    /// in the detail sheet so the user understands how each metric is
+    /// in the detail popover so the user understands how each metric is
     /// gathered.
     let explanation: String
     /// Optional related rows ("see also") for richer drill-downs.
     var related: [(label: String, value: String)] = []
     /// Top inputs leaderboard (button presses / axis flicks / etc.). Drawn
-    /// as a mini horizontal-bar chart inside the detail sheet.
+    /// as a mini horizontal-bar chart inside the detail popover.
     var topInputs: [(key: String, count: Int)]? = nil
     /// Top presets leaderboard.
     var topPresets: [(name: String, count: Int)]? = nil
@@ -31,11 +27,13 @@ struct StatDetail: Identifiable {
     var last14Days: [TimeInterval]? = nil
 }
 
+/// Lifetime statistics dashboard. Opened from the round chart icon in the
+/// main window toolbar. Everything shown here is local; no telemetry leaves
+/// the device.
 struct StatsView: View {
     @StateObject private var service: StatsServiceRef = StatsServiceRef()
     @Environment(\.dismiss) private var dismiss
     @State private var showResetConfirmation = false
-    @State var selectedDetail: StatDetail?
     /// Subscribed to live so the power tiles update once per second
     /// while the dashboard is open.
     @ObservedObject private var sysStats = SystemStatsService.shared
@@ -45,40 +43,31 @@ struct StatsView: View {
             header
                 .padding(.horizontal, 22)
                 .padding(.top, 22)
-                .padding(.bottom, 12)
+                .padding(.bottom, 6)
 
             // ScrollView sits flush against the sheet edges so the scroll
             // bar tracks against the outer edge of the window, not inset
-            // by the sheet's padding.
+            // by the sheet's padding. The content keeps a top inset of its
+            // own: flush against the clip edge, the first row of tiles lost
+            // its top edge, its keyboard focus ring, and its hover lift.
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    bigTiles
-                    sectionCard {
-                        sectionHeader("Top presets by activation count")
-                        presetsChart
+                VStack(alignment: .leading, spacing: Metrics.gap) {
+                    tileGrid
+                    HStack(alignment: .top, spacing: Metrics.gap) {
+                        glassCard("Favorite presets") { presetsChart }
+                        glassCard("Most-pressed inputs") { inputsSection }
                     }
-                    sectionCard {
-                        sectionHeader("Most-pressed inputs")
-                        inputsSection
+                    .fixedSize(horizontal: false, vertical: true)
+                    glassCard("Last 14 days", trailing: busiestDayText) { timelineChart }
+                    HStack(alignment: .top, spacing: Metrics.gap) {
+                        glassCard("Time per controller") { controllersSection }
+                        glassCard("Output mix") { outputsChart }
                     }
-                    sectionCard {
-                        sectionHeader("Time per controller")
-                        controllersSection
-                    }
-                    sectionCard {
-                        sectionHeader("Last 14 days connected")
-                        timelineChart
-                    }
-                    sectionCard {
-                        sectionHeader("Output mix")
-                        outputsChart
-                    }
-                    sectionCard {
-                        sectionHeader("Power & energy (this session)")
-                        powerSection
-                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    glassCard("This session", trailing: "Energy is an estimate") { powerSection }
                 }
                 .padding(.horizontal, 22)
+                .padding(.top, 8)
                 .padding(.bottom, 16)
             }
 
@@ -100,7 +89,10 @@ struct StatsView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
         }
-        .frame(width: 740, height: 720)
+        .frame(width: 780, height: 740)
+        // The app's layered icon look, set here too so every icon in the
+        // sheet and its popovers draws its secondary layers translucent.
+        .symbolRenderingMode(.hierarchical)
         .onAppear { sysStats.retain() }
         .onDisappear { sysStats.release() }
         .confirmationDialog("Reset all statistics?",
@@ -114,10 +106,6 @@ struct StatsView: View {
         } message: {
             Text("Lifetime counters, daily logs, and per-preset history will all return to zero. This cannot be undone.")
         }
-        .sheet(item: $selectedDetail) { detail in
-            StatDetailSheet(detail: detail)
-                .glassBackground()
-        }
     }
 
     // MARK: - Header
@@ -125,26 +113,39 @@ struct StatsView: View {
     private var header: some View {
         HStack(spacing: 14) {
             Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.system(size: 28))
+                .font(.system(size: 26))
                 .iconTint(Color.accentColor)
-                .frame(width: 40, height: 40)
-                .background(
-                    Circle().fill(Color.accentColor.opacity(0.15))
-                )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Statistics")
-                    .font(.title2.weight(.semibold))
-                Text("Lifetime usage of InputConfig on this Mac. Local only.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+                .frame(width: 44, height: 44)
+                .liquidGlass(in: Circle(), tint: Color.accentColor.opacity(0.25))
+                .accessibilityHidden(true)
+            Text("Statistics")
+                .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Spacer()
         }
     }
 
-    // MARK: - Big tiles
+    // MARK: - Tiles
 
-    private var bigTiles: some View {
+    private struct TileSpec {
+        let detail: StatDetail
+        let subline: String
+        let count: Double
+        let alwaysShown: Bool
+    }
+
+    /// Tiles for the counters that have something to show. A counter still
+    /// at zero gets no tile at all, so there is never a wall of zeros.
+    private var tileGrid: some View {
+        let shown = tileSpecs.filter { $0.alwaysShown || $0.count > 0 }
+        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 10)], spacing: 10) {
+            ForEach(shown, id: \.detail.label) { spec in
+                StatTileView(detail: spec.detail, subline: spec.subline)
+            }
+        }
+    }
+
+    private var tileSpecs: [TileSpec] {
         let s = service.stats
         // Helpers shared across multiple tiles so each detail sheet can
         // surface real breakdowns instead of a static explanation.
@@ -152,10 +153,15 @@ struct StatsView: View {
         let topPresets = service.topPresets.prefix(5).map { (name: $0.name, count: $0.count) }
         let topCtrls = service.topControllers.prefix(5).map { (name: $0.name, seconds: $0.time) }
         let last14 = service.last14DaysConnected.map(\.seconds)
+        let activeMinutes = s.totalEngineRunningTime / 60
+        func perMinute(_ n: Int) -> String {
+            activeMinutes >= 1 ? "\(bigNumber(Int(Double(n) / activeMinutes))) per active minute" : "per active minute soon"
+        }
+        let meters = Double(s.totalMouseMotionPixels) / 96.0 * 0.0254
 
-        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
-            StatTileView(detail: StatDetail(
-                icon: "gamecontroller", tint: .blue,
+        return [
+            TileSpec(detail: StatDetail(
+                icon: "gamecontroller.fill", tint: .blue,
                 value: timeShort(s.totalConnectedTime),
                 label: "Time with a controller",
                 explanation: "Cumulative time any controller has been plugged in or paired since you first launched the app.",
@@ -166,9 +172,10 @@ struct StatsView: View {
                         : "-")
                 ],
                 topControllers: topCtrls,
-                last14Days: last14
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                last14Days: last14),
+                subline: service.daysTracked > 0 ? "\(timeShort(s.totalConnectedTime / Double(service.daysTracked))) a day on average" : "",
+                count: s.totalConnectedTime, alwaysShown: true),
+            TileSpec(detail: StatDetail(
                 icon: "play.fill", tint: .green,
                 value: timeShort(s.totalEngineRunningTime),
                 label: "Time with a preset active",
@@ -180,28 +187,39 @@ struct StatsView: View {
                         : "-"),
                     ("Connected vs active",
                         s.totalConnectedTime > 0
-                        ? String(format: "%.1f%%", s.totalEngineRunningTime / s.totalConnectedTime * 100)
+                        ? String(format: "%.1f%%", min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100))
                         : "-")
                 ],
-                topPresets: topPresets
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                topPresets: topPresets),
+                subline: s.totalConnectedTime > 0
+                    ? "\(Int(min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100).rounded()))% of connected time" : "",
+                count: s.totalEngineRunningTime, alwaysShown: true),
+            TileSpec(detail: StatDetail(
                 icon: "hand.point.up.left.fill", tint: .orange,
                 value: bigNumber(s.totalButtonPresses),
-                label: "Total button presses",
+                label: "Button presses",
                 explanation: "Every controller button press counts, across every preset and every controller. Hat / D-pad direction changes count too.",
                 related: [
                     ("Average per minute (active)", s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalButtonPresses) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ],
-                topInputs: topInputs
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
-                icon: "keyboard", tint: .indigo,
+                topInputs: topInputs),
+                subline: perMinute(s.totalButtonPresses),
+                count: Double(s.totalButtonPresses), alwaysShown: true),
+            TileSpec(detail: StatDetail(
+                icon: "arrowtriangle.up.fill", tint: .red,
+                value: "\(s.presetActivationCount)",
+                label: "Preset activations",
+                explanation: "Number of distinct times you've turned a preset on. Toggling off then back on counts as a fresh activation.",
+                topPresets: topPresets),
+                subline: service.topPresets.first.map { "Most often \($0.name)" } ?? "",
+                count: Double(s.presetActivationCount), alwaysShown: true),
+            TileSpec(detail: StatDetail(
+                icon: "keyboard.fill", tint: .indigo,
                 value: bigNumber(s.totalKeyPresses),
                 label: "Keystrokes sent",
-                explanation: "Number of synthetic key events the engine has sent to macOS. One press + release = 2 events. Macros multiply this.",
+                explanation: "Number of key outputs the engine has fired. A press and its release count once; a row with several keys counts each one.",
                 related: [
                     ("Per minute active", s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalKeyPresses) / (s.totalEngineRunningTime / 60)))
@@ -209,119 +227,110 @@ struct StatsView: View {
                     ("Per button press", s.totalButtonPresses > 0
                         ? String(format: "%.2fx", Double(s.totalKeyPresses) / Double(s.totalButtonPresses))
                         : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                ]),
+                subline: perMinute(s.totalKeyPresses),
+                count: Double(s.totalKeyPresses), alwaysShown: false),
+            TileSpec(detail: StatDetail(
                 icon: "cursorarrow.click.2", tint: .pink,
                 value: bigNumber(s.totalMouseClicks),
                 label: "Mouse clicks sent",
-                explanation: "Synthetic mouse-button events sent by the engine. Includes left, right, and middle clicks plus their releases.",
+                explanation: "Mouse-button outputs the engine has fired: left, right, middle, and other buttons. A press and its release count once.",
                 related: [
                     ("Per minute active", s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalMouseClicks) / (s.totalEngineRunningTime / 60)))
                         : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                ]),
+                subline: perMinute(s.totalMouseClicks),
+                count: Double(s.totalMouseClicks), alwaysShown: false),
+            TileSpec(detail: StatDetail(
+                icon: "cursorarrow.motionlines", tint: .teal,
+                value: meters >= 1000 ? String(format: "%.2f km", meters / 1000) : String(format: "%.1f m", meters),
+                label: "Pointer travel",
+                explanation: "How far the engine has moved the cursor, measured as pixels on a 96 dpi screen. Stick aim, gyro aim, and touchpad mouse all contribute.",
+                related: [
+                    ("Pixels", bigNumber(s.totalMouseMotionPixels)),
+                    ("Inches (96 dpi)", String(format: "%.1f\"", Double(s.totalMouseMotionPixels) / 96.0)),
+                    ("Per minute active", s.totalEngineRunningTime > 60
+                        ? bigNumber(Int(Double(s.totalMouseMotionPixels) / (s.totalEngineRunningTime / 60))) + " px"
+                        : "-")
+                ]),
+                subline: "\(bigNumber(s.totalMouseMotionPixels)) pixels at 96 dpi",
+                count: Double(s.totalMouseMotionPixels), alwaysShown: false),
+            TileSpec(detail: StatDetail(
+                icon: "scroll.fill", tint: .mint,
+                value: bigNumber(s.totalScrollTicks),
+                label: "Scroll ticks",
+                explanation: "Vertical and horizontal scroll steps the engine has sent.",
+                related: [
+                    ("Per minute active", s.totalEngineRunningTime > 60
+                        ? bigNumber(Int(Double(s.totalScrollTicks) / (s.totalEngineRunningTime / 60)))
+                        : "-")
+                ]),
+                subline: perMinute(s.totalScrollTicks),
+                count: Double(s.totalScrollTicks), alwaysShown: false),
+            TileSpec(detail: StatDetail(
                 icon: "music.note", tint: .purple,
                 value: bigNumber(s.totalMidiEvents),
                 label: "MIDI events sent",
-                explanation: "Note-on, note-off, CC, pitch-bend, program change - every event sent to the virtual MIDI source counts.",
+                explanation: "Note-on, note-off, CC, pitch-bend, program change: every event sent to the virtual MIDI source counts.",
                 related: [
                     ("Per minute active", s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalMidiEvents) / (s.totalEngineRunningTime / 60)))
                         : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
-                icon: "cursorarrow.motionlines", tint: .teal,
-                value: bigNumber(s.totalMouseMotionPixels),
-                label: "Mouse motion (pixels)",
-                explanation: "Total absolute pixel-delta the engine has moved the cursor. Stick aim, gyro aim, and touchpad mouse all contribute.",
-                related: [
-                    ("Inches (96 dpi)", String(format: "%.1f\"", Double(s.totalMouseMotionPixels) / 96.0)),
-                    ("Miles equivalent", String(format: "%.4f mi", Double(s.totalMouseMotionPixels) / 96.0 / 63360.0)),
-                    ("Per minute active", s.totalEngineRunningTime > 60
-                        ? bigNumber(Int(Double(s.totalMouseMotionPixels) / (s.totalEngineRunningTime / 60))) + " px"
-                        : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
-                icon: "scroll", tint: .mint,
-                value: bigNumber(s.totalScrollTicks),
-                label: "Scroll ticks",
-                explanation: "Vertical + horizontal scroll wheel ticks the engine has emitted. Each click of a wheel = 1 tick.",
-                related: [
-                    ("Approx. lines scrolled", bigNumber(s.totalScrollTicks * 3))
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                ]),
+                subline: perMinute(s.totalMidiEvents),
+                count: Double(s.totalMidiEvents), alwaysShown: false),
+            TileSpec(detail: StatDetail(
                 icon: "rectangle.and.hand.point.up.left.fill", tint: .cyan,
                 value: bigNumber(s.totalTouchpadFingerEvents),
                 label: "Touchpad finger updates",
-                explanation: "Each new position sample received from the DualSense / DualShock 4 touchpad helper counts as one event. Long sliding gestures generate many.",
+                explanation: "Each new finger position reported by a DualSense or DualShock 4 touchpad counts as one update. Long sliding gestures generate many.",
                 related: [
                     ("Per minute active", s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalTouchpadFingerEvents) / (s.totalEngineRunningTime / 60)))
                         : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
+                ]),
+                subline: perMinute(s.totalTouchpadFingerEvents),
+                count: Double(s.totalTouchpadFingerEvents), alwaysShown: false),
+            TileSpec(detail: StatDetail(
                 icon: "bolt.fill", tint: .yellow,
                 value: bigNumber(s.totalMacroExecutions),
-                label: "Macros executed",
+                label: "Macros run",
                 explanation: "Number of times a macro binding has fired. Each macro chain counts once regardless of how many steps it contains.",
                 related: [
                     ("Per activation", s.presetActivationCount > 0
                         ? String(format: "%.2f", Double(s.totalMacroExecutions) / Double(s.presetActivationCount))
                         : "-")
-                ]
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
-                icon: "arrowtriangle.up.fill", tint: .red,
-                value: "\(s.presetActivationCount)",
-                label: "Preset activations",
-                explanation: "Number of distinct times you've turned a preset on. Toggling off then back on counts as a fresh activation.",
-                topPresets: topPresets
-            ), onSelect: openDetail)
-            StatTileView(detail: StatDetail(
-                icon: "calendar", tint: .gray,
-                value: "\(service.daysTracked)",
-                label: "Days tracked",
-                explanation: "Count of distinct calendar days with any controller activity (button press, preset activation, etc.).",
-                related: [
-                    ("Average / day", service.daysTracked > 0
-                        ? timeShort(s.totalConnectedTime / Double(service.daysTracked))
-                        : "-")
-                ],
-                last14Days: last14
-            ), onSelect: openDetail)
-        }
-    }
-
-    private func openDetail(_ detail: StatDetail) {
-        selectedDetail = detail
+                ]),
+                subline: s.presetActivationCount > 0
+                    ? String(format: "%.1f per activation", Double(s.totalMacroExecutions) / Double(s.presetActivationCount)) : "",
+                count: Double(s.totalMacroExecutions), alwaysShown: false),
+        ]
     }
 
     // MARK: - Cards / Sections
 
-    /// Lightly tinted rounded card behind each section. Gives the dashboard
-    /// a more "designed" feel than bare dividers.
-    @ViewBuilder
-    private func sectionCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// A section on its own glass card, the app's one card surface.
+    private func glassCard<Content: View>(_ title: String, trailing: String? = nil,
+                                          @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                if let trailing, !trailing.isEmpty {
+                    Text(trailing)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             content()
+            Spacer(minLength: 0)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.secondary.opacity(0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
-        )
+        .padding(Metrics.cardPad)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -330,22 +339,12 @@ struct StatsView: View {
         if top.isEmpty {
             emptyHint("Activate a preset to start tracking.")
         } else {
-            // Compact mini-bar leaderboard. Each row is the preset name, a
-            // capsule sized by its share of the leader, and the raw
-            // activation count. Same format as the inputs section below so
-            // the two sections read as a unit and don't waste vertical space
-            // on chart axes / annotations.
             let maxCount = max(1, top.first?.count ?? 1)
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(top, id: \.name) { row in
-                    leaderboardRow(
-                        icon: "play.circle.fill",
-                        iconColor: .green,
-                        label: row.name,
-                        count: row.count,
-                        maxCount: maxCount,
-                        barTint: .green
-                    )
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(top.enumerated()), id: \.element.name) { i, row in
+                    leaderboardRow(rank: i + 1, icon: nil, iconColor: .green,
+                                   label: row.name, count: row.count,
+                                   maxCount: maxCount, barTint: .green)
                 }
             }
         }
@@ -353,62 +352,64 @@ struct StatsView: View {
 
     @ViewBuilder
     private var inputsSection: some View {
-        let top = service.topInputs
+        let top = Array(service.topInputs.prefix(5))
         if top.isEmpty {
             emptyHint("Push a button on your controller while a preset is active to start tracking.")
         } else {
             let maxCount = max(1, top.first?.count ?? 1)
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(top, id: \.key) { row in
-                    leaderboardRow(
-                        icon: iconForInputKey(row.key),
-                        iconColor: .orange,
-                        label: prettyInputLabel(row.key),
-                        count: row.count,
-                        maxCount: maxCount,
-                        barTint: .orange
-                    )
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(top.enumerated()), id: \.element.key) { i, row in
+                    leaderboardRow(rank: i + 1, icon: iconForInputKey(row.key), iconColor: .orange,
+                                   label: prettyInputLabel(row.key), count: row.count,
+                                   maxCount: maxCount, barTint: .orange)
                 }
             }
         }
     }
 
-    /// One row in a compact horizontal leaderboard: icon, single-line label,
-    /// filled capsule bar, count. Used by both the preset and input
-    /// sections so they look like a single coherent unit.
-    private func leaderboardRow(icon: String,
+    /// One leaderboard row: rank, optional icon, the name, its count, and a
+    /// thin bar under the name sized by its share of the leader.
+    private func leaderboardRow(rank: Int,
+                                icon: String?,
                                 iconColor: Color,
                                 label: String,
                                 count: Int,
                                 maxCount: Int,
                                 barTint: Color) -> some View {
-        HStack(spacing: 8) {
-            IconView(name: icon, glyphHeight: 12)
-                .foregroundStyle(iconColor)
-                .frame(width: 16)
+        HStack(alignment: .center, spacing: 8) {
+            Text("\(rank)")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(rank == 1 ? AnyShapeStyle(barTint) : AnyShapeStyle(.tertiary))
+                .frame(width: 14, alignment: .trailing)
                 .accessibilityHidden(true)
-            Text(label)
-                .font(.callout)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(width: 200, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.secondary.opacity(0.12))
-                    Capsule()
-                        .fill(barTint.gradient)
-                        .frame(width: max(2, CGFloat(Double(count) / Double(maxCount)) * geo.size.width))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if let icon {
+                        StatIconBadge(icon: icon, tint: iconColor, diameter: 18)
+                    }
+                    Text(label)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Text("\(count)\u{00D7}")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(barTint.opacity(0.8))
+                            .frame(width: max(3, CGFloat(Double(count) / Double(maxCount)) * geo.size.width))
+                    }
+                }
+                .frame(height: 4)
+                .accessibilityHidden(true)
             }
-            .frame(height: 8)
-            .accessibilityHidden(true)
-            Text("\(count)×")
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 48, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
+        .accessibilityLabel("Number \(rank), \(label)")
         .accessibilityValue("\(count) times")
     }
 
@@ -418,30 +419,51 @@ struct StatsView: View {
         if top.isEmpty {
             emptyHint("Connect a controller and use it for a while.")
         } else {
-            VStack(alignment: .leading, spacing: 4) {
+            let total = max(1, top.reduce(0) { $0 + $1.time })
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(top, id: \.name) { row in
                     let conns = service.stats.controllerConnectionCount[row.name] ?? 0
-                    HStack(spacing: 10) {
-                        ControllerGlyph(height: 14)
-                            .iconTint(.blue)
-                            .accessibilityHidden(true)
-                        Text(row.name)
-                            .font(.callout)
-                        Spacer()
-                        Text("\(conns) connection\(conns == 1 ? "" : "s")")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                        Text(timeShort(row.time))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 80, alignment: .trailing)
+                    let share = row.time / total
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            StatIconBadge(icon: "gamecontroller.fill", tint: .blue, diameter: 18)
+                            Text(row.name)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(timeShort(row.time))
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 8) {
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.primary.opacity(0.08))
+                                    Capsule().fill(Color.blue.opacity(0.75))
+                                        .frame(width: max(3, CGFloat(share) * geo.size.width))
+                                }
+                            }
+                            .frame(height: 4)
+                            Text("\(conns) connection\(conns == 1 ? "" : "s")")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.hint)
+                                .fixedSize()
+                        }
+                        .accessibilityHidden(true)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(row.name)
-                    .accessibilityValue("\(timeShort(row.time)), \(conns) connection\(conns == 1 ? "" : "s")")
+                    .accessibilityValue("\(timeShort(row.time)), \(Int((share * 100).rounded())) percent, \(conns) connection\(conns == 1 ? "" : "s")")
                 }
             }
         }
+    }
+
+    /// "Busiest: Sep 28, 59m", for the 14-day card's corner.
+    private var busiestDayText: String? {
+        guard let best = service.last14DaysConnected.max(by: { $0.seconds < $1.seconds }),
+              best.seconds > 0 else { return nil }
+        return "Busiest: \(best.date.formatted(.dateTime.month(.abbreviated).day())), \(timeShort(best.seconds))"
     }
 
     @ViewBuilder
@@ -451,29 +473,41 @@ struct StatsView: View {
         let total = secs.reduce(0, +)
         let peak = secs.max() ?? 0
         let activeDays = secs.filter { $0 > 0 }.count
-        Chart(days, id: \.date) { day in
-            BarMark(
-                x: .value("Day", day.date, unit: .day),
-                y: .value("Seconds", day.seconds)
-            )
-            .foregroundStyle(day.seconds > 0
-                             ? Color.accentColor.gradient
-                             : Color.secondary.opacity(0.25).gradient)
-            .cornerRadius(3)
+        let average = activeDays > 0 ? total / Double(activeDays) : 0
+        Chart {
+            ForEach(days, id: \.date) { day in
+                BarMark(
+                    x: .value("Day", day.date, unit: .day),
+                    y: .value("Seconds", day.seconds)
+                )
+                .foregroundStyle(day.seconds > 0
+                                 ? Color.accentColor.opacity(0.8)
+                                 : Color.primary.opacity(0.1))
+                .cornerRadius(4)
+            }
+            if activeDays > 1 {
+                RuleMark(y: .value("Average", average))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .foregroundStyle(Color.secondary)
+                    .annotation(position: .top, alignment: .leading) {
+                        Text("average \(timeShort(average))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Controller connection over the last 14 days")
         .accessibilityValue("\(timeShort(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeShort(peak))")
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: 2)) { value in
-                AxisGridLine()
+            AxisMarks(values: .stride(by: .day, count: 2)) { _ in
                 AxisValueLabel(format: .dateTime.day().month(.abbreviated), centered: true)
                     .font(.caption2)
             }
         }
         .chartYAxis {
             AxisMarks { value in
-                AxisGridLine()
+                AxisGridLine().foregroundStyle(Color.primary.opacity(0.08))
                 AxisValueLabel {
                     if let secs = value.as(Double.self) {
                         Text(timeShort(secs))
@@ -482,7 +516,7 @@ struct StatsView: View {
                 }
             }
         }
-        .frame(height: 140)
+        .frame(height: 130)
     }
 
     @ViewBuilder
@@ -500,18 +534,27 @@ struct StatsView: View {
             emptyHint("Fire some outputs while a preset is running to see your mix.")
         } else {
             let total = max(1, nonZero.reduce(0) { $0 + $1.count })
-            HStack(alignment: .top, spacing: 18) {
-                // Donut chart - sector per output kind.
+            HStack(alignment: .center, spacing: 14) {
+                // Donut chart, one sector per output kind, total in the hole.
                 Chart(nonZero, id: \.name) { slice in
                     SectorMark(
                         angle: .value("Count", slice.count),
-                        innerRadius: .ratio(0.55),
-                        angularInset: 2
+                        innerRadius: .ratio(0.62),
+                        angularInset: 1.5
                     )
-                    .cornerRadius(4)
-                    .foregroundStyle(slice.color.gradient)
+                    .cornerRadius(3)
+                    .foregroundStyle(slice.color.opacity(0.85))
                 }
-                .frame(width: 140, height: 140)
+                .chartBackground { _ in
+                    VStack(spacing: 0) {
+                        Text(bigNumber(total))
+                            .font(.headline.monospacedDigit())
+                        Text("outputs")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 104, height: 104)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Output mix")
                 .accessibilityValue(nonZero
@@ -521,31 +564,35 @@ struct StatsView: View {
                 // Legend with raw counts.
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(nonZero, id: \.name) { slice in
-                        HStack(spacing: 8) {
-                            Circle().fill(slice.color).frame(width: 10, height: 10)
+                        HStack(spacing: 7) {
+                            Circle().fill(slice.color.opacity(0.85)).frame(width: 8, height: 8)
                                 .accessibilityHidden(true)
                             Text(slice.name)
                                 .font(.callout)
-                            Spacer()
-                            Text("\(slice.count)")
+                            Spacer(minLength: 4)
+                            Text(Self.share(slice.count, of: total))
                                 .font(.callout.monospacedDigit())
                                 .foregroundStyle(.secondary)
-                            Text("\(Int(Double(slice.count) / Double(total) * 100))%")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                                .frame(width: 40, alignment: .trailing)
                         }
+                        .help("\(slice.count) \(slice.name.lowercased())")
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(slice.name)
                         .accessibilityValue("\(slice.count), \(Int(Double(slice.count) / Double(total) * 100)) percent")
                     }
                 }
-                Spacer(minLength: 0)
             }
         }
     }
 
     // MARK: - Format helpers
+
+    /// A share as a whole percent, with "<1%" for a small share that is
+    /// not zero, so a used output never reads as 0%.
+    private static func share(_ count: Int, of total: Int) -> String {
+        let pct = Double(count) / Double(max(1, total)) * 100
+        if count > 0 && pct < 1 { return "<1%" }
+        return "\(Int(pct.rounded()))%"
+    }
 
     private func bigNumber(_ n: Int) -> String {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
@@ -553,78 +600,35 @@ struct StatsView: View {
         return "\(n)"
     }
 
-    /// Live power / energy tiles. Pulls cumulative + battery info
-    /// straight from `SystemStatsService`. Distinct from the Settings
-    /// → System Performance panel: this one is part of the lifetime
-    /// Statistics dashboard so power sits next to all the other
-    /// session/usage charts.
+    /// Live power and energy for this session, one compact row. The how of
+    /// each number lives in its tooltip.
     private var powerSection: some View {
         let c = sysStats.cumulative
         let p = sysStats.power
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 16) {
-                powerTile(label: "Uptime",
-                          value: timeShort(c.sessionUptime),
-                          icon: "clock",
-                          tint: .secondary,
-                          hint: "Time the engine + stats panel have been polling.")
-                powerTile(label: "Energy used",
-                          value: formatEnergy(c.estimatedEnergyJoules),
-                          icon: "bolt.fill",
-                          tint: .yellow,
-                          hint: "Coarse estimate: CPU% × time × 5 W package.")
-                powerTile(label: "Avg CPU",
-                          value: String(format: "%.1f%%", c.averageCpuPercent),
-                          icon: "cpu",
-                          tint: cpuTint(for: c.averageCpuPercent),
-                          hint: "Running mean since session start.")
-                powerTile(label: "Peak CPU",
-                          value: String(format: "%.1f%%", c.peakCpuPercent),
-                          icon: "speedometer",
-                          tint: cpuTint(for: c.peakCpuPercent),
-                          hint: "Highest single sample this session.")
+        return HStack(alignment: .top, spacing: 10) {
+            powerTile(label: "Uptime", value: timeShort(c.sessionUptime), icon: "clock",
+                      tint: .secondary, hint: "Time the engine and stats panel have been polling.")
+            powerTile(label: "Energy", value: formatEnergy(c.estimatedEnergyJoules), icon: "bolt.fill",
+                      tint: .yellow, hint: "Coarse estimate: CPU percent times time times a 5 W package.")
+            powerTile(label: "Avg CPU", value: String(format: "%.1f%%", c.averageCpuPercent), icon: "cpu",
+                      tint: cpuTint(for: c.averageCpuPercent), hint: "Running mean since session start.")
+            powerTile(label: "Peak CPU", value: String(format: "%.1f%%", c.peakCpuPercent), icon: "speedometer",
+                      tint: cpuTint(for: c.peakCpuPercent), hint: "Highest single sample this session.")
+            if let pct = p.batteryPercent {
+                powerTile(label: "Battery", value: "\(pct)%", icon: batteryIcon(for: pct),
+                          tint: batteryTint(for: pct),
+                          hint: [p.source, p.batteryState].compactMap { $0 }.joined(separator: ", "))
+            } else if let source = p.source {
+                powerTile(label: "Power", value: source, icon: "powerplug.fill",
+                          tint: .green, hint: "Where this Mac is drawing power from.")
             }
-            if p.source != nil || p.batteryPercent != nil {
-                HStack(alignment: .top, spacing: 16) {
-                    powerTile(label: "Source",
-                              value: p.source ?? "Unknown",
-                              icon: (p.source ?? "").lowercased().contains("battery")
-                                    ? "battery.50" : "powerplug.fill",
-                              tint: (p.source ?? "").lowercased().contains("battery")
-                                    ? .orange : .green,
-                              hint: "AC = wall power, Battery = on battery.")
-                    if let pct = p.batteryPercent {
-                        powerTile(label: "Battery",
-                                  value: "\(pct)%",
-                                  icon: batteryIcon(for: pct),
-                                  tint: batteryTint(for: pct),
-                                  hint: p.batteryState ?? "Charge level.")
-                    }
-                    if abs(p.batteryDeltaPercent) >= 0.5 {
-                        let delta = -p.batteryDeltaPercent
-                        powerTile(label: "Δ session",
-                                  value: String(format: "%+.0f%%", delta),
-                                  icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
-                                  tint: delta < 0 ? .orange : .green,
-                                  hint: "Battery change since the panel opened.")
-                    }
-                    if let mins = p.minutesRemaining {
-                        powerTile(label: "Time left",
-                                  value: "\(mins)m",
-                                  icon: "hourglass",
-                                  tint: .secondary,
-                                  hint: "Estimate to empty or full.")
-                    }
-                }
-            } else {
-                Text("This Mac has no battery / power source data. Desktops show only CPU + energy estimates.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+            if abs(p.batteryDeltaPercent) >= 0.5 {
+                let delta = -p.batteryDeltaPercent
+                powerTile(label: "This session", value: String(format: "%+.0f%%", delta),
+                          icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
+                          tint: delta < 0 ? .orange : .green,
+                          hint: "Battery change since the panel opened.")
             }
-            Text("Energy is a coarse estimate (CPU% × duration × 5 W). Battery delta and source come from IOKit's power-source API; CPU values come from task_info().")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -632,28 +636,24 @@ struct StatsView: View {
                            tint: Color, hint: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                IconView(name: icon, glyphHeight: 12)
-                    .iconTint(tint)
+                StatIconBadge(icon: icon, tint: tint, diameter: 18)
                 Text(label)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Text(value)
-                .font(.title3.monospacedDigit())
-                .foregroundStyle(tint)
-            Text(hint)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+                .font(.title3.weight(.medium).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.secondary.opacity(0.08))
-        )
+        .innerWell()
+        .help(hint)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(hint)
     }
 
     private func formatEnergy(_ joules: Double) -> String {
@@ -689,18 +689,10 @@ struct StatsView: View {
         return "\(s / 86400)d \((s % 86400) / 3600)h"
     }
 
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-    }
-
     private func emptyHint(_ text: String) -> some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.hint)
     }
 
     private func iconForInputKey(_ key: String) -> String {
@@ -713,12 +705,17 @@ struct StatsView: View {
         return "questionmark"
     }
 
+    /// "Left stick up" rather than "Axis 1 -": the standard gamepad's own
+    /// control names, then the input's generic name.
     private func prettyInputLabel(_ key: String) -> String {
-        if let event = InputEvent.parse(key) {
-            return event.displayName
-        }
-        return key
+        Self.friendlyNames[key] ?? InputEvent.parse(key)?.displayName ?? key
     }
+
+    static let friendlyNames: [String: String] = {
+        var names: [String: String] = [:]
+        for c in ControllerScaffold.standardGamepad() { names[c.input] = c.name }
+        return names
+    }()
 }
 
 /// Thin observable wrapper around the singleton StatsService so the view
@@ -775,251 +772,270 @@ final class StatsServiceRef: ObservableObject {
     }
 }
 
-/// One big-number tile. Lifts on hover + click reveals a detail sheet.
+/// A tinted icon on a soft disc of its own color: the one icon treatment
+/// for Statistics (tiles, leaderboards, controllers, power, popovers), so
+/// every icon reads as the same layered, translucent mark at any size.
+/// Grows with Text Size alongside the glyph it holds.
+struct StatIconBadge: View {
+    let icon: String
+    let tint: Color
+    var diameter: CGFloat = 28
+    @Environment(\.appTextScale) private var textScale
+
+    var body: some View {
+        let d = (diameter * textScale).rounded()
+        // The glyph's font goes through the app's scaled .font, so it takes
+        // the unscaled size; the controller glyph is sized directly.
+        IconView(name: icon, glyphHeight: (d * 0.42).rounded())
+            .font(.system(size: (diameter * 0.46).rounded(), weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .iconTint(tint)
+            .frame(width: d, height: d)
+            .background(Circle().fill(tint.opacity(0.16)))
+            .accessibilityHidden(true)
+    }
+}
+
+/// One tile: a tinted icon badge, the number, its name, and a detail line.
+/// Glass like the rest of the page; hover lifts it with the tile's color and
+/// a click opens the detail popover anchored to the tile.
 struct StatTileView: View {
     let detail: StatDetail
-    let onSelect: (StatDetail) -> Void
+    var subline: String = ""
     @State private var hovering: Bool = false
+    @State private var showingDetail: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Stays lit while its popover is open, so it is clear which tile
+        // the popover belongs to.
+        let lit = hovering || showingDetail
         Button {
-            onSelect(detail)
+            showingDetail.toggle()
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 4) {
-                    Image(systemName: detail.icon)
-                        .font(.title3)
-                        .iconTint(detail.tint)
-                        .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center) {
+                    StatIconBadge(icon: detail.icon, tint: detail.tint, diameter: 28)
                     Spacer()
-                    Image(systemName: "info.circle")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .opacity(hovering ? 1 : 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.hint)
+                        .opacity(lit ? 1 : 0)
                         .accessibilityHidden(true)
                 }
-                Text(detail.value)
-                    .font(.title2.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.primary)
-                Text(detail.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(detail.value)
+                        .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text(detail.label)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !subline.isEmpty {
+                        Text(subline)
+                            .font(.caption2)
+                            .foregroundStyle(.hint)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
             }
-            // Uniform minimum height across the grid so every tile in
-            // the LazyVGrid lines up regardless of label length.
-            .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(hovering
-                          ? detail.tint.opacity(0.18)
-                          : Color.secondary.opacity(0.08))
-            )
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous),
+                         tint: lit ? detail.tint.opacity(0.22) : nil)
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(hovering ? detail.tint.opacity(0.55) : Color.clear,
-                            lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(detail.tint.opacity(lit ? 0.45 : 0), lineWidth: 1)
             )
-            .scaleEffect(reduceMotion ? 1.0 : (hovering ? 1.02 : 1.0))
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
+            .scaleEffect(reduceMotion ? 1.0 : (hovering ? 1.015 : 1.0))
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: lit)
         }
         .buttonStyle(.plain)
         // macOS otherwise draws an accent focus ring around the first
         // focusable button when the sheet opens (the top-left tile gets
-        // it). Disabling the focus effect keeps every tile visually
-        // consistent.
-        .focusEffectDisabled()
+        // it). Hidden unless Keyboard navigation is on, so every tile
+        // looks the same for pointer users and keyboard users still see
+        // where focus is.
+        .focusRingForKeyboardUsers()
         .onHover { hovering = $0 }
         .help("Details for \(detail.label)")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(detail.label): \(detail.value)")
+        .accessibilityValue(subline)
         .accessibilityHint("Opens details")
         .accessibilityAddTraits(.isButton)
+        // Last, so the tile's accessibility grouping above never reaches
+        // into the popover's own elements.
+        .popover(isPresented: $showingDetail, arrowEdge: .bottom) {
+            StatDetailPopover(detail: detail)
+        }
     }
 }
 
-/// Modal that pops up when the user clicks a tile. Shows the metric, its
-/// plain-English description, related stats, and (when the source data
-/// allows it) a top-N leaderboard plus a 14-day sparkline so the user
-/// gets a real drill-down instead of just a definition.
-struct StatDetailSheet: View {
+/// The popover a tile opens: the metric, what it counts, related numbers,
+/// and (when the data allows it) top-N leaderboards and a 14-day history.
+/// Every section shares one shape, a small caption title over a quiet well,
+/// and the popover sizes to its content on the system's translucent popover
+/// surface.
+struct StatDetailPopover: View {
     let detail: StatDetail
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.appTextScale) private var textScale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Header: icon block + big number.
-            HStack(spacing: 14) {
-                Image(systemName: detail.icon)
-                    .font(.system(size: 38))
-                    .iconTint(detail.tint)
-                    .frame(width: 56, height: 56)
-                    .background(detail.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(detail.label)
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Text(detail.value)
-                        .font(.system(size: 36, weight: .semibold).monospacedDigit())
-                }
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            header
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    // Explanation.
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("What this counts")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(detail.explanation)
-                            .font(.callout)
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            Text(detail.explanation)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-                    // Related stats.
-                    if !detail.related.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("By the numbers")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            ForEach(Array(detail.related.enumerated()), id: \.offset) { _, pair in
-                                HStack {
-                                    Text(pair.label)
-                                        .font(.callout)
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(pair.value)
-                                        .font(.callout.monospacedDigit())
-                                }
+            if !detail.related.isEmpty {
+                section("By the numbers") {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(Array(detail.related.enumerated()), id: \.offset) { _, pair in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(pair.label)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Text(pair.value)
+                                    .font(.callout.monospacedDigit())
                             }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(pair.label)
+                            .accessibilityValue(pair.value)
                         }
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    // Top inputs leaderboard.
-                    if let inputs = detail.topInputs, !inputs.isEmpty {
-                        miniLeaderboard(
-                            title: "Top inputs",
-                            rows: inputs.map { (label: prettyInputLabel($0.key),
-                                                value: "\($0.count)\u{00D7}",
-                                                weight: Double($0.count)) },
-                            tint: detail.tint)
-                    }
-
-                    // Top presets leaderboard.
-                    if let presets = detail.topPresets, !presets.isEmpty {
-                        miniLeaderboard(
-                            title: "Top presets",
-                            rows: presets.map { (label: $0.name,
-                                                 value: "\($0.count)\u{00D7}",
-                                                 weight: Double($0.count)) },
-                            tint: detail.tint)
-                    }
-
-                    // Top controllers leaderboard (time-weighted).
-                    if let ctrls = detail.topControllers, !ctrls.isEmpty {
-                        miniLeaderboard(
-                            title: "Top controllers",
-                            rows: ctrls.map { (label: $0.name,
-                                               value: timeStr($0.seconds),
-                                               weight: $0.seconds) },
-                            tint: detail.tint)
-                    }
-
-                    // 14-day sparkline.
-                    if let last14 = detail.last14Days, !last14.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Last 14 days")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            sparkline(values: last14, tint: detail.tint)
-                        }
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
             }
 
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.solid)
+            if let inputs = detail.topInputs, !inputs.isEmpty {
+                section("Top inputs") {
+                    leaderboard(inputs.map { (label: prettyInputLabel($0.key),
+                                              value: "\($0.count)\u{00D7}",
+                                              weight: Double($0.count)) })
+                }
+            }
+
+            if let presets = detail.topPresets, !presets.isEmpty {
+                section("Top presets") {
+                    leaderboard(presets.map { (label: $0.name,
+                                               value: "\($0.count)\u{00D7}",
+                                               weight: Double($0.count)) })
+                }
+            }
+
+            if let ctrls = detail.topControllers, !ctrls.isEmpty {
+                section("Top controllers") {
+                    leaderboard(ctrls.map { (label: $0.name,
+                                             value: timeStr($0.seconds),
+                                             weight: $0.seconds) })
+                }
+            }
+
+            if let last14 = detail.last14Days, !last14.isEmpty {
+                section("Last 14 days") {
+                    sparkline(values: last14)
+                }
             }
         }
-        .padding(22)
-        .frame(width: 500, height: 540)
+        .padding(16)
+        .frame(width: (320 * textScale).rounded(), alignment: .leading)
+        .modifier(StatPopoverBackdrop())
     }
 
-    /// Mini horizontal-bar leaderboard. Three columns: label, weight bar,
-    /// numeric value. Used for top inputs / top presets / top controllers.
-    private func miniLeaderboard(
-        title: String,
-        rows: [(label: String, value: String, weight: Double)],
-        tint: Color
-    ) -> some View {
-        let maxWeight = max(1, rows.first?.weight ?? 1)
-        return VStack(alignment: .leading, spacing: 6) {
+    /// Same badge and number styling as the tile it came from.
+    private var header: some View {
+        HStack(spacing: 10) {
+            StatIconBadge(icon: detail.icon, tint: detail.tint, diameter: 34)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(detail.value)
+                    .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(detail.label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(detail.label)
+        .accessibilityValue(detail.value)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// One section: a caption title over its content in a quiet well.
+    private func section<Content: View>(_ title: String,
+                                        @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
-            VStack(spacing: 4) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .innerWell()
+        }
+    }
+
+    /// Leaderboard rows drawn like the dashboard's own: the name and its
+    /// value on one line, a thin bar under them sized by share of the leader.
+    private func leaderboard(_ rows: [(label: String, value: String, weight: Double)]) -> some View {
+        let maxWeight = max(1, rows.map(\.weight).max() ?? 1)
+        return VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(row.label)
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                            .frame(width: 170, alignment: .leading)
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Capsule().fill(tint.opacity(0.12))
-                                Capsule()
-                                    .fill(tint.gradient)
-                                    .frame(width: max(2, CGFloat(row.weight / maxWeight) * geo.size.width))
-                            }
-                        }
-                        .frame(height: 6)
-                        .accessibilityHidden(true)
+                        Spacer(minLength: 4)
                         Text(row.value)
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
-                            .frame(width: 70, alignment: .trailing)
                     }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(row.label)
-                    .accessibilityValue(row.value)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.primary.opacity(0.08))
+                            Capsule()
+                                .fill(detail.tint.opacity(0.8))
+                                .frame(width: max(3, CGFloat(row.weight / maxWeight) * geo.size.width))
+                        }
+                    }
+                    .frame(height: 4)
+                    .accessibilityHidden(true)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(row.label)
+                .accessibilityValue(row.value)
             }
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    /// Compact bar-chart sparkline for the 14-day history.
-    private func sparkline(values: [Double], tint: Color) -> some View {
+    /// Compact bar chart of the 14-day history, filling the well's width.
+    private func sparkline(values: [Double]) -> some View {
         let maxValue = max(1, values.max() ?? 1)
         let total = values.reduce(0, +)
         let peak = values.max() ?? 0
         let activeDays = values.filter { $0 > 0 }.count
+        let height: CGFloat = 44
         return HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, v in
-                Capsule()
-                    .fill(v > 0 ? tint.gradient : Color.secondary.opacity(0.1).gradient)
-                    .frame(width: 14, height: max(3, CGFloat(v / maxValue) * 60))
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(v > 0 ? detail.tint.opacity(0.8) : Color.primary.opacity(0.08))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: max(4, CGFloat(v / maxValue) * height))
             }
         }
-        .frame(height: 60)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: height, alignment: .bottom)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Last 14 days")
         .accessibilityValue("\(timeStr(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeStr(peak))")
@@ -1034,9 +1050,23 @@ struct StatDetailSheet: View {
     }
 
     private func prettyInputLabel(_ key: String) -> String {
-        if let event = InputEvent.parse(key) {
-            return event.displayName
+        StatsView.friendlyNames[key] ?? InputEvent.parse(key)?.displayName ?? key
+    }
+}
+
+/// The popover keeps the system's own translucent surface (Liquid Glass on
+/// macOS 26 and later, the frosted popover material before that), which
+/// already follows the system Reduce Transparency setting. The app's own
+/// Reduce Transparency switch swaps in a solid window color, the same rule
+/// every glass surface in the app follows.
+private struct StatPopoverBackdrop: ViewModifier {
+    @AppStorage("InputConfig.a11y.reduceTransparency") private var reduceTransparency = false
+
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.presentationBackground(Color(nsColor: .windowBackgroundColor))
+        } else {
+            content
         }
-        return key
     }
 }

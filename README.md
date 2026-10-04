@@ -7,7 +7,7 @@ replace a keyboard entirely if using one is difficult. It works in every app, no
 only games.
 
 Works with PS5 DualSense and DualSense Edge, PS4 DualShock 4, Xbox Wireless, Series
-and Elite, Switch Pro and Joy-Con, 8BitDo, the PlayStation Access Controller, the
+and Elite, Switch Pro and Joy-Con, 8BitDo Pro 2 and Ultimate 2C, the PlayStation Access Controller, the
 Xbox Adaptive Controller, MIDI keyboards and pad controllers, and any HID-compatible
 gamepad. No drivers, no subscription, no account.
 
@@ -28,19 +28,20 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.5
+## What's new in 1.6
 
-- Tap the Mac is now enhanced with additional compatibility on more MacBooks, counts up to five taps, and has a live calibration plot in the Options of any tap row
-- Your Mac is an input: every key, including modifiers and media keys, plus clicks, scroll gestures, and Force Touch on the trackpad or mouse can be mapped, with live Keyboard and Mouse & Trackpad templates in the Live Visualizer
-- Screen regions are their own input: draw an area of any display and it fires while the pointer is inside it, with a Screen template that shows the display, its regions, and the live pointer
-- The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, zoom, a choice of background, and every control clickable
-- The editor has a search field, section headings, Automatically insert available inputs, and a device menu listing every controller, Bluetooth and USB device, this Mac's keyboard and mouse, and MIDI source
-- Chords can hold up to three controls, and accessories plugged into a PlayStation Access Controller or Xbox Adaptive Controller are picked up as inputs
-- Gyro pointing follows the controller's tilt like a laser pointer, Motion Calibration is one simple sheet with a 3D controller model, and pointer motion runs smoothly on a timer of its own
-- Rumble on a DualSense Edge is much stronger, its strength setting works, and vibration has a Duration slider
-- New presets: One-Stick Driving, Access Controller, Keyboard Deck, Trackpad & Mouse, Modifier Holds, Double Click Deck, Cursor Regions, Hold & Double-Tap, Keyboard & Mouse Input, Shortcuts & Apps, and Touchpad Zones
-- The sidebar splits into My Presets and Built-in Presets, every Feature Showcase opens its preset, Help is rewritten, and the activity log shows everything the app does
-- Fixes: a crash on first launch, the pointer walking off target with two displays, lone modifier keys invisible to apps, mouse buttons 3 and up hanging the app, and touchpad zones lost between presets
+- Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles
+- Added infrastructure for far more controllers: generic USB pads and arcade sticks take their button names from the community SDL GameControllerDB, and wheels, flight sticks, and pedals are read on every axis at full resolution and every hat switch
+- Generic USB pads and a single Joy-Con number their controls like other controllers; InputConfig offers to update older rows on USB pads
+- Added infrastructure for two-player adapters and dual arcade encoders, so each player gets a controller of their own
+- Added infrastructure for Valve's 2026 Steam Controller on a USB cable, over Bluetooth, or through its Puck: every button, the four back buttons, both trackpads, the gyro, rumble, and battery, and a built-in preset
+- Added infrastructure for the Stream Deck, the Neo's touch points and the Stream Deck modules included, connected from the Devices menu or the menu bar
+- New built-in presets: Easy Browse for using the whole Mac from a controller, Easy Edit for a controller in one hand and a mouse in the other, and Auto Clicker, which clicks 5 to 20 times a second, on and off, while held, or a set number of times
+- While the editor is open, the controller still moves the pointer and clicks, and Escape, Return, Tab, the arrows and Space still work from it, so Save and Cancel are always in reach
+- Star your favorite presets and show only favorites in the sidebar and the menu bar
+- A controller that also acts as a keyboard, such as some arcade sticks, works once Input Monitoring is allowed for InputConfig in System Settings
+- With two PlayStation controllers connected, each gets its own light color, rumble, and Edge paddles, and two identical controllers can go to two players
+- While the Mac sleeps or is locked no key is sent: at the lock screen only the pointer, clicks, and scrolling work
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
@@ -50,7 +51,7 @@ Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the la
 
 Open InputConfig and everything it can do is on one screen. Controllers, keyboards,
 mice, trackpads, and MIDI gear go in; keys, mouse, macros, MIDI, system functions,
-and Siri Shortcuts come out. Forty-two presets ship with it, sorted into folders you
+and Siri Shortcuts come out. Forty-five presets ship with it, sorted into folders you
 can name and color, and the Smart Preset Maker draws on a library of more than 450
 games and apps.
 
@@ -59,36 +60,37 @@ games and apps.
 Scanning maps any input the instant you touch it. No manual codes, no guesswork,
 and it works for controllers, MIDI gear, and your Mac's own keyboard and trackpad.
 
-![Fine-tune every binding](Marketing/posters/03-advanced.jpg)
+![Fine-tune every binding](Marketing/posters/04-advanced.jpg)
 
 One press can send a key, a click, a MIDI note, and a spoken phrase at once, then
 repeat while held, send Return on a double tap, run a two-step macro, and rumble,
 with every timing set right in the row.
 
-![Your Mac is an input, too](Marketing/posters/04-mac-inputs.jpg)
+![Your Mac is an input, too](Marketing/posters/05-mac-inputs.jpg)
 
 Every key on the keyboard, every click, scroll gesture, and Force Touch on the
 trackpad or mouse, any area of the screen, and a knock on the palm rest can all be
 scanned and mapped like a controller button.
 
-![Built for accessibility](Marketing/posters/05-accessibility.jpg)
+![Built for accessibility](Marketing/posters/06-accessibility.jpg)
 
 Drive your whole Mac from a single stick. One-stick driving steers, accelerates,
 brakes, and shifts from one control, and it outputs keyboard and mouse, so it works
 in games that never planned for it. Built with the PlayStation Access Controller
 and other adaptive hardware in mind.
 
-![Send MIDI in and out](Marketing/posters/06-outputs.jpg)
+![Send MIDI in and out](Marketing/posters/07-outputs.jpg)
 
 Play notes into your DAW through a virtual MIDI port, or let a MIDI keyboard or knob
 box drive the Mac itself: volume, tracks, brightness, Mission Control, a Siri
 Shortcut. Every binding shows exactly what it sends.
 
-![See every input, live](Marketing/posters/07-visualizer.jpg)
+![See every input live](Marketing/posters/03-visualizer.jpg)
 
 The Live Visualizer mirrors your controller and your MIDI gear in real time. Sticks,
 triggers, keys, and knobs light up as you play, clicking any control jumps straight
-to its binding, and Edit Layout rearranges the map to match how you hold the pad.
+to its binding, and Edit Layout rearranges the keyboard, mouse, touchpad and generic
+maps; a drawn controller keeps its real layout.
 
 ![Touchpad support, done right](Marketing/posters/08-touchpad.jpg)
 
@@ -132,12 +134,12 @@ tools. Check for yourself before you switch.
 
 - Every button, trigger, joystick, and D-pad on any MFi or HID-compatible gamepad
 - DualSense Edge extras: both back paddles, both FN buttons, and the mute button, over USB and Bluetooth
-- Controller touchpads: cursor control, two-finger tracking, tap zones, one-finger and two-finger taps, with per-pad calibration
+- Controller touchpads: cursor control, two-finger tracking, tap zones, one-finger and two-finger taps, with calibration
 - Gyroscope, accelerometer, and absolute attitude on Sony controllers (DualSense, DualShock 4)
-- MIDI notes and pads, CC knobs, sliders, and pedals, the pitch wheel, channel aftertouch, and Program Change, from any MIDI device over USB or Bluetooth
-- Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from center, like a stick), and Turn (a nudge per step of rotation, built for endless encoders)
+- MIDI notes and pads, CC knobs, sliders, and pedals, the pitch wheel, channel and polyphonic aftertouch, Program Change, and transport Start, Continue, and Stop, from any MIDI device over USB or Bluetooth
+- Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from center, like a stick), and Turn (a nudge per step of rotation, for knobs and for endless encoders set to absolute mode)
 - Per-binding MIDI channel and device filters, so two keyboards stay independent
-- Your Mac keyboard as an input: every key, including Shift, Control, Option, Command, Caps Lock, fn, and the brightness, media, and volume keys, plus a second keyboard, captured per device
+- Your Mac keyboard as an input: every key, including Shift, Control, Option, Command, Caps Lock, fn, and the brightness, media, and volume keys, on the built-in keyboard or any keyboard you connect (all keyboards read as one)
 - Your mouse and trackpad as inputs: every button, double click, scroll in four directions, scroll gestures, Force Touch pressure, and Force Click
 - Tap the Mac: knock on the palm rest and the MacBook's motion sensor fires any output, single to quintuple taps, with a live calibration plot
 - Screen regions: areas of any display that act as inputs while the pointer is inside them, per display or on every display
@@ -180,14 +182,14 @@ tools. Check for yourself before you switch.
 
 ### Presets
 
-- 42 built-in presets: the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
+- 45 built-in presets: Easy Browse and Easy Edit, an Auto Clicker, the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
 - Smart Preset Maker builds a tailored preset from a few questions, from a library of more than 450 games, apps, and workflows, and can add a touchpad-as-trackpad, gyro fine aim, and trigger rumble
 - Folders with names and colors, and unlimited presets of your own
 - Per-app auto-switch: presets activate themselves when their app comes to the front
 - Per-preset automation: launch an app or URL on activate, confine the cursor, auto-recenter, hide the pointer
 - Import, export, and share presets, and convert them between controller types
 - A global keyboard shortcut to toggle the most recent preset from anywhere
-- Crash recovery restores your active preset, engine and all
+- Crash recovery offers to start your active preset again after a crash
 
 ### Live Visualizer
 
@@ -195,7 +197,7 @@ tools. Check for yourself before you switch.
 - Switchable layouts per slot: controller, keyboard, mouse and trackpad, controller touchpad, screen regions, or MIDI instrument, with auto-detection from the bindings
 - The MIDI instrument: a seven-octave velocity-shaded keyboard, a named dial for every knob (Mod Wheel, Cutoff, Sustain and the rest), knob-mode badges, pitch bend and aftertouch meters, a 16-channel activity strip, and a rolling event log
 - Click any control to jump straight to its binding in the editor
-- Edit Layout to drag controls into the arrangement you hold the pad in, saved per controller model, plus zoom, pan, and four backgrounds
+- Edit Layout to rearrange the keyboard, mouse, touchpad and generic maps (a drawn controller keeps its real layout), plus zoom, pan, and four backgrounds
 
 ### Accessibility
 
@@ -222,14 +224,17 @@ tools. Check for yourself before you switch.
 
 - PlayStation Access Controller (and other adaptive hardware)
 - PlayStation DualSense (PS5) and DualSense Edge, including the Edge's paddles and extra buttons
-- PlayStation DualShock 4 (PS4) and DualShock 3
-- Xbox Wireless Controller (One, Series X|S)
+- PlayStation DualShock 4 (PS4)
+- Xbox Wireless Controller (One, Series X|S), Xbox Elite Series 2, and the Xbox Adaptive Controller
 - Nintendo Switch Pro Controller and Joy-Cons
-- 8BitDo controllers (Pro 2, Ultimate, SN30 Pro+, and more)
-- Steam Controller, Stadia Controller, Logitech F-series, fight sticks, and wheels
+- 8BitDo Pro 2, SN30 Pro+, SN30 Pro, and Ultimate 2C
+- Steam Controller (2015 and 2026), Stadia Controller, and the Logitech G29 and G923 wheels
 - Any MFi or HID-compatible gamepad
 - MIDI keyboards, pad controllers, knob boxes, and control surfaces
+- Stream Deck keys
 - Your Mac keyboard, mouse, and trackpad
+
+Other controllers, joysticks and wheels are read as well, shown in a generic drawing.
 
 ## Questions people ask
 
@@ -270,7 +275,8 @@ afterthought.
 
 **Do I need drivers?**
 No. Connect the controller by USB or Bluetooth and macOS handles the rest. MIDI
-devices are found automatically too.
+devices are found automatically too. Wired Xbox One and Series pads need macOS 15
+or later; on macOS 14, connect them over Bluetooth.
 
 **Can I map a controller for a game that has no controller support?**
 Yes. Map the buttons and sticks to whatever keys and mouse motion the game expects, and it
@@ -284,7 +290,7 @@ nothing.
 
 - macOS 14.0 or later
 - Accessibility permission (for keyboard and mouse simulation)
-- Tap the Mac needs a MacBook: it uses the motion sensor inside, and desktop Macs have none
+- Tap the Mac needs an Apple silicon MacBook: desktop Macs and Intel Macs have no motion sensor, and some earlier models do not publish it
 
 ## Building
 
@@ -296,6 +302,11 @@ nothing.
 
 MIT License. See [LICENSE](LICENSE) for details.
 
+## Acknowledgments
+
+- [SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB) and SDL, Copyright (C) 1997-2025 Sam Lantinga, used under the zlib license. The full notice is in `SDLGameControllerDBData.swift`.
+- [procon2-mac](https://github.com/caqlayan/procon2-mac), Copyright (c) 2026 Arda Caglayan Ercan, used under the MIT License, for the Switch 2 controller USB start-up commands. The full license text is in `Switch2USBEnabler.swift`.
+
 ## Privacy
 
 InputConfig does not collect any data. See [PRIVACY.md](PRIVACY.md).
@@ -303,3 +314,5 @@ InputConfig does not collect any data. See [PRIVACY.md](PRIVACY.md).
 ## Contact
 
 Questions, bugs, or feature requests? Open an issue here, see [inputconfig.com/help](https://inputconfig.com/help/), or reach out at [ryleighnewman.com](https://ryleighnewman.com).
+
+<a href="https://apps.apple.com/us/app/inputconfig/id6777759147?pt=128760092&amp;ct=github&amp;mt=12"><img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" alt="Download on the Mac App Store" height="56"></a>

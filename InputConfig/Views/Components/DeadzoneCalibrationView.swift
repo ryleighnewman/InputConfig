@@ -40,6 +40,10 @@ struct DeadzoneCalibrationView: View {
 
     let onClose: () -> Void
 
+    /// The controller the row reads. Reading slot 0 always showed the
+    /// first pad's stick while tuning a row for the second.
+    var slot: Int = 0
+
     @EnvironmentObject var controllerService: GameControllerService
 
     @State private var currentX: Float = 0
@@ -51,8 +55,11 @@ struct DeadzoneCalibrationView: View {
     // Snapshots of the original values, captured on appear. If the user
     // presses Cancel, we restore these so the binding model doesn't keep
     // the experimental slider values.
-    @State private var originalInner: Double = 0.25
-    @State private var originalOuter: Double = 1.0
+    /// The sliders move these; Save writes them to the row once. Bound
+    /// straight to the row, every tick saved the preset and added an undo
+    /// step, and Cancel on an untouched row wrote the 25% it showed.
+    @State private var inner: Double = 0.25
+    @State private var outer: Double = 1.0
     @State private var hasSnapshot = false
 
     private let canvasSize: CGFloat = 260
@@ -71,6 +78,9 @@ struct DeadzoneCalibrationView: View {
     }
 
     private var is2D: Bool { axisPair.y != nil }
+    /// Only the standard trigger axes run one way; the other single axes
+    /// (a trackpad's X, a wheel, a throttle) run both ways from rest.
+    private var isTrigger: Bool { axisIndex == 4 || axisIndex == 5 }
 
     private var title: String {
         switch axisIndex {
@@ -91,23 +101,24 @@ struct DeadzoneCalibrationView: View {
                 Text(title)
                     .font(.headline)
                 Spacer()
-                Button("Cancel") {
-                    if hasSnapshot {
-                        deadzone = originalInner
-                        outerDeadzone = originalOuter
-                    }
-                    onClose()
-                }
+                Button("Cancel") { onClose() }
                 .buttonStyle(.solidSecondaryCompact)
                 .keyboardShortcut(.cancelAction)
-                Button("Save") { onClose() }
+                Button("Save") {
+                    // Only what changed, so an untouched value stays unset.
+                    if inner != deadzone { deadzone = inner }
+                    if outer != outerDeadzone { outerDeadzone = outer }
+                    onClose()
+                }
                 .buttonStyle(.solidCompact)
                     .keyboardShortcut(.defaultAction)
             }
 
             Text(is2D
                  ? "Move the joystick all the way around to plot its full range. Set the deadzone large enough that the dot rests inside it without input, but small enough to keep full travel."
-                 : "Press the trigger fully and release. Set the deadzone large enough to ignore any rest-state pressure without losing the bottom of the trigger's range.")
+                 : isTrigger
+                 ? "Press the trigger fully and release. Set the deadzone large enough to ignore any rest-state pressure without losing the bottom of the trigger's range."
+                 : "Move the control fully both ways and let go. The bar shows how far it is from rest either way; set the deadzone large enough that it rests inside it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -131,11 +142,13 @@ struct DeadzoneCalibrationView: View {
                     Text("Inner Deadzone (ignore below)")
                         .font(.subheadline)
                     Spacer()
-                    Text(String(format: "%.0f%%", deadzone * 100))
+                    Text(String(format: "%.0f%%", inner * 100))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $deadzone, in: 0.01...0.9, step: 0.01)
+                Slider(value: $inner, in: 0.01...0.9, step: 0.01)
+                    .accessibilityLabel("Inner deadzone")
+                    .accessibilityValue("\(Int((inner * 100).rounded())) percent")
             }
 
             // Outer deadzone slider
@@ -144,18 +157,20 @@ struct DeadzoneCalibrationView: View {
                     Text("Outer Deadzone (saturate above)")
                         .font(.subheadline)
                     Spacer()
-                    Text(String(format: "%.0f%%", outerDeadzone * 100))
+                    Text(String(format: "%.0f%%", outer * 100))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $outerDeadzone, in: max(deadzone + 0.05, 0.1)...1.0, step: 0.01)
+                Slider(value: $outer, in: max(inner + 0.05, 0.1)...1.0, step: 0.01)
+                    .accessibilityLabel("Outer deadzone")
+                    .accessibilityValue("\(Int((outer * 100).rounded())) percent")
             }
 
             // Stats
             HStack(spacing: 20) {
                 statBlock("Current", String(format: "%.0f%%", magnitude * 100))
                 statBlock("Peak", String(format: "%.0f%%", maxMagnitude * 100))
-                statBlock("Inside deadzone", magnitude < Float(deadzone) ? "Yes" : "No")
+                statBlock("Inside deadzone", magnitude < Float(inner) ? "Yes" : "No")
                 Spacer()
                 Button {
                     trail.removeAll()
@@ -186,8 +201,8 @@ struct DeadzoneCalibrationView: View {
         .frame(width: 440)
         .onAppear {
             if !hasSnapshot {
-                originalInner = deadzone
-                originalOuter = outerDeadzone
+                inner = deadzone
+                outer = outerDeadzone
                 hasSnapshot = true
             }
             startSampling()
@@ -215,17 +230,17 @@ struct DeadzoneCalibrationView: View {
             // Inner deadzone ring (red - input ignored inside)
             Circle()
                 .fill(Color.red.opacity(0.08))
-                .frame(width: CGFloat(deadzone) * canvasSize, height: CGFloat(deadzone) * canvasSize)
+                .frame(width: CGFloat(inner) * canvasSize, height: CGFloat(inner) * canvasSize)
             Circle()
                 .strokeBorder(Color.red.opacity(0.5), lineWidth: 1, antialiased: true)
-                .frame(width: CGFloat(deadzone) * canvasSize, height: CGFloat(deadzone) * canvasSize)
+                .frame(width: CGFloat(inner) * canvasSize, height: CGFloat(inner) * canvasSize)
 
             // Outer deadzone ring (green - input saturates outside).
             // Only drawn when the user has narrowed it from the default 1.0.
-            if outerDeadzone < 0.99 {
+            if outer < 0.99 {
                 Circle()
                     .strokeBorder(Color.green.opacity(0.5), lineWidth: 1, antialiased: true)
-                    .frame(width: CGFloat(outerDeadzone) * canvasSize, height: CGFloat(outerDeadzone) * canvasSize)
+                    .frame(width: CGFloat(outer) * canvasSize, height: CGFloat(outer) * canvasSize)
             }
 
             // Trail of recent points
@@ -263,9 +278,9 @@ struct DeadzoneCalibrationView: View {
     private var triggerVisualizer: some View {
         let barWidth: CGFloat = 90
         let barHeight: CGFloat = 240
-        let pulled = CGFloat(max(0, min(1, currentX)))
-        let inner = CGFloat(max(0, min(1, deadzone)))
-        let outer = CGFloat(max(inner + 0.01, min(1, outerDeadzone)))
+        let pulled = CGFloat(max(0, min(1, isTrigger ? currentX : abs(currentX))))
+        let inner = CGFloat(max(0, min(1, inner)))
+        let outer = CGFloat(max(inner + 0.01, min(1, outer)))
 
         return HStack(spacing: 16) {
             // Trigger fill gauge
@@ -374,10 +389,8 @@ struct DeadzoneCalibrationView: View {
     }
 
     private func sample() {
-        // Read controller 0's state. If you have multiple controllers connected,
-        // calibration always reads the first one, which matches how single-joystick
-        // bindings work in the engine.
-        guard let state = controllerService.readControllerState(at: 0) else { return }
+        // The slot the row's device group reads, as the engine does.
+        guard let state = controllerService.peekControllerState(at: slot) else { return }
         var x: Float = state.axes[axisPair.x] ?? 0
         var y: Float = 0
         if let yAxis = axisPair.y {
@@ -396,7 +409,7 @@ struct DeadzoneCalibrationView: View {
 
         // Only add to trail if outside the deadzone; otherwise the rest position
         // would spam the trail with overlapping dots.
-        if mag > Float(deadzone) * 0.5 {
+        if mag > Float(inner) * 0.5 {
             trail.append((x: x, y: y))
             if trail.count > trailLimit { trail.removeFirst(trail.count - trailLimit) }
         }

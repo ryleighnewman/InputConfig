@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// Per-preset automation panel for the preset editor (labelled
+/// Per-preset automation panel for the preset editor (labeled
 /// "Automation & Gaming Utilities" in the UI; the type keeps the PresetAutomation
 /// name for file-format compatibility). Houses settings that should ride
 /// along with each preset rather than living in global app Settings -
@@ -77,6 +77,9 @@ struct PresetAutomationSection: View {
         if automation.sensitivityMultiplier != 1.0 {
             parts.append(String(format: "sensitivity ×%.2f", automation.sensitivityMultiplier))
         }
+        if automation.scrollMultiplier != 1.0 {
+            parts.append(String(format: "scroll ×%.2f", automation.scrollMultiplier))
+        }
         return parts.isEmpty
             ? "Optional extras: auto-launch an app, confine, recenter, or hide the cursor. Expand to set up."
             : parts.joined(separator: " · ")
@@ -119,9 +122,9 @@ struct PresetAutomationSection: View {
             TextField("Optional deep link, e.g. steam://run/730",
                       text: $automation.launchURL)
                 .textFieldStyle(.roundedBorder)
-            Text("Both fields run on activation. Leave blank to disable. Paths accept .app bundles or any executable; identifiers accept reverse-DNS strings.")
+            Text("Both fields run on activation. Leave blank to disable. The app can be an .app bundle or a bundle identifier such as com.valvesoftware.steam.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .fileImporter(isPresented: $showingAppPicker,
@@ -158,7 +161,7 @@ struct PresetAutomationSection: View {
             if apps.isEmpty {
                 Text("Empty. Add an app and this preset activates by itself whenever that app comes to the front, then steps aside when you leave.")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach(apps, id: \.self) { bundleID in
@@ -170,7 +173,7 @@ struct PresetAutomationSection: View {
                             .font(.caption)
                         Text(bundleID)
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.hint)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
@@ -231,9 +234,9 @@ struct PresetAutomationSection: View {
                 Text("Cursor while active")
                     .font(.subheadline.weight(.semibold))
             }
-            Text("These only run while this preset is the active one. Stopping the engine restores the system cursor.")
+            Text("These only run while this preset is the active one. If it lists apps above, they run only while one of those is in front; otherwise they pause only while InputConfig or the Finder is in front. Stopping the engine restores the system cursor.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .fixedSize(horizontal: false, vertical: true)
 
             Toggle(isOn: $automation.confineCursor) {
@@ -300,6 +303,7 @@ struct DriveModeSection: View {
     @State private var expanded: Bool = false
     @EnvironmentObject private var controllerService: GameControllerService
     @EnvironmentObject private var mappingEngine: MappingEngine
+    @ObservedObject private var telemetry = DriveTelemetry.shared
 
     /// Live axis values for the configured slot, refreshed while the panel is
     /// open so the user can see which axis moves and confirm their mapping.
@@ -407,7 +411,7 @@ struct DriveModeSection: View {
                 if lastPhysicsTick != nil { lastPhysicsTick = nil }
                 return
             }
-            let axes = controllerService.readControllerState(at: cfg.wrappedValue.slot)?.axes ?? [:]
+            let axes = controllerService.peekControllerState(at: cfg.wrappedValue.slot)?.axes ?? [:]
             if axes != axisValues { axisValues = axes }
             stepCar()
         }
@@ -416,7 +420,7 @@ struct DriveModeSection: View {
 
     // MARK: - Live feedback (while actually driving)
     @ViewBuilder private var liveFeedback: some View {
-        if let s = mappingEngine.driveLiveState {
+        if let s = telemetry.state {
             HStack(spacing: 10) {
                 Text(s.reverse ? "Reverse" : "Drive")
                     .font(.caption2.weight(.medium))
@@ -440,7 +444,7 @@ struct DriveModeSection: View {
     /// Whether the demo vehicle is currently in reverse: the real processor's
     /// gear when the engine is running, otherwise inferred from motion.
     private var demoReversing: Bool {
-        if let s = mappingEngine.driveLiveState { return s.reverse }
+        if let s = telemetry.state { return s.reverse }
         return carSpeed < -2
     }
 
@@ -491,7 +495,7 @@ struct DriveModeSection: View {
             }
             Text("Move your stick to drive the demo vehicle. No controller? Drag the virtual stick. Parameter changes below apply instantly.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -515,7 +519,7 @@ struct DriveModeSection: View {
             }
             context.stroke(grid, with: .color(.secondary.opacity(0.12)), lineWidth: 0.5)
 
-            // Fading tyre trail.
+            // Fading tire trail.
             if trail.count > 1 {
                 var path = Path()
                 path.move(to: trail[0])
@@ -581,7 +585,7 @@ struct DriveModeSection: View {
         var steer: Double = 0
         var accel: Double = 0   // -1 full reverse ... +1 full power
         var brake: Double = 0
-        if let s = mappingEngine.driveLiveState {
+        if let s = telemetry.state {
             steer = Double(s.steer)
             accel = (s.reverse ? -1 : 1) * Double(s.throttle)
             brake = Double(s.brake)
@@ -605,6 +609,11 @@ struct DriveModeSection: View {
             steer = shapedAxis(x, deadzone: c.deadzone, curve: c.steerCurve)
             accel = shapedAxis(fwd, deadzone: c.deadzone, curve: c.throttleCurve)
         }
+        #if DEBUG
+        // The marketing shot (oneStick hook): the demo car drives a steady
+        // loop forward instead of following the synthetic controller's jitter.
+        if DebugMarketing.shared.oneStick { steer = 0.47; accel = 0.7; brake = 0 }
+        #endif
 
         // Fully idle (no command, car at rest, trail drained): skip every
         // write so an open-but-untouched panel does zero re-render work.
@@ -818,7 +827,7 @@ struct DriveModeSection: View {
     }
     private func blockTitle(_ t: String, _ symbol: String) -> some View {
         HStack(spacing: 6) {
-            IconView(name: symbol, glyphHeight: 9).font(.caption2).foregroundStyle(.tertiary)
+            IconView(name: symbol, glyphHeight: 9).font(.caption2).foregroundStyle(.hint)
             Text(t).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         }
         .accessibilityAddTraits(.isHeader)

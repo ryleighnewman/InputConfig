@@ -37,6 +37,22 @@ struct ControllerProfile: Equatable {
         }
     }
 
+    /// Where a Stream Deck model's key bytes sit in its input report 0x01.
+    struct StreamDeckFormat: Equatable {
+        /// Number of keys (or pedals).
+        var keys: Int
+        /// Byte of the first key, counting the report ID: 1 on the first
+        /// Original and the Minis, 4 on every later model, whose byte 1
+        /// says what the report carries (0 = keys).
+        var keyOffset: Int
+        /// The first Original reports each row right to left; this is the
+        /// row length to mirror, or 0.
+        var mirrorColumns: Int = 0
+        /// Button slot of the first key. Keys sit past the gamepad block so
+        /// they show as Key 1, Key 2 rather than as gamepad buttons.
+        static let firstSlot = 22
+    }
+
     /// Pre-baked decoder layouts. Each case knows the byte offsets and
     /// bit positions for its specific report format.
     enum ReportLayout: Equatable {
@@ -52,6 +68,28 @@ struct ControllerProfile: Equatable {
         /// tools outside the app's scope).
         case dualShock3
 
+        /// Switch 2 Pro Controller over USB, once `Switch2USBEnabler` has
+        /// started it: input report 0x09, buttons in three bytes, sticks as
+        /// 12-bit values packed three bytes to a stick, which the descriptor
+        /// parser (whole bytes only) cannot read.
+        case switch2Pro
+
+        /// Nintendo Switch Online GameCube controller for Switch 2 over USB.
+        /// `Switch2USBEnabler` puts it in the same report 0x09 format as the
+        /// Switch 2 Pro Controller; the decoder reads it with those offsets
+        /// and gives the buttons their GameCube roles.
+        case switch2GameCube
+
+        /// Valve's 2026 Steam Controller, wired, over Bluetooth, or through
+        /// its Steam Controller Puck: input reports 0x42, 0x45 and 0x47 with
+        /// a 32-bit button field, sticks, analog triggers, both trackpads
+        /// with pressure, and the IMU (layout from SDL's Triton driver).
+        case steamController2026
+
+        /// Elgato Stream Deck: one byte per key, nonzero while pressed.
+        /// Connected by hand from the Devices menu only.
+        case streamDeck(StreamDeckFormat)
+
         /// Layout synthesized at runtime by walking the HID descriptor.
         /// Used for unknown (vendor, product) pairs so the controller
         /// still works without a hand-coded entry.
@@ -64,15 +102,20 @@ struct ControllerProfile: Equatable {
         var buttonBitOffsets: [Int]      // Bit index of each button, relative to the payload (after any report ID byte)
         var axisByteOffsets: [Int]       // Byte offset of each axis, payload-relative
         var axisByteWidths: [Int]        // Per-axis: 1 (8-bit) or 2 (16-bit); parallel to axisByteOffsets
-        var axisIsSignedFlags: [Bool]    // Per-axis: signed-centred-at-0 vs unsigned-centred-at-midpoint
+        var axisIsSignedFlags: [Bool]    // Per-axis: signed-centered-at-0 vs unsigned-centered-at-midpoint
         var axisUsages: [Int] = []       // Per-axis HID usage (0x30 X, 0x31 Y, 0x32 Z, 0x33 Rx, 0x34 Ry, 0x35 Rz); parallel to axisByteOffsets. Empty = unknown, decoder falls back to positional Y-flip.
         var hatByteOffset: Int?          // Byte that holds the 4-bit hat direction (kept for display/tests; hatBitOffset is authoritative)
-        var triggerByteOffsets: [Int]    // Byte offsets of analogue triggers (0-255), payload-relative
+        var triggerByteOffsets: [Int]    // Byte offsets of analog triggers (0-255), payload-relative
         var reportSize: Int              // Expected payload bytes (excluding the leading report ID byte if present)
         var hasReportID: Bool            // True if first byte of each report is a report ID we should skip
         var hatBitOffset: Int? = nil     // Absolute payload-relative bit offset of the 4-bit hat (handles high-nibble hats)
         var hatLogicalMin: Int = 0       // Hat's declared logical minimum (0 or 1); values map north = logicalMin
         var reportID: Int? = nil         // Which input report ID this layout decodes, for multi-report devices
+        /// The parser's full decode plan (logical ranges, bit sizes, every hat,
+        /// every input report). Carried here so two devices whose legacy fields
+        /// match but whose ranges differ never share a plan. nil for hand-coded
+        /// profiles; the decoder synthesizes one from the fields above.
+        var extended: HIDExtendedLayout? = nil
     }
 }
 

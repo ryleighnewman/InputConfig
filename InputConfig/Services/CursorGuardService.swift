@@ -4,7 +4,7 @@ import CoreGraphics
 import Combine
 
 /// Gaming-oriented cursor utilities. Optional, all-off by default so
-/// the app's normal "I move my mouse, the OS moves it" behaviour is
+/// the app's normal "I move my mouse, the OS moves it" behavior is
 /// preserved. Each feature toggles independently:
 ///
 ///   - **Edge confine**: keeps the cursor at least `edgeBufferPx`
@@ -13,29 +13,19 @@ import Combine
 ///     cursor still hits the edge of the screen and stops moving.
 ///
 ///   - **Auto-recenter**: every `recenterIntervalMs` the cursor is
-///     teleported back to the screen centre (or a user-defined
-///     anchor). Mirrors what tools like X-Mouse Button Control offer
-///     on Windows. Together with edge-confine, lets the user play any
-///     game that needs unbounded mouselook on a captive cursor.
+///     moved back to the center of the screen it is on. Together with
+///     edge-confine, lets the user play a game that needs unbounded
+///     mouselook on a captive cursor.
 ///
 ///   - **Hide while engine running**: hides the system cursor while
-///     the MappingEngine is active (since the controller is driving
-///     input anyway, a floating cursor is just visual noise). Restores
-///     it on stop.
+///     the MappingEngine is active. Restores it on stop.
 ///
-///   - **Sensitivity multiplier**: scales OS cursor movement by a
-///     constant factor by tracking deltas and re-warping. Independent
-///     of macOS's own tracking-speed slider.
+///   - **Sensitivity multiplier**: a factor the pointer outputs
+///     (stick, touchpad, gyro) are scaled by, read by the engine.
 ///
-///   - **Sticky-to-anchor**: while the configured modifier key is
-///     held, every mouse delta is suppressed and the cursor stays at
-///     the anchor. Lets the user define a "hold to lock cursor" hotkey
-///     for top-down games where the cursor should park dead centre.
-///
-/// All warping uses `CGWarpMouseCursorPosition`, which is a public API
-/// and works without accessibility permissions because we're moving
-/// the cursor, not synthesising clicks. The class lives on the main
-/// actor since CG calls expect it.
+/// Warps go through `InputSimulator.warpPointer`, so the pointer pump
+/// continues from the new spot. The class lives on the main actor since
+/// the screen lookups expect it.
 @MainActor
 final class CursorGuardService: ObservableObject {
 
@@ -89,20 +79,137 @@ final class CursorGuardService: ObservableObject {
     /// global Settings → Gaming Utilities choices). Non-nil = the
     /// preset's PresetAutomation values temporarily replace the
     /// effective values while the engine is active.
-    private var presetOverride: PresetAutomation?
+    private var presetOverride: PresetAutomation? {
+        didSet { presetTargets = Self.targets(of: presetOverride) }
+    }
+
+    /// Where the running preset's own cursor utilities apply (see
+    /// `GuardScope`).
+    private var presetTargets = GuardScope()
+    private var targetAppInFront = true
+    private var frontAppObserver: NSObjectProtocol?
 
     private init() {
+        frontAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.frontAppChanged() }
+        }
         // Restart in case any persisted flag was already on.
         restartLoop()
     }
 
+    /// Which apps a preset's own confine, recenter, and hide run in.
+    /// `only`: the apps it lists under Activate when these apps are in
+    /// front, plus the app it launches; when there are any, the utilities
+    /// run while one of them is in front, or an app one of them started (a
+    /// launcher's game: the Minecraft launcher starts the game as a separate
+    /// Java process), found by parent process, or by name when the launcher
+    /// has quit. A preset that names no app runs them in every app, as 1.5
+    /// did. Never in `except`: the Finder, InputConfig, System Settings, the
+    /// Dock and the system's permission and password prompts, where a
+    /// pointer pulled to the middle of the screen made the Accessibility
+    /// switch a new user is sent to impossible to reach.
+    private struct GuardScope {
+        var only: Set<String> = []
+        /// The named apps' names, for a game whose launcher has quit.
+        var names: Set<String> = []
+        var except: Set<String> = []
+    }
+
+    private static let neverGuarded: Set<String> = [
+        "com.apple.finder", "com.apple.systempreferences", "com.apple.SecurityAgent",
+        "com.apple.UserNotificationCenter", "com.apple.coreservices.uiagent", "com.apple.loginwindow",
+        "com.apple.LocalAuthentication.UIAgent", "com.apple.dock",
+    ]
+
+    private static func targets(of automation: PresetAutomation?) -> GuardScope {
+        guard let automation else { return GuardScope() }
+        var scope = GuardScope()
+        scope.only = Set(automation.autoActivateBundleIDs ?? [])
+        let launch = automation.launchAppPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !launch.isEmpty {
+            if launch.hasPrefix("/") {
+                let url = URL(fileURLWithPath: launch)
+                if let id = Bundle(url: url)?.bundleIdentifier { scope.only.insert(id) }
+                scope.names.insert(url.deletingPathExtension().lastPathComponent)
+            } else if !launch.contains("/") {
+                scope.only.insert(launch)
+            }
+        }
+        scope.except = neverGuarded
+        if let own = Bundle.main.bundleIdentifier { scope.except.insert(own) }
+        scope.only.subtract(scope.except)
+        for id in scope.only {
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first,
+               let name = app.localizedName { scope.names.insert(name) }
+        }
+        scope.names = Set(scope.names.filter { $0.count >= 4 })
+        return scope
+    }
+
+    /// A process's parent, or nil when it cannot be read.
+    private static func parentPID(of pid: pid_t) -> pid_t? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let parent = info.kp_eproc.e_ppid
+        return parent > 1 ? parent : nil
+    }
+
+    /// Whether the app in front is one of the scope's apps, or was started
+    /// by one (up to four generations), or carries one's name.
+    private static func matches(_ app: NSRunningApplication, _ scope: GuardScope) -> Bool {
+        if let id = app.bundleIdentifier, scope.only.contains(id) { return true }
+        let named = scope.only.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+        let ancestors = Set(named.map(\.processIdentifier))
+        var pid = app.processIdentifier
+        for _ in 0..<4 {
+            guard let parent = parentPID(of: pid) else { break }
+            if ancestors.contains(parent) { return true }
+            pid = parent
+        }
+        if let name = app.localizedName?.lowercased() {
+            return scope.names.contains { name.contains($0.lowercased()) }
+        }
+        return false
+    }
+
+    private func frontAppChanged() {
+        let front = NSWorkspace.shared.frontmostApplication
+        let id = front?.bundleIdentifier
+        let scope = presetTargets
+        let inFront: Bool
+        if id.map({ scope.except.contains($0) }) ?? false {
+            inFront = false
+        } else if !scope.only.isEmpty {
+            inFront = front.map { Self.matches($0, scope) } ?? false
+        } else {
+            inFront = true
+        }
+        guard inFront != targetAppInFront else { return }
+        targetAppInFront = inFront
+        restartLoop()
+        applyHideState()
+    }
+
+    /// The preset's own utilities, when its target app (if it names one)
+    /// is in front. The global Settings toggles are not gated.
+    private var presetGuards: PresetAutomation? {
+        targetAppInFront ? presetOverride : nil
+    }
+
     /// Adopt the given preset's automation as the active override.
     /// Called by MappingEngine.start. While set, the service's
-    /// effective behaviour is driven entirely by these values rather
+    /// effective behavior is driven entirely by these values rather
     /// than the global @Published toggles. Persisted user settings
     /// are untouched.
     func applyPresetOverride(_ automation: PresetAutomation) {
         presetOverride = automation
+        // Measure the front app for the new targets before the loop starts.
+        targetAppInFront = !targetAppInFront
+        frontAppChanged()
         restartLoop()
         applyHideState()
     }
@@ -125,19 +232,19 @@ final class CursorGuardService: ObservableObject {
     // ran. The preset's own numbers apply only when the preset turned the
     // utility on; otherwise the global numbers do.
     private var effectiveConfineEnabled: Bool {
-        (presetOverride?.confineCursor ?? false) || edgeConfineEnabled
+        (presetGuards?.confineCursor ?? false) || edgeConfineEnabled
     }
     private var effectiveBufferPx: Double {
-        presetOverride?.confineCursor == true ? (presetOverride?.confineBufferPx ?? edgeBufferPx) : edgeBufferPx
+        presetGuards?.confineCursor == true ? (presetGuards?.confineBufferPx ?? edgeBufferPx) : edgeBufferPx
     }
     private var effectiveRecenterEnabled: Bool {
-        (presetOverride?.autoRecenterCursor ?? false) || autoRecenterEnabled
+        (presetGuards?.autoRecenterCursor ?? false) || autoRecenterEnabled
     }
     private var effectiveRecenterIntervalMs: Double {
-        presetOverride?.autoRecenterCursor == true ? (presetOverride?.autoRecenterIntervalMs ?? recenterIntervalMs) : recenterIntervalMs
+        presetGuards?.autoRecenterCursor == true ? (presetGuards?.autoRecenterIntervalMs ?? recenterIntervalMs) : recenterIntervalMs
     }
     private var effectiveHideCursor: Bool {
-        (presetOverride?.hideCursorWhileActive ?? false) || hideCursorWhileEngineRunning
+        (presetGuards?.hideCursorWhileActive ?? false) || hideCursorWhileEngineRunning
     }
 
     // MARK: - Engine integration
@@ -161,10 +268,35 @@ final class CursorGuardService: ObservableObject {
     /// preset is active - so the loop is a no-op when `engineActive`
     /// is false even if the toggles are on. This avoids the cursor
     /// jumping around while the user is editing a preset.
+    /// True while the Mac sleeps, is locked, or shows another user's
+    /// session: confine, recenter and hide stop there like every output.
+    private var suspended = false
+
+    func setSuspended(_ value: Bool) {
+        guard suspended != value else { return }
+        suspended = value
+        restartLoop()
+        applyHideState()
+    }
+
+    /// Re-read the stored settings after Reset or Restore changed them
+    /// with no control involved; the pointer stayed hidden or confined.
+    func reloadFromDefaults() {
+        let d = UserDefaults.standard
+        edgeConfineEnabled = d.bool(forKey: "CursorGuard.edgeConfine")
+        edgeBufferPx = max(1, d.double(forKey: "CursorGuard.edgeBufferPx").nonZeroOrDefault(24))
+        autoRecenterEnabled = d.bool(forKey: "CursorGuard.autoRecenter")
+        recenterIntervalMs = max(50, d.double(forKey: "CursorGuard.recenterIntervalMs").nonZeroOrDefault(500))
+        hideCursorWhileEngineRunning = d.bool(forKey: "CursorGuard.hideWhileRunning")
+        sensitivityMultiplier = min(5.0, max(0.1, d.double(forKey: "CursorGuard.sensitivity").nonZeroOrDefault(1.0)))
+        restartLoop()
+        applyHideState()
+    }
+
     private func restartLoop() {
         loopTimer?.invalidate()
         loopTimer = nil
-        guard engineActive else { return }
+        guard engineActive, !suspended else { return }
         guard effectiveConfineEnabled || effectiveRecenterEnabled else { return }
         // Use the shorter of the two intervals so edge-confine is
         // reactive; auto-recenter fires only when its own counter
@@ -180,13 +312,16 @@ final class CursorGuardService: ObservableObject {
         RunLoop.main.add(t, forMode: .common)
         loopTimer = t
         recenterAccumulator = 0
+        // A fresh start, or the first tick measured the time since the last
+        // preset ran and recentered the pointer the moment this one started.
+        lastTickAt = 0
     }
 
     private var recenterAccumulator: TimeInterval = 0
     private var lastTickAt: TimeInterval = 0
 
     private func tick() {
-        let now = Date().timeIntervalSince1970
+        let now = ProcessInfo.processInfo.systemUptime
         let dt = lastTickAt == 0 ? 0 : (now - lastTickAt)
         lastTickAt = now
 
@@ -210,7 +345,11 @@ final class CursorGuardService: ObservableObject {
     /// top-down. We convert between the two.
     private func screenForCursor() -> NSScreen? {
         let mouse = NSEvent.mouseLocation
-        if let hit = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+        // NSMouseInRect takes columns [minX, maxX) and rows (minY, maxY],
+        // which is how the pointer's location reports a display's top row.
+        // contains() left that row out; counting both edges of every display
+        // gave a shared edge to the primary display.
+        if let hit = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) {
             return hit
         }
         return NSScreen.main
@@ -241,7 +380,7 @@ final class CursorGuardService: ObservableObject {
         return CGRect(x: f.origin.x, y: flippedY, width: f.width, height: f.height)
     }
 
-    // MARK: - Behaviours
+    // MARK: - Behaviors
 
     /// If the cursor is within `edgeBufferPx` of any edge of its
     /// current screen, warp it back inside the buffer. The user still
@@ -262,22 +401,22 @@ final class CursorGuardService: ObservableObject {
         if ny < frame.minY + buf { ny = frame.minY + buf; changed = true }
         if ny > frame.maxY - buf { ny = frame.maxY - buf; changed = true }
         if changed {
-            CGWarpMouseCursorPosition(CGPoint(x: nx, y: ny))
+            InputSimulator.shared.warpPointer(to: CGPoint(x: nx, y: ny))
         }
     }
 
-    /// Teleport the cursor back to the centre of the screen it's on.
+    /// Teleport the cursor back to the center of the screen it's on.
     /// Future work: per-screen / per-app anchor points.
     func warpToAnchor() {
         guard let screen = screenForCursor() else { return }
         let frame = screenRectTopLeft(screen)
-        let centre = CGPoint(x: frame.midX, y: frame.midY)
-        CGWarpMouseCursorPosition(centre)
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        InputSimulator.shared.warpPointer(to: center)
     }
 
     /// CG cursor hide/show toggle, matched to the engine-running state.
     private func applyHideState() {
-        let shouldHide = engineActive && effectiveHideCursor
+        let shouldHide = engineActive && !suspended && effectiveHideCursor
         if shouldHide, !cursorHidden {
             CGDisplayHideCursor(CGMainDisplayID())
             cursorHidden = true

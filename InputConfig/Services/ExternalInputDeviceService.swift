@@ -126,10 +126,14 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// The last raw keyboard events seen by the monitors and the tap,
     /// before any decoding, for the debug hook. Type, keyCode, flags, and
     /// for system-defined events the subtype and data1.
+    /// Debug builds only: a release build keeps no record of anyone's
+    /// keystrokes, not even in memory, and does not format the lines.
     private(set) var debugEventLog: [String] = []
-    private func logRaw(_ line: String) {
-        debugEventLog.append(line)
+    private func logRaw(_ line: @autoclosure () -> String) {
+        #if DEBUG
+        debugEventLog.append(line())
         if debugEventLog.count > 60 { debugEventLog.removeFirst(debugEventLog.count - 60) }
+        #endif
     }
 
     /// One line per fact, for the debug hook.
@@ -160,7 +164,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     static let builtInKeyboardID = "builtin.keyboard"
     static let builtInMouseID = "builtin.mouse"
 
-    private static let excludeBuiltInKey = "InputConfig.externalInput.excludeBuiltIn"
+    static let excludeBuiltInKey = "InputConfig.externalInput.excludeBuiltIn"
 
     /// Retained as a stored preference only so Settings' existing toggle
     /// and the backup key list keep working. It no longer gates any
@@ -173,12 +177,42 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     private init() {
         excludeBuiltInDevices = UserDefaults.standard.bool(forKey: Self.excludeBuiltInKey)
+        // Follow the Accessibility grant. Nothing did: granting it after a
+        // preset started left Mac keyboard and mouse rows dead until the
+        // preset restarted, and a revoke then re-grant never made the tap
+        // again. Consumers are kept across a revoke, so the grant brings
+        // back exactly what was wanted.
+        Task { @MainActor [weak self] in
+            self?.trustSubscription = AccessibilityPermissionService.shared.$isTrusted
+                .removeDuplicates()
+                .dropFirst()
+                .sink { [weak self] trusted in
+                    guard let self else { return }
+                    if trusted {
+                        self.applyMonitoring()
+                    } else {
+                        self.stopMouseMonitoring()
+                        self.stopKeyboardMonitoring()
+                        // The blocking tap too: kept, it came back after a
+                        // re-grant possibly disabled, and nothing read the
+                        // middle and side buttons.
+                        self.destroyButtonTap()
+                    }
+                }
+        }
     }
+
+    private var trustSubscription: AnyCancellable?
 
     // MARK: - Reference-counted monitoring
 
     private var mouseConsumers: Set<String> = []
     private var keyboardConsumers: Set<String> = []
+    /// Mouse consumers that read pointer movement. The tap takes movement
+    /// and drag events only for them: up to 1000 a second from a gaming
+    /// mouse went through the tap for presets that bind only a button.
+    private var movementConsumers: Set<String> = []
+    private var tapHasMovement = false
 
     /// Whether the app may listen at all. Both monitors ride on the
     /// Accessibility permission; without it nothing is installed.
@@ -188,8 +222,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// again with the same reason replaces what that reason holds. Safe
     /// before Accessibility is granted: the monitor is installed the next
     /// time anyone retains after the grant.
-    func retain(_ reason: String, mouse: Bool = false, keyboard: Bool = false) {
+    func retain(_ reason: String, mouse: Bool = false, keyboard: Bool = false, movement: Bool = true) {
         if mouse { mouseConsumers.insert(reason) } else { mouseConsumers.remove(reason) }
+        if mouse && movement { movementConsumers.insert(reason) } else { movementConsumers.remove(reason) }
         if keyboard { keyboardConsumers.insert(reason) } else { keyboardConsumers.remove(reason) }
         applyMonitoring()
     }
@@ -198,11 +233,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// monitor tears it down.
     func release(_ reason: String) {
         mouseConsumers.remove(reason)
+        movementConsumers.remove(reason)
         keyboardConsumers.remove(reason)
         applyMonitoring()
     }
 
     private func applyMonitoring() {
+        // The tap's mask is fixed when it is made; a change in who reads
+        // movement makes it again.
+        if eventTap != nil, tapHasMovement != !movementConsumers.isEmpty { stopMouseMonitoring() }
         if mouseConsumers.isEmpty { stopMouseMonitoring() } else { startMouseMonitoring() }
         if keyboardConsumers.isEmpty { stopKeyboardMonitoring() } else { startKeyboardMonitoring() }
         if mouseConsumers.isEmpty && keyboardConsumers.isEmpty {
@@ -297,11 +336,47 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     ]
     private var polledDown: Set<Int> = []
 
+    /// Both sides' device bits for each side-specific modifier key.
+    private static let modifierFamilyBits: [Int: UInt] = [
+        56: 0x0000_0006, 60: 0x0000_0006,   // Shift
+        59: 0x0000_2001, 62: 0x0000_2001,   // Control
+        58: 0x0000_0060, 61: 0x0000_0060,   // Option
+        55: 0x0000_0018, 54: 0x0000_0018,   // Command
+    ]
+
+    /// Whether a polled key is down. A side-specific modifier is read from
+    /// its own device bit in the session's modifier flags: the key state
+    /// answers for the modifier, not the key, so right Command and right
+    /// Option read as the left ones too. A keyboard that sets no device bits
+    /// falls back to the key state, as before.
+    /// The family is tested on the session's full flags, the side on the
+    /// flags without this app's own posted bits. While only the app holds
+    /// a modifier, the family is set and the person's side reads up; the
+    /// key state is never asked then, since it counts the app's own key and
+    /// latched the other side.
+    private static func isDown(_ vk: CGKeyCode, flags raw: UInt, own: UInt) -> Bool {
+        if let family = modifierFamilyBits[Int(vk)], let bit = modifierDeviceBit[Int(vk)], raw & family != 0 {
+            return (raw & ~own) & bit != 0
+        }
+        return CGEventSource.keyState(.combinedSessionState, key: vk)
+    }
+
     private func pollKeys() {
         guard !keyboardConsumers.isEmpty else { return }
         let dev = Self.builtInKeyboardID
+        // Without the side bits this app's own posted modifiers carry: a
+        // row turning right Option into left Option otherwise read the
+        // posted left bit as the right key being let go, and flickered.
+        let flags = UInt(CGEventSource.flagsState(.combinedSessionState).rawValue)
+        let own = InputSimulator.shared.ownDeviceModifierBits()
         for entry in Self.polledKeys {
-            let down = CGEventSource.keyState(.combinedSessionState, key: entry.vk)
+            // keyState includes the events this app posts, and the own-event
+            // marker only protects the event tap. Without this a preset that
+            // swaps Command and Control read its own output as input and
+            // latched both, and any row sending a modifier fired the rows
+            // bound to that modifier as an input.
+            if InputSimulator.shared.isHolding(entry.hid) { continue }
+            let down = Self.isDown(entry.vk, flags: flags, own: own)
             let was = polledDown.contains(entry.hid)
             guard down != was else { continue }
             if down { polledDown.insert(entry.hid) } else { polledDown.remove(entry.hid) }
@@ -316,10 +391,40 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// only when the set changed.
     private func publishLive() {
         pollKeys()
+        reconcileHeld()
         let now = Date()
         for (k, until) in liveUntil where until <= now { liveUntil.removeValue(forKey: k) }
         if liveUntil.count != rawActiveInputs.count || !rawActiveInputs.isSuperset(of: liveUntil.keys) {
             rawActiveInputs = Set(liveUntil.keys)
+        }
+    }
+
+    /// A key or button still marked held that the system says is up lost
+    /// its release (Secure Event Input swallows events for the global
+    /// monitor, and a monitor rebuild can drop one), and a bound output
+    /// stayed down. Release it here, as if the event had arrived.
+    private func reconcileHeld() {
+        let polled = Set(Self.polledKeys.map(\.hid))
+        for key in liveUntil.keys where liveUntil[key] == .distantFuture && !key.hasSuffix(" any") {
+            let parts = key.split(separator: " ")
+            // Not the Globe key: its press is a system-made key-down that
+            // the key state never reports as held, so it was let go on the
+            // next tick. Its real key-up still arrives and releases it.
+            if parts.count == 3, parts[0] == "ekb", let code = Int(parts[1]), !polled.contains(code),
+               code != KeyCodeMap.globeKeyCode, code != KeyCodeMap.globeFnCode,
+               // A key with no name is stored as its key code past the base.
+               let vk = KeyCodeMap.hidToVirtualKeyCode[code]
+                    ?? ((KeyCodeMap.unknownKeyBase..<KeyCodeMap.unknownSystemKeyBase).contains(code)
+                        ? code - KeyCodeMap.unknownKeyBase : nil),
+               !CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(vk)) {
+                let e: Event = .keyUp(deviceID: String(parts[2]), hidCode: code)
+                noteLive(e); events.send(e)
+            } else if parts.count == 5, parts[0] == "ems", parts[1] == "button", let b = Int(parts[2]),
+                      let button = CGMouseButton(rawValue: UInt32(b)),
+                      !CGEventSource.buttonState(.combinedSessionState, button: button) {
+                let e: Event = .mouseButtonUp(deviceID: String(parts[4]), button: b)
+                noteLive(e); events.send(e)
+            }
         }
     }
 
@@ -335,6 +440,62 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// Active tap for middle and side button presses, installed only while
+    /// a running preset blocks one of them (`blockedMouseButtons`). The
+    /// listen-only tap above stops taking those events meanwhile, so each
+    /// press is reported once, and cursor motion never waits on this app.
+    private var buttonTap: CFMachPort?
+    private var buttonTapSource: CFRunLoopSource?
+
+    /// Mouse buttons (2 and up; main and secondary click never) whose own
+    /// action is swallowed while a preset binds them with "Block the
+    /// button's own action". Set by the engine on start, cleared on stop.
+    private(set) var blockedMouseButtons: Set<Int> = []
+
+    /// Buttons whose press was swallowed and whose release has not come
+    /// yet. A release is swallowed only when its press was, so stopping the
+    /// preset mid-press does not let a bare release through, and a press
+    /// made before blocking began still gets its release.
+    private var swallowedPresses: Set<Int> = []
+    /// The button tap outlives an empty blocked set until every swallowed
+    /// press has had its release, or a few seconds pass.
+    private var buttonTapTeardownPending = false
+
+    /// True while the engine's outputs are paused (the editor is open) or
+    /// suspended: the row sends nothing then, so the button keeps its own
+    /// action rather than doing nothing at all. A row with a pointer output
+    /// still sends it while pointer passthrough is on (in the editor, at
+    /// the lock screen), so its button stays blocked then.
+    private var blockingPaused = false
+    func setBlockingPaused(_ paused: Bool) { blockingPaused = paused }
+    /// Blocked buttons whose rows send a click, pointer move or scroll.
+    private var pointerRowButtons: Set<Int> = []
+    /// Asked on each blocked press: does the engine let pointer outputs through?
+    var pointerOutputsPassing: (() -> Bool)?
+
+    func setBlockedMouseButtons(_ buttons: Set<Int>, pointerRows: Set<Int> = []) {
+        pointerRowButtons = pointerRows
+        let safe = buttons.filter { $0 >= 2 && $0 <= 31 }
+        guard safe != blockedMouseButtons else { return }
+        let tapsChange = safe.isEmpty != blockedMouseButtons.isEmpty
+        blockedMouseButtons = safe
+        if safe.isEmpty, !swallowedPresses.isEmpty, buttonTap != nil {
+            buttonTapTeardownPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.finishButtonTapTeardown(force: true)
+            }
+            return
+        }
+        buttonTapTeardownPending = false
+        // The listen tap's mask depends on whether the button tap exists.
+        if tapsChange, eventTap != nil {
+            stopMouseMonitoring()
+            startMouseMonitoring()
+        }
+        if !safe.isEmpty {
+            ActivityLog.shared.info("Mouse", "Blocking the own action of mouse button(s) \(safe.sorted().map { String($0 + 1) }.joined(separator: ", ")) while this preset runs")
+        }
+    }
 
     /// Begin listening for system mouse events (buttons, scroll, movement)
     /// so the user can bind their mouse as an input source. Uses a
@@ -347,17 +508,23 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         if eventTap != nil { return }
         guard AXIsProcessTrusted() else { return }
 
+        let otherButtons: CGEventMask =
+            (1 << CGEventType.otherMouseDown.rawValue) |
+            (1 << CGEventType.otherMouseUp.rawValue)
+        let blocking = !blockedMouseButtons.isEmpty
+        let movement = !movementConsumers.isEmpty
+        let moves: CGEventMask =
+            (1 << CGEventType.mouseMoved.rawValue) |
+            (1 << CGEventType.leftMouseDragged.rawValue) |
+            (1 << CGEventType.rightMouseDragged.rawValue) |
+            (1 << CGEventType.otherMouseDragged.rawValue)
         let mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseUp.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.rightMouseUp.rawValue) |
-            (1 << CGEventType.otherMouseDown.rawValue) |
-            (1 << CGEventType.otherMouseUp.rawValue) |
-            (1 << CGEventType.mouseMoved.rawValue) |
-            (1 << CGEventType.leftMouseDragged.rawValue) |
-            (1 << CGEventType.rightMouseDragged.rawValue) |
-            (1 << CGEventType.otherMouseDragged.rawValue) |
+            (blocking ? 0 : otherButtons) |
+            (movement ? moves : 0) |
             (1 << CGEventType.scrollWheel.rawValue)
 
         // Capture-free C callback; `userInfo` carries the service instance.
@@ -390,6 +557,48 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         eventTap = tap
         runLoopSource = src
         cgEventTapInstalled = true
+        tapHasMovement = movement
+
+        // Middle and side buttons through an active tap that can drop a
+        // bound button's press. It still reports every press it sees. One
+        // kept from the last preset (a blocked button still held while the
+        // preset switched) is reused, not leaked beside a second one.
+        // A kept tap is turned back on; one the system will not enable is
+        // rebuilt rather than left dead.
+        if let bTap = buttonTap {
+            CGEvent.tapEnable(tap: bTap, enable: true)
+            if !CGEvent.tapIsEnabled(tap: bTap) { destroyButtonTap() }
+        }
+        if blocking, buttonTap == nil {
+            let buttonCallback: CGEventTapCallBack = { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<ExternalInputDeviceService>.fromOpaque(userInfo).takeUnretainedValue()
+                service.handleMouseEvent(type: type, event: event)
+                return service.shouldBlock(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
+            }
+            if let bTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                            options: .defaultTap, eventsOfInterest: otherButtons,
+                                            callback: buttonCallback,
+                                            userInfo: Unmanaged.passUnretained(self).toOpaque()) {
+                let bSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, bTap, 0)
+                CFRunLoopAddSource(CFRunLoopGetMain(), bSrc, .commonModes)
+                CGEvent.tapEnable(tap: bTap, enable: true)
+                buttonTap = bTap
+                buttonTapSource = bSrc
+            } else {
+                // No active tap: the listen tap takes the buttons back so
+                // they still bind; they just are not blocked.
+                ActivityLog.shared.warning("Mouse", "Could not block mouse buttons; they still work but also do their own action")
+                CGEvent.tapEnable(tap: tap, enable: false)
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+                CFMachPortInvalidate(tap)
+                eventTap = nil
+                runLoopSource = nil
+                blockedMouseButtons = []
+                startMouseMonitoring()
+                return
+            }
+        }
         if !devices.contains(where: { $0.id == Self.builtInMouseID }) {
             devices.append(Device(id: Self.builtInMouseID, kind: .mouse,
                                   vendorID: 0, productID: 0,
@@ -441,11 +650,43 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     /// Stop the mouse tap. The local pressure monitor stays installed so
     /// in-window gauges keep working; there is no global one to tear down.
+    /// Send a release for every held input under `prefix` ("ems ", "ekb ")
+    /// before its monitor goes away, so the engine lets go of rows on it;
+    /// cleared silently, a held key or button stayed held in the engine.
+    private func releaseHeldLive(prefix: String) {
+        for key in liveUntil.keys where key.hasPrefix(prefix) && liveUntil[key] == .distantFuture {
+            let parts = key.split(separator: " ").map(String.init)
+            let event: Event?
+            if parts.count == 3, parts[0] == "ekb", let code = Int(parts[1]) {
+                event = .keyUp(deviceID: parts[2], hidCode: code)
+            } else if parts.count == 5, parts[0] == "ems", let b = Int(parts[2]), parts[1] == "button" {
+                event = .mouseButtonUp(deviceID: parts[4], button: b)
+            } else if parts.count == 5, parts[0] == "ems", parts[1] == "scrollGesture" {
+                event = .scrollGesture(deviceID: parts[4], active: false)
+            } else if parts.count == 5, parts[0] == "ems", parts[1] == "pressure" || parts[1] == "deepPress" {
+                event = .pressureChanged(deviceID: parts[4], value: 0, stage: 0)
+            } else {
+                event = nil
+            }
+            if let event { noteLive(event); events.send(event) }
+        }
+    }
+
     private func stopMouseMonitoring() {
         guard eventTap != nil else { return }
+        releaseHeldLive(prefix: "ems ")
         if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+        }
+        if let tap = eventTap { CFMachPortInvalidate(tap) }
+        // A blocked button still down when blocking ended (the preset
+        // stopped mid-press) keeps its tap until it is let go, or its bare
+        // release reached the front app (finishButtonTapTeardown).
+        // Kept too while blocking is still wanted: this is a restart for a
+        // new mask, and a held blocked button's release must stay blocked.
+        if !(buttonTapTeardownPending && !swallowedPresses.isEmpty), blockedMouseButtons.isEmpty {
+            destroyButtonTap()
         }
         eventTap = nil
         runLoopSource = nil
@@ -460,8 +701,10 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         if let m = keyboardGlobalMonitor { NSEvent.removeMonitor(m); keyboardGlobalMonitor = nil }
         if let m = keyboardLocalMonitor { NSEvent.removeMonitor(m); keyboardLocalMonitor = nil }
         #endif
+        releaseHeldLive(prefix: "ekb ")
         if let tap = sysDefinedTap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = sysDefinedSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        if let tap = sysDefinedTap { CFMachPortInvalidate(tap) }
         sysDefinedTap = nil
         sysDefinedSource = nil
         devices.removeAll { $0.id == Self.builtInKeyboardID }
@@ -483,6 +726,16 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         // The system can disable a tap if it ever blocks; re-enable it.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // A tap the system will not turn back on (the permission went
+            // away) is rebuilt instead of staying dead.
+            if let tap = eventTap, !CGEvent.tapIsEnabled(tap: tap) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.stopMouseMonitoring()
+                    self.applyMonitoring()
+                }
+            }
             return
         }
         if event.getIntegerValueField(.eventSourceUserData) == InputSimulator.ownEventMarker {
@@ -493,11 +746,10 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         var also: Event? = nil
         switch type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            let button: Int
-            switch type {
-            case .leftMouseDown: button = 0
-            case .rightMouseDown: button = 1
-            default: button = Int(event.getIntegerValueField(.mouseEventButtonNumber))
+            let button = Self.mouseButton(of: event, type: type)
+            if button >= 5 {
+                Self.noteUnfamiliar("Mouse", id: "button\(button)",
+                    "Mouse button \(button + 1) pressed. It can be bound: Scan a mouse row and press it.")
             }
             out = .mouseButtonDown(deviceID: dev, button: button)
             // macOS counts clicks itself; the second of a pair is a double.
@@ -507,15 +759,14 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         case .leftMouseUp:    out = .mouseButtonUp(deviceID: dev, button: 0)
         case .rightMouseUp:   out = .mouseButtonUp(deviceID: dev, button: 1)
         case .otherMouseUp:
-            out = .mouseButtonUp(deviceID: dev, button: Int(event.getIntegerValueField(.mouseEventButtonNumber)))
+            out = .mouseButtonUp(deviceID: dev, button: Self.mouseButton(of: event, type: type))
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             out = .mouseMove(deviceID: dev,
                              dx: Int(event.getIntegerValueField(.mouseEventDeltaX)),
                              dy: Int(event.getIntegerValueField(.mouseEventDeltaY)))
         case .scrollWheel:
-            out = .scroll(deviceID: dev,
-                          dx: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
-                          dy: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)))
+            let delta = Self.scrollDeltas(of: event)
+            out = .scroll(deviceID: dev, dx: delta.dx, dy: delta.dy)
             also = scrollGestureTransition(event, dev: dev)
         default:
             out = nil
@@ -530,17 +781,118 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// True for a press or release of a blocked button that a person made
+    /// (the app's own synthesized clicks always pass through).
+    fileprivate func shouldBlock(type: CGEventType, event: CGEvent) -> Bool {
+        guard type == .otherMouseDown || type == .otherMouseUp,
+              event.getIntegerValueField(.eventSourceUserData) != InputSimulator.ownEventMarker else { return false }
+        let button = Self.mouseButton(of: event, type: type)
+        if type == .otherMouseDown {
+            let paused = blockingPaused
+                && !(pointerRowButtons.contains(button) && (pointerOutputsPassing?() ?? false))
+            guard !paused, blockedMouseButtons.contains(button) else { return false }
+            swallowedPresses.insert(button)
+            return true
+        }
+        guard swallowedPresses.remove(button) != nil else { return false }
+        if swallowedPresses.isEmpty && buttonTapTeardownPending {
+            // Not from inside the tap's own callback.
+            DispatchQueue.main.async { [weak self] in self?.finishButtonTapTeardown(force: false) }
+        }
+        return true
+    }
+
+    /// Drop the button tap once blocking ended and the last swallowed
+    /// press got its release (or, forced, after the wait ran out).
+    private func finishButtonTapTeardown(force: Bool) {
+        guard buttonTapTeardownPending, blockedMouseButtons.isEmpty,
+              force || swallowedPresses.isEmpty else { return }
+        buttonTapTeardownPending = false
+        if eventTap != nil {
+            stopMouseMonitoring()
+            startMouseMonitoring()
+        } else {
+            // Monitoring already stopped; only the kept button tap is left.
+            destroyButtonTap()
+        }
+    }
+
+    private func destroyButtonTap() {
+        if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = buttonTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        if let tap = buttonTap { CFMachPortInvalidate(tap) }
+        swallowedPresses.removeAll()
+        buttonTapTeardownPending = false
+        buttonTap = nil
+        buttonTapSource = nil
+    }
+
+    /// Which button a mouse event is for, numbered the way macOS numbers
+    /// them: 0 main, 1 secondary, 2 middle, then every extra button up to 31.
+    static func mouseButton(of event: CGEvent, type: CGEventType) -> Int {
+        switch type {
+        case .leftMouseDown, .leftMouseUp: return 0
+        case .rightMouseDown, .rightMouseUp: return 1
+        default: return Int(event.getIntegerValueField(.mouseEventButtonNumber))
+        }
+    }
+
+    /// A scroll event's movement: dx from a tilt wheel or a sideways swipe,
+    /// dy from the wheel itself.
+    static func scrollDeltas(of event: CGEvent) -> (dx: Int, dy: Int) {
+        (Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
+         Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)))
+    }
+
+    /// Keys and buttons already noted this session, so an unusual one is
+    /// logged on its first press and not on every press after.
+    private static let unfamiliarLock = NSLock()
+    nonisolated(unsafe) private static var unfamiliarSeen = Set<String>()
+
+    /// Notes the first press of a key without a name, or of an extra mouse
+    /// button, in the activity log. A saved report then shows exactly what
+    /// an unusual keyboard or mouse sends. The input works either way.
+    static func noteUnfamiliar(_ source: String, id: String, _ text: String) {
+        unfamiliarLock.lock()
+        let first = unfamiliarSeen.insert(id).inserted
+        unfamiliarLock.unlock()
+        if first { ActivityLog.shared.info(source, text) }
+    }
+
     /// Reads the finger-scroll phases a trackpad or Magic Mouse stamps on
     /// its scroll events (a wheel stamps none) and turns them into the
     /// published gesture state plus a begin / end event when it changes.
-    /// Phase bits: 1 began, 2 stationary, 4 changed, 8 ended, 16 cancelled.
+    /// The fields hold CGScrollPhase (1 began, 2 changed, 4 ended,
+    /// 8 canceled, 128 may begin) and CGMomentumScrollPhase (1 begin,
+    /// 2 continue, 3 end) values, not NSEvent phase bits. Read as bits, an
+    /// ended scroll stayed "fingers" and a momentum end turned the gesture
+    /// back on, so a row on it stayed held until the next scroll.
+    /// Cancels a delayed gesture end; see scrollGestureTransition.
+    private var scrollEndToken = 0
+
     private func scrollGestureTransition(_ event: CGEvent, dev: String) -> Event? {
         let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
         let momentum = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
         let next: ScrollGesture
-        if phase & (1 | 2 | 4) != 0 { next = .fingers }
-        else if momentum & (1 | 4) != 0 { next = .momentum }
+        if phase == 1 || phase == 2 || phase == 128 { next = .fingers }
+        else if momentum == 1 || momentum == 2 { next = .momentum }
         else { next = .none }
+        // Fingers lifted with no momentum yet: momentum may begin on the
+        // next event, so the end waits a moment. Ending at once let a row
+        // on the gesture let go and press again within one flick.
+        if next == .none, phase == 4, momentum == 0, scrollGesture != .none {
+            scrollEndToken &+= 1
+            let token = scrollEndToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+                guard let self, self.scrollEndToken == token, self.scrollGesture != .none else { return }
+                self.scrollGesture = .none
+                let e: Event = .scrollGesture(deviceID: dev, active: false)
+                self.noteLive(e)
+                self.events.send(e)
+            }
+            return nil
+        }
+        scrollEndToken &+= 1
         guard next != scrollGesture else { return nil }
         let wasActive = scrollGesture != .none
         scrollGesture = next
@@ -645,13 +997,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     ]
 
     /// Decodes an NSSystemDefined event into (HID code, pressed). Returns nil
-    /// for anything that is not a recognised aux key press or release.
+    /// for anything that is not a recognized aux key press or release.
     static func mediaKey(from ev: NSEvent) -> (hid: Int, isDown: Bool)? {
         guard ev.type == .systemDefined, ev.subtype.rawValue == 8 else { return nil }
         let keyType = (ev.data1 & 0xFFFF_0000) >> 16
         let state = (ev.data1 & 0x0000_FF00) >> 8
-        guard let hid = hidUsageByNXKeyType[keyType] else { return nil }
         guard state == 0x0A || state == 0x0B else { return nil }
+        // A key type the table has no entry for still becomes an input,
+        // "Special key N", so an unusual keyboard's extra keys can be bound.
+        let hid = hidUsageByNXKeyType[keyType] ?? KeyCodeMap.unknownSystemKeyBase + keyType
         return (hid, state == 0x0A)
     }
 
@@ -694,6 +1048,11 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         if ev.type == .systemDefined {
             if !fromTap && sysDefinedTap != nil { return }
             guard let media = Self.mediaKey(from: ev) else { return }
+            if media.isDown, media.hid >= KeyCodeMap.unknownSystemKeyBase {
+                let type = media.hid - KeyCodeMap.unknownSystemKeyBase
+                Self.noteUnfamiliar("Keyboard", id: "nx\(type)",
+                    "Special key \(type) has no name in InputConfig. It still works as an input, shown as Special key \(type).")
+            }
             let e: Event = media.isDown ? .keyDown(deviceID: dev, hidCode: media.hid)
                                         : .keyUp(deviceID: dev, hidCode: media.hid)
             if media.isDown, !receivedAnyKeyboardEvent { receivedAnyKeyboardEvent = true }
@@ -708,7 +1067,12 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         // Modifiers are read by polling their key state (see pollKeys);
         // flagsChanged is logged for the record and otherwise ignored.
         if ev.type == .flagsChanged { return }
-        guard let hid = Self.hidUsage(forVirtualKeyCode: Int(ev.keyCode)) else { return }
+        let vk = Int(ev.keyCode)
+        let hid = Self.inputCode(forVirtualKeyCode: vk)
+        if hid >= KeyCodeMap.unknownKeyBase, ev.type == .keyDown, !ev.isARepeat {
+            Self.noteUnfamiliar("Keyboard", id: "vk\(vk)",
+                "Key code \(vk) has no name in InputConfig. It still works as an input, shown as Key code \(vk).")
+        }
         switch ev.type {
         case .keyDown:
             if ev.isARepeat { return }
@@ -743,6 +1107,13 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// ANSI block, modifiers, function keys, arrows, and the keypad.
     static func hidUsage(forVirtualKeyCode vk: Int) -> Int? {
         Self.hidUsageByVirtualKey[vk]
+    }
+
+    /// The code a key press is stored under: its HID usage when the table
+    /// knows the key, otherwise its macOS key code above
+    /// `KeyCodeMap.unknownKeyBase`, so a key with no name is still bindable.
+    static func inputCode(forVirtualKeyCode vk: Int) -> Int {
+        hidUsage(forVirtualKeyCode: vk) ?? KeyCodeMap.unknownKeyBase + vk
     }
 
     /// Virtual-key to HID usage table, stored once. Building this dictionary
@@ -786,7 +1157,13 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             106: 107, 64: 108, 79: 109, 80: 110,
             // Navigation cluster.
             114: 73, 115: 74, 116: 75, 117: 76, 118: 61, 119: 77, 120: 59,
-            121: 78, 122: 58, 123: 80, 124: 79, 125: 81, 126: 82
+            121: 78, 122: 58, 123: 80, 124: 79, 125: 81, 126: 82,
+            // Keys that scanned as nothing: F20, the PC Menu key, the ISO
+            // section key, the Japanese keys, and keyboards that send volume
+            // as plain keys (given the codes the media volume keys use).
+            90: 111, 110: 101, 10: 100,
+            93: 137, 94: 135, 95: 133, 102: 145, 104: 144,
+            72: 311, 73: 312, 74: 310
     ]
 
     /// Stop the tap on app termination.

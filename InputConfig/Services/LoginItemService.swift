@@ -12,9 +12,19 @@ final class LoginItemService: ObservableObject {
 
     @Published private(set) var isEnabled: Bool
     @Published var lastError: String?
+    /// Registered, but macOS is waiting for the user to allow it in
+    /// System Settings, General, Login Items. The switch used to flip back
+    /// off with no word about why.
+    @Published private(set) var needsApproval = false
 
     private init() {
         self.isEnabled = (SMAppService.mainApp.status == .enabled)
+        self.needsApproval = (SMAppService.mainApp.status == .requiresApproval)
+    }
+
+    /// Open System Settings at Login Items, where the approval is given.
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
     /// Toggle the registration. Returns true on success, false on error.
@@ -31,11 +41,13 @@ final class LoginItemService: ObservableObject {
             // Re-read the actual status. macOS may put us in `.requiresApproval`
             // if the user has denied background tasks, in which case the toggle
             // visually flips but the system Settings panel shows the truth.
-            isEnabled = (SMAppService.mainApp.status == .enabled)
+            refresh()
             return true
         } catch {
-            lastError = error.localizedDescription
-            isEnabled = (SMAppService.mainApp.status == .enabled)
+            refresh()
+            // Waiting for approval in Login Items: the hint with its button
+            // says what to do, not the raw error.
+            lastError = needsApproval ? nil : error.localizedDescription
             return false
         }
     }
@@ -44,6 +56,8 @@ final class LoginItemService: ObservableObject {
     /// the Settings window reopens, in case the user toggled the setting
     /// externally.
     func refresh() {
-        isEnabled = (SMAppService.mainApp.status == .enabled)
+        let status = SMAppService.mainApp.status
+        isEnabled = (status == .enabled)
+        needsApproval = (status == .requiresApproval)
     }
 }

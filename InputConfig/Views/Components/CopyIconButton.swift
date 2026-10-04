@@ -23,6 +23,7 @@ struct CopyIconButton: View {
     var body: some View {
         Button {
             action()
+            AccessibilityNotification.Announcement("Copied").post()
             withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
                 justCopied = true
             }
@@ -48,5 +49,7 @@ struct CopyIconButton: View {
         }
         .buttonStyle(.plain)
         .help(helpText)
+        .accessibilityLabel(helpText)
+        .accessibilityValue(justCopied ? "Copied" : "")
     }
 }

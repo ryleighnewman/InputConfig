@@ -24,6 +24,10 @@
 		FB10010012RAWHIDGAMEPAD001 /* RawHIDGamepad.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010012RAWHIDGAMEPAD001 /* RawHIDGamepad.swift */; };
 		FB10010013HIDREPORTDEC0001 /* HIDReportDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010013HIDREPORTDEC0001 /* HIDReportDecoder.swift */; };
 		FB10010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift */; };
+		FB10010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */; };
+		FB10010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */; };
+		FB1001CURSORTHROTTLE1 /* CursorSetThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001CURSORTHROTTLE1 /* CursorSetThrottle.swift */; };
+		FB10010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift */; };
 		FB10010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift */; };
 		FB10010016STICKREGSVC00001 /* StickRegionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010016STICKREGSVC00001 /* StickRegionService.swift */; };
 		FB10010017STICKREGVIEW0001 /* StickRegionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010017STICKREGVIEW0001 /* StickRegionsView.swift */; };
@@ -43,12 +47,9 @@
 		FB10010100CRASHRECOVERY00 /* CrashRecoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */; };
 		FB10010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */; };
 		FB10010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift */; };
-		FB10010103UPDATECHECKSVC /* UpdateCheckService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010103UPDATECHECKSVC /* UpdateCheckService.swift */; };
 		FB10010104CURSORREGIONSVC /* CursorRegionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010104CURSORREGIONSVC /* CursorRegionService.swift */; };
 		FB10010105CURSORREGIONSVIEW /* CursorRegionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */; };
 		FBF0HELPER001STEAMCTRL /* SteamControllerHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER001STEAMCTRL /* SteamControllerHelper */; };
-		FBF0HELPER002TOUCHPAD /* TouchpadHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER002TOUCHPAD /* TouchpadHelper */; };
-		FBF0HELPER003LIGHT /* LightHelper in CopyFiles */ = {isa = PBXBuildFile; fileRef = FBF1HELPER003LIGHT /* LightHelper */; };
 		3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1008D4FE7819632F4C378FD /* HIDLightController.swift */; };
 		35903CFFA9BFF5EB883BA3E8 /* JoystickGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B1284DBD0DABB5A3E83845C /* JoystickGroupView.swift */; };
 		400237FA664F7DF515A5036A /* MappingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5119FD097588A76BA1AD62 /* MappingEngine.swift */; };
@@ -75,6 +76,7 @@
 		FB1001MOUSEPUMP00001 /* MouseMotionPump.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001MOUSEPUMP00001 /* MouseMotionPump.swift */; };
 		FB1001HIDREGISTRY001 /* HIDDeviceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001HIDREGISTRY001 /* HIDDeviceRegistry.swift */; };
 		FB1001SCAFFOLD000001 /* ControllerScaffold.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001SCAFFOLD000001 /* ControllerScaffold.swift */; };
+		FB1001BUTTONNAMES001 /* ButtonNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001BUTTONNAMES001 /* ButtonNames.swift */; };
 		FB1001REVIEWSVC00001 /* ReviewPromptService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001REVIEWSVC00001 /* ReviewPromptService.swift */; };
 		FB1001REVIEWVIEW0001 /* ReviewPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001REVIEWVIEW0001 /* ReviewPromptView.swift */; };
 		FB1001DEVICEMENU0001 /* DeviceCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001DEVICEMENU0001 /* DeviceCommands.swift */; };
@@ -92,8 +94,62 @@
 		E753B7D373A453F72513C4A3 /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C2207F21589E350202E2A6D /* Preset.swift */; };
 		F5507342D4D6DD92F3857308 /* PresetEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */; };
 		F6C48A5E5C669AC7A680582A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F5F37A9B969741FCE8A4F38A /* Assets.xcassets */; };
+		FB10010100APPICONICONFILE1 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = FB20010100APPICONICONFILE1 /* AppIcon.icon */; };
 		EE1000000000000000000001 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = EE1000000000000000000002 /* Localizable.xcstrings */; };
 		FBPRIV0001PRIVACYRES000001 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FBPRIV0002PRIVACYREF000001 /* PrivacyInfo.xcprivacy */; };
+		FB1LY000002 /* ControllerLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000001 /* ControllerLayout.swift */; };
+		FB1LY000004 /* Silhouette.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000003 /* Silhouette.swift */; };
+		FB1LY000006 /* ControllerLayoutCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000005 /* ControllerLayoutCatalog.swift */; };
+		FB1LY000008 /* LayoutValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000007 /* LayoutValidation.swift */; };
+		FB1LY000010 /* Layout+SteamController2026.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000009 /* Layout+SteamController2026.swift */; };
+		FB1LY000012 /* Layout+SteamController2015.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000011 /* Layout+SteamController2015.swift */; };
+		FB1LY000014 /* Layout+DualSense.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000013 /* Layout+DualSense.swift */; };
+		FB1LY000016 /* Layout+DualSenseEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000015 /* Layout+DualSenseEdge.swift */; };
+		FB1LY000018 /* Layout+DualShock4.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000017 /* Layout+DualShock4.swift */; };
+		FB1LY000020 /* Layout+DualShock3.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000019 /* Layout+DualShock3.swift */; };
+		FB1LY000022 /* Layout+PsAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000021 /* Layout+PsAccess.swift */; };
+		FB1LY000024 /* Layout+XboxSeries.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000023 /* Layout+XboxSeries.swift */; };
+		FB1LY000026 /* Layout+XboxOne.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000025 /* Layout+XboxOne.swift */; };
+		FB1LY000028 /* Layout+XboxElite2.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000027 /* Layout+XboxElite2.swift */; };
+		FB1LY000030 /* Layout+XboxAdaptive.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000029 /* Layout+XboxAdaptive.swift */; };
+		FB1LY000032 /* Layout+SwitchPro.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000031 /* Layout+SwitchPro.swift */; };
+		FB1LY000034 /* Layout+Switch2Pro.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000033 /* Layout+Switch2Pro.swift */; };
+		FB1LY000036 /* Layout+JoyConPair.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000035 /* Layout+JoyConPair.swift */; };
+		FB1LY000038 /* Layout+JoyConLeft.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000037 /* Layout+JoyConLeft.swift */; };
+		FB1LY000040 /* Layout+JoyConRight.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000039 /* Layout+JoyConRight.swift */; };
+		FB1LY000042 /* Layout+JoyCon2Pair.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000041 /* Layout+JoyCon2Pair.swift */; };
+		FB1LY000044 /* Layout+GameCubeSwitch2.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000043 /* Layout+GameCubeSwitch2.swift */; };
+		FB1LY000046 /* Layout+GameCubeAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000045 /* Layout+GameCubeAdapter.swift */; };
+		FB1LY000048 /* Layout+NsoN64.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000047 /* Layout+NsoN64.swift */; };
+		FB1LY000050 /* Layout+NsoSNES.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000049 /* Layout+NsoSNES.swift */; };
+		FB1LY000052 /* Layout+NsoGenesis.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000051 /* Layout+NsoGenesis.swift */; };
+		FB1LY000054 /* Layout+Stadia.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000053 /* Layout+Stadia.swift */; };
+		FB1LY000056 /* Layout+EightBitDoUltimate.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000055 /* Layout+EightBitDoUltimate.swift */; };
+		FB1LY000058 /* Layout+EightBitDoUltimate2C.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000057 /* Layout+EightBitDoUltimate2C.swift */; };
+		FB1LY000060 /* Layout+EightBitDoPro2.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000059 /* Layout+EightBitDoPro2.swift */; };
+		FB1LY900001 /* Layout+EightBitDoPro3.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY900001 /* Layout+EightBitDoPro3.swift */; };
+		FB1LY000062 /* Layout+EightBitDoSN30Pro.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000061 /* Layout+EightBitDoSN30Pro.swift */; };
+		FB1LY000064 /* Layout+EightBitDoMicro.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000063 /* Layout+EightBitDoMicro.swift */; };
+		FB1LY000066 /* Layout+EightBitDoLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000065 /* Layout+EightBitDoLite.swift */; };
+		FB1LY000068 /* Layout+EightBitDoArcade.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000067 /* Layout+EightBitDoArcade.swift */; };
+		FB1LY000070 /* Layout+BackboneOne.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000069 /* Layout+BackboneOne.swift */; };
+		FB1LY000072 /* Layout+RazerKishiV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000071 /* Layout+RazerKishiV2.swift */; };
+		FB1LY000074 /* Layout+GameSirG8.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000073 /* Layout+GameSirG8.swift */; };
+		FB1LY000076 /* Layout+GenericGamepad.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000075 /* Layout+GenericGamepad.swift */; };
+		FB1LY000078 /* Layout+GenericSNES.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000077 /* Layout+GenericSNES.swift */; };
+		FB1LY000080 /* Layout+ArcadeStick.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000079 /* Layout+ArcadeStick.swift */; };
+		FB1LY000082 /* Layout+Leverless.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000081 /* Layout+Leverless.swift */; };
+		FB1LY000084 /* Layout+LogitechExtreme3D.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000083 /* Layout+LogitechExtreme3D.swift */; };
+		FB1LY000086 /* Layout+ThrustmasterT16000M.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000085 /* Layout+ThrustmasterT16000M.swift */; };
+		FB1LY000088 /* Layout+LogitechG29.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000087 /* Layout+LogitechG29.swift */; };
+		FB1LY000090 /* Layout+ThrustmasterT300.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000089 /* Layout+ThrustmasterT300.swift */; };
+		FB1LY000092 /* Layout+UnrecognizedHID.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000091 /* Layout+UnrecognizedHID.swift */; };
+		FB1VIZCANVAS0001 /* ControllerCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2VIZCANVAS0001 /* ControllerCanvas.swift */; };
+		FB1VIZLEGEND0001 /* CanvasLegend.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2VIZLEGEND0001 /* CanvasLegend.swift */; };
+		FB1LAYRESOLVE001 /* ControllerLayoutResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LAYRESOLVE001 /* ControllerLayoutResolver.swift */; };
+		FB1001LEGACYROWS1 /* LegacyRowCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001LEGACYROWS1 /* LegacyRowCheck.swift */; };
+		FB1001LOGIWHEEL01 /* LogitechWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001LOGIWHEEL01 /* LogitechWheel.swift */; };
+		FB1001LOGIWHLLAY1 /* Layout+LogitechWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001LOGIWHLLAY1 /* Layout+LogitechWheel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -114,18 +170,16 @@
 		FB2001MOUSEPUMP00001 /* MouseMotionPump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseMotionPump.swift; sourceTree = "<group>"; };
 		FB2001HIDREGISTRY001 /* HIDDeviceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDDeviceRegistry.swift; sourceTree = "<group>"; };
 		FB2001SCAFFOLD000001 /* ControllerScaffold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerScaffold.swift; sourceTree = "<group>"; };
+		FB2001BUTTONNAMES001 /* ButtonNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ButtonNames.swift; sourceTree = "<group>"; };
 		FB2001REVIEWSVC00001 /* ReviewPromptService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptService.swift; sourceTree = "<group>"; };
 		FB2001REVIEWVIEW0001 /* ReviewPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptView.swift; sourceTree = "<group>"; };
 		FB2001DEVICEMENU0001 /* DeviceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCommands.swift; sourceTree = "<group>"; };
 		FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryService.swift; sourceTree = "<group>"; };
 		FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreezeWatchdogService.swift; sourceTree = "<group>"; };
 		FB20010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalInputDeviceService.swift; sourceTree = "<group>"; };
-		FB20010103UPDATECHECKSVC /* UpdateCheckService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckService.swift; sourceTree = "<group>"; };
 		FB20010104CURSORREGIONSVC /* CursorRegionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorRegionService.swift; sourceTree = "<group>"; };
 		FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorRegionsView.swift; sourceTree = "<group>"; };
 		FBF1HELPER001STEAMCTRL /* SteamControllerHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = SteamControllerHelper; path = SteamControllerHelper/SteamControllerHelper; sourceTree = "<group>"; };
-		FBF1HELPER002TOUCHPAD /* TouchpadHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = TouchpadHelper; path = TouchpadHelper/TouchpadHelper; sourceTree = "<group>"; };
-		FBF1HELPER003LIGHT /* LightHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = LightHelper; path = LightHelper/LightHelper; sourceTree = "<group>"; };
 		FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCalibrationView.swift; sourceTree = "<group>"; };
 		FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapCalibrationView.swift; sourceTree = "<group>"; };
 		FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualControllerView.swift; sourceTree = "<group>"; };
@@ -164,6 +218,10 @@
 		FB20010012RAWHIDGAMEPAD001 /* RawHIDGamepad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawHIDGamepad.swift; sourceTree = "<group>"; };
 		FB20010013HIDREPORTDEC0001 /* HIDReportDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDReportDecoder.swift; sourceTree = "<group>"; };
 		FB20010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawHIDGamepadService.swift; sourceTree = "<group>"; };
+		FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Switch2USBEnabler.swift; sourceTree = "<group>"; };
+		FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDLGameControllerDB.swift; sourceTree = "<group>"; };
+		FB2001CURSORTHROTTLE1 /* CursorSetThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorSetThrottle.swift; sourceTree = "<group>"; };
+		FB20010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDLGameControllerDBData.swift; sourceTree = "<group>"; };
 		FB20010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDDescriptorParser.swift; sourceTree = "<group>"; };
 		FB20010016STICKREGSVC00001 /* StickRegionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickRegionService.swift; sourceTree = "<group>"; };
 		FB20010017STICKREGVIEW0001 /* StickRegionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickRegionsView.swift; sourceTree = "<group>"; };
@@ -184,8 +242,62 @@
 		F1008D4FE7819632F4C378FD /* HIDLightController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDLightController.swift; sourceTree = "<group>"; };
 		F45D143E9943FE3D2A6E7BD6 /* PresetEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetEditorView.swift; sourceTree = "<group>"; };
 		F5F37A9B969741FCE8A4F38A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FB20010100APPICONICONFILE1 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		EE1000000000000000000002 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		FBPRIV0002PRIVACYREF000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		FB2LY000001 /* ControllerLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerLayout.swift"; sourceTree = "<group>"; };
+		FB2LY000003 /* Silhouette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Silhouette.swift"; sourceTree = "<group>"; };
+		FB2LY000005 /* ControllerLayoutCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerLayoutCatalog.swift"; sourceTree = "<group>"; };
+		FB2LY000007 /* LayoutValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LayoutValidation.swift"; sourceTree = "<group>"; };
+		FB2LY000009 /* Layout+SteamController2026.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+SteamController2026.swift"; sourceTree = "<group>"; };
+		FB2LY000011 /* Layout+SteamController2015.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+SteamController2015.swift"; sourceTree = "<group>"; };
+		FB2LY000013 /* Layout+DualSense.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+DualSense.swift"; sourceTree = "<group>"; };
+		FB2LY000015 /* Layout+DualSenseEdge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+DualSenseEdge.swift"; sourceTree = "<group>"; };
+		FB2LY000017 /* Layout+DualShock4.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+DualShock4.swift"; sourceTree = "<group>"; };
+		FB2LY000019 /* Layout+DualShock3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+DualShock3.swift"; sourceTree = "<group>"; };
+		FB2LY000021 /* Layout+PsAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+PsAccess.swift"; sourceTree = "<group>"; };
+		FB2LY000023 /* Layout+XboxSeries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+XboxSeries.swift"; sourceTree = "<group>"; };
+		FB2LY000025 /* Layout+XboxOne.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+XboxOne.swift"; sourceTree = "<group>"; };
+		FB2LY000027 /* Layout+XboxElite2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+XboxElite2.swift"; sourceTree = "<group>"; };
+		FB2LY000029 /* Layout+XboxAdaptive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+XboxAdaptive.swift"; sourceTree = "<group>"; };
+		FB2LY000031 /* Layout+SwitchPro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+SwitchPro.swift"; sourceTree = "<group>"; };
+		FB2LY000033 /* Layout+Switch2Pro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+Switch2Pro.swift"; sourceTree = "<group>"; };
+		FB2LY000035 /* Layout+JoyConPair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+JoyConPair.swift"; sourceTree = "<group>"; };
+		FB2LY000037 /* Layout+JoyConLeft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+JoyConLeft.swift"; sourceTree = "<group>"; };
+		FB2LY000039 /* Layout+JoyConRight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+JoyConRight.swift"; sourceTree = "<group>"; };
+		FB2LY000041 /* Layout+JoyCon2Pair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+JoyCon2Pair.swift"; sourceTree = "<group>"; };
+		FB2LY000043 /* Layout+GameCubeSwitch2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+GameCubeSwitch2.swift"; sourceTree = "<group>"; };
+		FB2LY000045 /* Layout+GameCubeAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+GameCubeAdapter.swift"; sourceTree = "<group>"; };
+		FB2LY000047 /* Layout+NsoN64.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+NsoN64.swift"; sourceTree = "<group>"; };
+		FB2LY000049 /* Layout+NsoSNES.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+NsoSNES.swift"; sourceTree = "<group>"; };
+		FB2LY000051 /* Layout+NsoGenesis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+NsoGenesis.swift"; sourceTree = "<group>"; };
+		FB2LY000053 /* Layout+Stadia.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+Stadia.swift"; sourceTree = "<group>"; };
+		FB2LY000055 /* Layout+EightBitDoUltimate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoUltimate.swift"; sourceTree = "<group>"; };
+		FB2LY000057 /* Layout+EightBitDoUltimate2C.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoUltimate2C.swift"; sourceTree = "<group>"; };
+		FB2LY000059 /* Layout+EightBitDoPro2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoPro2.swift"; sourceTree = "<group>"; };
+		FB2LY900001 /* Layout+EightBitDoPro3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoPro3.swift"; sourceTree = "<group>"; };
+		FB2LY000061 /* Layout+EightBitDoSN30Pro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoSN30Pro.swift"; sourceTree = "<group>"; };
+		FB2LY000063 /* Layout+EightBitDoMicro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoMicro.swift"; sourceTree = "<group>"; };
+		FB2LY000065 /* Layout+EightBitDoLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoLite.swift"; sourceTree = "<group>"; };
+		FB2LY000067 /* Layout+EightBitDoArcade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoArcade.swift"; sourceTree = "<group>"; };
+		FB2LY000069 /* Layout+BackboneOne.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+BackboneOne.swift"; sourceTree = "<group>"; };
+		FB2LY000071 /* Layout+RazerKishiV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+RazerKishiV2.swift"; sourceTree = "<group>"; };
+		FB2LY000073 /* Layout+GameSirG8.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+GameSirG8.swift"; sourceTree = "<group>"; };
+		FB2LY000075 /* Layout+GenericGamepad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+GenericGamepad.swift"; sourceTree = "<group>"; };
+		FB2LY000077 /* Layout+GenericSNES.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+GenericSNES.swift"; sourceTree = "<group>"; };
+		FB2LY000079 /* Layout+ArcadeStick.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+ArcadeStick.swift"; sourceTree = "<group>"; };
+		FB2LY000081 /* Layout+Leverless.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+Leverless.swift"; sourceTree = "<group>"; };
+		FB2LY000083 /* Layout+LogitechExtreme3D.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+LogitechExtreme3D.swift"; sourceTree = "<group>"; };
+		FB2LY000085 /* Layout+ThrustmasterT16000M.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+ThrustmasterT16000M.swift"; sourceTree = "<group>"; };
+		FB2LY000087 /* Layout+LogitechG29.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+LogitechG29.swift"; sourceTree = "<group>"; };
+		FB2LY000089 /* Layout+ThrustmasterT300.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+ThrustmasterT300.swift"; sourceTree = "<group>"; };
+		FB2LY000091 /* Layout+UnrecognizedHID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+UnrecognizedHID.swift"; sourceTree = "<group>"; };
+		FB2VIZCANVAS0001 /* ControllerCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Visualizer/ControllerCanvas.swift"; sourceTree = "<group>"; };
+		FB2VIZLEGEND0001 /* CanvasLegend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Visualizer/CanvasLegend.swift"; sourceTree = "<group>"; };
+		FB2LAYRESOLVE001 /* ControllerLayoutResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerLayoutResolver.swift"; sourceTree = "<group>"; };
+		FB2001LEGACYROWS1 /* LegacyRowCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LegacyRowCheck.swift"; sourceTree = "<group>"; };
+		FB2001LOGIWHEEL01 /* LogitechWheel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LogitechWheel.swift"; sourceTree = "<group>"; };
+		FB2001LOGIWHLLAY1 /* Layout+LogitechWheel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+LogitechWheel.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -215,6 +327,7 @@
 			isa = PBXGroup;
 			children = (
 				F5F37A9B969741FCE8A4F38A /* Assets.xcassets */,
+				FB20010100APPICONICONFILE1 /* AppIcon.icon */,
 				EE1000000000000000000002 /* Localizable.xcstrings */,
 				6A40EA3CD3A8811E78EDA424 /* Info.plist */,
 				FBPRIV0002PRIVACYREF000001 /* PrivacyInfo.xcprivacy */,
@@ -233,6 +346,8 @@
 				9953EE66C8AB92001E3C8F60 /* InputEvent.swift */,
 				D9AFC638DF7D9B649E63CD4D /* KeyCodeMap.swift */,
 				FB2001SCAFFOLD000001 /* ControllerScaffold.swift */,
+				FB2001BUTTONNAMES001 /* ButtonNames.swift */,
+				FB3LY000102 /* Layouts */,
 				5AEC52DE5A4CD75E782F3060 /* OutputAction.swift */,
 				8C2207F21589E350202E2A6D /* Preset.swift */,
 				FB20010010CTRLPROFILE00001 /* ControllerProfile.swift */,
@@ -264,11 +379,23 @@
 			path = Components;
 			sourceTree = "<group>";
 		};
+		FB2001DEVICESGROUP01 /* Devices */ = {
+			isa = PBXGroup;
+			children = (
+				FB2001001ADSSUPPSVC0000001 /* DualSenseSupplementService.swift */,
+				FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */,
+				FB2001LOGIWHEEL01 /* LogitechWheel.swift */,
+				FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */,
+				FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */,
+			);
+			path = Devices;
+			sourceTree = "<group>";
+		};
 		9C21B2EB3BCE07C2FA6F351B /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				FB2001DEVICESGROUP01 /* Devices */,
 				FB20010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift */,
-				FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */,
 				FB20010001FEEDBACK000001 /* FeedbackService.swift */,
 				8207CB5F209C9B16F9F67675 /* GameControllerService.swift */,
 				F1008D4FE7819632F4C378FD /* HIDLightController.swift */,
@@ -279,16 +406,19 @@
 				FB2001000FMENUBARCTRL00001 /* MenuBarController.swift */,
 				FB20010013HIDREPORTDEC0001 /* HIDReportDecoder.swift */,
 				FB20010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift */,
+				FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */,
+				FB2LAYRESOLVE001 /* ControllerLayoutResolver.swift */,
+				FB2001CURSORTHROTTLE1 /* CursorSetThrottle.swift */,
+				FB2001LEGACYROWS1 /* LegacyRowCheck.swift */,
+				FB20010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift */,
 				FB20010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift */,
 				FB20010016STICKREGSVC00001 /* StickRegionService.swift */,
 				FB20010018SYSSTATSSVC00001 /* SystemStatsService.swift */,
-				FB2001001ADSSUPPSVC0000001 /* DualSenseSupplementService.swift */,
 				FB2001001BCURSORGUARDSVC001 /* CursorGuardService.swift */,
 				5B3F9303B5602B756C4652DF /* PresetStore.swift */,
 				FB2001000ATESTBENCHSVC0001 /* TestBenchService.swift */,
 				FB20010006TIPJARSVC0000001 /* TipJarService.swift */,
 				FB2001000FTOUCHPADSVC00001 /* TouchpadService.swift */,
-				FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */,
 				FB20010014STATSSVC0000001 /* StatsService.swift */,
 				FB20010016MOTIONCALSVC001 /* MotionCalibrationService.swift */,
 				FB2001ACTIVITYLOG0001 /* ActivityLog.swift */,
@@ -298,7 +428,6 @@
 				FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */,
 				FB20010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift */,
 				FB20010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift */,
-				FB20010103UPDATECHECKSVC /* UpdateCheckService.swift */,
 				FB20010104CURSORREGIONSVC /* CursorRegionService.swift */,
 			);
 			path = Services;
@@ -345,6 +474,8 @@
 				FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */,
 				FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */,
 				FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */,
+				FB2VIZLEGEND0001 /* CanvasLegend.swift */,
+				FB2VIZCANVAS0001 /* ControllerCanvas.swift */,
 				FB20010015STATSVIEW000001 /* StatsView.swift */,
 				FB2001001EIMPORTREVIEW001 /* ImportReviewSheet.swift */,
 				FB20010003HELPVIEW0000001 /* HelpGuideView.swift */,
@@ -359,6 +490,133 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		FB3LY000093 /* Valve */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000009 /* Layout+SteamController2026.swift */,
+				FB2LY000011 /* Layout+SteamController2015.swift */,
+			);
+			path = Valve;
+			sourceTree = "<group>";
+		};
+		FB3LY000094 /* Sony */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000013 /* Layout+DualSense.swift */,
+				FB2LY000015 /* Layout+DualSenseEdge.swift */,
+				FB2LY000017 /* Layout+DualShock4.swift */,
+				FB2LY000019 /* Layout+DualShock3.swift */,
+				FB2LY000021 /* Layout+PsAccess.swift */,
+			);
+			path = Sony;
+			sourceTree = "<group>";
+		};
+		FB3LY000095 /* Microsoft */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000023 /* Layout+XboxSeries.swift */,
+				FB2LY000025 /* Layout+XboxOne.swift */,
+				FB2LY000027 /* Layout+XboxElite2.swift */,
+				FB2LY000029 /* Layout+XboxAdaptive.swift */,
+			);
+			path = Microsoft;
+			sourceTree = "<group>";
+		};
+		FB3LY000096 /* Nintendo */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000031 /* Layout+SwitchPro.swift */,
+				FB2LY000033 /* Layout+Switch2Pro.swift */,
+				FB2LY000035 /* Layout+JoyConPair.swift */,
+				FB2LY000037 /* Layout+JoyConLeft.swift */,
+				FB2LY000039 /* Layout+JoyConRight.swift */,
+				FB2LY000041 /* Layout+JoyCon2Pair.swift */,
+				FB2LY000043 /* Layout+GameCubeSwitch2.swift */,
+				FB2LY000045 /* Layout+GameCubeAdapter.swift */,
+				FB2LY000047 /* Layout+NsoN64.swift */,
+				FB2LY000049 /* Layout+NsoSNES.swift */,
+				FB2LY000051 /* Layout+NsoGenesis.swift */,
+			);
+			path = Nintendo;
+			sourceTree = "<group>";
+		};
+		FB3LY000097 /* Google */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000053 /* Layout+Stadia.swift */,
+			);
+			path = Google;
+			sourceTree = "<group>";
+		};
+		FB3LY000098 /* EightBitDo */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000055 /* Layout+EightBitDoUltimate.swift */,
+				FB2LY000057 /* Layout+EightBitDoUltimate2C.swift */,
+				FB2LY000059 /* Layout+EightBitDoPro2.swift */,
+				FB2LY900001 /* Layout+EightBitDoPro3.swift */,
+				FB2LY000061 /* Layout+EightBitDoSN30Pro.swift */,
+				FB2LY000063 /* Layout+EightBitDoMicro.swift */,
+				FB2LY000065 /* Layout+EightBitDoLite.swift */,
+				FB2LY000067 /* Layout+EightBitDoArcade.swift */,
+			);
+			path = EightBitDo;
+			sourceTree = "<group>";
+		};
+		FB3LY000099 /* PhoneGrips */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000069 /* Layout+BackboneOne.swift */,
+				FB2LY000071 /* Layout+RazerKishiV2.swift */,
+				FB2LY000073 /* Layout+GameSirG8.swift */,
+			);
+			path = PhoneGrips;
+			sourceTree = "<group>";
+		};
+		FB3LY000100 /* Generic */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000075 /* Layout+GenericGamepad.swift */,
+				FB2LY000077 /* Layout+GenericSNES.swift */,
+				FB2LY000091 /* Layout+UnrecognizedHID.swift */,
+			);
+			path = Generic;
+			sourceTree = "<group>";
+		};
+		FB3LY000101 /* ArcadeAndSim */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000079 /* Layout+ArcadeStick.swift */,
+				FB2LY000081 /* Layout+Leverless.swift */,
+				FB2LY000083 /* Layout+LogitechExtreme3D.swift */,
+				FB2LY000085 /* Layout+ThrustmasterT16000M.swift */,
+				FB2LY000087 /* Layout+LogitechG29.swift */,
+				FB2001LOGIWHLLAY1 /* Layout+LogitechWheel.swift */,
+				FB2LY000089 /* Layout+ThrustmasterT300.swift */,
+			);
+			path = ArcadeAndSim;
+			sourceTree = "<group>";
+		};
+		FB3LY000102 /* Layouts */ = {
+			isa = PBXGroup;
+			children = (
+				FB2LY000001 /* ControllerLayout.swift */,
+				FB2LY000003 /* Silhouette.swift */,
+				FB2LY000005 /* ControllerLayoutCatalog.swift */,
+				FB2LY000007 /* LayoutValidation.swift */,
+				FB3LY000093 /* Valve */,
+				FB3LY000094 /* Sony */,
+				FB3LY000095 /* Microsoft */,
+				FB3LY000096 /* Nintendo */,
+				FB3LY000097 /* Google */,
+				FB3LY000098 /* EightBitDo */,
+				FB3LY000099 /* PhoneGrips */,
+				FB3LY000100 /* Generic */,
+				FB3LY000101 /* ArcadeAndSim */,
+			);
+			path = Layouts;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -369,6 +627,7 @@
 				0B181C993C6692E901A0F565 /* Sources */,
 				573DA7520DCA5F52E036DE58 /* Resources */,
 				F9384C09D1156887266DC160 /* Frameworks */,
+				FBF4BUILDHELPERS0PHASE /* Build Helpers */,
 				FBF2HELPERS00COPYPHASE /* Copy Helpers */,
 				FBF3SIGNHELPERS00PHASE /* Sign Helpers With Entitlements */,
 			);
@@ -417,6 +676,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F6C48A5E5C669AC7A680582A /* Assets.xcassets in Resources */,
+				FB10010100APPICONICONFILE1 /* AppIcon.icon in Resources */,
 				EE1000000000000000000001 /* Localizable.xcstrings in Resources */,
 				FBPRIV0001PRIVACYRES000001 /* PrivacyInfo.xcprivacy in Resources */,
 			);
@@ -432,8 +692,6 @@
 			dstSubfolderSpec = 6;
 			files = (
 				FBF0HELPER001STEAMCTRL /* SteamControllerHelper in CopyFiles */,
-				FBF0HELPER002TOUCHPAD /* TouchpadHelper in CopyFiles */,
-				FBF0HELPER003LIGHT /* LightHelper in CopyFiles */,
 			);
 			name = "Copy Helpers";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -441,6 +699,27 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		FBF4BUILDHELPERS0PHASE /* Build Helpers */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/SteamControllerHelper/main.swift",
+			);
+			name = "Build Helpers";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/SteamControllerHelper/SteamControllerHelper",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Compile the helpers from source, universal, when a binary is missing,\n# older than its source, or not universal. They are not checked in, so a\n# fresh clone failed to build, and an archive shipped whatever binary was\n# left on disk.\nset -e\nbuild_helper() {\n  name=\"$1\"\n  src=\"${SRCROOT}/$name/main.swift\"\n  out=\"${SRCROOT}/$name/$name\"\n  archs=$(lipo -archs \"$out\" 2>/dev/null || true)\n  universal=0\n  case \"$archs\" in *arm64*) case \"$archs\" in *x86_64*) universal=1 ;; esac ;; esac\n  if [ ! -f \"$out\" ] || [ \"$src\" -nt \"$out\" ] || [ \"$universal\" = 0 ]; then\n    echo \"Building $name (universal)\"\n    xcrun --sdk macosx swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" -o \"$out.arm64\"\n    xcrun --sdk macosx swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" -o \"$out.x86_64\"\n    lipo -create \"$out.arm64\" \"$out.x86_64\" -output \"$out\"\n    rm -f \"$out.arm64\" \"$out.x86_64\"\n  fi\n}\nbuild_helper SteamControllerHelper\n";
+		};
 		FBF3SIGNHELPERS00PHASE /* Sign Helpers With Entitlements */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -458,7 +737,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Sign embedded helpers with their own sandbox entitlements.\n# The Copy Helpers phase brings in pre-built helper binaries that Xcode\n# signs without entitlements by default, which fails App Store validation\n# (\"App sandbox not enabled\"). This phase re-signs each helper with its\n# entitlements file. Xcode's implicit outer-bundle sign that runs after\n# this phase preserves these nested signatures.\n\nset -e\n\nAPP=\"${CODESIGNING_FOLDER_PATH}\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-$CODE_SIGN_IDENTITY}\"\n\nif [ -z \"$IDENTITY\" ] || [ \"$IDENTITY\" = \"-\" ]; then\n  echo \"warning: No code signing identity, skipping helper signing.\"\n  exit 0\nfi\n\nsign_helper() {\n  local name=\"$1\"\n  local ents=\"$2\"\n  local target=\"$APP/Contents/MacOS/$name\"\n  if [ ! -f \"$target\" ]; then\n    echo \"warning: $name not found at $target\"\n    return\n  fi\n  if [ ! -f \"$ents\" ]; then\n    echo \"error: entitlements file not found: $ents\"\n    exit 1\n  fi\n  xattr -cr \"$target\" || true\n  /usr/bin/codesign --force --options runtime \\\n    --sign \"$IDENTITY\" \\\n    --entitlements \"$ents\" \\\n    \"$target\"\n  echo \"Signed $name with entitlements\"\n}\n\nsign_helper SteamControllerHelper \"${SRCROOT}/SteamControllerHelper/SteamControllerHelper.entitlements\"\nsign_helper TouchpadHelper \"${SRCROOT}/TouchpadHelper/TouchpadHelper.entitlements\"\nsign_helper LightHelper \"${SRCROOT}/LightHelper/LightHelper.entitlements\"\n";
+			shellScript = "# Sign embedded helpers with their own entitlements: app-sandbox + inherit,\n# nothing else, so each runs inside the app's sandbox when the app launches it.\n# The Copy Helpers phase brings in pre-built helper binaries that Xcode\n# signs without entitlements by default, which fails App Store validation\n# (\"App sandbox not enabled\"). This phase re-signs each helper with its\n# entitlements file. Xcode's implicit outer-bundle sign that runs after\n# this phase preserves these nested signatures.\n\nset -e\n\nAPP=\"${CODESIGNING_FOLDER_PATH}\"\n# Respect a build that turns signing off, and sign only with the identity\n# Xcode resolved: the bare CODE_SIGN_IDENTITY name matched whatever\n# certificate came first in the keychain.\nif [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ]; then\n  echo \"Code signing is off for this build; skipping helper signing.\"\n  exit 0\nfi\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY}\"\n\nif [ -z \"$IDENTITY\" ] || [ \"$IDENTITY\" = \"-\" ]; then\n  # A Release build (the archive) must not ship the helper without its\n  # sandbox entitlements: App Store validation rejects it, and the helper\n  # traps at launch.\n  if [ \"${CONFIGURATION}\" = \"Release\" ]; then\n    echo \"error: No code signing identity for a Release build; the helper would ship unsigned.\"\n    exit 1\n  fi\n  echo \"warning: No code signing identity, skipping helper signing.\"\n  exit 0\nfi\n\nsign_helper() {\n  local name=\"$1\"\n  local ents=\"$2\"\n  local target=\"$APP/Contents/MacOS/$name\"\n  if [ ! -f \"$target\" ]; then\n    if [ \"${CONFIGURATION}\" = \"Release\" ]; then\n      echo \"error: $name not found at $target\"\n      exit 1\n    fi\n    echo \"warning: $name not found at $target\"\n    return\n  fi\n  if [ ! -f \"$ents\" ]; then\n    echo \"error: entitlements file not found: $ents\"\n    exit 1\n  fi\n  xattr -cr \"$target\" || true\n  /usr/bin/codesign --force --options runtime \\\n    --sign \"$IDENTITY\" \\\n    --entitlements \"$ents\" \\\n    \"$target\"\n  echo \"Signed $name with entitlements\"\n}\n\nsign_helper SteamControllerHelper \"${SRCROOT}/SteamControllerHelper/SteamControllerHelper.entitlements\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -488,12 +767,63 @@
 				FB1001MOUSEPUMP00001 /* MouseMotionPump.swift in Sources */,
 				FB1001HIDREGISTRY001 /* HIDDeviceRegistry.swift in Sources */,
 				FB1001SCAFFOLD000001 /* ControllerScaffold.swift in Sources */,
+				FB1001BUTTONNAMES001 /* ButtonNames.swift in Sources */,
+				FB1LY000002 /* ControllerLayout.swift in Sources */,
+				FB1LY000004 /* Silhouette.swift in Sources */,
+				FB1LY000006 /* ControllerLayoutCatalog.swift in Sources */,
+				FB1LY000008 /* LayoutValidation.swift in Sources */,
+				FB1LY000010 /* Layout+SteamController2026.swift in Sources */,
+				FB1LY000012 /* Layout+SteamController2015.swift in Sources */,
+				FB1LY000014 /* Layout+DualSense.swift in Sources */,
+				FB1LY000016 /* Layout+DualSenseEdge.swift in Sources */,
+				FB1LY000018 /* Layout+DualShock4.swift in Sources */,
+				FB1LY000020 /* Layout+DualShock3.swift in Sources */,
+				FB1LY000022 /* Layout+PsAccess.swift in Sources */,
+				FB1LY000024 /* Layout+XboxSeries.swift in Sources */,
+				FB1LY000026 /* Layout+XboxOne.swift in Sources */,
+				FB1LY000028 /* Layout+XboxElite2.swift in Sources */,
+				FB1LY000030 /* Layout+XboxAdaptive.swift in Sources */,
+				FB1LY000032 /* Layout+SwitchPro.swift in Sources */,
+				FB1LY000034 /* Layout+Switch2Pro.swift in Sources */,
+				FB1LY000036 /* Layout+JoyConPair.swift in Sources */,
+				FB1LY000038 /* Layout+JoyConLeft.swift in Sources */,
+				FB1LY000040 /* Layout+JoyConRight.swift in Sources */,
+				FB1LY000042 /* Layout+JoyCon2Pair.swift in Sources */,
+				FB1LY000044 /* Layout+GameCubeSwitch2.swift in Sources */,
+				FB1LY000046 /* Layout+GameCubeAdapter.swift in Sources */,
+				FB1LY000048 /* Layout+NsoN64.swift in Sources */,
+				FB1LY000050 /* Layout+NsoSNES.swift in Sources */,
+				FB1LY000052 /* Layout+NsoGenesis.swift in Sources */,
+				FB1LY000054 /* Layout+Stadia.swift in Sources */,
+				FB1LY000056 /* Layout+EightBitDoUltimate.swift in Sources */,
+				FB1LY000058 /* Layout+EightBitDoUltimate2C.swift in Sources */,
+				FB1LY000060 /* Layout+EightBitDoPro2.swift in Sources */,
+				FB1LY900001 /* Layout+EightBitDoPro3.swift in Sources */,
+				FB1LY000062 /* Layout+EightBitDoSN30Pro.swift in Sources */,
+				FB1LY000064 /* Layout+EightBitDoMicro.swift in Sources */,
+				FB1LY000066 /* Layout+EightBitDoLite.swift in Sources */,
+				FB1LY000068 /* Layout+EightBitDoArcade.swift in Sources */,
+				FB1LY000070 /* Layout+BackboneOne.swift in Sources */,
+				FB1LY000072 /* Layout+RazerKishiV2.swift in Sources */,
+				FB1LY000074 /* Layout+GameSirG8.swift in Sources */,
+				FB1LY000076 /* Layout+GenericGamepad.swift in Sources */,
+				FB1LY000078 /* Layout+GenericSNES.swift in Sources */,
+				FB1LY000080 /* Layout+ArcadeStick.swift in Sources */,
+				FB1LY000082 /* Layout+Leverless.swift in Sources */,
+				FB1LY000084 /* Layout+LogitechExtreme3D.swift in Sources */,
+				FB1LY000086 /* Layout+ThrustmasterT16000M.swift in Sources */,
+				FB1LY000088 /* Layout+LogitechG29.swift in Sources */,
+				FB1001LOGIWHLLAY1 /* Layout+LogitechWheel.swift in Sources */,
+				FB1LY000090 /* Layout+ThrustmasterT300.swift in Sources */,
+				FB1LY000092 /* Layout+UnrecognizedHID.swift in Sources */,
 				FB1001REVIEWSVC00001 /* ReviewPromptService.swift in Sources */,
 				FB1001REVIEWVIEW0001 /* ReviewPromptView.swift in Sources */,
 				FB1001DEVICEMENU0001 /* DeviceCommands.swift in Sources */,
 				FB10010017MOTIONCALVW0001 /* MotionCalibrationView.swift in Sources */,
 				FB1001TAPCALVIEW00001 /* TapCalibrationView.swift in Sources */,
 				FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */,
+				FB1VIZLEGEND0001 /* CanvasLegend.swift in Sources */,
+				FB1VIZCANVAS0001 /* ControllerCanvas.swift in Sources */,
 				FB1001000FTOUCHPADSVC00001 /* TouchpadService.swift in Sources */,
 				D1BABA54C5FFEC5A13FA70B6 /* GameControllerService.swift in Sources */,
 				3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */,
@@ -513,6 +843,13 @@
 				FB10010012RAWHIDGAMEPAD001 /* RawHIDGamepad.swift in Sources */,
 				FB10010013HIDREPORTDEC0001 /* HIDReportDecoder.swift in Sources */,
 				FB10010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift in Sources */,
+				FB10010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift in Sources */,
+				FB10010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift in Sources */,
+				FB1LAYRESOLVE001 /* ControllerLayoutResolver.swift in Sources */,
+				FB1001CURSORTHROTTLE1 /* CursorSetThrottle.swift in Sources */,
+				FB1001LOGIWHEEL01 /* LogitechWheel.swift in Sources */,
+				FB1001LEGACYROWS1 /* LegacyRowCheck.swift in Sources */,
+				FB10010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift in Sources */,
 				FB10010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift in Sources */,
 				FB10010016STICKREGSVC00001 /* StickRegionService.swift in Sources */,
 				FB10010017STICKREGVIEW0001 /* StickRegionsView.swift in Sources */,
@@ -541,7 +878,6 @@
 				FB10010100CRASHRECOVERY00 /* CrashRecoveryService.swift in Sources */,
 				FB10010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift in Sources */,
 				FB10010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift in Sources */,
-				FB10010103UPDATECHECKSVC /* UpdateCheckService.swift in Sources */,
 				FB10010104CURSORREGIONSVC /* CursorRegionService.swift in Sources */,
 				FB10010105CURSORREGIONSVIEW /* CursorRegionsView.swift in Sources */,
 			);
@@ -558,7 +894,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -566,7 +902,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
@@ -649,7 +985,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 29;
+				CURRENT_PROJECT_VERSION = 30;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -657,7 +993,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;

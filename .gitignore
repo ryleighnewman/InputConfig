@@ -24,7 +24,7 @@ xcuserdata/
 .cursor/
 .vscode/
 
-# Compiled helper binary (rebuilt by build_and_archive.sh)
+# Compiled helper binary (rebuilt by the Build Helpers phase; LightHelper was removed in 1.6)
 LightHelper/LightHelper
 
 # Personal setup notes (not part of the app)
@@ -45,3 +45,6 @@ AUDIT-*.md
 Marketing/*
 !Marketing/posters/
 scripts/* 2.py
+
+# A personal file in the posters folder, not part of the app or its marketing
+Marketing/posters/verstappen-minecaft.gif

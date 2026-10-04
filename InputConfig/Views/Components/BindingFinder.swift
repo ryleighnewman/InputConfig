@@ -111,6 +111,7 @@ enum PresetSearch {
             case .systemAction: add("system", "mac", "shortcut")
             case .midiNote, .midiCC, .midiPitchBend, .midiProgramChange, .midiTransport: add("midi")
             case .absoluteVolume: add("volume")
+            case .lightBar: add("light bar", "rgb", "color", "led", "rainbow")
             }
         }
         if binding.turboEnabled == true { add("turbo", "rapid fire", "repeat") }
@@ -121,9 +122,13 @@ enum PresetSearch {
     }
 
     /// Every row in the preset, in order, with the text search matches against.
-    static func index(_ preset: Preset) -> [PresetSearchHit] {
+    /// `naming` gives each group's family and model names, the editor's
+    /// own; without it, the preset's Buttons choice.
+    static func index(_ preset: Preset,
+                      naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil) -> [PresetSearchHit] {
         var out: [PresetSearchHit] = []
         for (g, joystick) in preset.joysticks.enumerated() {
+            let names = naming?(g) ?? (family: preset.buttonFamily, model: .none)
             for (i, b) in joystick.bindings.enumerated() {
                 let outputs = b.outputs.isEmpty ? "nothing bound" : b.outputs.map(\.displayName).joined(separator: " + ")
                 var parts: [String] = []
@@ -131,13 +136,15 @@ enum PresetSearch {
                 if let dbl = b.doubleTapOutputs, !dbl.isEmpty { parts.append("double tap: " + dbl.map(\.displayName).joined(separator: " + ")) }
                 if let steps = b.macroSteps, !steps.isEmpty { parts.append("macro, \(steps.count) steps") }
                 if !b.modifiers.isEmpty { parts.append("while holding " + b.modifiers.map(\.displayName).joined(separator: " + ")) }
-                var title = "\(b.input.displayName)  \u{2192}  \(outputs)"
+                let inputName = ButtonNames.inputName(b.input, family: names.family, model: names.model)
+                var title = "\(inputName)  \u{2192}  \(outputs)"
                 if !parts.isEmpty { title += "  (" + parts.joined(separator: "; ") + ")" }
                 var place = ["Input device \(g)"]
                 if let s = b.section, !s.isEmpty { place.append(s) }
                 var detail = place.joined(separator: " \u{203A} ")
                 if let note = b.note, !note.isEmpty { detail += " \u{00B7} " + note }
-                let text = (title + " " + detail + " " + b.input.serialized + " " + aliases(for: b)).lowercased()
+                let text = (title + " " + detail + " " + b.input.serialized + " " + b.input.displayName + " "
+                            + aliases(for: b)).lowercased()
                 out.append(PresetSearchHit(id: b.id, joystickIndex: g, rowNumber: i + 1,
                                            inputSerialized: b.input.serialized,
                                            title: title, detail: detail, searchText: text))
@@ -159,6 +166,7 @@ enum PresetSearch {
 /// editor scrolls to it. Up and Down move the highlight, Return goes.
 struct PresetSearchBar: View {
     let preset: Preset
+    var naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil
     let onGo: (PresetSearchHit) -> Void
 
     @State private var query = ""
@@ -167,7 +175,7 @@ struct PresetSearchBar: View {
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
-        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(PresetSearch.index(preset), query: trimmed)
+        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(PresetSearch.index(preset, naming: naming), query: trimmed)
         VStack(alignment: .leading, spacing: 6) {
             searchField(hits)
             if !trimmed.isEmpty {
@@ -185,7 +193,19 @@ struct PresetSearchBar: View {
                 .frame(width: 16)
             TextField("Search this preset: a button, a key, a note, anything in a row", text: $query)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: query) { _, _ in highlighted = 0 }
+                .onChange(of: query) { _, _ in
+                    highlighted = 0
+                    // Spoken, since the list is otherwise silent.
+                    let n = hits.count
+                    if !trimmed.isEmpty {
+                        AccessibilityNotification.Announcement(n == 0 ? "No matching rows" : "\(n) matching row\(n == 1 ? "" : "s")").post()
+                    }
+                }
+                .onChange(of: highlighted) { _, i in
+                    if hits.indices.contains(i) {
+                        AccessibilityNotification.Announcement("Row \(hits[i].rowNumber), \(hits[i].title)").post()
+                    }
+                }
                 .onSubmit { if hits.indices.contains(highlighted) { go(hits[highlighted]) } }
                 .onKeyPress(.downArrow) {
                     guard !hits.isEmpty else { return .ignored }
@@ -202,7 +222,7 @@ struct PresetSearchBar: View {
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                     .accessibilityLabel("Clear search")
             }
         }
@@ -260,6 +280,11 @@ struct PresetSearchBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
         .contentShape(Rectangle())
+        // One element that acts as a button, for VoiceOver and Voice Control.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Row \(h.rowNumber), \(h.title), \(h.detail)")
+        .accessibilityAction { go(h) }
     }
 
     private func go(_ h: PresetSearchHit) {

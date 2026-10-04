@@ -62,7 +62,7 @@ enum HelpGuideLibrary {
         title: "Your First Preset",
         category: "Getting started",
         url: "https://inputconfig.com/help/first-preset",
-        intro: "Five minutes from install to a controller that moves the pointer, clicks, scrolls, and types in every app on the Mac. Most of that time is macOS asking for one permission.",
+        intro: "Five minutes gets you from install to a controller that moves the pointer, clicks, scrolls and types in every app on the Mac. You install InputConfig, connect a controller, activate the built-in Desktop Navigation preset, and switch on one permission when macOS asks for it. Most of the five minutes is that permission. This page is for the first time you open the app. If the pointer does not move after that, go to [the permission ladder](#if-the-pointer-does-not-move).",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -71,25 +71,81 @@ enum HelpGuideLibrary {
                     "In the sidebar, open Desktop & Productivity and click Desktop Navigation.",
                     "Click Activate. The first time, macOS asks for the Accessibility permission. Open System Settings, Privacy & Security, Accessibility, and switch InputConfig on.",
                     "Move the left stick. The pointer moves. Press A / Cross to click. The right stick scrolls.",
-                    "To stop, click Deactivate, or hold Back / Share / View on the controller for three seconds. That hold is the emergency stop and it works no matter what the preset maps that button to."
+                    "To stop, click Deactivate, or hold Back and Start together on the controller for three seconds. That hold is the emergency stop and it works no matter what the preset maps those buttons to."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "What the permission is for", blocks: [
-                .paragraph("InputConfig turns controller input into the same keyboard and mouse events a real keyboard sends. macOS only lets an app do that with the Accessibility permission. The app never reads what you type in other apps. The permission is about sending. Using your own keyboard, mouse, or trackpad as an input rides on the same permission; nothing else is ever asked for.")
+            HelpSection(heading: "Allow the one permission", blocks: [
+                .paragraph("InputConfig turns controller input into the same keyboard and mouse events a real keyboard sends, and macOS only lets an app do that with the Accessibility permission."),
+                .list([
+                    "**You:** Click Activate on Desktop Navigation. When macOS asks, open System Settings, Privacy & Security, Accessibility, and switch InputConfig on.",
+                    "**macOS:** Lets InputConfig send keystrokes, clicks and pointer movement to other apps. Rows start working the moment the permission is granted.",
+                    "**Check:** Move the left stick and the pointer moves. If the InputConfig icon in the menu bar is orange, the running preset is still waiting for the permission."
+                ], ordered: false),
+                .paragraph("The permission is mostly about sending. The app watches your own keyboard, mouse or trackpad only when a preset uses one of their keys or buttons as an input, and then only while that preset, Scan or the Live Visualizer needs it. Keys are only listened to, so a bound key still does its normal job. A mouse's middle or side button is held back from its own action only when its row turns on Block the button's own action. All of that rides on the same permission. For most setups nothing else is asked for, and the app has no network access. A controller that also acts as a keyboard needs Input Monitoring, and macOS may ask about Bluetooth when you use Disconnect on a Bluetooth controller. More on [what the Accessibility permission allows](https://inputconfig.com/questions/accessibility-permission-on-mac).")
             ]),
             HelpSection(heading: "What Desktop Navigation does", blocks: [
-                .paragraph("Left stick moves the pointer, and a small push is precise while a full push is fast. Right stick scrolls. A / Cross is left click, B / Circle is right click. The bumpers switch tabs, the D-pad sends the arrow keys, Start / Options presses Return. Every row has a note saying what it does, so the preset explains itself.")
+                .paragraph("Desktop Navigation is a pointer plus the everyday shortcuts, for using the Mac without touching the keyboard."),
+                .list([
+                    "**Point and scroll.** The left stick moves the pointer: a small push is precise and a full push is fast. The right stick scrolls.",
+                    "**Click.** The right trigger is left click and the left trigger is right click. A / Cross clicks too.",
+                    "**Edit.** B / Circle undoes, X / Square cuts and Y / Triangle pastes. Pressing the right stick selects all.",
+                    "**Get around.** The bumpers switch apps and the D-pad sends the arrow keys. Back / Share opens Spotlight and Start / Options presses Return."
+                ], ordered: false),
+                .paragraph("There is no copy button in the layout; add a row for Command C, or change B. Every row carries a note saying what it does, so the preset explains itself.")
             ]),
-            HelpSection(heading: "Changing one thing", blocks: [
-                .paragraph("Click Edit. Every row is one control and what it sends. To change what a button does, change the output on its row. To move a row to a different button, press Scan on the row and press the button you want. Save, and a running preset picks the change up at once.")
+            HelpSection(heading: "Change one thing", blocks: [
+                .paragraph("Every row in the editor is one control and what it sends, so a change is one row."),
+                .list([
+                    "**You:** Click Edit. To change what a button does, change the output on its row. To move a row to a different button, press Scan on the row and press the button you want. Then click Save.",
+                    "**InputConfig:** Saves the preset, and a running preset picks the change up at once.",
+                    "**Check:** Press the button and watch the new output happen. While the editor is open only the pointer, clicks, scrolling, and Escape, Return, Tab, the arrows and Space work, so test after you save."
+                ], ordered: false),
+                .paragraph("Change one row, try it, then change the next. The [binding editor](https://inputconfig.com/help/binding-editor) page explains every part of a row.")
             ]),
             HelpSection(heading: "If the pointer does not move", blocks: [
-                .paragraph("The Accessibility permission has not been granted. Open System Settings, Privacy & Security, Accessibility, and switch InputConfig on. If it is already on the list and still not working, remove it with the minus button and add it again.")
+                .paragraph("A missing permission is the usual cause, so climb this ladder, smallest step first:"),
+                .list([
+                    "**Check the permission.** Open System Settings, Privacy & Security, Accessibility, and make sure InputConfig is switched on.",
+                    "**Remove it and add it again.** If it is already on the list and the pointer still does not move, remove it with the minus button, add it again, and relaunch InputConfig.",
+                    "**Check the preset is running.** The button on the preset's page reads Deactivate while it runs. If it reads Activate, click it.",
+                    "**Check the controller.** It should be at the top of the sidebar with its battery level. If it is not, [connecting a controller](https://inputconfig.com/help/connecting-controllers) has the fixes."
+                ], ordered: true),
+                .paragraph("Start at the top: the permission is the step people skip.")
+            ]),
+            HelpSection(heading: "If your Mac is not in English", blocks: [
+                .paragraph("The permission step reads System Settings, Privacy & Security, Accessibility. On a Mac set to another language, the same three places are called:"),
+                .table(header: ["Mac language", "System Settings", "Privacy & Security", "Accessibility"], rows: [
+                    ["Spanish (Spain)", "Ajustes del Sistema", "Privacidad y seguridad", "Accesibilidad"],
+                    ["Spanish (Latin America)", "Configuración del Sistema", "Privacidad y seguridad", "Accesibilidad"],
+                    ["Portuguese (Brazil)", "Ajustes do Sistema", "Privacidade e Segurança", "Acessibilidade"],
+                    ["Portuguese (Portugal)", "Definições do Sistema", "Privacidade e segurança", "Acessibilidade"],
+                    ["French", "Réglages Système", "Confidentialité et sécurité", "Accessibilité"],
+                    ["German", "Systemeinstellungen", "Datenschutz & Sicherheit", "Bedienungshilfen"],
+                    ["Italian", "Impostazioni di Sistema", "Privacy e sicurezza", "Accessibilità"],
+                    ["Japanese", "システム設定", "プライバシーとセキュリティ", "アクセシビリティ"],
+                    ["Korean", "시스템 설정", "개인정보 보호 및 보안", "손쉬운 사용"],
+                    ["Chinese (Simplified)", "系统设置", "隐私与安全性", "辅助功能"],
+                    ["Chinese (Traditional)", "系統設定", "隱私權與安全性", "輔助使用"]
+                ]),
+                .paragraph("These are the names on macOS 26 Tahoe; older versions may word them a little differently. InputConfig's own editor, presets and help are in English. The mapping itself works the same whatever language the Mac is set to. The one thing that changes is the keyboard layout, covered in the [binding editor](https://inputconfig.com/help/binding-editor) help.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Install and connect.** InputConfig from the Mac App Store, then a controller by cable or Bluetooth.",
+                    "**Activate Desktop Navigation.** Allow Accessibility once when macOS asks.",
+                    "**Stop any time.** Click Deactivate, or hold Back and Start together for three seconds.",
+                    "**Then make it yours.** Change one row at a time, or start a layout for a game with the [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker)."
+                ], ordered: false),
+                .paragraph("Five minutes of setup, and the controller runs the whole Mac.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Do I need drivers?", answer: "No. macOS handles the controller over USB or Bluetooth and InputConfig reads it through Apple's own framework. MIDI devices are found on their own too."),
-                    HelpQuestion(question: "Does it work with games that have no controller support?", answer: "Yes. The game sees a keyboard and a mouse, because that is what InputConfig sends.")
+                    HelpQuestion(question: "Does it work with games that have no controller support?", answer: "The game sees a keyboard and a mouse, because that is what InputConfig sends."),
+                    HelpQuestion(question: "Is InputConfig free?", answer: "It is free and open source on the Mac App Store, with no account and nothing locked. The optional tip jar unlocks nothing."),
+                    HelpQuestion(question: "I searched the Mac App Store for a controller mapper and InputConfig was not at the top. How do I find it?", answer: "Search for InputConfig, one word. App Store search ranks apps with words like mapper or gamepad in their name first, so a search for controller mapper can list other apps above it. The right one is by Ryleigh Newman, free, for macOS 14 or later."),
+                    HelpQuestion(question: "Can I download InputConfig from GitHub instead?", answer: "The full source code is on GitHub under the MIT license, but the GitHub releases are source only, with no ready-to-run app attached. The signed, ready-to-run copy is the free one on the Mac App Store. If you would rather build it yourself, open the project in Xcode 26 or later, choose your own signing team, and build; the README has the steps."),
+                    HelpQuestion(question: "Is InputConfig available in my language?", answer: "The editor, the presets and the help are written in English. The mapping itself works the same on a Mac set to any language, and the section above lists what System Settings calls the permission step in eleven languages. If you use a French, German or other non-US keyboard layout, read the binding editor's note on layouts before you bind letter shortcuts.")
                 ])
             ]),
         ],
@@ -98,6 +154,9 @@ enum HelpGuideLibrary {
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Presets and Folders", url: "https://inputconfig.com/help/presets-and-folders"),
+            HelpLink(title: "How to map an Xbox controller to keyboard keys on a Mac", url: "https://inputconfig.com/questions/xbox-controller-keyboard-mapping-on-mac"),
+            HelpLink(title: "The best controller, gamepad and joystick mapper for Mac", url: "https://inputconfig.com/questions/best-controller-mapper-for-mac"),
+            HelpLink(title: "How to map controller buttons to keyboard keys on a Mac", url: "https://inputconfig.com/questions/how-to-map-a-controller-to-keyboard-on-mac"),
         ]
     )
 
@@ -106,37 +165,66 @@ enum HelpGuideLibrary {
         title: "Connecting a Controller",
         category: "Getting started",
         url: "https://inputconfig.com/help/connecting-controllers",
-        intro: "A controller connects by cable or by Bluetooth, and InputConfig notices either within a few seconds. If nothing shows up, the fixes below cover almost every case.",
+        intro: "InputConfig notices a controller within a few seconds of it connecting, by USB-C cable or by Bluetooth, and lists it at the top of the sidebar with its battery level. This page covers what InputConfig does once the Mac has the controller: the sidebar entry, the Devices menu for pads it did not pick up, and more than one controller. To pair a controller with the Mac itself, start with [how to connect a controller to a Mac](https://inputconfig.com/questions/how-to-connect-a-controller-to-a-mac). A pad the app did not pick up is usually one tick away, in [the Devices menu](#connect-a-device-by-hand).",
         sections: [
-            HelpSection(heading: "USB-C cable", blocks: [
-                .paragraph("Plug it in. The DualSense, DualSense Edge, DualShock 4, and Xbox controllers all work this way with nothing to set up. The controller appears at the top of the sidebar with its name, battery level, and a chip you can click for the light bar and other options. If it does not, click Refresh Controllers in that chip's popover.")
+            HelpSection(heading: "Connect it with a cable", blocks: [
+                .paragraph("Plug it in. The DualSense, DualSense Edge and DualShock 4 work this way with nothing to set up. So do Xbox controllers on macOS 15 Sequoia or later, once you allow the connection the Mac asks about. On macOS 14, connect an Xbox controller over Bluetooth instead."),
+                .list([
+                    "**You:** Plug the controller in, or turn on one that is already paired.",
+                    "**InputConfig:** Lists it at the top of the sidebar with its name and battery level.",
+                    "**Check:** Click the entry. Its popover has the light bar on a PlayStation pad, Refresh Controllers, and Disconnect. Disconnect on a Bluetooth controller is the one time macOS may ask whether InputConfig can use Bluetooth. To leave a controller out without unplugging it, or one that shows up twice, turn off the switch beside its name at the top of its Live Visualizer panel: it reads as idle everywhere and shows Ignored until you turn it back on."
+                ], ordered: false)
             ]),
-            HelpSection(heading: "Bluetooth", blocks: [
+            HelpSection(heading: "Pair it over Bluetooth", blocks: [
                 .paragraph("Put the controller into pairing mode, then connect it in System Settings, Bluetooth."),
                 .list([
-                    "DualSense or DualShock 4: hold the PS button and the Create (or Share) button together until the light bar flashes.",
-                    "Xbox: hold the pairing button on the top edge until the Xbox button blinks fast.",
-                    "Switch Pro Controller: hold the small Sync button next to the USB-C port until the player LEDs run back and forth."
-                ], ordered: false)
+                    "**DualSense or DualShock 4.** Hold the PS button and the Create (or Share) button together until the light bar flashes. Step by step: [PS5 controller](https://inputconfig.com/questions/how-to-connect-a-ps5-controller-to-a-mac), [PS4 controller](https://inputconfig.com/questions/how-to-connect-a-ps4-controller-to-a-mac).",
+                    "**Xbox.** Hold the pairing button on the top edge until the Xbox button blinks fast. Step by step: [connect an Xbox controller to a Mac](https://inputconfig.com/questions/how-to-connect-an-xbox-controller-to-a-mac).",
+                    "**Switch Pro Controller.** Hold the small Sync button next to the USB-C port until the player LEDs run back and forth. Step by step: [connect a Switch Pro Controller to a Mac](https://inputconfig.com/questions/how-to-connect-a-switch-pro-controller-to-a-mac)."
+                ], ordered: false),
+                .paragraph("Pairing happens in System Settings, Bluetooth; InputConfig needs no pairing of its own.")
+            ]),
+            HelpSection(heading: "Connect a device by hand", blocks: [
+                .paragraph("InputConfig, Devices in the menu bar lists every Bluetooth and USB device the Mac can see, plus MIDI sources, with a tick on the ones the app is reading. When the Dock icon is off, the same list is behind the Devices button in the InputConfig menu bar item, and in the editor on each input device's menu."),
+                .list([
+                    "**You:** Tick a gamepad the app has not picked up on its own.",
+                    "**InputConfig:** Opens it directly and remembers it, by its serial number when it has one and otherwise by make and model, so it reconnects next time.",
+                    "**Check:** The controller appears at the top of the sidebar. Untick it to stop reading it and forget it."
+                ], ordered: false),
+                .paragraph("Some entries cannot be ticked, and the line says why:"),
+                .list([
+                    "**Read by macOS GameController.** macOS already hands it to InputConfig as a controller, so connecting it again would double every press.",
+                    "**Needs Input Monitoring.** A controller that also acts as a keyboard, such as some arcade sticks. Click it and macOS asks to allow Input Monitoring the first time; after that the click opens System Settings, Privacy & Security, Input Monitoring, where InputConfig is listed to switch on. The pad is read when InputConfig comes back to the front.",
+                    "**Grayed out with a reason.** A pad macOS cannot read at all, such as a wired Xbox 360 controller, with what to try instead."
+                ], ordered: false),
+                .paragraph("A device with no readable layout is still read bit by bit, so Scan can find its controls. Bluetooth headsets and hearing aids have no controller inside, but their buttons reach the Mac as media keys, and those bind as Keyboard Key inputs such as Play / Pause. If the Mac can see a device, the Devices menu is where you make InputConfig read it.")
             ]),
             HelpSection(heading: "If the controller does not appear", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
                 .list([
-                    "A controller pairs with one device at a time. If it is still paired to a PlayStation, an Xbox, a Switch, or a phone, unpair it there first.",
-                    "If the Mac shows it connected but InputConfig does not, click Refresh Controllers, or tick it under InputConfig, Devices in the menu bar. The app opens it directly and remembers it.",
-                    "A Bluetooth session that has been alive for days can go quiet. Power the controller off and on.",
-                    "If the controller has a mode switch, try another position. The 8BitDo and Stadia pages say which."
-                ], ordered: false)
+                    "**Refresh.** Click Refresh in Settings, Devices, or Refresh Controllers in any controller's popover at the top of the sidebar.",
+                    "**Tick it by hand.** If the Mac shows it connected but InputConfig does not, tick it under InputConfig, Devices. The app opens it directly and remembers it.",
+                    "**Power it off and on.** A Bluetooth session that has been alive for days can go quiet.",
+                    "**Unpair it elsewhere.** A controller pairs with one device at a time. If it is still paired to a PlayStation, an Xbox, a Switch or a phone, unpair it there first.",
+                    "**Try another mode.** If the controller has a mode switch, try another position. The [8BitDo](https://inputconfig.com/help/8bitdo-controllers) and [Stadia](https://inputconfig.com/help/stadia-controller) pages say which."
+                ], ordered: true),
+                .paragraph("If the Mac itself does not see the controller in System Settings, Bluetooth, the fix is on the Mac side: [controller connected but not working](https://inputconfig.com/questions/controller-connected-but-not-working-on-mac) covers it. Most controllers that vanish come back with the first two rungs.")
             ]),
-            HelpSection(heading: "Connecting a device by hand", blocks: [
-                .paragraph("InputConfig, Devices in the menu bar lists every Bluetooth and USB device the Mac can see, plus MIDI sources, with a tick on the ones the app is reading. Tick a gamepad the app has not picked up on its own and it opens it directly, remembers it by make and model, and reconnects it next time. The same list is in the editor, on each input device's menu. A device with no readable layout is still read bit by bit, so Scan can find its controls. Bluetooth headsets and hearing aids have no controller inside, but their buttons reach the Mac as media keys, and those bind as Keyboard Key inputs such as Play / Pause.")
+            HelpSection(heading: "Use more than one controller", blocks: [
+                .paragraph("Every connected controller gets its own slot, numbered from 0, and a preset holds bindings per slot. Two people can share one Mac from [two controllers](https://inputconfig.com/questions/how-to-use-two-controllers-on-a-mac), or one person can put a DualSense and a MIDI keyboard on the same preset. The [Live Visualizer](https://inputconfig.com/help/live-visualizer) shows one panel per slot. One preset can hold every device you own, each in its own slot.")
             ]),
-            HelpSection(heading: "More than one controller", blocks: [
-                .paragraph("Every connected controller gets its own slot, numbered from 0, and a preset holds bindings per slot. Two people can share one Mac from two controllers, or one person can put a DualSense and a MIDI keyboard on the same preset. The Live Visualizer shows one panel per slot.")
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Cable or Bluetooth.** Either works; the controller appears at the top of the sidebar within seconds.",
+                    "**Not there.** Refresh, then tick it under InputConfig, Devices.",
+                    "**Still not there.** Power it off and on, unpair it from the console, or try another mode."
+                ], ordered: false),
+                .paragraph("If the Mac sees it, InputConfig can almost always be made to read it.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Which controllers work?", answer: "DualSense and DualSense Edge, DualShock 4 and 3, Xbox One and Series, Switch Pro and Joy-Cons, Stadia, 8BitDo, the Steam Controller, Logitech F-series pads, fight sticks, wheels, and any MFi or HID gamepad. MIDI devices and the Mac's own keyboard, mouse, and trackpad are inputs too."),
-                    HelpQuestion(question: "Does the DualSense work over Bluetooth with everything?", answer: "Yes: light bar, rumble, touchpad, gyroscope, and on the Edge the paddles and FN buttons.")
+                    HelpQuestion(question: "Which controllers work?", answer: "DualSense and DualSense Edge, DualShock 4, Xbox One and Series, Switch Pro and Joy-Cons, Stadia, 8BitDo, the Steam Controller, Logitech F-series pads, the Logitech G29 and G923 wheels, and any MFi or HID gamepad. Other controllers, joysticks and wheels are read as well, shown in a generic drawing. MIDI devices and the Mac's own keyboard, mouse, and trackpad are inputs too."),
+                    HelpQuestion(question: "Does the DualSense work over Bluetooth with everything?", answer: "Everything works over Bluetooth: light bar, rumble, touchpad, gyroscope, and on the Edge the paddles and FN buttons. Some Bluetooth pairings drop motion; a USB cable always has it.")
                 ])
             ]),
         ],
@@ -146,8 +234,10 @@ enum HelpGuideLibrary {
             HelpLink(title: "Switch Pro Controller", url: "https://inputconfig.com/help/switch-pro-controller"),
             HelpLink(title: "8BitDo", url: "https://inputconfig.com/help/8bitdo-controllers"),
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
-            HelpLink(title: "questions/how-to-connect-a-controller-to-a-mac", url: "https://inputconfig.com/questions/how-to-connect-a-controller-to-a-mac"),
-            HelpLink(title: "questions/controller-connected-but-not-working-on-mac", url: "https://inputconfig.com/questions/controller-connected-but-not-working-on-mac"),
+            HelpLink(title: "How to connect a controller to a Mac or MacBook", url: "https://inputconfig.com/questions/how-to-connect-a-controller-to-a-mac"),
+            HelpLink(title: "Controller connected but not working on a Mac", url: "https://inputconfig.com/questions/controller-connected-but-not-working-on-mac"),
+            HelpLink(title: "PS5 controller will not connect to a Mac", url: "https://inputconfig.com/questions/ps5-controller-wont-connect-to-mac"),
+            HelpLink(title: "How to turn off or disconnect a controller on a Mac", url: "https://inputconfig.com/questions/how-to-turn-off-a-controller-connected-to-a-mac"),
         ]
     )
 
@@ -156,41 +246,81 @@ enum HelpGuideLibrary {
         title: "The Binding Editor",
         category: "Getting started",
         url: "https://inputconfig.com/help/binding-editor",
-        intro: "A preset is a list of rows. Every row is the same shape: one input on the left, one or more outputs on the right, and an Options panel for how the two are joined. Once a row makes sense, the whole app does.",
+        intro: "The binding editor is where a preset is made: a list of rows, each one control and what it sends. Select a preset in the sidebar and click Edit to open it. Every row is the same shape, one input on the left, one or more outputs on the right, and an Options panel for how the two are joined. Once one row makes sense, the whole app does.",
         sections: [
-            HelpSection(heading: "A row", blocks: [
-                .paragraph("Left to right: a drag handle, the row number, Scan, the input type, the input itself, an arrow, the output type, and the output. Under the row is a Notes line that says what the row does, and Options, which unfolds below it. Rows sit under section headings such as Left stick, Buttons, or D-pad, which you can rename, add to, or remove. The row number matches the number in the Live Visualizer, so clicking a control there opens its row.")
+            HelpSection(heading: "Read a row", blocks: [
+                .paragraph("Left to right, a row has a drag handle, the row number, Scan, the input type, the input itself, an arrow, the output type and the output. Under the row is a Notes line that says what the row does, and Options, which unfolds below it."),
+                .paragraph("Rows sit under section headings such as Left stick, Buttons or D-pad, which you can rename, add to or remove. The editor's search field finds any row by input, output, section or note. Clicking a control in the Live Visualizer lists its rows, and clicking one opens it. Read the Notes line first: it says in words what the row does.")
             ]),
-            HelpSection(heading: "Every control at once", blocks: [
-                .paragraph("An empty input device offers Automatically insert available inputs and says what it found, for example a stick and ten buttons on an Access Controller. Press it and a row appears for every control the device reports, under a heading per part of the device, each waiting for an output. It only offers what the device actually has: a gyro only if the pad publishes one, paddles only if it has them, a mouse slot gets buttons, movement, scroll, double click, and the scroll gesture. The same offer is on the device's menu, with Insert one part, Sort rows into sections, and New section.")
-            ]),
-            HelpSection(heading: "Inputs", blocks: [
-                .paragraph("Button, Axis, Hat (the D-pad), Touchpad, Touchpad Zone, Touchpad Gesture, Motion, Keyboard Key, Mouse, Screen Region, Stick Zone, Tap the Mac, and MIDI. Sticks and analog triggers bind one direction at a time, so a stick is four rows. Keyboard Key and Mouse make the Mac's own keyboard, mouse, and trackpad into inputs.")
-            ]),
-            HelpSection(heading: "Outputs", blocks: [
-                .paragraph("Keyboard Key, Type Text, Mouse Button, Mouse Motion, Mouse Wheel, Mouse Wheel Step, MIDI Note, MIDI CC, MIDI Pitch Bend, MIDI Program Change, MIDI Transport, System Function, System Volume, and App Action. A row can carry several outputs with the plus button and they fire together. A keyboard output can be a chord such as Command Shift 3.")
-            ]),
-            HelpSection(heading: "Options", blocks: [
-                .paragraph("Every area of the panel is its own box."),
+            HelpSection(heading: "Add every control at once", blocks: [
+                .paragraph("An empty input device offers Automatically insert available inputs and says what it found, for example a stick and ten buttons on an Access Controller."),
                 .list([
-                    "How it fires: fires while held, toggles, repeats while held (turbo), repeats a set number of times, or runs a macro. See Macros, Turbo, Toggle.",
-                    "Extra actions: a different output when held, and another on a double tap. See Hold and Double-Tap.",
-                    "Second control: the row only fires while another button on the same controller is held. See Chords.",
-                    "Feedback: rumble the controller and speak a phrase when the row fires.",
-                    "Stick, Trigger, or Motion: deadzones, invert, a curve, Variable Sensitivity, and Calibrate. See Deadzones."
-                ], ordered: false)
+                    "**You:** Press Automatically insert available inputs.",
+                    "**InputConfig:** Adds a row for every control the device reports, under a heading per part of the device, each waiting for an output.",
+                    "**Check:** Scroll the list: it only holds what the device really has. A gyro appears only if the pad publishes one, paddles only if it has them, and a mouse slot gets buttons, movement, scroll, double click and the scroll gesture."
+                ], ordered: false),
+                .paragraph("The same offer is on the device's menu, with Insert one part, Sort rows into sections and New section. Start here on a new device, then give each row an output.")
             ]),
-            HelpSection(heading: "Reordering, duplicating, converting", blocks: [
-                .paragraph("Drag a row by its handle. The copy button duplicates a row with every option. The device's menu has Stick settings to set the deadzone on every axis row at once, and duplicates or removes the whole device. Convert To, on the preset's own menu in the sidebar, changes a preset between controller families and keeps every setting.")
+            HelpSection(heading: "Pick an input", blocks: [
+                .list([
+                    "**Controller.** Button, Axis, Hat (the D-pad), Touchpad, Touchpad Zone, Touchpad Gesture and Motion.",
+                    "**The Mac itself.** Keyboard Key and Mouse make the Mac's own keyboard, mouse and trackpad into inputs, and Tap the Mac reads a knock on a MacBook. Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens.",
+                    "**Areas.** Screen Region is an area of a display and Stick Zone an area of a stick's travel.",
+                    "**MIDI.** Notes, pads, knobs, the pitch wheel and the sustain pedal."
+                ], ordered: false),
+                .paragraph("Sticks and analog triggers bind one direction at a time, so a stick is four rows. The easy way to pick any input is Scan: press it, then press the control. See [Scan](https://inputconfig.com/help/scan-to-bind).")
             ]),
-            HelpSection(heading: "Undo, versions, and the Key field", blocks: [
-                .paragraph("The editor has undo and redo. Every save keeps a snapshot, and the preset's page can revert to any of the last ten. The Key field at the top gives the preset its own system-wide shortcut: press it anywhere to switch to the preset, press it again to stop.")
+            HelpSection(heading: "Pick an output", blocks: [
+                .list([
+                    "**Keys.** Keyboard Key, which can be a chord such as Command Shift 3, and Type Text, which sends a whole phrase.",
+                    "**Mouse.** Mouse Button, Mouse Motion, Mouse Wheel and Mouse Wheel Step.",
+                    "**MIDI.** MIDI Note, MIDI CC, MIDI Pitch Bend, MIDI Program Change and MIDI Transport. See [MIDI output](https://inputconfig.com/help/midi-output).",
+                    "**The Mac and the app.** System Function, System Volume and App Action. See [system functions](https://inputconfig.com/help/system-functions)."
+                ], ordered: false),
+                .paragraph("A row can carry several outputs with the plus button, and they fire together. A Mouse Button output clicks wherever the pointer is, or always at one spot on the screen. For the spot, open its click menu, which reads at pointer, choose At a fixed point: use the pointer's position now, and move the pointer to the spot; a countdown is spoken and the position is taken after three seconds. The X and Y fields that appear beside it take the spot as typed numbers instead. Several outputs on one row fire as one press.")
+            ]),
+            HelpSection(heading: "Set the options", blocks: [
+                .paragraph("Options unfolds under a row, and every area of the panel is its own box."),
+                .list([
+                    "**How it fires.** Fires while held, toggles on and off, repeats while held (turbo), repeats until pressed again (an auto clicker), or a different action when held, plus a Repeat count and a macro. See [macros, turbo and toggle](https://inputconfig.com/help/macros-turbo-and-toggle).",
+                    "**Extra actions.** A different output when held, and another on a double tap. See [hold and double tap](https://inputconfig.com/help/hold-and-double-tap).",
+                    "**Second control.** The row only fires while another button on the same controller is held. See [chords](https://inputconfig.com/help/chords).",
+                    "**Feedback.** Rumble the controller and speak a phrase when the row fires. See [vibration](https://inputconfig.com/help/haptic-feedback) and [spoken feedback](https://inputconfig.com/help/spoken-feedback).",
+                    "**Stick or trigger.** Deadzones, invert, a curve, Variable Sensitivity and Adjust live. A motion row has a deadzone and invert. See [deadzones](https://inputconfig.com/help/deadzones-and-sensitivity)."
+                ], ordered: false),
+                .paragraph("Options is where one button learns a second and third job.")
+            ]),
+            HelpSection(heading: "Reorder, duplicate and convert", blocks: [
+                .list([
+                    "**Reorder.** Drag a row by its handle.",
+                    "**Duplicate.** The copy button duplicates a row with every option.",
+                    "**Every axis at once.** The device's menu has Stick settings, which sets the deadzone on every axis row at once, and duplicates or removes the whole device.",
+                    "**Another controller.** Convert To, on the preset's own menu in the sidebar, makes a new preset beside the original for another controller family, with the same rows. The original keeps its shortcut and its app list."
+                ], ordered: false),
+                .paragraph("Convert To leaves the original alone, so trying it costs nothing.")
+            ]),
+            HelpSection(heading: "Undo, versions and the Key field", blocks: [
+                .list([
+                    "**Undo.** The editor has undo and redo, and Cancel asks before it throws away changes.",
+                    "**Versions.** Every save keeps a snapshot, and the preset's page can revert to any of the last ten.",
+                    "**Key.** The Key field at the top gives the preset its own system-wide shortcut: press it anywhere to switch to the preset, and press it again to stop."
+                ], ordered: false),
+                .paragraph("Ten saved versions mean a bad edit is never permanent.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**One row, one control.** Input on the left, outputs on the right, Options underneath.",
+                    "**Start a device with one press.** Automatically insert available inputs adds every control it has.",
+                    "**Bind by pressing.** Scan, then press the control."
+                ], ordered: false),
+                .paragraph("Get one row right and the rest of the editor follows.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can one button send more than one thing?", answer: "Yes. Add outputs with the plus button and they fire together, or build a macro for a sequence with timing."),
+                    HelpQuestion(question: "Can one button send more than one thing?", answer: "Add outputs with the plus button and they fire together, or build a macro for a sequence with timing."),
                     HelpQuestion(question: "What does a row with no output do?", answer: "Nothing, which is sometimes the point. A chord's modifier button can be given an empty row so it stops doing its normal job while it is held."),
-                    HelpQuestion(question: "Why are stick rows in pairs?", answer: "A stick axis binds one direction at a time, so left and right are two rows. That is what lets each direction send a different thing and have its own deadzone and curve.")
+                    HelpQuestion(question: "Why are stick rows in pairs?", answer: "A stick axis binds one direction at a time, so left and right are two rows. That is what lets each direction send a different thing and have its own deadzone and curve."),
+                    HelpQuestion(question: "Do Keyboard Key rows work with a French, German or other keyboard layout?", answer: "They work by position. A Keyboard Key row presses a key by where it sits on the keyboard, the way a real keyboard does, and the editor names keys the way a US keyboard labels them. Your layout decides which letter appears: on French AZERTY the key the editor calls W types Z, and on German QWERTZ the key it calls Z types Y. Games that read key positions get WASD movement in the right place on any layout. For a letter shortcut, pick the key in the position your layout uses; to find its name, press that key in the key code finder under Tools. Type Text is different: it sends the characters themselves, so accented letters and other scripts come out exactly as written.")
                 ])
             ]),
         ],
@@ -200,6 +330,8 @@ enum HelpGuideLibrary {
             HelpLink(title: "Macros, Turbo, Toggle", url: "https://inputconfig.com/help/macros-turbo-and-toggle"),
             HelpLink(title: "Chords", url: "https://inputconfig.com/help/chords"),
             HelpLink(title: "Key code finder", url: "https://inputconfig.com/tools/key-codes"),
+            HelpLink(title: "How to map a PS5 controller to keyboard keys on a Mac", url: "https://inputconfig.com/questions/ps5-controller-keyboard-mapping-on-mac"),
+            HelpLink(title: "Stacked Outputs preset", url: "https://inputconfig.com/presets/built-in/stacked-outputs"),
         ]
     )
 
@@ -208,30 +340,50 @@ enum HelpGuideLibrary {
         title: "Scan",
         category: "Getting started",
         url: "https://inputconfig.com/help/scan-to-bind",
-        intro: "Nobody should have to know that Cross is button 0 or that the mod wheel is CC 1. Press Scan on a row, press the thing, and the row is bound to it. It listens to every device at once.",
+        intro: "Scan binds a row to whatever you press next, so nobody has to know that Cross is button 0 or that the mod wheel is CC 1. It is the Scan button on every row of the binding editor, and it listens to every device at once. It is the quickest way to make or fix any row.",
         sections: [
+            HelpSection(heading: "Use it", blocks: [
+                .list([
+                    "**You:** Press Scan on the row, then press the control: hold a button, push an axis to its end, play a key or turn a knob.",
+                    "**InputConfig:** Listens to every connected device and binds the row to the first control it hears.",
+                    "**Check:** The row updates with the control's name and the panel closes. Escape cancels, and there is a Cancel button for people without a keyboard."
+                ], ordered: false),
+                .paragraph("Scan waits 20 seconds for a press unless you change it in Settings, General, Scan: 10, 20 or 40 seconds, 1 minute, or until canceled. When time runs out, it says so aloud."),
+                .paragraph("Press only the control you mean while Scan is listening.")
+            ]),
             HelpSection(heading: "What Scan hears", blocks: [
                 .list([
-                    "Any button, trigger, stick direction, or D-pad direction on a connected controller, including the DualSense Edge paddles and FN buttons.",
-                    "Any key on the Mac's keyboard, including a modifier on its own: Shift, Control, Option, Command on either side, Caps Lock, fn, and F13 to F19.",
-                    "A mouse button: pick Scan in the button menu on a Mouse row and click the one you mean.",
-                    "A MIDI note, pad, control change, pitch bend, aftertouch, or program change.",
-                    "A swipe, press, or tap on a DualSense or DualShock 4 touchpad.",
-                    "Gyroscope and accelerometer movement on a pad that has them."
+                    "**Controller controls.** Any button, trigger, stick direction or D-pad direction on a connected controller, including the DualSense Edge paddles and FN buttons.",
+                    "**Keys.** Any key on the Mac's keyboard, including a modifier on its own: Shift, Control, Option or Command on either side, Caps Lock, fn, and F13 to F19.",
+                    "**Mouse buttons.** Pick Scan in the button menu on a Mouse row and click the one you mean. That scan waits 5 seconds unless the Scan setting was changed.",
+                    "**MIDI.** A note, pad, control change, pitch bend, aftertouch or program change.",
+                    "**Touchpad touches.** A swipe, press or tap on a DualSense or DualShock 4 touchpad.",
+                    "**Motion.** Gyroscope and accelerometer movement on a pad that has them."
                 ], ordered: false)
             ]),
-            HelpSection(heading: "How to use it", blocks: [
-                .paragraph("Press Scan on the row, then press the control. Hold a button, push an axis to its end, play a key, or turn a knob. The row updates and the panel closes. Escape cancels, and there is a Cancel button for people without a keyboard.")
+            HelpSection(heading: "Choose the touchpad gesture", blocks: [
+                .paragraph("A press and a tap on a DualSense touchpad feel the same under a finger, so Scan does not guess. It collects what happened for half a second and asks: a press, a one-finger tap, a double tap or a two-finger tap, marking whichever the pad reported. A finger sliding on the pad is a Touchpad input, chosen from the input type menu, not scanned.")
             ]),
-            HelpSection(heading: "The touchpad", blocks: [
-                .paragraph("A press and a tap on a DualSense touchpad feel the same under a finger, so Scan does not guess. It collects what happened for half a second and asks: a press, a one-finger tap, a double tap, or a two-finger tap, marking whichever the pad reported. A finger sliding on the pad is a Touchpad input, chosen from the input type menu.")
+            HelpSection(heading: "If Scan picks the wrong thing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Scan again.** It listens to everything at once, so a stray keystroke during a scan is the usual way to bind the wrong thing.",
+                    "**Check the paddle.** If a back button scans as A, the controller is copying A onto it. Most back buttons work this way; the DualSense Edge's paddles and FN buttons do not. Give the paddle a button you can spare on the controller, or on an Xbox Elite switch to the default profile, then scan again.",
+                    "**Pick it from the menu.** Some inputs are never scanned, listed below. Choose them from the input type menu instead."
+                ], ordered: true),
+                .paragraph("If the row shows something you did not mean, the controller usually sent it.")
             ]),
             HelpSection(heading: "What it never scans", blocks: [
-                .paragraph("Taps on the Mac. Pressing a controller button on a desk jolts a MacBook enough to count as a tap, so Tap the Mac is picked from the input type menu with its tap count. A controller that is not connected, and a socket the Access Controller's profile leaves unassigned, send nothing to scan.")
+                .list([
+                    "**Taps on the Mac.** Pressing a controller button on a desk jolts a MacBook enough to count as a tap, so Tap the Mac is picked from the input type menu with its tap count. Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens.",
+                    "**Silent controls.** A controller that is not connected, and a socket the Access Controller's profile leaves unassigned, send nothing to scan."
+                ], ordered: false),
+                .paragraph("If Scan hears nothing, the control is not reaching the Mac. The [Live Visualizer](https://inputconfig.com/help/live-visualizer) shows whether it is.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Why does the scanner take my Mac keyboard when I want the controller?", answer: "It listens to everything at once. Press the controller and that is what it takes; a stray keystroke during a scan is the only way to bind the wrong thing.")
+                    HelpQuestion(question: "Why does the scanner take my Mac keyboard when I want the controller?", answer: "It listens to everything at once. Press the controller and that is what it takes; a stray keystroke during a scan is the only way to bind the wrong thing."),
+                    HelpQuestion(question: "I pressed a paddle and Scan shows A. Why?", answer: "The controller is copying A onto that paddle, so the Mac receives A. Most back buttons work this way; the DualSense Edge's paddles and FN buttons do not. Assign the paddle a button you can spare on the controller, or on an Xbox Elite switch to the default profile, then scan again.")
                 ])
             ]),
         ],
@@ -239,6 +391,8 @@ enum HelpGuideLibrary {
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "Keyboard, Mouse, Trackpad", url: "https://inputconfig.com/help/keyboard-and-mouse-as-input"),
             HelpLink(title: "MIDI Devices", url: "https://inputconfig.com/help/midi-as-input"),
+            HelpLink(title: "Map every button at once", url: "https://inputconfig.com/questions/map-every-controller-button-at-once"),
+            HelpLink(title: "Controller button names and map", url: "https://inputconfig.com/tools/controller-map"),
         ]
     )
 
@@ -247,24 +401,59 @@ enum HelpGuideLibrary {
         title: "Presets and Folders",
         category: "Getting started",
         url: "https://inputconfig.com/help/presets-and-folders",
-        intro: "A preset is one complete layout: every binding for every connected device, plus its automation. One preset runs at a time. The sidebar holds all of them in folders, and the app ships with dozens to start from.",
+        intro: "A preset is one complete layout: every binding for every connected device, plus its automation. One preset runs at a time, and the sidebar holds all of them in folders. The app ships with dozens of built-in presets to start from, and this page covers keeping your own in order.",
         sections: [
-            HelpSection(heading: "Folders", blocks: [
-                .paragraph("Drag one preset onto another and the app asks for a folder name. Folders nest. A preset's menu has Move to Group, New Group, and Remove from Group. A folder's menu renames it, gives it a colour, adds a subfolder, or moves it under another. Deleting a folder moves it and everything in it to the Trash at the bottom of the sidebar, where it can be put back whole.")
+            HelpSection(heading: "Organize the sidebar", blocks: [
+                .list([
+                    "**Reorder.** Drag a preset up or down and drop it where you want it. The order you set is kept.",
+                    "**Folders.** Drop a preset on a folder header to move it in. New Group in a preset's menu makes a folder, and folders nest. A preset's menu also has Move to Group and Remove from Group.",
+                    "**Folder menu.** A folder's menu renames it, gives it a color, adds a subfolder, or moves it under another.",
+                    "**Trash.** Deleting a folder moves it and everything in it to the Trash at the bottom of the sidebar, where it can be put back whole. Deleting a folder and Empty Trash both ask first."
+                ], ordered: false),
+                .paragraph("Nothing you delete is gone until you empty the Trash.")
             ]),
-            HelpSection(heading: "Reordering", blocks: [
-                .paragraph("Drag a preset up or down and drop it where you want it, or onto a folder header to move it in. The order you set is kept.")
+            HelpSection(heading: "Star your favorites", blocks: [
+                .paragraph("Click the star on a preset to make it a favorite. The star in the sidebar header shows only favorites, there and in the menu bar list, and clicking it again shows the whole library. Removing the last star turns the filter off. Star the four or five you use every day and the list stays short.")
             ]),
-            HelpSection(heading: "Duplicate, convert, share", blocks: [
-                .paragraph("Duplicate makes an exact copy. Convert To changes the controller family, so an Xbox layout becomes a PlayStation layout with the same bindings. Export writes the preset to a JSON file, Import reads one back, and preset files can be dragged onto the app icon.")
+            HelpSection(heading: "Duplicate, convert and share", blocks: [
+                .list([
+                    "**Duplicate.** Makes an exact copy.",
+                    "**Convert To.** Makes a new preset beside the original for another controller family, so an Xbox layout gets a PlayStation twin with the same bindings. The shortcut and app list stay with the original.",
+                    "**Export.** Writes the preset to a JSON file.",
+                    "**Import.** Open a preset file, drop it on the Dock icon, or choose Import Preset File from the menu next to any preset. Actions that open apps or websites can be removed first, and the sharer's own shortcut stays behind. The import review shows every action, macro and pointer setting in full, and an imported preset asks before its first start, with a list of what it does."
+                ], ordered: false),
+                .paragraph("An imported preset never brings the sharer's shortcut or launch actions with it unless you add them.")
             ]),
-            HelpSection(heading: "Switching", blocks: [
-                .paragraph("Each preset can have its own system-wide key, set in the Key field at the top of the editor. Settings, General has a global shortcut that toggles the most recent preset. The menu bar icon lists every preset. And a preset can activate itself when one of its apps comes to the front; see Auto-Switch.")
+            HelpSection(heading: "Switch between presets", blocks: [
+                .list([
+                    "**A key per preset.** Set in the Key field at the top of the editor. Press it anywhere to switch.",
+                    "**A global shortcut.** Settings, General has one that toggles the most recent preset.",
+                    "**The menu bar.** The [menu bar](https://inputconfig.com/help/menu-bar) icon lists every preset.",
+                    "**By app.** A preset can activate itself when one of its apps comes to the front. See [auto-switch](https://inputconfig.com/help/per-app-auto-switch)."
+                ], ordered: false),
+                .paragraph("Switching is always one press away, so one preset per job is the easy way to work.")
+            ]),
+            HelpSection(heading: "Name the buttons your controller's way", blocks: [
+                .paragraph("Each preset can name its buttons the way one controller prints them. Choosing a controller in the Live Visualizer's menu sets it, and Automatic in that menu goes back. On a preset with more than one controller group, choosing one only names the buttons while no names are set yet. That names every button, not only the face buttons: the bumpers, triggers, center buttons, paddles and back buttons, in the editor and the Live Visualizer alike."),
+                .list([
+                    "**Presets written for one controller.** A preset like FPS (Xbox) keeps that controller's names on any pad.",
+                    "**Printed names.** Otherwise PlayStation, Switch, Stadia, GameCube and Steam controllers show the names printed on them. GameCube and 2026 Steam Controller support is experimental in 1.6.",
+                    "**Other pads.** Settings, Devices, Face button names picks the letters for other pads, including the many 8BitDo pads that report themselves as Xbox pads, and Positions puts North, South, East and West on every pad."
+                ], ordered: false),
+                .paragraph("Only the names change, never what the buttons do.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**One at a time.** One preset runs; switch with a key, the menu bar, or by app.",
+                    "**Keep them tidy.** Folders, colors and stars, with a Trash that gives things back.",
+                    "**Share safely.** Export a file; an import shows its app and website actions first."
+                ], ordered: false),
+                .paragraph("Make a preset per job and let switching do the work.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Can two presets run at once?", answer: "No, one at a time. A preset can hold bindings for several controllers, and switching is a key press away."),
-                    HelpQuestion(question: "Where are presets stored?", answer: "In the app's own folder under your Library, one JSON file each. Settings, General, Reveal Data Folder opens it. See Data and Backups.")
+                    HelpQuestion(question: "Where are presets stored?", answer: "In the app's own folder under your Library, one JSON file each. Settings, Advanced, Reveal Data Folder opens it. See Data and Backups.")
                 ])
             ]),
         ],
@@ -272,6 +461,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Data and Backups", url: "https://inputconfig.com/help/data-and-backups"),
             HelpLink(title: "Smart Preset Maker", url: "https://inputconfig.com/help/smart-preset-maker"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
+            HelpLink(title: "Built-in Presets", url: "https://inputconfig.com/help/built-in-presets"),
         ]
     )
 
@@ -280,31 +470,51 @@ enum HelpGuideLibrary {
         title: "Built-in Presets",
         category: "Getting started",
         url: "https://inputconfig.com/help/built-in-presets",
-        intro: "The app ships with example presets in folders. Every one is a working starting point to activate, edit, or duplicate, with a note on every row.",
+        intro: "InputConfig ships with 45 built-in presets in folders, and every one is a working starting point to activate, edit or duplicate, with a note on every row. They sit under Built-in Presets in the sidebar. Each one also has its own page on this site with the full button map, in the [preset library](https://inputconfig.com/presets/).",
         sections: [
-            HelpSection(heading: "Desktop &amp; Productivity", blocks: [
-                .paragraph("Desktop Navigation, Web Browsing, Mouse + Scroll, Media Controller, Presentation Remote, Anki, and Access Controller for the controller. For the Mac's own devices: Keyboard Deck (F13 to F19 run the Mac), Trackpad & Mouse (side buttons, middle click, force click), Modifier Holds (hold a modifier on its own), and Double Click Deck.")
+            HelpSection(heading: "Desktop & Productivity", blocks: [
+                .list([
+                    "**Easy Browse and Easy Edit.** Two calm everyday layouts: the whole Mac from a controller, and a controller in one hand with a mouse in the other.",
+                    "**For the controller.** Desktop Navigation, Web Browsing, Mouse + Scroll, Media Controller, Presentation Remote, Anki and Access Controller.",
+                    "**For the Mac's own devices.** Trackpad & Mouse (side buttons, middle click, force click), Modifier Holds (hold a modifier on its own) and Double Click Deck.",
+                    "**Auto Clicker.** Clicks for you, 5 to 20 times a second, on and off, while held, or a set number of times, from a controller, fn F6 and F7, or a mouse's side button."
+                ], ordered: false),
+                .paragraph("Easy Browse is the gentlest place to start.")
             ]),
             HelpSection(heading: "Gaming", blocks: [
-                .paragraph("One FPS preset per controller family so the button positions are native: FPS (PS5 DualSense), FPS (Xbox), FPS (Switch Pro), FPS (8BitDo). By genre: Minecraft, Fortnite, Racing Game.")
+                .list([
+                    "**First-Person.** One FPS preset per controller family so the button positions are native: FPS (PS5 DualSense), FPS (Xbox), FPS (Switch Pro) and FPS (8BitDo).",
+                    "**Genre.** Minecraft, Fortnite and Racing Game."
+                ], ordered: false),
+                .paragraph("For any other game, the [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker) builds a layout from more than 450 titles. Pick the FPS preset for your controller's family, not the game's.")
             ]),
-            HelpSection(heading: "MIDI &amp; Creative", blocks: [
-                .paragraph("Out: MIDI: DAW Performance, MIDI: Drum Pad, MIDI: Transport Control, MIDI: CC Dials. In: MIDI: Knob Deck and MIDI: Media Deck.")
+            HelpSection(heading: "MIDI & Creative", blocks: [
+                .list([
+                    "**MIDI out.** MIDI: DAW Performance, MIDI: Drum Pad, MIDI: Transport Control and MIDI: CC Dials.",
+                    "**MIDI in.** MIDI: Knob Deck and MIDI: Media Deck."
+                ], ordered: false),
+                .paragraph("The MIDI in presets are ready to re-scan onto your own keyboard or pad.")
             ]),
             HelpSection(heading: "Feature Showcases", blocks: [
-                .paragraph("One per feature so you can open it and see the settings: Variable Sensitivity, Deadzone Calibration, Haptic Feedback, Spoken Feedback, Macros & Turbo, Toggle Mode, Stacked Outputs, Hold & Double-Tap, Touchpad Mouse, Touchpad Zones, Cursor Regions, Gyro Aim, Motion Cursor, Steam Controller, Tap the Mac, Keyboard & Mouse Input, and Shortcuts & Apps.")
+                .paragraph("One per feature, so you can open it and see the settings: Variable Sensitivity, Deadzone Calibration, Haptic Feedback, Spoken Feedback, Macros & Turbo, Toggle Mode, Stacked Outputs, Hold & Double-Tap, Touchpad Mouse, Touchpad Zones, Cursor Regions, Gyro Aim, Motion Cursor, Steam Controller, Steam Controller (2026), Tap the Mac, One-Stick Driving, Keyboard & Mouse Input, and Shortcuts & Apps. Steam Controller (2026) is for Valve's 2026 controller, whose support is experimental in 1.6, and Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing. Open a showcase to see exactly how a feature is set, then copy the rows you need.")
             ]),
-            HelpSection(heading: "Editing or copying one", blocks: [
-                .paragraph("They are ordinary presets in your data folder. Edit them, or Duplicate first to keep the original. A deleted one can be downloaded again from its page on the site.")
+            HelpSection(heading: "Edit or copy one", blocks: [
+                .list([
+                    "**Edit.** They are ordinary presets in your data folder. Edit them, or Duplicate first to keep the original.",
+                    "**Updates.** An update leaves presets you changed alone, and new presets added in a release arrive alongside. A built-in preset you never changed can be updated to its new layout, and What's New lists these.",
+                    "**Retired presets.** A retired one moves to the Trash at the bottom of the sidebar, where you can put it back.",
+                    "**Deleted by mistake.** Restore Built-in Presets in Settings, Advanced, Data & storage puts it back, or download it again from its page on the site."
+                ], ordered: false),
+                .paragraph("Duplicate before you edit, and the original stays as a reference.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Do the built-in presets come back after an update?", answer: "An update never touches your data folder. New presets added in a release arrive alongside.")
+                    HelpQuestion(question: "Do the built-in presets come back after an update?", answer: "An update leaves presets you changed alone, and new presets added in a release arrive alongside. A built-in preset you never changed can be updated to its new layout (What's New lists these), and a retired one moves to the Trash at the bottom of the sidebar, where you can put it back.")
                 ])
             ]),
         ],
         related: [
-            HelpLink(title: " preset", url: "https://inputconfig.com/presets/"),
+            HelpLink(title: "Preset Library", url: "https://inputconfig.com/presets/"),
             HelpLink(title: "Presets and Folders", url: "https://inputconfig.com/help/presets-and-folders"),
             HelpLink(title: "Smart Preset Maker", url: "https://inputconfig.com/help/smart-preset-maker"),
         ]
@@ -315,33 +525,65 @@ enum HelpGuideLibrary {
         title: "Smart Preset Maker",
         category: "Getting started",
         url: "https://inputconfig.com/help/smart-preset-maker",
-        intro: "A catalogue of ready layouts for more than 450 games, apps, and workflows. Search for the title, pick your controller, and the preset lands in the sidebar.",
+        intro: "The Smart Preset Maker builds a complete layout for a named game, app or workflow, from a catalog of more than 450, in a few clicks. Open it from the welcome screen or the wand button in the sidebar, search for the title, pick your controller, and the preset lands in the sidebar. It is the fastest start for anyone who would rather play than map.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
                     "Click Smart Preset Maker on the welcome screen, or the wand button in the sidebar.",
                     "Pick a game, an app, or a workflow, then the title. Titles match as you type.",
                     "Pick your controller. The one that is connected is picked for you.",
-                    "Fine-tune. On a pad with a touchpad, Use the touchpad as a trackpad adds the rows that make it one. On a pad with motion, in a game that looks with the mouse, Gyro fine aim adds tilt aiming on top of the stick. Rumble when a trigger clicks is off unless you want it. Games also get launch, confine, recenter, and hide the pointer, and a light bar colour.",
+                    "Fine-tune: the touchpad, gyro fine aim, rumble, and for a game the pointer guards and a light bar color.",
                     "Name it and click Create."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "What you get", blocks: [
-                .paragraph("Every row the layout needs, each with a note saying what it does in that game or app. It is an ordinary preset: re-scan a row to another button, change an output, add a hold or a double tap, delete what you do not want.")
+            HelpSection(heading: "Fine-tune before you create", blocks: [
+                .paragraph("The Fine-tune step offers only what fits the title and the controller you picked."),
+                .list([
+                    "**Use the touchpad as a trackpad.** On a pad with a touchpad, adds the rows that make it one: one finger points, two fingers scroll, tap to click.",
+                    "**Gyro fine aim.** On a pad with motion, in a game that looks with the mouse, tilting the pad nudges the aim on top of the stick.",
+                    "**Rumble when a trigger clicks.** Off unless you want it. It adds a short buzz to each trigger row that clicks the mouse.",
+                    "**Pointer ramp-up.** A short push moves slowly and a held push speeds up.",
+                    "**Game extras.** Open the app automatically when the preset activates, confine the mouse to the screen, auto-recenter and hide the cursor, and a light bar color for a PlayStation pad."
+                ], ordered: false),
+                .paragraph("Leave anything you are unsure about off; every switch can be added later in the editor.")
+            ]),
+            HelpSection(heading: "Check what you get", blocks: [
+                .list([
+                    "**You:** Click Create, then select the new preset and click Activate.",
+                    "**InputConfig:** Writes every row the layout needs, each with a note saying what it does in that game or app. It fills back paddles on a pad that has them, gives 13 apps their Mac shortcuts instead of Windows ones, and opens a Steam game through Steam.",
+                    "**Check:** Open the game or app and try the controls the notes describe. Anything that feels wrong is one row to change."
+                ], ordered: false),
+                .paragraph("The result is an ordinary preset: re-scan a row to another button, change an output, add a hold or a double tap, or delete what you do not want. A Smart Preset is a starting point you own, not a locked layout.")
             ]),
             HelpSection(heading: "When a title is missing", blocks: [
-                .paragraph("Start from the closest one. FPS presets exist per controller family, and Racing Game, Minecraft, and the workflow layouts cover most shapes of control. Duplicate one, rename it, and re-scan the rows that differ.")
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Pick the closest title.** A game in the same genre usually needs the same controls.",
+                    "**Start from a shape.** FPS presets exist per controller family, and Racing Game, Minecraft and the workflow layouts cover most shapes of control.",
+                    "**Duplicate and rename it.** Then re-scan only the rows that differ."
+                ], ordered: true),
+                .paragraph("The [preset library](https://inputconfig.com/presets/) lists every title with its full button map, so you can check a layout before you make it. Most missing games are one or two changed rows away from one that is there.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Search, pick, create.** Title, controller, a few switches, a name.",
+                    "**Read the notes.** Every row says what it does in that game or app.",
+                    "**Change what you like.** It is an ordinary preset from the moment it exists."
+                ], ordered: false),
+                .paragraph("Let it build the first draft, then make it yours.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it work for apps, not just games?", answer: "Yes. Browsers, office apps, creative tools, media players, and general workflows such as desktop navigation and presentations.")
+                    HelpQuestion(question: "Does it work for apps, not just games?", answer: "Browsers, office apps, creative tools, media players, and general workflows such as desktop navigation and presentations.")
                 ])
             ]),
         ],
         related: [
-            HelpLink(title: " preset", url: "https://inputconfig.com/presets/"),
+            HelpLink(title: "Preset Library", url: "https://inputconfig.com/presets/"),
             HelpLink(title: "Presets and Folders", url: "https://inputconfig.com/help/presets-and-folders"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
+            HelpLink(title: "Preset chooser", url: "https://inputconfig.com/tools/preset-chooser"),
+            HelpLink(title: "Built-in Presets", url: "https://inputconfig.com/help/built-in-presets"),
         ]
     )
 
@@ -350,38 +592,107 @@ enum HelpGuideLibrary {
         title: "Keyboard, Mouse, Trackpad",
         category: "Inputs",
         url: "https://inputconfig.com/help/keyboard-and-mouse-as-input",
-        intro: "The Mac's own keyboard, its trackpad, a Magic Mouse, or any other mouse can be an input, no controller needed. Keys, both sides of every modifier, the top row's brightness, media, and volume keys, F13 to F19, mouse buttons, double clicks, scrolling, the two-finger scroll gesture, and the trackpad's force click all bind to anything.",
+        intro: "The Mac's own keyboard, its trackpad, a Magic Mouse or any other mouse can be an input in InputConfig, with no controller needed. Keys, both sides of every modifier, the top row's brightness, media and volume keys, F13 to F19, mouse buttons, double clicks, scrolling, the two-finger scroll gesture and the trackpad's force click all bind to anything. InputConfig listens to them and does not block or remap the key itself, so every key keeps its normal job as well. It needs no permission beyond Accessibility. Because a bound key still types, [pick keys that type nothing](#pick-keys-that-type-nothing).",
         sections: [
-            HelpSection(heading: "Keys", blocks: [
-                .paragraph("Add a row, press Scan, and press the key. Every key binds, and the row shows the key's name. Shift, Control, Option, and Command are read on each side separately, Caps Lock and fn too. The top row's brightness, keyboard light, media, mute, and volume keys are inputs from any app. Mission Control, Launchpad, Spotlight, Dictation, and Focus are not: macOS keeps those five keys to itself and never hands them to an app; with fn held they are plain F3 to F6, which do work.")
+            HelpSection(heading: "Bind a key", blocks: [
+                .list([
+                    "**You:** Add a row, press Scan, and press the key.",
+                    "**InputConfig:** Binds the row to that key and shows the key's name. Shift, Control, Option and Command are read on each side separately, and Caps Lock and fn too.",
+                    "**Check:** Press the key with the preset running and the output fires, while the key still does what it always did."
+                ], ordered: false),
+                .paragraph("The top row's brightness, keyboard light, media, mute and volume keys are inputs from any app. Mission Control, Launchpad, Spotlight, Dictation and Focus are not: macOS keeps those five keys to itself and never hands them to an app. With fn held they are plain F3 to F6, which do work. Every keyboard reports to InputConfig as one keyboard, with one synthetic device id, so the same key on two keyboards is the same input. A preset with only keyboard rows runs on its own, with no controller connected.")
             ]),
-            HelpSection(heading: "The app listens alongside macOS", blocks: [
-                .paragraph("A key keeps doing what it did; the app cannot take it away. That is why the built-in presets use keys nothing needs. Keyboard Deck puts a system function on each of F13 to F19. Modifier Holds gives the right-hand modifiers a second job with no output on the plain press: hold Right Command for Spotlight, double tap it for Launchpad, hold Right Option for Dictation, hold Right Shift for Mission Control, and every shortcut still works.")
+            HelpSection(heading: "Pick keys that type nothing", blocks: [
+                .paragraph("A key keeps doing what it did; the app listens alongside macOS and cannot take the key away. That is why the built-in presets use keys nothing needs: F13 to F19 are free on a full-size keyboard (see [which keyboards have F13 to F19](https://inputconfig.com/questions/f13-to-f19-keys-on-mac), and what to use on a MacBook)."),
+                .list([
+                    "**Modifier Holds.** Gives the right-hand modifiers a second job with no output on the plain press: hold Right Command for Spotlight, double tap it for Launchpad, hold Right Option for Dictation, hold Right Shift for Mission Control. Every shortcut still works.",
+                    "**The hold timing.** In Modifier Holds the hold fires once Right Command has been down for 450 ms, even if you press another key meanwhile, so a slow Command Tab on the right-hand key opens Spotlight too. Use the left Command for long shortcuts, or raise the hold to 700 ms in the row's Options."
+                ], ordered: false),
+                .paragraph("The [right Command and Option keys page](https://inputconfig.com/questions/right-command-and-option-keys-on-mac) covers the timing and what to do if you want the key itself changed. The best key to bind is one that does nothing today.")
             ]),
-            HelpSection(heading: "Mouse and trackpad", blocks: [
-                .paragraph("A Mouse row's kind menu offers Button, Move X and Y, Scroll X and Y, Pressure and Deep Press (force click on the trackpad), Double click, and Scroll gesture. Buttons are named the way macOS numbers them: Left click, Right click, Middle click, Button 4, Button 5. Pick Scan in the button menu and click the one you mean. A double click fires on the second click of a pair, so a single click keeps doing what it always did; on a trackpad with tap to click, a double tap counts. The scroll gesture is on from the moment fingers touch the pad until momentum stops. Trackpad & Mouse and Double Click Deck are the built-in examples.")
+            HelpSection(heading: "Bind a mouse or trackpad", blocks: [
+                .paragraph("A Mouse row's kind menu offers Button, Move X and Y, Scroll X and Y, Pressure and Deep Press (force click on the trackpad), Double click, and Scroll gesture."),
+                .list([
+                    "**Buttons.** Named the way macOS numbers them: Left click, Right click, Middle click, Button 4, Button 5, and on up to Button 8 in the menu, with More buttons reaching Button 32. Pick Scan in the button menu and click the one you mean; it waits 5 seconds unless the Scan setting in Settings, General was changed.",
+                    "**Tilt and thumb wheels.** They scan as Scroll X.",
+                    "**Double click.** It fires on the second click of a pair, so a single click keeps doing what it always did. On a trackpad with tap to click, a double tap counts.",
+                    "**Scroll gesture.** It is on from the moment fingers touch the pad until momentum stops.",
+                    "**Block the button's own action.** Turn it on in a row's Options to stop a side button also going Back in a browser while the preset runs."
+                ], ordered: false),
+                .paragraph("Every mouse connected to the Mac counts as one, so two mice cannot have different jobs for the same button. Trackpad & Mouse and Double Click Deck are the built-in examples. Side buttons and double clicks are free inputs on almost every mouse.")
             ]),
-            HelpSection(heading: "Force Touch", blocks: [
-                .paragraph("Pressure scales an output the way a trigger does, and a force click is a button. macOS gives trackpad force to the front app only, so those two work while InputConfig is the front window; everything else works from any app.")
+            HelpSection(heading: "Use gaming mice, keypads and macro pads", blocks: [
+                .paragraph("Gaming mice and keyboards work the same way: press Scan and press the button or key. A key InputConfig has no name for still binds, and the row calls it Key code followed by a number. A Razer Naga, Logitech G600, Corsair Scimitar, Razer Tartarus, Azeron or macro pad reaches the Mac as a keyboard, so the pad's 1 is the main keyboard's 1, and it still types."),
+                .list([
+                    "**You:** In the device's own software or onboard memory, such as Razer Synapse, Logitech G Hub or Logi Options+, set its keys or buttons to F13 to F20. Then press Scan on a row and press each one.",
+                    "**InputConfig:** Binds the row to that F key, which no real keyboard key clashes with.",
+                    "**Check:** The row shows F13 or whichever key you set, and pressing it types nothing. Skip F21 to F24, which macOS does not pass to apps."
+                ], ordered: false),
+                .paragraph("The activity log notes the first press of a key with no name, and of any mouse button above Button 5, so a saved report shows exactly what your device sends. F13 to F20 turn any keypad into keys that only InputConfig uses.")
             ]),
-            HelpSection(heading: "Seeing it", blocks: [
-                .paragraph("The Live Visualizer's Keyboard template draws the keyboard like a MacBook and lights every key as you press it. Mouse & Trackpad draws both, with the clicks, scrolling in four directions, the scroll gesture, double clicks, and a Force Touch gauge, live. They work with no preset running, so they double as a way to check what a key or button sends.")
+            HelpSection(heading: "Use pen tablets, eye trackers and head trackers", blocks: [
+                .list([
+                    "**Pen tablets.** The pen works as a mouse, and its tip and side buttons bind as Mouse inputs. Express keys work when the tablet's own software sets them to send keystrokes; give them F13 to F20 and Scan them.",
+                    "**Eye and head trackers.** Tobii eye trackers and head trackers work when their software moves the pointer, which screen regions and Mouse rows then read."
+                ], ordered: false),
+                .paragraph("Anything that moves the pointer can drive screen regions.")
             ]),
-            HelpSection(heading: "The keys you need", blocks: [
-                .paragraph("A preset that binds Command or Escape adds to those keys while it runs; it does not remove them. The emergency stop, Control Option Command period, is checked before any row.")
+            HelpSection(heading: "See it live", blocks: [
+                .paragraph("The Live Visualizer's Keyboard template draws the keyboard like a MacBook and lights every key as you press it. Mouse draws the mouse and the trackpad, with the clicks, scrolling in four directions, the scroll gesture, double clicks and a Force Touch gauge, live. They work with no preset running."),
+                .paragraph("Check what a key or button sends here before you bind it.")
+            ]),
+            HelpSection(heading: "If a key or button does nothing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Watch the Live Visualizer.** Press it with the Keyboard or Mouse template open.",
+                    "**Check it is not a reserved key.** Mission Control, Launchpad, Spotlight, Dictation and Focus never reach an app; hold fn for F3 to F6.",
+                    "**Give it an F key.** If Scan hears nothing, macOS is not passing that button to apps, which is common for thumb, gesture and DPI buttons. Set it to F13 to F20 in the device's own software.",
+                    "**Bring InputConfig to the front for Force Touch.** Pressure and Deep Press work only while InputConfig is the front window.",
+                    "**Check the permission.** Keys and clicks are read through Accessibility."
+                ], ordered: true),
+                .paragraph("If the Live Visualizer cannot see it, no binding can.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .list([
+                    "**Block a key.** InputConfig listens; a bound key still does its normal job. A mouse button is held back only when its row turns on Block the button's own action.",
+                    "**Tell keyboards or mice apart.** Every keyboard counts as one, and so does every mouse.",
+                    "**Read Force Touch in other apps.** macOS gives trackpad force to the front app only, so Pressure and Deep Press work while InputConfig is the front window; everything else works from any app.",
+                    "**Read DPI and profile buttons.** They are handled inside the mouse and never reach the Mac.",
+                    "**Read TrackIR.** It sends head position only to games."
+                ], ordered: false),
+                .paragraph("A preset that binds Command or Escape adds to those keys while it runs; it does not remove them. The emergency stop, Control Option Command period, is checked before any row. Nothing you bind can lock you out of your own keyboard.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Scan the key or button.** Any key, any mouse button, double clicks and scrolling.",
+                    "**Pick keys that type nothing.** F13 to F19, a held right-hand modifier, or a side button.",
+                    "**Remap the device first if Scan hears nothing.** F13 to F20 in its own software."
+                ], ordered: false),
+                .paragraph("Your own keyboard and mouse are full of spare inputs.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can I remap keys without a controller?", answer: "Yes. A preset with only keyboard rows runs on its own."),
-                    HelpQuestion(question: "Can a mouse button send a shortcut?", answer: "Yes. Side buttons, the middle button, and a double click on any of them bind to any output.")
+                    HelpQuestion(question: "Can I remap keys without a controller?", answer: "A preset with only keyboard rows runs on its own."),
+                    HelpQuestion(question: "Can a mouse button send a shortcut?", answer: "Side buttons, the middle button, and a double click on any of them bind to any output. To stop a side button also going Back in a browser, turn on Block the button's own action in the row's options; it applies while the preset runs."),
+                    HelpQuestion(question: "My keyboard has no dictation key. Can another key start dictation?", answer: "Bind any key to System Function, Start Dictation. Pick one nothing uses, such as F18 or a held Right Option (the built-in Modifier Holds does this), because the key still does its usual job too."),
+                    HelpQuestion(question: "Can a USB foot pedal run a shortcut?", answer: "It can if it sends a key or a mouse button, as most USB pedals do. Program the pedal to send a key nothing uses, such as F13, then Scan it in a row and pick any output. A pedal that sends a middle click, Button 4 or Button 5 binds the same way. The foot pedal page covers MIDI and adaptive-controller pedals too."),
+                    HelpQuestion(question: "Why does my mouse's side button do nothing on a Mac?", answer: "macOS hands Button 4 and Button 5 to the app in front, and many apps ignore them. Bind them here and they work in every app while the preset runs. The [side buttons page](https://inputconfig.com/questions/how-to-use-mouse-side-buttons-on-mac) has setup ideas and fixes."),
+                    HelpQuestion(question: "Will holding Right Command for a shortcut set off Spotlight?", answer: "It can. In Modifier Holds the hold fires once Right Command has been down for 450 ms, even if you press another key meanwhile, so a slow Command Tab on the right-hand key opens Spotlight too. Use the left Command for long shortcuts, or raise the hold to 700 ms in the row's Options."),
+                    HelpQuestion(question: "Can the same key do something different in each app?", answer: "Make a preset per app with the same key on different outputs and list the app under Automation & Gaming Utilities. With automatic switching on in Settings, Advanced, the preset takes over when the app comes to the front and the previous one returns when you leave. [Per-app keyboard shortcuts](https://inputconfig.com/questions/per-app-keyboard-shortcuts-on-mac) walks through it."),
+                    HelpQuestion(question: "Can a key or mouse button start an auto clicker?", answer: "Scan it as the row's input, put a click on the output, and choose Repeats until pressed again. The key still does its usual job, so use one that types nothing, such as a side button or F13.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "Custom hot corners on a Mac that run any shortcut or app", url: "https://inputconfig.com/questions/hot-corners-alternative-for-mac"),
+            HelpLink(title: "How to use mouse side buttons on a Mac", url: "https://inputconfig.com/questions/how-to-use-mouse-side-buttons-on-mac"),
             HelpLink(title: "Scan", url: "https://inputconfig.com/help/scan-to-bind"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Auto-Switch", url: "https://inputconfig.com/help/per-app-auto-switch"),
-            HelpLink(title: "A spare keyboard as a macro deck", url: "https://inputconfig.com/guides/spare-keyboard-macro-deck"),
+            HelpLink(title: "A macro deck from a numpad, MIDI pad, or controller", url: "https://inputconfig.com/guides/spare-keyboard-macro-deck"),
+            HelpLink(title: "Which key remapper for Mac do you need?", url: "https://inputconfig.com/questions/key-remapper-for-mac"),
+            HelpLink(title: "What F13 to F19 do on a Mac, and how to use them", url: "https://inputconfig.com/questions/f13-to-f19-keys-on-mac"),
+            HelpLink(title: "Can Karabiner-Elements map a game controller?", url: "https://inputconfig.com/questions/karabiner-elements-game-controller"),
         ]
     )
 
@@ -390,7 +701,7 @@ enum HelpGuideLibrary {
         title: "MIDI Devices",
         category: "Inputs",
         url: "https://inputconfig.com/help/midi-as-input",
-        intro: "A MIDI keyboard, a pad controller, or a box of knobs can drive the Mac the way a game controller can: keys are buttons, knobs are dials or switches, the sustain pedal is a click. Plug it in over USB or Bluetooth MIDI and the app finds it with no drivers.",
+        intro: "InputConfig turns MIDI notes, pads, knobs, faders and the sustain pedal into keystrokes, keyboard shortcuts, mouse clicks, scrolling, macros and system functions on a Mac. Plug the device in over USB or pair it as Bluetooth MIDI and the app finds it with no drivers. It is free and open source, on the [Mac App Store](https://apps.apple.com/us/app/inputconfig/id6777759147?mt=12). I built InputConfig because my hands do not work well, and one pad is easier for me than a three-key shortcut. If a pad does nothing, [the ladder](#if-a-pad-does-nothing) starts with the Live Visualizer.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -399,29 +710,87 @@ enum HelpGuideLibrary {
                     "Pick an output. The built-in MIDI: Knob Deck and MIDI: Media Deck presets are complete examples to re-scan onto your own hardware."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "What binds", blocks: [
-                .paragraph("Notes and pads act like buttons and stay held while the key is down. Control Change knobs, sliders, and pedals fire once they pass halfway, so a sustain pedal is an on / off switch. The pitch wheel rests at centre and binds in plus and minus like a stick axis. Aftertouch fires when you press harder into a held key. Program Change fires once each time the patch changes.")
-            ]),
-            HelpSection(heading: "Knob modes", blocks: [
+            HelpSection(heading: "Know what each control does", blocks: [
                 .list([
-                    "Switch: fires once the value passes halfway. For pedals and buttons that send CC.",
-                    "Dial: the centre of the knob is zero, like a stick. The further you turn, the faster the output runs, and the row's deadzone keeps it still near the middle. Pair it with Mouse Wheel for scrolling that speeds up as you turn.",
-                    "Turn: fires short nudges every few steps of rotation, clockwise for plus and counterclockwise for minus. For endless encoders and anything that steps: volume, brightness, arrow keys, zoom. Turn Step sets the nudge size."
-                ], ordered: false)
+                    "**Notes and pads.** They act like buttons and stay held while the key is down.",
+                    "**Knobs, sliders and pedals.** Control Change fires once the value passes halfway, so a sustain pedal is an on and off switch.",
+                    "**The pitch wheel.** It rests at center and binds in plus and minus, like a stick axis.",
+                    "**Aftertouch.** It fires when you press harder into a held key.",
+                    "**Program Change.** It fires once each time the patch changes.",
+                    "**Transport.** Start, Continue and Stop from a sequencer, drum machine or DAW fire once each, like Program Change."
+                ], ordered: false),
+                .paragraph("A DAW on this Mac reaches InputConfig through an IAC Driver bus in Audio MIDI Setup: send its MIDI sync to that bus and InputConfig hears it. Press Scan and play the control, and InputConfig works out which kind it is.")
             ]),
-            HelpSection(heading: "Volume as a fader", blocks: [
-                .paragraph("Bind a CC, the pitch wheel, aftertouch, or a trigger to the System Volume output and the Mac's volume follows the control one to one. It only takes over once you move the control, so plugging in does not yank the volume.")
+            HelpSection(heading: "Choose a knob mode", blocks: [
+                .list([
+                    "**Switch.** Fires once the value passes halfway. For pedals and buttons that send CC.",
+                    "**Dial.** The center of the knob is zero, like a stick. The further you turn, the faster the output runs, and the row's deadzone keeps it still near the middle. Pair it with Mouse Wheel for scrolling that speeds up as you turn.",
+                    "**Turn.** Fires short nudges every few steps of rotation, clockwise for plus and counterclockwise for minus. For knobs that send their position, including endless encoders set to absolute mode: volume, brightness, arrow keys, zoom. Turn Step sets the nudge size."
+                ], ordered: false),
+                .paragraph("An encoder in a relative mode, sending 65 and 63 or 1 and 127, is not decoded; set it to absolute. Dial for scrolling, Turn for stepping, Switch for pedals.")
             ]),
-            HelpSection(heading: "Channels and devices", blocks: [
-                .paragraph("Rows default to any channel and any device, so the preset keeps working when a different keyboard is plugged in. Pick a channel to split a keyboard, or a device to keep two keyboards independent.")
+            HelpSection(heading: "Pick what a pad, key or knob sends", blocks: [
+                .list([
+                    "**A key or a full shortcut.** Such as Command S or Command Shift 4. The key is held for as long as the pad is held.",
+                    "**A macro.** A timed list of keys and clicks, such as copy, switch app, paste. See [macros](https://inputconfig.com/help/macros-turbo-and-toggle).",
+                    "**Type Text.** A whole phrase, a signature or a code snippet from one pad.",
+                    "**Mouse clicks.** Left or right, and a held button for dragging. A knob in Dial mode can be the scroll wheel.",
+                    "**System functions.** Volume, mute, play and pause, next track, brightness, Mission Control, Spotlight, lock screen, the screenshot toolbar and Start Dictation. See [system functions](https://inputconfig.com/help/system-functions).",
+                    "**Automation.** Run a Siri Shortcut, Open App or Open URL.",
+                    "**System Volume.** A real fader that follows a knob or slider one to one. It only takes over once you move the control, so plugging in does not yank the volume.",
+                    "**MIDI out.** Through the app's own virtual port. See [MIDI output](https://inputconfig.com/help/midi-output).",
+                    "**App actions.** Switch to another preset, or the [emergency stop](https://inputconfig.com/help/emergency-stop)."
+                ], ordered: false),
+                .paragraph("Several outputs can sit on one row, so a single pad can press a key and click at once. Anything a keyboard, a mouse or the Mac's own keys can do, a pad can do.")
             ]),
-            HelpSection(heading: "Watching it live", blocks: [
-                .paragraph("The Live Visualizer's MIDI layout shows a seven-octave keyboard shaded by velocity, a named dial for every knob, pitch bend and aftertouch meters, a channel strip, and an event log. It is the quickest way to find what a mystery knob sends.")
+            HelpSection(heading: "Filter by channel and device", blocks: [
+                .paragraph("Rows default to any device, so the preset keeps working when a different keyboard is plugged in. A row made by Scan keeps the channel it was scanned on; choose Any channel from the row's menu for an MPE controller, which plays each note on its own channel. Pick a channel to split a keyboard, or a device to keep two keyboards independent. Leave rows on any device unless two keyboards need different jobs.")
+            ]),
+            HelpSection(heading: "Give one pad several jobs", blocks: [
+                .list([
+                    "**Hold and double tap.** Every row can carry a press, a [hold action and a double-tap action](https://inputconfig.com/help/hold-and-double-tap), so one pad can save on a tap and save-as on a hold.",
+                    "**Toggle.** Latches a modifier until the next press.",
+                    "**Per app.** With [per-app auto-switch](https://inputconfig.com/help/per-app-auto-switch) the same pads send Final Cut shortcuts while Final Cut is in front and OBS hotkeys while OBS is in front. Automatic switching is off until you turn it on in Settings, Advanced.",
+                    "**Whole layouts.** A Program Change row can activate a specific preset, so a patch button on the controller flips between whole layouts."
+                ], ordered: false),
+                .paragraph("With three jobs per pad, a small pad controller goes a long way.")
+            ]),
+            HelpSection(heading: "If a pad does nothing", blocks: [
+                .paragraph("The Live Visualizer's MIDI layout shows a seven-octave keyboard shaded by velocity, a named dial for every knob, pitch bend and aftertouch meters, a channel strip and an event log. It is the quickest way to find what a mystery knob sends. Climb this ladder, smallest step first:"),
+                .list([
+                    "**Watch the Live Visualizer.** Press the pad. If nothing lights, macOS is not passing the device through, so check Audio MIDI Setup and the cable.",
+                    "**Check the preset is active.** If it lights but nothing happens, the preset may not be running.",
+                    "**Check the filters.** The row's channel and device must match what the pad sends.",
+                    "**Check the permission.** InputConfig needs Accessibility in System Settings, Privacy & Security to send keys and clicks."
+                ], ordered: true),
+                .paragraph("If the Live Visualizer sees the pad, the fix is in the preset, not the cable.")
+            ]),
+            HelpSection(heading: "Why a MIDI pad makes a good macro pad", blocks: [
+                .paragraph("A second computer keyboard makes a poor macro pad on a Mac, because InputConfig listens alongside macOS and never takes a key away: the 7 on a spare numpad still types 7. A MIDI pad types nothing on its own, so every pad is free for a shortcut, and many desks already have one. The [macro deck guide](https://inputconfig.com/guides/spare-keyboard-macro-deck) compares the options, and the [streaming deck guide](https://inputconfig.com/guides/streaming-deck) builds an OBS deck the same way."),
+                .paragraph("Your DAW still hears the notes, because InputConfig reads a copy of what the device sends. If a track is armed, it will record the shortcut pads. Use pads or a channel the DAW ignores, or disarm the track.")
+            ]),
+            HelpSection(heading: "When you do not need this", blocks: [
+                .paragraph("If you only want a knob to move a fader or a plugin control inside your DAW, use the DAW's own MIDI learn. It is built for that and needs nothing else. InputConfig is for everything the DAW cannot reach: Finder, the browser, Zoom, Photoshop, menu commands, the Mac's volume. If you need conditional rules, variables or routing between hardware MIDI ports, Bome MIDI Translator Pro is the stronger tool. The [MIDI to keystroke app list](https://inputconfig.com/questions/midi-to-keystroke-apps-for-mac) compares the rest honestly."),
+                .paragraph("I have not tested every MIDI controller. Any keyboard, pad controller, knob box or pedal that shows up in Audio MIDI Setup should work, and a controller with a DAW-specific mode should be switched to its plain MIDI mode. If it appears in Audio MIDI Setup, InputConfig sees it.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Connect and scan.** Plug in the device, press Scan on a row, play the control.",
+                    "**Pick an output.** A shortcut, a macro, a click, the volume, or anything else a row can send.",
+                    "**Start from an example.** MIDI: Knob Deck and MIDI: Media Deck are complete layouts to re-scan onto your own hardware."
+                ], ordered: false),
+                .paragraph("A pad that types nothing is the best shortcut key a Mac can have.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Does it need a game controller alongside?", answer: "No. A MIDI-only preset runs with no controller connected."),
-                    HelpQuestion(question: "Can MIDI in and MIDI out share a preset?", answer: "Yes. The app never listens to its own output port, so they cannot loop.")
+                    HelpQuestion(question: "Can MIDI in and MIDI out share a preset?", answer: "The app never listens to its own output port, so they cannot loop."),
+                    HelpQuestion(question: "Can one pad press a whole sequence of keys?", answer: "Make the row a macro: each step is a key, click, or other output with its own wait and hold time. Type Text sends a whole phrase in one go."),
+                    HelpQuestion(question: "Does my DAW still get the notes?", answer: "InputConfig reads a copy of what the device sends and does not intercept it, so the DAW and InputConfig hear the same notes. Keep shortcut pads off armed tracks."),
+                    HelpQuestion(question: "I press a pad and nothing happens. What should I check?", answer: "First, open the Live Visualizer and press the pad: if nothing lights, macOS is not passing the device through, so check Audio MIDI Setup and the cable. If it lights, check that the preset is active, that the row's channel and device filters match, and that InputConfig has Accessibility permission in System Settings, Privacy & Security, which it needs to send keys and clicks."),
+                    HelpQuestion(question: "Is there a free MIDI to keystroke app for Mac that works on Apple silicon?", answer: "InputConfig is free and open source with nothing locked, runs on Apple silicon and Intel Macs with macOS 14 or later, and comes from the Mac App Store. It needs no account and makes no network connections."),
+                    HelpQuestion(question: "Which MIDI controllers work?", answer: "Any keyboard, pad controller, knob box, or pedal that shows up in Audio MIDI Setup, which covers most USB class-compliant gear, Bluetooth MIDI, and hardware on an interface. I have not tested every model, so that is the check to make: if your Akai, Novation, Arturia, or Korg controller appears there, InputConfig sees it. Controllers with a DAW-specific mode should be switched to their plain MIDI mode."),
+                    HelpQuestion(question: "Can a knob scroll, move the volume, or step through frames?", answer: "In Dial mode a knob drives the mouse wheel, faster the further you turn. Bound to System Volume, it becomes the Mac's volume fader. In Turn mode each bit of rotation sends a nudge, so it can press the arrow keys, change brightness, or zoom.")
                 ])
             ]),
         ],
@@ -429,8 +798,14 @@ enum HelpGuideLibrary {
             HelpLink(title: "MIDI Output", url: "https://inputconfig.com/help/midi-output"),
             HelpLink(title: "System Functions", url: "https://inputconfig.com/help/system-functions"),
             HelpLink(title: "A MIDI controller as a control surface", url: "https://inputconfig.com/guides/midi-control-surface"),
-            HelpLink(title: "MIDI Knob Deck preset", url: "https://inputconfig.com/presets/built-in/midi-knob-deck"),
+            HelpLink(title: "MIDI: Knob Deck preset", url: "https://inputconfig.com/presets/built-in/midi-knob-deck"),
             HelpLink(title: "MIDI reference", url: "https://inputconfig.com/tools/midi-cc"),
+            HelpLink(title: "MIDI to keystroke on a Mac: every app, compared", url: "https://inputconfig.com/questions/midi-to-keystroke-apps-for-mac"),
+            HelpLink(title: "A macro deck from a numpad, MIDI pad, or controller", url: "https://inputconfig.com/guides/spare-keyboard-macro-deck"),
+            HelpLink(title: "Macros, Turbo, Toggle", url: "https://inputconfig.com/help/macros-turbo-and-toggle"),
+            HelpLink(title: "Auto-Switch", url: "https://inputconfig.com/help/per-app-auto-switch"),
+            HelpLink(title: "MIDI: Media Deck preset", url: "https://inputconfig.com/presets/built-in/midi-media-deck"),
+            HelpLink(title: "A free Bome MIDI Translator alternative for Mac", url: "https://inputconfig.com/questions/bome-midi-translator-alternative-for-mac"),
         ]
     )
 
@@ -439,27 +814,71 @@ enum HelpGuideLibrary {
         title: "Gyroscope",
         category: "Inputs",
         url: "https://inputconfig.com/help/gyroscope-aim",
-        intro: "The DualSense, DualSense Edge, and DualShock 4 expose a gyroscope and an accelerometer on macOS. The app fuses them into the controller's actual tilt and moves the pointer from that, like a laser pointer: tilt up and the pointer goes up, tilt back to level and it comes back.",
+        intro: "You can aim or move the pointer by tilting a DualSense, DualSense Edge or DualShock 4 on a Mac, in any game that aims with a mouse. macOS passes the gyroscope and accelerometer to apps, but almost no Mac game reads them. InputConfig fuses them into the controller's actual tilt and moves the pointer from that, like a laser pointer: tilt up and the pointer goes up, tilt back to level and it comes back. The 2026 Steam Controller's gyro is read too (experimental).",
         sections: [
-            HelpSection(heading: "Adding a motion row", blocks: [
-                .paragraph("Set the input type to Motion and pick the channel. Gyro X is forward and back tilt, for up and down. Gyro Y is sideways tilt, for left and right. Both are anchored to gravity, so they track the controller's real angle. Gyro Z is turning the controller flat like a torch and moves the pointer by rate. Pick plus or minus, one row each, and Mouse Motion in the matching direction. Speed sets how far the pointer travels per degree.")
+            HelpSection(heading: "Start from a preset", blocks: [
+                .list([
+                    "**Gyro Aim.** Wires sideways tilt to mouse X and forward tilt to mouse Y, with fire and aim on the triggers, pause on LB, and re-zero plus center on RB. See [Gyro Aim](https://inputconfig.com/presets/built-in/gyro-aim).",
+                    "**Motion Cursor.** The same idea, slower, with clicks on the face buttons and scrolling on the right stick, for someone who can hold a controller but cannot work a stick. See [Motion Cursor](https://inputconfig.com/presets/built-in/motion-cursor).",
+                    "**Gyro fine aim.** The Smart Preset Maker can add it to any mouse-look game, on top of the stick."
+                ], ordered: false),
+                .paragraph("Gyro and the right stick can both drive mouse motion in the same preset, and they add together. Because the output is plain mouse movement, gyro aim works in any game that aims with a mouse.")
             ]),
-            HelpSection(heading: "The presets", blocks: [
-                .paragraph("Gyro Aim wires sideways tilt to mouse X and forward tilt to mouse Y, with fire and aim on the triggers, pause on LB, and re-zero plus centre on RB. Motion Cursor is the same idea, slower, with clicks on the face buttons and scrolling on the right stick, for someone who can hold a controller but cannot work a stick. The Smart Preset Maker can add gyro fine aim to any mouse-look game.")
+            HelpSection(heading: "Add a motion row by hand", blocks: [
+                .list([
+                    "**Gyro X.** Forward and back tilt, for up and down.",
+                    "**Gyro Y.** Sideways tilt, for left and right.",
+                    "**Gyro Z.** Turning the controller flat like a torch; the pointer follows the turn."
+                ], ordered: false),
+                .paragraph("Gyro X and Gyro Y are anchored to gravity, so they track the controller's real angle."),
+                .list([
+                    "**You:** Set the input type to Motion, pick the channel and plus or minus, one row each, and give it Mouse Motion in the matching direction.",
+                    "**InputConfig:** Moves the pointer by the controller's tilt. Speed sets how far the pointer travels per degree.",
+                    "**Check:** Tilt the controller up and the pointer goes up; tilt back to level and it comes back."
+                ], ordered: false),
+                .paragraph("Four rows, plus and minus on two channels, make a full gyro pointer.")
             ]),
-            HelpSection(heading: "Ratcheting", blocks: [
-                .paragraph("Motion aim runs out of wrist travel. Bind a button, for example L1 or a paddle, to the App Action Pause Motion While Held. While it is held, motion stops moving the cursor and you swing the controller back to a comfortable angle; on release the new angle is neutral, so nothing snaps. Re-zero Motion and Center Pointer on Screen are App Actions too.")
+            HelpSection(heading: "Re-aim with Pause Motion While Held", blocks: [
+                .paragraph("Motion aim runs out of wrist travel, the way a mouse runs out of desk."),
+                .list([
+                    "**You:** Bind a button, for example L1 or a paddle, to the App Action Pause Motion While Held.",
+                    "**InputConfig:** Stops motion from moving the cursor while the button is held. On release the new angle is neutral, so nothing snaps.",
+                    "**Check:** Hold the button, swing the controller back to a comfortable angle, and let go. The pointer stays where it was."
+                ], ordered: false),
+                .paragraph("Re-zero Motion and Center Pointer on Screen are App Actions too. Lift the gyro like you lift a mouse: hold the pause button and reset your wrist.")
             ]),
-            HelpSection(heading: "Drift and calibration", blocks: [
-                .paragraph("A resting controller cannot creep: the tilt axes settle back onto what gravity says within a fraction of a second, and the gyro's zero looks after itself while the controller rests. Motion Calibration, from a Motion row's Options or the Calibrate menu, records the zero by hand and shows the controller as a 3D model so you can see it respond.")
+            HelpSection(heading: "Keep it from drifting", blocks: [
+                .paragraph("A resting controller cannot creep: the tilt axes settle back onto what gravity says within a fraction of a second, and the gyro's zero looks after itself while the controller rests. Motion Calibration, from a Motion row's Options or the Calibrate menu, records the zero by hand and shows the controller as a 3D model so you can see it respond."),
+                .paragraph("Put it down and it settles; you rarely need to calibrate by hand.")
             ]),
-            HelpSection(heading: "Compatibility", blocks: [
-                .paragraph("A wired connection always has motion. Some Bluetooth pairings drop it; Settings, Devices shows whether it is available. The Switch Pro Controller, Joy-Cons, and Xbox controllers have no motion on the Mac.")
+            HelpSection(heading: "If motion does not arrive", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Watch the Live Visualizer.** Its motion readout moves when you tilt a controller that sends motion.",
+                    "**Use a cable.** Some Bluetooth pairings drop motion. A wired connection always has it.",
+                    "**Open Motion Calibration.** The 3D model turns as you turn the controller, and records the resting zero if you want to set it by hand.",
+                    "**Check the controller has a gyro.** InputConfig reads motion from the DualSense, DualSense Edge, DualShock 4 and the 2026 Steam Controller (experimental). Xbox controllers have no gyroscope."
+                ], ordered: true),
+                .paragraph("If the motion readout does not move, try the cable before anything else.")
+            ]),
+            HelpSection(heading: "The 2026 Steam Controller (experimental)", blocks: [
+                .paragraph("Its gyro is read directly. Gyro X and Gyro Y follow the turn by rate rather than from gravity, so over a long session the pointer can drift a little. The rest bias is learned while the controller lies still, and Center Pointer or a re-zero puts the neutral back. Gyro Z follows a turn about the real vertical, as on PlayStation controllers. On the Steam Controller, keep Center Pointer on a button for the occasional drift.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Activate Gyro Aim.** Or add gyro fine aim from the Smart Preset Maker.",
+                    "**Pause to re-aim.** Hold the Pause Motion While Held button and reset your wrist.",
+                    "**No motion.** Try a USB cable."
+                ], ordered: false),
+                .paragraph("Tilt is the most natural aim there is, and every mouse-aimed game can use it.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Which axis is which?", answer: "Hold the controller flat. Tipping the front up and down is Gyro X. Rolling it sideways like a steering wheel is Gyro Y. Swinging it left and right flat is Gyro Z."),
-                    HelpQuestion(question: "Can I use gyro and the right stick together?", answer: "Yes. Both can drive mouse motion in the same preset and they add together.")
+                    HelpQuestion(question: "Can I use gyro and the right stick together?", answer: "Both can drive mouse motion in the same preset and they add together."),
+                    HelpQuestion(question: "Does the PS5 controller have gyro?", answer: "The DualSense and DualSense Edge have a gyroscope and an accelerometer, and so does the PS4's DualShock 4. On a Mac they work in the few games written for them, and in any game that aims with a mouse through InputConfig."),
+                    HelpQuestion(question: "Why does gyro not work over Bluetooth?", answer: "Some Bluetooth pairings do not carry motion. InputConfig's Live Visualizer shows whether motion arrives from the connected controller (tilt it and watch the motion readout), and a USB cable always has it."),
+                    HelpQuestion(question: "How do I test the gyro on a Mac?", answer: "Open Motion Calibration from a Motion row's Options or the Calibrate menu. It shows the controller as a 3D model that turns as you turn it, and records the resting zero if you want to set it by hand.")
                 ])
             ]),
         ],
@@ -469,7 +888,10 @@ enum HelpGuideLibrary {
             HelpLink(title: "Chords", url: "https://inputconfig.com/help/chords"),
             HelpLink(title: "Gyro Aim preset", url: "https://inputconfig.com/presets/built-in/gyro-aim"),
             HelpLink(title: "Motion Cursor preset", url: "https://inputconfig.com/presets/built-in/motion-cursor"),
-            HelpLink(title: "questions/how-to-use-gyro-aim-on-a-mac", url: "https://inputconfig.com/questions/how-to-use-gyro-aim-on-a-mac"),
+            HelpLink(title: "How to use gyro aim on a Mac", url: "https://inputconfig.com/questions/how-to-use-gyro-aim-on-a-mac"),
+            HelpLink(title: "What works with a PS5 DualSense on a Mac", url: "https://inputconfig.com/questions/dualsense-on-mac"),
+            HelpLink(title: "How to use a PS4 controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-ps4-controller-as-a-mouse-on-mac"),
+            HelpLink(title: "Touchpad as a Mouse", url: "https://inputconfig.com/help/touchpad-as-mouse"),
         ]
     )
 
@@ -478,7 +900,7 @@ enum HelpGuideLibrary {
         title: "Touchpad as a Mouse",
         category: "Inputs",
         url: "https://inputconfig.com/help/touchpad-as-mouse",
-        intro: "The DualSense, DualSense Edge, and DualShock 4 have a two-finger touch surface that most Mac software ignores. The app reads it, tracks two fingers separately, and maps swipes to mouse motion, scrolling, or anything an axis can send. The pad's press stays its own button.",
+        intro: "InputConfig turns the DualSense, DualSense Edge or DualShock 4 touchpad into a Mac trackpad. Activate the built-in Touchpad Mouse preset and one finger moves the pointer, a second finger scrolls, a tap clicks and a two-finger tap right-clicks. macOS lets apps read the pad's two fingers, but nothing on the Mac turns it into a pointer, so out of the box it does nothing. It works over Bluetooth and over USB. If the pad does nothing, [the ladder](#if-the-pad-does-nothing) starts with the Live Visualizer.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -487,16 +909,60 @@ enum HelpGuideLibrary {
                     "Set the output, usually Mouse Motion in the matching direction. Four rows make a full pointer. The Touchpad Mouse preset is the complete example, and the Smart Preset Maker can add the same rows to any layout."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Press, tap, double tap, two-finger tap", blocks: [
-                .paragraph("Pressing the pad down is button 13. A one-finger tap, a two-finger tap, and a double tap are Touchpad Gesture inputs. A click is never counted as a tap, so all of them can live in one preset: swipe to move, tap or press to click, two fingers for a right click. Scan asks which one you meant.")
+            HelpSection(heading: "Set it up in a minute", blocks: [
+                .list([
+                    "Pair the controller with the Mac ([PS5](https://inputconfig.com/questions/how-to-connect-a-ps5-controller-to-a-mac) or [PS4](https://inputconfig.com/questions/how-to-connect-a-ps4-controller-to-a-mac)), or plug it in.",
+                    "Open InputConfig, pick the [Touchpad Mouse](https://inputconfig.com/presets/built-in/touchpad-mouse) preset in the sidebar, and press Activate.",
+                    "Slide one finger to move the pointer and put a second finger down to scroll. Tap or press the pad to click; tap with two fingers to right-click. Cross clicks and Circle right-clicks too."
+                ], ordered: true),
+                .paragraph("If the pointer is too fast or too slow, change Speed on the four finger 1 rows. Touchpad Mouse is the whole setup; everything else is tuning.")
             ]),
-            HelpSection(heading: "Calibration", blocks: [
-                .paragraph("Pads differ slightly at the edges. Touchpad Setup, from a touchpad row's Options, asks you to swipe to every edge and records the real bounds, so a swipe across the pad moves the pointer a uniform distance. It is also where zones are drawn.")
+            HelpSection(heading: "Calibrate the edges", blocks: [
+                .list([
+                    "**You:** Open a touchpad row's Options and press Calibrate Touchpad, which opens Touchpad Setup, then swipe to every edge of the pad.",
+                    "**InputConfig:** Records the pad's real bounds, since pads differ slightly at the edges.",
+                    "**Check:** A swipe across the pad moves the pointer the same distance anywhere on it."
+                ], ordered: false),
+                .paragraph("New touchpad rows move the pointer as far up and down as they do side to side; rows made before 1.6 keep the speed they had. Touchpad Setup is also where zones are drawn. Calibrate once per controller and the pad feels even.")
+            ]),
+            HelpSection(heading: "Press, tap, double tap and two-finger tap", blocks: [
+                .paragraph("Pressing the pad down is button 13. A one-finger tap, a two-finger tap and a double tap are Touchpad Gesture inputs. A click is never counted as a tap, so all of them can live in one preset: swipe to move, tap or press to click, two fingers for a right click. Scan asks which one you meant. Press and tap are separate inputs, so each can do its own job.")
+            ]),
+            HelpSection(heading: "Build it by hand", blocks: [
+                .paragraph("The Touchpad Mouse preset is the complete example, and the Smart Preset Maker can add the same rows to any layout. To build it yourself, add a row with the input type Touchpad, pick Finger 1 or Finger 2, the axis and the direction, and give it Mouse Motion in the matching direction. X plus is a swipe right and Y minus a swipe up. For a scroll wheel only, bind finger 1 Y plus and minus to Mouse Wheel and leave X unbound. Four finger 1 rows make a full pointer.")
+            ]),
+            HelpSection(heading: "If the pad does nothing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Watch the touchpad live.** Open the Live Visualizer and pick the Touchpad template: each finger shows on the pad as you move it. Touchpad Setup shows your finger live too.",
+                    "**Reconnect the controller.** If nothing moves there, the Mac is not getting touch data from it.",
+                    "**Check the preset is active.** Touchpad Mouse, or your own preset with touchpad rows.",
+                    "**Check which controller is read.** With two PlayStation pads, only the first input device with touchpad rows is read."
+                ], ordered: true),
+                .paragraph("If the Live Visualizer shows your finger, the rest is the preset.")
+            ]),
+            HelpSection(heading: "Why it does nothing on a Mac by default", blocks: [
+                .paragraph("A lot of articles say macOS only sees the touchpad click and that swipes never register. The Mac does pass the finger positions to any app that asks; what is missing is something that uses them. macOS does not make the pad a pointer, and a game only reacts to swipes if its developer wrote for them, which almost no Mac game did. If you only want it in one Steam game, look in that game's controller settings in Steam first. A pad that clicks but never moves the pointer is not broken; nothing is reading the fingers yet.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .paragraph("A preset reads one PlayStation touchpad: the touchpad of the first input device that has touchpad rows and whose controller has one. Touchpad rows in a second PlayStation pad's device stay quiet, so the second player's touchpad does nothing in that preset. A Steam Controller's trackpads are read on their own, so a DualSense and a Steam Controller both work in one preset; see [Steam Controller](https://inputconfig.com/help/steam-controller). Xbox controllers have no touchpad. One PlayStation touchpad per preset.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Activate Touchpad Mouse.** One finger points, two scroll, a tap clicks.",
+                    "**Calibrate once.** Touchpad Setup, swipe to every edge.",
+                    "**Tune the speed.** Speed on the four finger 1 rows."
+                ], ordered: false),
+                .paragraph("The touchpad you already own makes a decent trackpad.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can the pad be a scroll wheel only?", answer: "Yes. Bind finger 1 Y plus and minus to Mouse Wheel and leave X unbound."),
-                    HelpQuestion(question: "Does the Xbox controller have a touchpad?", answer: "No. The Steam Controller's two trackpads are on its own page.")
+                    HelpQuestion(question: "Two controllers with touchpads: which one is read?", answer: "One PlayStation touchpad per preset: the touchpad of the first input device that has touchpad rows and whose controller has one (a DualSense or DualShock 4). Touchpad rows in a second PlayStation pad's device stay quiet, so the second player's touchpad does nothing in that preset. A Steam Controller's trackpads are read on their own, so a DualSense and a Steam Controller both work in one preset."),
+                    HelpQuestion(question: "Can the pad be a scroll wheel only?", answer: "Bind finger 1 Y plus and minus to Mouse Wheel and leave X unbound."),
+                    HelpQuestion(question: "Does the Xbox controller have a touchpad?", answer: "No. The Steam Controller's two trackpads are on its own page."),
+                    HelpQuestion(question: "Why does the DualSense touchpad do nothing on my Mac?", answer: "macOS does not turn it into a pointer, and most Mac games and apps ignore it. InputConfig reads each finger and maps it: activate the built-in Touchpad Mouse preset and the pad moves the pointer."),
+                    HelpQuestion(question: "Does the touchpad work over Bluetooth?", answer: "InputConfig reads the touchpad over Bluetooth and over USB, on the DualSense, DualSense Edge, and DualShock 4."),
+                    HelpQuestion(question: "How can I see the touchpad working on my Mac?", answer: "Open the Live Visualizer and pick the Touchpad template: each finger shows on the pad as you move it. The touchpad calibration shows your finger live too. If nothing moves there, the Mac is not getting touch data from the controller, so reconnect it.")
                 ])
             ]),
         ],
@@ -504,7 +970,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "Touchpad Zones", url: "https://inputconfig.com/help/touchpad-regions-and-gestures"),
             HelpLink(title: "Steam Controller", url: "https://inputconfig.com/help/steam-controller"),
             HelpLink(title: "Touchpad Mouse preset", url: "https://inputconfig.com/presets/built-in/touchpad-mouse"),
-            HelpLink(title: "questions/can-you-use-the-ps5-touchpad-as-a-trackpad-on-mac", url: "https://inputconfig.com/questions/can-you-use-the-ps5-touchpad-as-a-trackpad-on-mac"),
+            HelpLink(title: "Can you use the PS5 controller's touchpad as a trackpad on a Mac?", url: "https://inputconfig.com/questions/can-you-use-the-ps5-touchpad-as-a-trackpad-on-mac"),
+            HelpLink(title: "How to use a PS5 controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-ps5-controller-as-a-mouse-on-mac"),
+            HelpLink(title: "How to use a PS4 controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-ps4-controller-as-a-mouse-on-mac"),
+            HelpLink(title: "Gyroscope", url: "https://inputconfig.com/help/gyroscope-aim"),
+            HelpLink(title: "How to test a controller on a Mac", url: "https://inputconfig.com/questions/how-to-test-if-a-controller-works-on-a-mac"),
         ]
     )
 
@@ -513,29 +983,49 @@ enum HelpGuideLibrary {
         title: "Touchpad Zones",
         category: "Inputs",
         url: "https://inputconfig.com/help/touchpad-regions-and-gestures",
-        intro: "The touchpad can be carved into zones. Each zone is its own input that fires when a finger lands in it, so the pad becomes a row of soft buttons: extra keys, hotbar slots, or a tiny keyboard for someone who cannot reach the face buttons. Zones are on the controller's pad; areas of the screen are Screen Regions, a different input.",
+        intro: "The DualSense or DualShock 4 touchpad can be carved into zones, and each zone is its own input that fires when a finger lands in it. Zones are drawn in Touchpad Setup, which Calibrate Touchpad opens from a touchpad row's Options, and they belong to the preset you draw them in. The pad becomes a row of soft buttons: extra keys, hotbar slots, or a tiny keyboard for someone who cannot reach the face buttons. Areas of the screen are a different input, [screen regions](https://inputconfig.com/help/cursor-and-stick-regions).",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
-                    "Open a touchpad row's Options and press Touchpad Setup. Calibrate the pad first if you have not.",
+                    "Open a touchpad row's Options and press Calibrate Touchpad.",
                     "Draw rectangles on the pad and name them.",
                     "Add a row with the input type Touchpad Zone and pick a zone, or press Scan and touch it. Give it an output. Zones carry every option a button does."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Gestures", blocks: [
-                .paragraph("Touchpad Gesture recognises a one-finger tap, a two-finger tap, and a double tap, all separate from pressing the pad down. Inside a zone a tap fires the zone.")
-            ]),
-            HelpSection(heading: "Ideas", blocks: [
+            HelpSection(heading: "Draw zones", blocks: [
                 .list([
-                    "Left half and right half as Page Up and Page Down.",
-                    "Three columns as Again, Good, Easy for Anki.",
-                    "A strip of five as a hotbar.",
-                    "Four corners as Undo, Redo, Copy, Paste."
-                ], ordered: false)
+                    "**You:** Open a touchpad row's Options, press Calibrate Touchpad, draw rectangles on the pad and name them. A zone's Left, Top, Width and Height fields, in percent, place it by number instead. Then add a row with the input type Touchpad Zone and pick a zone, or press Scan and touch it.",
+                    "**InputConfig:** Fires the row when a finger lands in the zone. Zones carry every option a button does.",
+                    "**Check:** Touch the zone and the output fires. The Live Visualizer draws the zones on the pad and fills the one under a finger."
+                ], ordered: false),
+                .paragraph("The pad is about 5 by 2.5 cm, so six to eight zones stay easy to hit without looking. Fewer, bigger zones are easier to hit by feel.")
+            ]),
+            HelpSection(heading: "Bind a gesture", blocks: [
+                .paragraph("Touchpad Gesture recognizes a one-finger tap, a two-finger tap and a double tap, all separate from pressing the pad down. As on a Mac trackpad, the second tap of a double tap also fires a one-finger Tap row, so tap-to-click clicks twice and opens a file. Inside a zone, a tap fires the zone. A double tap also counts as two taps, the way a Mac trackpad works.")
+            ]),
+            HelpSection(heading: "Share the pad with pointing", blocks: [
+                .paragraph("A finger that lands in a zone fires it, and a finger that moves drives the motion rows. Keep zones near the edges if the middle is for pointing.")
+            ]),
+            HelpSection(heading: "Try a layout", blocks: [
+                .list([
+                    "**Two halves.** Left half and right half as Page Up and Page Down.",
+                    "**Three columns.** Again, Good and Easy for Anki. See [Anki from a controller](https://inputconfig.com/guides/anki-from-a-controller).",
+                    "**A strip of five.** A hotbar.",
+                    "**Four corners.** Undo, Redo, Copy and Paste."
+                ], ordered: false),
+                .paragraph("The [Touchpad Zones](https://inputconfig.com/presets/built-in/touchpad-zones) preset is a working example to start from.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Draw.** Calibrate Touchpad, then rectangles on the pad in Touchpad Setup.",
+                    "**Bind.** Touchpad Zone rows, or Scan and touch the zone.",
+                    "**Combine.** Zones at the edges, pointing in the middle."
+                ], ordered: false),
+                .paragraph("The touchpad is a whole extra row of buttons under your thumb.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can zones and mouse motion share the pad?", answer: "Yes. A finger that lands in a zone fires it; a finger that moves drives the motion rows. Keep zones near the edges if the middle is for pointing."),
+                    HelpQuestion(question: "Can zones and mouse motion share the pad?", answer: "A finger that lands in a zone fires it; a finger that moves drives the motion rows. Keep zones near the edges if the middle is for pointing."),
                     HelpQuestion(question: "How many zones?", answer: "The pad is about 5 by 2.5 cm, so six to eight stay easy to hit without looking.")
                 ])
             ]),
@@ -544,6 +1034,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Touchpad as a Mouse", url: "https://inputconfig.com/help/touchpad-as-mouse"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "Anki from a controller", url: "https://inputconfig.com/guides/anki-from-a-controller"),
+            HelpLink(title: "Touchpad Zones preset", url: "https://inputconfig.com/presets/built-in/touchpad-zones"),
         ]
     )
 
@@ -552,28 +1043,72 @@ enum HelpGuideLibrary {
         title: "Screen Regions, Stick Zones",
         category: "Inputs",
         url: "https://inputconfig.com/help/cursor-and-stick-regions",
-        intro: "Two inputs have no button. A screen region is an area of a display that fires while the pointer is inside it, whatever moves the pointer. A stick zone is an area of a stick's travel with its own binding, so pushing the stick into its upper-right corner can be one command and its right edge another.",
+        intro: "A screen region is an area of a display that fires a shortcut while the pointer is inside it: a custom hot corner, a screen edge or a strip. macOS Hot Corners offer a fixed list of actions; a screen region runs anything, whatever moves the pointer. A stick zone is the same idea on a stick's travel, so pushing a stick into its upper-right corner can be one command and its right edge another. Both are inputs with no button, drawn from a row's Options in the editor.",
         sections: [
-            HelpSection(heading: "Screen regions", blocks: [
-                .paragraph("Add a row with the input type Screen Region and open Screen regions to draw it. The editor has a display picker: a region can belong to one display or to every display, and it is drawn in each display's real shape. A region for the external monitor is silent on the laptop screen. Displays are recognised by their hardware identity, so a region survives unplugging. The Live Visualizer has a Screen template that shows the display, centred, with the preset's regions on it and its own display picker. Uses: a corner that locks the screen, a strip along the bottom that shows the Dock, a region over a game's chat box that switches presets. A preset of only screen regions runs with no controller.")
+            HelpSection(heading: "Draw a screen region", blocks: [
+                .list([
+                    "**You:** Add a row with the input type Screen Region and open Screen regions to draw it. Or, in the Live Visualizer's Screen view, choose Draw a screen region.",
+                    "**InputConfig:** Saves the region with the preset, measured as a share of its display, and fires the row while the pointer is inside it.",
+                    "**Check:** Move the pointer into the region and the output fires. The Live Visualizer's Screen template shows the display, centered, with the preset's regions and the live pointer."
+                ], ordered: false),
+                .paragraph("A region can also be placed by number: the Left, Top, Width and Height fields take percent of the display. The editor has a display picker: a region can belong to one display or to every display, and it is drawn in each display's real shape. Displays are recognized by their hardware identity, so a region survives unplugging. A corner that locks the screen is the classic first region.")
             ]),
-            HelpSection(heading: "Stick zones", blocks: [
-                .paragraph("Add a row with the input type Stick Zone, choose the stick, and draw the zone on the stick's travel. Leave the middle clear so the centre stays neutral. Four corners and four edges on one stick make an eight-way menu, with a rumble on each so you can feel it land. Diagonals in games are the other common use.")
+            HelpSection(heading: "Know how regions behave", blocks: [
+                .list([
+                    "**Like a button.** Pressed when the pointer enters, released when it leaves. Turbo repeats the output while the pointer stays.",
+                    "**Sixteen per preset.** They are saved with the preset, so the same corner can mean something different in another preset.",
+                    "**Any display size.** A region is a rectangle measured as a share of its display, so an every-display region lands in the same place on a laptop screen and on a wide monitor.",
+                    "**Edges count.** A region drawn right against an edge still counts while the pointer is pushed against that edge.",
+                    "**No permission.** Knowing where the pointer is needs none. The app checks it 60 times a second, and only while a preset with regions is running or this editor is open.",
+                    "**A held key.** A region can wait for a held key: in Options, Second control, press Scan and press the key.",
+                    "**No controller needed.** A preset of only screen regions runs with nothing connected, and any pointer fires it."
+                ], ordered: false),
+                .paragraph("A region is a button you press by moving the pointer.")
             ]),
-            HelpSection(heading: "Zones and axis rows together", blocks: [
-                .paragraph("A stick can carry both. Axis rows move the pointer while zones at the far corners fire commands, as long as the zones sit past where the pointer rows usually run.")
+            HelpSection(heading: "Use regions with a head pointer, a joystick mouse or a wheelchair", blocks: [
+                .paragraph("Screen regions read the real pointer, so they work however the pointer is moved: the macOS head pointer, a joystick mouse, a power wheelchair in Bluetooth mouse mode, or a stick mapped in InputConfig. For someone who can move the pointer but has few buttons or none, every region is a command that costs only a movement: a corner for dictation, an edge for Return, another for Mission Control. Turn on spoken feedback for each row so it announces what fired. See [clicking with head pointer](https://inputconfig.com/questions/how-to-click-with-head-pointer-on-mac) and [a wheelchair joystick as a Mac mouse](https://inputconfig.com/questions/can-a-wheelchair-joystick-control-a-mac). If you can move the pointer, you can run commands with no buttons at all.")
+            ]),
+            HelpSection(heading: "Draw a stick zone", blocks: [
+                .list([
+                    "**You:** Add a row with the input type Stick Zone, choose the stick, and draw the zone on the stick's travel, or type its Left, Top, Width and Height in percent.",
+                    "**InputConfig:** Fires the row when the stick is pushed into that zone.",
+                    "**Check:** Push the stick into the zone and the output fires. Leave the middle clear so the center stays neutral."
+                ], ordered: false),
+                .paragraph("Four corners and four edges on one stick make an eight-way menu, with a rumble on each so you can feel it land. Diagonals in games are the other common use. A stick can carry both: axis rows move the pointer while zones at the far corners fire commands, as long as the zones sit past where the pointer rows usually run. Keep stick zones at the far edges and the stick still points normally.")
+            ]),
+            HelpSection(heading: "If a region fires too often, or never", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Shrink it.** Keep regions small and tight to the edges so ordinary pointer travel does not set them off.",
+                    "**Check the display.** A region for the external monitor is silent on the laptop screen. Pick every display if you want it on both.",
+                    "**Check the preset is running.** Regions are read only while a preset with regions runs, or while the editor is open."
+                ], ordered: true),
+                .paragraph("Most misfires are a region that is too big.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Screen region.** An area of a display; it fires while the pointer is in it.",
+                    "**Stick zone.** An area of a stick's travel; it fires when the stick is pushed there.",
+                    "**Keep them small.** Tight to the edges, clear of everyday movement."
+                ], ordered: false),
+                .paragraph("Corners and edges are free buttons on every screen.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Does a screen region fire repeatedly while the pointer sits in it?", answer: "It behaves like a button: pressed when the pointer enters, released when it leaves. Add turbo for repetition."),
-                    HelpQuestion(question: "What about the touchpad?", answer: "Areas of a controller's touchpad are Touchpad Zones, a separate input on its own page.")
+                    HelpQuestion(question: "What about the touchpad?", answer: "Areas of a controller's touchpad are Touchpad Zones, a separate input on its own page."),
+                    HelpQuestion(question: "Does a screen region need a controller?", answer: "No. A preset with only screen region rows runs with nothing connected, and any pointer fires it: a mouse, the trackpad, a controller stick, or the macOS Head Pointer."),
+                    HelpQuestion(question: "How many screen regions can one preset have?", answer: "Sixteen. Each preset has its own set, so a game preset and a desktop preset can use the same corner for different things.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "Custom hot corners on a Mac that run any shortcut or app", url: "https://inputconfig.com/questions/hot-corners-alternative-for-mac"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "Vibration", url: "https://inputconfig.com/help/haptic-feedback"),
             HelpLink(title: "One, two, or four switches", url: "https://inputconfig.com/guides/single-switch-and-few-buttons"),
+            HelpLink(title: "Cursor Regions preset", url: "https://inputconfig.com/presets/built-in/cursor-regions"),
+            HelpLink(title: "Chords", url: "https://inputconfig.com/help/chords"),
         ]
     )
 
@@ -582,7 +1117,7 @@ enum HelpGuideLibrary {
         title: "Tap the Mac",
         category: "Inputs",
         url: "https://inputconfig.com/help/tap-the-mac",
-        intro: "A MacBook has a motion sensor inside it. The app reads it and turns a knock on the palm rest or the lid into an input. Taps are counted, from one to five, typing is ignored on purpose, and there is no controller, cable, or accessory involved.",
+        intro: "InputConfig can turn a knock on a MacBook's palm rest or lid into a shortcut, using the motion sensor inside the MacBook. Taps are counted from one to five, typing is ignored on purpose, and there is no controller, cable or accessory involved. It was tested on M4 MacBooks; it did not work on an M1 Pro in our testing, and the calibrator's status chip tells you whether yours listens. Whether your MacBook can do it is shown by [the calibrator](#read-the-calibrator).",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -591,27 +1126,82 @@ enum HelpGuideLibrary {
                     "Knock twice on the palm rest, firmly, about as fast as a double click."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Where to knock", blocks: [
-                .paragraph("The palm rest either side of the trackpad is the most reliable. The lid works with a firmer knock. A soft surface absorbs the tap; a desk or a lap is better. One knock is easy to make by accident, so the built-in preset uses double and triple.")
+            HelpSection(heading: "Knock in the right place", blocks: [
+                .paragraph("The palm rest either side of the trackpad is the most reliable. The lid works with a firmer knock. A soft surface absorbs the tap, so a desk or a lap is better than a cushion. Knock firmly, about as fast as a double click. One knock is easy to make by accident, so the built-in preset uses double and triple.")
             ]),
-            HelpSection(heading: "Calibrating", blocks: [
-                .paragraph("A Tap the Mac row's Options has Calibrate Taps: a live trace of the sensor with the threshold drawn across it, every knock marked with what the detector decided, and a slider that moves the threshold while you knock. Put the line just under your own taps and above ordinary handling. The setting is shared by every preset.")
+            HelpSection(heading: "Calibrate the threshold", blocks: [
+                .list([
+                    "**You:** Open a Tap the Mac row's Options and choose Calibrate Taps, then knock a few times.",
+                    "**InputConfig:** Draws a live trace of the sensor with the threshold across it, and marks every knock with what the detector decided.",
+                    "**Check:** Drag the slider until the line sits just under your own taps and above ordinary handling. Your knocks show green and handling the laptop shows gray."
+                ], ordered: false),
+                .paragraph("The setting is shared by every preset. When your knocks show green and handling shows gray, the setting is right.")
+            ]),
+            HelpSection(heading: "Read the calibrator", blocks: [
+                .paragraph("The status chip at the top says what the sensor is doing:"),
+                .list([
+                    "**Listening, in green.** The sensor is on and taps count.",
+                    "**Waking sensor, or Sensor parked, waking, in orange.** The app is bringing the sensor back.",
+                    "**Blocked by macOS, in red.** macOS refuses to switch the sensor on.",
+                    "**Sensor not responding on this Mac, in red.** It is there but has sent nothing.",
+                    "**A reason, in red.** Why the sensor could not be opened, such as no chassis accelerometer published on this Mac."
+                ], ordered: false),
+                .paragraph("The trace below covers the last four seconds and colors each strike:"),
+                .list([
+                    "**Green.** Counted as a tap.",
+                    "**Gray.** The ring-down of a strike, the case still vibrating from the same knock, or the laptop being lifted or tilted.",
+                    "**Red.** Too soon after a tap to be a new one.",
+                    "**Yellow.** Ignored because it landed next to typing or a click."
+                ], ordered: false),
+                .paragraph("The status chip is the honest answer to whether your MacBook can do this.")
             ]),
             HelpSection(heading: "If taps stop registering", blocks: [
-                .paragraph("macOS parks the sensor when the laptop sits still. The app wakes it again whenever it goes quiet and after sleep; the calibrator's status chip shows whether the sensor is listening. If it says the sensor is not available, that Mac does not publish it: every M2 and later MacBook does, and the M1 Pro, Max, and Ultra machines, but not the base M1 Air and 13-inch M1 Pro. Desktop Macs have no motion sensor.")
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Look at the status chip.** macOS parks the sensor when the laptop sits still, and the app wakes it again whenever it goes quiet and after sleep.",
+                    "**Knock on the palm rest, on a hard surface.** Firmly, about as fast as a double click.",
+                    "**Recalibrate.** Move the threshold just under your knocks in Calibrate Taps.",
+                    "**Accept what the chip says.** If it says the sensor is not available, that Mac does not publish it."
+                ], ordered: true),
+                .paragraph("Tap the Mac is tested on M4 MacBooks; it did not work on an M1 Pro in our testing, and other Apple silicon MacBooks vary, so the status chip is the way to know. Desktop Macs and Intel Macs have no motion sensor. If the chip says Listening and taps still do not count, the threshold is too high.")
+            ]),
+            HelpSection(heading: "Pick what a tap runs", blocks: [
+                .paragraph("Anything a button can send: Mission Control, Start Dictation, a key combination, a Siri Shortcut, play and pause, lock screen, a macro, the next preset, or Open App to open an app. It is Back Tap for a MacBook. [Tap your MacBook to run a shortcut](https://inputconfig.com/questions/how-to-tap-your-macbook-to-run-a-shortcut) walks through a first setup, and [which MacBooks have the sensor](https://inputconfig.com/questions/does-my-macbook-have-an-accelerometer) covers the models. A knock is a button for a hand that cannot reach one.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .list([
+                    "**Work on every Mac.** Tested on M4 MacBooks; it did not work on an M1 Pro in our testing; desktop and Intel Macs have no sensor.",
+                    "**Tell sides apart.** It counts knocks, one to five, wherever they land on the case.",
+                    "**Be scanned.** Pressing a controller button on a desk jolts a MacBook enough to count as a tap, so Tap the Mac is picked from the input type menu, never by Scan.",
+                    "**Ignore setting the laptop down.** That is one bump and can count as a single tap, which is why rows on a double or triple tap are the safe choice."
+                ], ordered: false),
+                .paragraph("The sensor is read only while something needs it: an active preset with a Tap the Mac row, or the preset editor, the calibrator or the Live Visualizer open. When nothing needs it, the app stops reading it.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Activate Tap the Mac.** Under Feature Showcases, or add a Tap the Mac row.",
+                    "**Knock twice on the palm rest.** Firmly, like a double click.",
+                    "**Check the status chip.** Calibrate Taps tells you whether your MacBook listens."
+                ], ordered: false),
+                .paragraph("Try it on your MacBook in a minute; the status chip settles whether it will work.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Will it fire when I set the laptop down?", answer: "Setting it down is one bump, not two quick ones, so no."),
-                    HelpQuestion(question: "Why does Scan never pick up a tap?", answer: "On purpose. Pressing a controller button on a desk jolts the MacBook enough to count as a tap. Pick Tap the Mac from the input type menu.")
+                    HelpQuestion(question: "Will it fire when I set the laptop down?", answer: "Setting it down is one bump, so it can count as a single tap, which is why the built-in preset uses double and triple taps. A row on a double or triple tap does not fire from it."),
+                    HelpQuestion(question: "Why does Scan never pick up a tap?", answer: "On purpose. Pressing a controller button on a desk jolts the MacBook enough to count as a tap. Pick Tap the Mac from the input type menu."),
+                    HelpQuestion(question: "Can I double tap my MacBook to open an app?", answer: "Bind a double tap to the Open App system function and name the app."),
+                    HelpQuestion(question: "Is the sensor read all the time?", answer: "No. It runs only while something needs it: a preset with a Tap the Mac row is active, or the preset editor, the calibrator or the Live Visualizer is open. When nothing needs it, the app stops reading it."),
+                    HelpQuestion(question: "Can it tell which side of the MacBook I knocked?", answer: "No. It counts knocks, one to five, wherever they land on the case. The palm rest either side of the trackpad gives the cleanest reading.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "How to tap your MacBook to run a shortcut", url: "https://inputconfig.com/questions/how-to-tap-your-macbook-to-run-a-shortcut"),
+            HelpLink(title: "Does your MacBook have an accelerometer?", url: "https://inputconfig.com/questions/does-my-macbook-have-an-accelerometer"),
             HelpLink(title: "Dictation and Zoom", url: "https://inputconfig.com/help/dictation-zoom-speak"),
             HelpLink(title: "System Functions", url: "https://inputconfig.com/help/system-functions"),
-            HelpLink(title: "Tap The Mac preset", url: "https://inputconfig.com/presets/built-in/tap-the-mac"),
-            HelpLink(title: "Using a Mac without a keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
+            HelpLink(title: "Tap the Mac preset", url: "https://inputconfig.com/presets/built-in/tap-the-mac"),
+            HelpLink(title: "How to use a Mac without a mouse or keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
         ]
     )
 
@@ -620,28 +1210,54 @@ enum HelpGuideLibrary {
         title: "System Functions",
         category: "Outputs",
         url: "https://inputconfig.com/help/system-functions",
-        intro: "A System Function is an output that runs the Mac directly instead of pressing a key: volume, media, brightness, Mission Control, lock screen, a Siri Shortcut, an app, a link.",
+        intro: "A System Function is an output that runs the Mac directly instead of pressing a key: volume, media, brightness, Mission Control, lock screen, a Siri Shortcut, an app or a link. Set a row's output type to System Function and pick from its list. It is the way to put the Mac's own controls on any button, pad or key.",
         sections: [
-            HelpSection(heading: "The list", blocks: [
+            HelpSection(heading: "Pick a system function", blocks: [
                 .list([
-                    "Sound: Volume Up, Volume Down, Mute.",
-                    "Media: Play / Pause, Next Track, Previous Track, sent as real media keys.",
-                    "Display: Brightness Up and Down, keyboard backlight up and down.",
-                    "Accessibility: Start Dictation, Speak Selection, Zoom On / Off, Zoom In, Zoom Out. See Dictation and Zoom.",
-                    "Mac: Mission Control, Launchpad, Spotlight, Lock Screen, the screenshot toolbar.",
-                    "Automation: Run Siri Shortcut, Open App, Open URL."
+                    "**Sound.** Volume Up, Volume Down and Mute.",
+                    "**Media.** Play / Pause, Next Track and Previous Track, sent as real media keys.",
+                    "**Display.** Brightness Up and Down, and keyboard backlight up and down.",
+                    "**Accessibility.** Start Dictation, Speak Selection, Zoom On / Off, Zoom In and Zoom Out. See [dictation, zoom and speak selection](https://inputconfig.com/help/dictation-zoom-speak) for the macOS setting each one needs.",
+                    "**Mac.** Mission Control, Launchpad, Spotlight, Lock Screen and the screenshot toolbar.",
+                    "**Automation.** Run Siri Shortcut, Open App and Open URL."
                 ], ordered: false),
-                .paragraph("System Volume is a separate output and not a press: the Mac's volume follows the position of a knob, a trigger, or a wheel.")
+                .paragraph("System Volume is a separate output and not a press: the Mac's volume follows the position of a knob, a trigger or a wheel. System Functions are the Mac's own controls, so they work in every app.")
             ]),
-            HelpSection(heading: "Siri Shortcuts", blocks: [
-                .paragraph("Run Siri Shortcut fires any shortcut from the Shortcuts app by name; pick it from the list on the row. It runs in the background without taking focus, so a pad can toggle Do Not Disturb, start a timer, or run a smart-home scene while you keep working. macOS asks once per shortcut the first time.")
+            HelpSection(heading: "Run a Siri Shortcut", blocks: [
+                .list([
+                    "**You:** Pick Run Siri Shortcut on a row and choose the shortcut from the list.",
+                    "**InputConfig:** Runs it by name in the background, without taking focus, so a pad can toggle Do Not Disturb, start a timer or run a smart-home scene while you keep working.",
+                    "**Check:** Press the control. macOS asks once per shortcut the first time; allow it, and the shortcut runs."
+                ], ordered: false),
+                .paragraph("Any input can carry it: a controller button, a MIDI pad, a mouse side button, a key such as F13, or a tap on a MacBook. Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens. [Running a Shortcut from a controller](https://inputconfig.com/questions/how-to-run-a-shortcut-from-a-controller-on-mac) has ideas and the built-in ways macOS offers first. Anything you can build in Shortcuts, one button can run.")
             ]),
-            HelpSection(heading: "Open App and Open URL", blocks: [
-                .paragraph("Open App takes an app name, a bundle identifier, or a path and brings the app to the front. Open URL opens anything the Mac has a handler for: https, mailto, facetime, and app schemes such as spotify or obsidian.")
+            HelpSection(heading: "Open an app or a link", blocks: [
+                .list([
+                    "**Open App.** Takes an app name, a bundle identifier or a path, and brings the app to the front.",
+                    "**Open URL.** Opens anything the Mac has a handler for: https, mailto, facetime, and app schemes such as spotify or obsidian."
+                ], ordered: false),
+                .paragraph("A System Function can also be a macro step, so a macro can mute, open an app, wait and type. One button can open the app and then do the first thing you always do in it.")
+            ]),
+            HelpSection(heading: "If a system function does nothing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Switch on the macOS setting.** Dictation, Zoom and Speak Selection each need a setting in System Settings first; [dictation, zoom and speak selection](https://inputconfig.com/help/dictation-zoom-speak) lists them.",
+                    "**Allow the Shortcut.** Run Siri Shortcut waits for macOS to ask the first time; allow it.",
+                    "**Check the permission.** InputConfig needs Accessibility in System Settings, Privacy & Security to send anything."
+                ], ordered: true),
+                .paragraph("The three accessibility outputs only work once their macOS setting is on.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Output type.** System Function, then pick from the list.",
+                    "**Siri Shortcuts.** Any shortcut, by name, in the background.",
+                    "**Apps and links.** Open App and Open URL."
+                ], ordered: false),
+                .paragraph("The Mac's own controls belong on whatever button is easiest for you.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can a System Function be a macro step?", answer: "Yes. A macro can mute, open an app, wait, and type.")
+                    HelpQuestion(question: "Can a System Function be a macro step?", answer: "A macro can mute, open an app, wait, and type.")
                 ])
             ]),
         ],
@@ -649,7 +1265,10 @@ enum HelpGuideLibrary {
             HelpLink(title: "Dictation and Zoom", url: "https://inputconfig.com/help/dictation-zoom-speak"),
             HelpLink(title: "MIDI Devices", url: "https://inputconfig.com/help/midi-as-input"),
             HelpLink(title: "Macros, Turbo, Toggle", url: "https://inputconfig.com/help/macros-turbo-and-toggle"),
-            HelpLink(title: "MIDI Media Deck preset", url: "https://inputconfig.com/presets/built-in/midi-media-deck"),
+            HelpLink(title: "MIDI: Media Deck preset", url: "https://inputconfig.com/presets/built-in/midi-media-deck"),
+            HelpLink(title: "Custom hot corners on a Mac that run any shortcut or app", url: "https://inputconfig.com/questions/hot-corners-alternative-for-mac"),
+            HelpLink(title: "macOS Screenshot preset", url: "https://inputconfig.com/presets/macos-screenshot"),
+            HelpLink(title: "Shortcuts & Apps preset", url: "https://inputconfig.com/presets/built-in/shortcuts-apps"),
         ]
     )
 
@@ -658,23 +1277,85 @@ enum HelpGuideLibrary {
         title: "Dictation and Zoom",
         category: "Outputs",
         url: "https://inputconfig.com/help/dictation-zoom-speak",
-        intro: "Three of the Mac's accessibility features live under System Function: Start Dictation, Zoom, and Speak Selection. Each needs the matching macOS feature switched on once.",
+        intro: "Start Dictation, Zoom and Speak Selection can sit on any button InputConfig reads. A mouse side button, a key you hold, a controller button, a MIDI pad, a switch on an adaptive controller or a knock on a MacBook can start dictation, magnify the screen or read the selected text aloud. macOS still does the work; InputConfig presses the button for you. Each feature needs its macOS setting switched on once, and the steps below say which. If one of them does nothing, [the ladder for each feature](#if-one-of-them-does-nothing) names the missing setting.",
         sections: [
             HelpSection(heading: "Start Dictation", blocks: [
-                .paragraph("One press starts dictation, the next stops it, exactly like the dictation key. It works as long as Dictation is on in System Settings, Keyboard. The output presses the dictation key itself, so it follows whatever shortcut macOS has for it. The Tap the Mac preset puts it on a triple tap.")
+                .paragraph("One press starts dictation and the next press stops it, exactly like the dictation key. InputConfig presses the Mac's own dictation key, the microphone key on F5 on recent MacBooks, so there is no shortcut to set up and your keyboard does not need that key."),
+                .list([
+                    "**You:** Switch Dictation on once in System Settings, Keyboard, then give any row the Start Dictation output.",
+                    "**InputConfig:** Presses the dictation key each time that control fires.",
+                    "**Check:** Press the control once and dictation starts listening. Press it again and it stops."
+                ], ordered: false),
+                .paragraph("Three ready-made places for it:"),
+                .list([
+                    "**A triple knock.** The built-in Tap the Mac preset, tested on M4 MacBooks; did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens.",
+                    "**A held Right Option.** The built-in Modifier Holds preset.",
+                    "**A controller's bottom face button.** The [Dictation Control](https://inputconfig.com/presets/dictation-control) layout."
+                ], ordered: false),
+                .paragraph("The full walk-through, including a mouse button, is in [how to start dictation from any button](https://inputconfig.com/questions/how-to-start-dictation-from-any-button-on-mac). Start Dictation needs no shortcut at all, only Dictation switched on.")
             ]),
             HelpSection(heading: "Zoom", blocks: [
-                .paragraph("Zoom On / Off, Zoom In, and Zoom Out send the macOS zoom shortcuts. Switch on System Settings, Accessibility, Zoom, Use keyboard shortcuts to zoom. Put In and Out on a Turn-mode knob or the two directions of a stick for a smooth magnifier.")
+                .list([
+                    "**You:** Switch on System Settings, Accessibility, Zoom, Use keyboard shortcuts to zoom. Then give rows the Zoom On / Off, Zoom In and Zoom Out outputs.",
+                    "**InputConfig:** Sends the macOS zoom shortcuts: Option Command 8, Option Command equals, and Option Command minus.",
+                    "**Check:** Press Zoom In and the screen magnifies. If nothing happens, the keyboard shortcuts setting is still off."
+                ], ordered: false),
+                .paragraph("Put Zoom In and Zoom Out on a Turn-mode knob or the two directions of a stick for a smooth magnifier.")
             ]),
             HelpSection(heading: "Speak Selection", blocks: [
-                .paragraph("Reads the selected text aloud. Switch on System Settings, Accessibility, Spoken Content, Speak selection. Pressing again stops it.")
+                .list([
+                    "**You:** Switch on System Settings, Accessibility, Spoken Content, Speak selection. Then give a row the Speak Selection output.",
+                    "**InputConfig:** Presses the macOS Speak selection shortcut, Option Esc.",
+                    "**Check:** Select some text and press the control. The Mac reads it aloud, and pressing again stops it."
+                ], ordered: false),
+                .paragraph("If you changed the Speak selection shortcut, change it back, or bind your new combination as a Keyboard Key output instead. Speak Selection reads whatever is selected, so select first, then press.")
             ]),
             HelpSection(heading: "VoiceOver", blocks: [
-                .paragraph("VoiceOver's commands are keyboard shortcuts, so they bind as ordinary Keyboard Key outputs. The Smart Preset Maker has a VoiceOver Navigation workflow.")
+                .paragraph("VoiceOver's commands are keyboard shortcuts, so they bind as ordinary Keyboard Key outputs. The Smart Preset Maker has a VoiceOver Navigation workflow. Any VoiceOver command can sit on a button as a Keyboard Key row.")
+            ]),
+            HelpSection(heading: "Choose a button", blocks: [
+                .paragraph("Pick a control that does nothing else, because InputConfig adds a job to a button without taking its old one away."),
+                .list([
+                    "**A mouse side button.** Button 4 and Button 5 do nothing on a Mac by default, so they are ideal. See [mouse side buttons](https://inputconfig.com/questions/how-to-use-mouse-side-buttons-on-mac).",
+                    "**A key nothing uses.** F13 to F19 on a full-size keyboard, or a right-hand modifier held on its own. The built-in Modifier Holds preset already does the second; see [keyboard and mouse as input](https://inputconfig.com/help/keyboard-and-mouse-as-input).",
+                    "**A knock on a MacBook.** [Tap the Mac](https://inputconfig.com/help/tap-the-mac) needs nothing in your hands. It was tested on M4 MacBooks; did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens.",
+                    "**A controller or adaptive switch.** Any button on a gamepad, the PlayStation Access Controller, or a switch plugged into the Xbox Adaptive Controller.",
+                    "**A MIDI pad or foot switch.** See [MIDI as input](https://inputconfig.com/help/midi-as-input)."
+                ], ordered: false),
+                .paragraph("A [hold or a double tap](https://inputconfig.com/help/hold-and-double-tap) lets one button carry dictation as well as its everyday job. The best trigger is one you never press by accident.")
+            ]),
+            HelpSection(heading: "If one of them does nothing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Dictation.** Check that System Settings, Keyboard, Dictation is on and its shortcut is not set to Off.",
+                    "**Zoom.** Use keyboard shortcuts to zoom is off by default. Switch it on in System Settings, Accessibility, Zoom.",
+                    "**Speak Selection.** Switch on System Settings, Accessibility, Spoken Content, Speak selection, and select some text first. If you gave Speak selection a different shortcut, bind that combination instead."
+                ], ordered: true),
+                .paragraph("macOS keeps the microphone key itself, along with Mission Control, Spotlight, Launchpad and Focus, and never hands it to an app, so the key cannot be remapped. InputConfig can press the dictation key from any other button, which is usually what people want.")
+            ]),
+            HelpSection(heading: "What macOS already does on its own", blocks: [
+                .paragraph("Use these first if they suit you; they need no app."),
+                .list([
+                    "**Dictation.** It has its own shortcut in System Settings, Keyboard, Dictation: the microphone key on recent MacBooks, a double press of a modifier key, or a combination you record.",
+                    "**Zoom.** It can follow a modifier key and the scroll wheel or trackpad: System Settings, Accessibility, Zoom, Use scroll gesture with modifier keys to zoom.",
+                    "**Speak selection.** It is Option Esc once it is switched on."
+                ], ordered: false),
+                .paragraph("InputConfig is for when those triggers are the problem: a double press is hard to time, the keyboard has no microphone key, there is no keyboard at all, or the only thing that works for you is a big button, a switch or a knock. If the Mac's own shortcut works for you, keep it.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Switch on the macOS setting once.** Dictation, Use keyboard shortcuts to zoom, or Speak selection.",
+                    "**Give a row the output.** Start Dictation, a Zoom output, or Speak Selection.",
+                    "**Use a control nothing else uses.** A side button, F13 to F19, a held modifier, a switch or a knock."
+                ], ordered: false),
+                .paragraph("One setting in macOS and one row in InputConfig, and the feature is on a button you can reach.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Dictation does not start.", answer: "Check System Settings, Keyboard, Dictation is on and its shortcut is not set to Off.")
+                    HelpQuestion(question: "Dictation does not start.", answer: "Check System Settings, Keyboard, Dictation is on and its shortcut is not set to Off."),
+                    HelpQuestion(question: "Speak Selection does nothing.", answer: "Switch on System Settings, Accessibility, Spoken Content, Speak selection, and select some text first. The output sends Option Esc, so if you gave Speak selection a different shortcut, bind that combination instead."),
+                    HelpQuestion(question: "Zoom In and Zoom Out do nothing.", answer: "Use keyboard shortcuts to zoom is off by default. Switch it on in System Settings, Accessibility, Zoom, and the three Zoom outputs start working."),
+                    HelpQuestion(question: "Can I remap the microphone key itself?", answer: "No. macOS keeps the Dictation key, along with Mission Control, Spotlight, Launchpad, and Focus, to itself and never hands it to an app. InputConfig can press the dictation key from any other button, which is usually what people want.")
                 ])
             ]),
         ],
@@ -682,7 +1363,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "System Functions", url: "https://inputconfig.com/help/system-functions"),
             HelpLink(title: "Tap the Mac", url: "https://inputconfig.com/help/tap-the-mac"),
             HelpLink(title: "Accessibility", url: "https://inputconfig.com/help/accessibility-features"),
-            HelpLink(title: "Using a Mac without a keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
+            HelpLink(title: "How to use a Mac without a mouse or keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
+            HelpLink(title: "How to start dictation from any button on a Mac", url: "https://inputconfig.com/questions/how-to-start-dictation-from-any-button-on-mac"),
+            HelpLink(title: "How to make a Mac read text aloud", url: "https://inputconfig.com/questions/how-to-make-a-mac-read-text-aloud"),
+            HelpLink(title: "Zoom Magnifier preset", url: "https://inputconfig.com/presets/zoom-magnifier"),
+            HelpLink(title: "How to type on a Mac with a game controller", url: "https://inputconfig.com/questions/how-to-type-with-a-game-controller-on-mac"),
         ]
     )
 
@@ -691,7 +1376,7 @@ enum HelpGuideLibrary {
         title: "MIDI Output",
         category: "Outputs",
         url: "https://inputconfig.com/help/midi-output",
-        intro: "A controller, a keyboard, or a MIDI device can play notes, send CC, bend pitch, change programs, and run the transport in any music app, through a virtual MIDI port named InputConfig that exists whenever the app runs.",
+        intro: "A controller, a keyboard or a MIDI device can send MIDI from a Mac through InputConfig: notes, CC, pitch bend, program changes and the transport, in any music app. It goes out through a virtual MIDI port named InputConfig that exists whenever the app runs. Give a row a MIDI output, enable the InputConfig input in your music app, and play.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -700,22 +1385,54 @@ enum HelpGuideLibrary {
                     "Arm a track that listens to it and activate a preset with MIDI outputs."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "The outputs", blocks: [
+            HelpSection(heading: "Pick a MIDI output", blocks: [
                 .list([
-                    "MIDI Note: one note while the control is pressed, with velocity and channel. MIDI: Drum Pad puts a kit on the face buttons with turbo on, so holding a button rolls.",
-                    "MIDI CC: with Variable Sensitivity on, the value follows how far a stick is pushed; off, it sends a fixed value on press.",
-                    "Pitch Bend: bind a stick axis in both directions. Centre is no bend.",
-                    "Program Change: recall a patch by number.",
-                    "Transport: Start, Stop, Continue."
-                ], ordered: false)
+                    "**MIDI Note.** One note while the control is pressed, with velocity and channel. MIDI: Drum Pad puts a kit on the face buttons with turbo on, so holding a button rolls.",
+                    "**MIDI CC.** From a stick or trigger, the value follows its position, 0 to 127, shaped by the row's response curve, and reaches the full range past the deadzone. From a button, it sends the value you set on press and 0 on release.",
+                    "**Pitch Bend.** Bind a stick axis and the bend follows the stick. From a button, it bends fully up while held and returns to center on release.",
+                    "**Program Change.** Recalls a patch by number, once per press.",
+                    "**Transport.** Real-time Start, Stop and Continue, once per press, for DAWs that follow external transport."
+                ], ordered: false),
+                .paragraph("Sticks and triggers make the best CC sources, because they send every value in between.")
             ]),
-            HelpSection(heading: "Stuck notes", blocks: [
-                .paragraph("When a preset deactivates the app sends note-off for every note it holds. The emergency stop does the same.")
+            HelpSection(heading: "Set it up in your music app", blocks: [
+                .table(header: ["App", "What to do"], rows: [
+                    ["Logic Pro and GarageBand", "Nothing. They listen to every MIDI source, InputConfig included. Arm a software instrument track and press a button."],
+                    ["Ableton Live", "In Settings (Preferences in older versions), Link, Tempo and MIDI, switch on Track for the InputConfig input to play notes and Remote to map controls with MIDI Map Mode."],
+                    ["FL Studio, Reaper, Bitwig, others", "Enable the InputConfig input in the app's MIDI settings."]
+                ]),
+                .paragraph("The port keeps the same identity every time the app starts, so once a DAW has it switched on it stays on. You do not need the IAC Driver. The [gamepad to MIDI guide](https://inputconfig.com/guides/gamepad-as-midi-instrument) has a ready instrument preset and the MIDI learn steps for Logic and Ableton, and [MIDI: CC Dials](https://inputconfig.com/presets/built-in/midi-cc-dials) turns both sticks and both triggers into knobs. Switch the InputConfig input on once, and the DAW remembers it.")
+            ]),
+            HelpSection(heading: "If the music app hears nothing", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Check InputConfig is running.** The port exists only while the app runs, and the preset must be active. An emergency stop halts everything until you activate the preset again.",
+                    "**Watch the Live Visualizer.** Press the button. If it does not light, the Mac is not reading the controller; see [connecting controllers](https://inputconfig.com/help/connecting-controllers).",
+                    "**Enable the input.** Make sure the InputConfig input is enabled in the music app and the track is armed or monitoring.",
+                    "**Match channels.** If the track or instrument listens to one channel, set the row's channel to the same number."
+                ], ordered: true),
+                .paragraph("Most silent setups are a track that is not armed, or an input that is not switched on.")
+            ]),
+            HelpSection(heading: "What happens to held notes", blocks: [
+                .paragraph("When a preset deactivates, the app sends note-off for every note it holds, and the emergency stop does the same. The app never listens to its own output port, so MIDI in and MIDI out can share a preset without looping. A stopped preset never leaves a note hanging.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .paragraph("Buttons are not velocity sensitive: each MIDI Note output plays at the velocity set in its row, from 1 to 127. For dynamics, use a trigger on CC 11. Velocity comes from the row, so put expression on a trigger.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Add a MIDI output.** Note, CC, Pitch Bend, Program Change or Transport.",
+                    "**Enable the input.** Logic and GarageBand need nothing; other apps need the InputConfig input switched on.",
+                    "**Arm a track.** Then press a button."
+                ], ordered: false),
+                .paragraph("Any controller can be a MIDI instrument while InputConfig runs.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can I play chords?", answer: "Yes. Give one row several MIDI Note outputs and they sound together."),
-                    HelpQuestion(question: "Latency?", answer: "The message goes out the moment the input arrives, a few milliseconds at the default polling rate.")
+                    HelpQuestion(question: "Can I play chords?", answer: "Give one row several MIDI Note outputs and they sound together."),
+                    HelpQuestion(question: "Latency?", answer: "The message goes out the moment the input arrives, a few milliseconds at the default polling rate."),
+                    HelpQuestion(question: "Does it work with Ableton Live?", answer: "In Ableton, switch on Track and Remote for the InputConfig input in Preferences, Link, Tempo and MIDI. GarageBand and Logic take it on their own."),
+                    HelpQuestion(question: "Are buttons velocity sensitive?", answer: "No. Each MIDI Note output plays at the velocity set in its row, from 1 to 127. Use a trigger on CC 11 for dynamics.")
                 ])
             ]),
         ],
@@ -723,8 +1440,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "MIDI Devices", url: "https://inputconfig.com/help/midi-as-input"),
             HelpLink(title: "Variable Sensitivity", url: "https://inputconfig.com/help/variable-sensitivity"),
             HelpLink(title: "A MIDI controller as a control surface", url: "https://inputconfig.com/guides/midi-control-surface"),
-            HelpLink(title: "MIDI DAW Performance preset", url: "https://inputconfig.com/presets/built-in/midi-daw-performance"),
+            HelpLink(title: "MIDI: DAW Performance preset", url: "https://inputconfig.com/presets/built-in/midi-daw-performance"),
             HelpLink(title: "MIDI reference", url: "https://inputconfig.com/tools/midi-cc"),
+            HelpLink(title: "Gamepad to MIDI: a game controller as a MIDI instrument", url: "https://inputconfig.com/guides/gamepad-as-midi-instrument"),
+            HelpLink(title: "MIDI: Drum Pad preset", url: "https://inputconfig.com/presets/built-in/midi-drum-pad"),
+            HelpLink(title: "MIDI: Transport Control preset", url: "https://inputconfig.com/presets/built-in/midi-transport-control"),
         ]
     )
 
@@ -733,7 +1453,7 @@ enum HelpGuideLibrary {
         title: "One-Stick Driving",
         category: "Outputs",
         url: "https://inputconfig.com/help/one-stick-driving",
-        intro: "One stick drives a whole vehicle, the way a power wheelchair joystick does. Left and right steer, forward accelerates, back brakes, and snapping the stick back twice shifts into reverse. It works in any driving game that can be played from a keyboard.",
+        intro: "One stick drives a whole vehicle, the way a power wheelchair joystick does: left and right steer, forward accelerates, back brakes, and snapping the stick back twice shifts into reverse. Switch it on in a preset's editor, under Accessibility Tools Suite. It works in any driving game that can be played from a keyboard.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -742,18 +1462,54 @@ enum HelpGuideLibrary {
                     "Set the accelerate and brake keys to match the game, and choose mouse or the A and D keys for steering."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "How it works", blocks: [
-                .paragraph("Variable throttle from a key is done by pulsing: pushing further holds the accelerate key a larger share of each cycle, which most games read as speed.")
+            HelpSection(heading: "Turn it on", blocks: [
+                .list([
+                    "**You:** Open a preset, scroll to One-Stick Driving under Accessibility Tools Suite and switch it on. Pick which stick drives: Left, Right, or Custom axes for an adaptive joystick. Set the accelerate and brake keys to match the game, and choose mouse or the A and D keys for steering.",
+                    "**InputConfig:** Turns the stick into steering, throttle and brake, sent as keys and mouse movement.",
+                    "**Check:** Move the stick and watch the readout. Then try it in the game: forward speeds up, back brakes, and letting go slows the car."
+                ], ordered: false),
+                .paragraph("Match the accelerate and brake keys to the game's own controls first.")
             ]),
-            HelpSection(heading: "Reverse", blocks: [
-                .paragraph("Snap the stick fully back twice, quickly, to shift into Reverse. Push fully forward to return to Drive. The tap count, the window, and how far back counts as the wall are all adjustable, so a slow hand can use a longer window and one that overshoots can use fewer taps.")
+            HelpSection(heading: "Start from the built-in preset", blocks: [
+                .paragraph("Feature Showcases has a One-Stick Driving preset with the drive already set up. The stick steers with A and D, forward presses W, back presses S, and letting go brakes gently, the way a power chair slows. Two quick snaps back shift into reverse. Its rows are named by button: handbrake, horn, boost, reset the car, gear down, gear up, camera and rewind. On an Access Controller's base profile only Cross (the center button), Circle (socket 5) and Options (socket 7) send; give the other sockets buttons in a profile made on a PS5. For a layout made for a particular game, see [One-Stick Racing](https://inputconfig.com/presets/one-stick-racing) and the [setup guide](https://inputconfig.com/guides/one-stick-driving-setup). The preset is a complete car on one stick; try it before you build your own.")
             ]),
-            HelpSection(heading: "If the vehicle launches on its own", blocks: [
-                .paragraph("The throttle axis is an analog trigger that rests at one end. Turn on the trigger option in the Throttle section.")
+            HelpSection(heading: "Understand the throttle", blocks: [
+                .paragraph("Variable throttle from a key is done by pulsing: pushing further holds the accelerate key a larger share of each cycle, which most games read as speed. Push further, go faster, even though the game only sees a key.")
+            ]),
+            HelpSection(heading: "Shift into reverse", blocks: [
+                .paragraph("Snap the stick fully back twice, quickly, to shift into Reverse, and push fully forward to return to Drive. The tap count, the window, and how far back counts as the wall are all adjustable, so a slow hand can use a longer window and one that overshoots can use fewer taps. Tune the reverse snap to your hand, not the other way round.")
+            ]),
+            HelpSection(heading: "Drive with a racing wheel and pedals", blocks: [
+                .paragraph("The steering and throttle axes do not have to be on one stick."),
+                .list([
+                    "**You:** Choose Custom and set the controller slot to the wheel's. Step the Steer axis until its bar follows the wheel, then step the Throttle axis until its bar follows the gas pedal, and turn on Throttle axis is a trigger (rests at one end).",
+                    "**InputConfig:** Spreads a pedal that reads -1 to 1, as many non-Logitech wheels and pedal sets do, over its whole travel.",
+                    "**Check:** Press the pedal and watch the throttle bar fill. If it runs backward, turn on Invert throttle."
+                ], ordered: false),
+                .paragraph("Put the brake pedal on an ordinary row sending the game's brake key. Reverse by snapping back is off in this mode, because a pedal has no backward pull. The full setup, and what macOS does with wheels, is on [racing wheels on a Mac](https://inputconfig.com/questions/how-to-use-a-racing-wheel-on-a-mac). Step each axis until its bar follows the part you move.")
+            ]),
+            HelpSection(heading: "If the vehicle moves on its own", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Turn on the trigger option.** If the throttle axis is an analog trigger that rests at one end, turn on Throttle axis is a trigger in the Throttle section.",
+                    "**Check Invert throttle.** If the bar runs backward, turn it on; otherwise leave it off. InputConfig 1.6 fixed accelerating when the stick was pulled back, and turned off Invert throttle, the old workaround."
+                ], ordered: true),
+                .paragraph("A car that launches by itself is almost always a trigger read as a stick.")
+            ]),
+            HelpSection(heading: "Why it works like a wheelchair", blocks: [
+                .paragraph("I drive a power wheelchair every day, and its joystick is the one control my hand never has to think about: push to go, turn by leaning the stick, let go to stop. One-stick driving brings that shape to driving games, so someone who already drives a chair can drive a car without learning a two-stick layout. The [setup guide](https://inputconfig.com/guides/one-stick-driving-setup) walks through the game settings that help. If you can drive a chair, you can drive this.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Switch it on.** Accessibility Tools Suite, One-Stick Driving, in the editor.",
+                    "**Match the keys.** Accelerate, brake and steering to the game.",
+                    "**Reverse.** Two quick snaps back; fully forward for Drive."
+                ], ordered: false),
+                .paragraph("One stick, the whole car.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it work with the Access Controller's stick?", answer: "Yes. That is one of the setups it was built for.")
+                    HelpQuestion(question: "Does it work with the Access Controller's stick?", answer: "That is one of the setups it was built for.")
                 ])
             ]),
         ],
@@ -770,7 +1526,7 @@ enum HelpGuideLibrary {
         title: "Chords",
         category: "Row options",
         url: "https://inputconfig.com/help/chords",
-        intro: "A chord is a row that only fires while another button on the same controller is held. It gives every button a second layer without giving up its first job: D-pad up scrolls, and Triangle plus D-pad up jumps to the top of the page.",
+        intro: "A chord is a row that only fires while another button on the same controller is held, the way Shift works on a keyboard. Set it in a row's Options, under Second control. It gives every button a second layer without giving up its first job: D-pad up scrolls, and Triangle plus D-pad up jumps to the top of the page.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -779,16 +1535,45 @@ enum HelpGuideLibrary {
                     "Save. The row fires only while the modifier is down and the button is pressed."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Plain and chord rows on one button", blocks: [
-                .paragraph("Keep the plain row for the normal action and add a second row with the modifier for the chord. While the modifier is held the plain row stays quiet. Hold the modifier first, then press the button, like Shift plus a key.")
+            HelpSection(heading: "Make a chord", blocks: [
+                .list([
+                    "**You:** Add a row on the button that does the work and set its output. Open its Options and, under Second control, set While also holding to the modifier button, or press Scan and press it.",
+                    "**InputConfig:** Fires the row only while the modifier is down and the button is pressed.",
+                    "**Check:** Hold the modifier, press the button, and the chord fires. Press the button alone and the plain row fires instead."
+                ], ordered: false),
+                .paragraph("Up to three modifiers can be required at once. Hold the modifier first, then press the button, like Shift plus a key.")
             ]),
-            HelpSection(heading: "The modifier's own binding", blocks: [
-                .paragraph("The modifier keeps whatever it is bound to. If you do not want that, give it a row with no output, or pick a button with nothing bound, such as a paddle or a bumper. Up to three modifiers can be required at once.")
+            HelpSection(heading: "Keep the plain row too", blocks: [
+                .paragraph("Keep the plain row for the normal action and add a second row with the modifier for the chord. While the modifier is held the plain row stays quiet. One button, two rows: the plain job and the chorded job.")
+            ]),
+            HelpSection(heading: "Decide what the modifier does on its own", blocks: [
+                .paragraph("The modifier keeps whatever it is bound to. If you do not want that, give it a row with no output, or pick a button with nothing bound, such as a paddle or a bumper. A trigger can be a modifier when it is bound as a button rather than an axis. A paddle makes the best modifier, because it has no job of its own.")
+            ]),
+            HelpSection(heading: "If the chord fires the wrong row", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Hold the modifier first.** If you press the button first, the chord fires as soon as the modifier goes down while the button is held, and the plain row lets go.",
+                    "**Empty the modifier's own row.** If the modifier also fires its own job, give it a row with no output.",
+                    "**Update to 1.6.** InputConfig 1.6 fixed chords firing the plain row on release."
+                ], ordered: true),
+                .paragraph("Order matters: modifier down, then the button.")
+            ]),
+            HelpSection(heading: "What can and cannot be part of a chord", blocks: [
+                .paragraph("As the held control, a controller row's chord can hold anything Scan sees, including a key, a mouse button or a MIDI pad. The row itself stays a controller row. Keyboard, mouse and MIDI rows have hold and double-tap actions instead, which give a key or pad up to three jobs. Chords live on controller rows; keys and pads get hold and double tap. See [hold and double tap](https://inputconfig.com/help/hold-and-double-tap).")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Second control.** In the row's Options, set While also holding.",
+                    "**Two rows per button.** The plain one and the chorded one.",
+                    "**Modifier first.** Then the button."
+                ], ordered: false),
+                .paragraph("One spare button doubles every other button on the controller.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can the modifier be a trigger?", answer: "Yes, when the trigger is bound as a button rather than an axis."),
-                    HelpQuestion(question: "What if I press the button first?", answer: "Nothing fires until the button is pressed again while the modifier is held.")
+                    HelpQuestion(question: "Can the modifier be a trigger?", answer: "It can when the trigger is bound as a button rather than an axis."),
+                    HelpQuestion(question: "What if I press the button first?", answer: "The chord fires as soon as the modifier goes down while the button is held, and the plain row lets go. To avoid it, hold the modifier first."),
+                    HelpQuestion(question: "Can a keyboard key, mouse button or MIDI pad be part of a chord?", answer: "As the held control, yes: a controller row's chord can hold anything Scan sees, including a key, a mouse button or a MIDI pad. The row itself stays a controller row. Keyboard, mouse and MIDI rows have hold and double-tap actions instead, which give a key or pad up to three jobs.")
                 ])
             ]),
         ],
@@ -797,6 +1582,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Hold and Double-Tap", url: "https://inputconfig.com/help/hold-and-double-tap"),
             HelpLink(title: "Macros, Turbo, Toggle", url: "https://inputconfig.com/help/macros-turbo-and-toggle"),
             HelpLink(title: "Working from a controller", url: "https://inputconfig.com/guides/controller-instead-of-keyboard-for-work"),
+            HelpLink(title: "How to remap controller buttons on a Mac", url: "https://inputconfig.com/questions/how-to-remap-controller-buttons-on-mac"),
         ]
     )
 
@@ -805,21 +1591,51 @@ enum HelpGuideLibrary {
         title: "Hold and Double-Tap",
         category: "Row options",
         url: "https://inputconfig.com/help/hold-and-double-tap",
-        intro: "Every row can carry three outputs on one control: the press, a hold action past a threshold, and a double-tap action on two quick presses. It is how a single switch on an adaptive controller does three things.",
+        intro: "Every row in InputConfig can carry three outputs on one control: the press, a hold action past a threshold, and a double-tap action on two quick presses. Both are in the row's Options. It is how a single switch on an adaptive controller does three things.",
         sections: [
-            HelpSection(heading: "Hold", blocks: [
-                .paragraph("In Options, under Extra actions, switch on Hold action and set the threshold. 400 to 600 ms feels natural; go longer for a control that gets pressed by accident. A press shorter than the threshold fires the normal output on release. A press past it fires the hold output instead.")
+            HelpSection(heading: "Add a hold action", blocks: [
+                .list([
+                    "**You:** In Options, under Extra actions, turn on When held, do something else, set the hold time, and pick the hold output (any output, or several).",
+                    "**InputConfig:** Fires the normal output on release for a press shorter than the threshold, and the hold output instead for a press past it.",
+                    "**Check:** Tap the control and the normal output fires; hold it past the threshold and the hold output fires."
+                ], ordered: false),
+                .paragraph("400 to 600 ms feels natural; go longer for a control that gets pressed by accident. A longer threshold is the cure for holds that fire by accident.")
             ]),
-            HelpSection(heading: "Double tap", blocks: [
-                .paragraph("Switch on Send a different action on a double tap and set the window. 250 to 350 ms suits most people; a longer window helps a hand that moves slowly. Because the app waits for a possible second press, the single press on such a row fires when the window closes, not instantly.")
+            HelpSection(heading: "Add a double-tap action", blocks: [
+                .list([
+                    "**You:** Under Extra actions, turn on When double tapped, do something else, set the window and pick the output.",
+                    "**InputConfig:** Waits for a possible second press. Two presses inside the window fire the double-tap output.",
+                    "**Check:** Double tap and the double-tap output fires. A single press fires when the window closes, not instantly."
+                ], ordered: false),
+                .paragraph("250 to 350 ms suits most people; a longer window helps a hand that moves slowly. Every double-tap row delays its single press by the window, so keep the window as short as your hand allows.")
             ]),
-            HelpSection(heading: "Stacking", blocks: [
-                .paragraph("Hold, double tap, a chord, toggle, and turbo can all sit on one row. A typical adaptive layout: press is left click, hold is right click, double tap is Return, and with a second switch held the same button is Escape. The Hold & Double-Tap preset shows it on the face buttons, and Modifier Holds puts it on the Mac's own modifier keys.")
+            HelpSection(heading: "Stack them with a chord", blocks: [
+                .paragraph("Hold, double tap and a chord can all sit on one row. A typical adaptive layout: press is left click, hold is right click, double tap is Return, and with a second switch held the same button is Escape. The [Hold & Double-Tap](https://inputconfig.com/presets/built-in/hold-double-tap) preset shows it on the face buttons, and Modifier Holds puts it on the Mac's own modifier keys. One switch and a second switch can cover four jobs.")
+            ]),
+            HelpSection(heading: "Use them on keys and pads", blocks: [
+                .paragraph("Any key row can have a hold action and a double-tap action, which is how Modifier Holds works; chords are the one option keyboard rows lack. A key still does its normal job as well, so they suit keys that type nothing, such as [F13 to F19](https://inputconfig.com/questions/f13-to-f19-keys-on-mac) or a right-hand modifier. Put hold and double tap on keys that type nothing.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .list([
+                    "**A macro on hold.** The hold action is any output, or several, but not a macro, and a row with a macro has no hold action. Put the macro on its own row.",
+                    "**Other press modes.** Toggle, repeat and macros are other press modes, so a row with a hold or a double tap does not also toggle, repeat or run a macro.",
+                    "**Repeat while held.** A hold repeats only when Repeat keys while held is on for the row; otherwise the key stays down as one press. Use turbo on a separate row for rapid repetition."
+                ], ordered: false),
+                .paragraph("When a row needs a macro or turbo, give that job its own row.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Hold.** Different action when held, 400 to 600 ms.",
+                    "**Double tap.** When double tapped, do something else, 250 to 350 ms.",
+                    "**Both.** They stack with a chord on the same row."
+                ], ordered: false),
+                .paragraph("Three jobs per button is often the difference between a layout that fits your hands and one that does not.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can the hold action be a macro?", answer: "Yes. Hold and double-tap outputs are ordinary outputs."),
-                    HelpQuestion(question: "Does a hold repeat while I keep holding?", answer: "No, it fires once. Use turbo on a separate row for repetition.")
+                    HelpQuestion(question: "Can the hold action be a macro?", answer: "No. The hold action is any output, or several, but not a macro, and a row with a macro has no hold action. Put the macro on its own row."),
+                    HelpQuestion(question: "Does a hold repeat while I keep holding?", answer: "Only when Repeat keys while held is on for the row; otherwise the key stays down as one press. Use turbo on a separate row for rapid repetition."),
+                    HelpQuestion(question: "Do hold and double tap work on keyboard keys?", answer: "Any key row can have a hold action and a double-tap action, which is how Modifier Holds works. Chords are the one option keyboard rows lack. A key still does its normal job as well, so they suit keys that type nothing, such as [F13 to F19](https://inputconfig.com/questions/f13-to-f19-keys-on-mac) or a right-hand modifier.")
                 ])
             ]),
         ],
@@ -828,6 +1644,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Macros, Turbo, Toggle", url: "https://inputconfig.com/help/macros-turbo-and-toggle"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "One, two, or four switches", url: "https://inputconfig.com/guides/single-switch-and-few-buttons"),
+            HelpLink(title: "Hold & Double-Tap preset", url: "https://inputconfig.com/presets/built-in/hold-double-tap"),
         ]
     )
 
@@ -836,24 +1653,74 @@ enum HelpGuideLibrary {
         title: "Macros, Turbo, Toggle",
         category: "Row options",
         url: "https://inputconfig.com/help/macros-turbo-and-toggle",
-        intro: "How it fires, in a row's Options, changes what a press means. Toggle latches. Turbo repeats while held. Repeat fires a set number of times. A macro replaces the output with a timed sequence.",
+        intro: "The press menu in a row's Options decides what a press means: **Fires while held**, **Toggles on and off**, **Repeats while held** (turbo, rapid fire), **Repeats until pressed again** (an auto clicker), or **Different action when held**. Beside it, Repeat fires a set number of times per press, and a macro replaces the output with a timed sequence of steps. All of it works on any controller button, key or pad. To stop a repeat that keeps going, see [the ladder](#if-it-keeps-going-or-never-starts).",
         sections: [
             HelpSection(heading: "Toggle", blocks: [
-                .paragraph("One press turns the output on and holds it; the next releases it. Sticky Shift, push-to-talk that stays on, auto-run, a held mouse button for one-handed dragging. The Toggle Mode preset shows four variations.")
+                .paragraph("One press turns the output on and holds it; the next releases it. It suits sticky Shift, push-to-talk that stays on, auto-run, and a held mouse button for one-handed dragging. The [Toggle Mode](https://inputconfig.com/presets/built-in/toggle-mode) preset shows four variations. Toggle turns any hold into two taps.")
             ]),
             HelpSection(heading: "Turbo and repeat", blocks: [
-                .paragraph("Turbo presses and releases the output over and over while the control is held, at the rate you set, with an optional variation and a stop count. Repeat fires a fixed number of times per press with a wait between them. Macros & Turbo fires the space bar at 12 presses a second from RB.")
+                .list([
+                    "**You:** Choose Repeats while held, then set Every, the gap in milliseconds, from 5 ms to a minute.",
+                    "**InputConfig:** Presses and releases the output over and over while the control is held, and shows the rate the gap works out to.",
+                    "**Check:** Hold the control and watch the output repeat at that rate; let go and it stops."
+                ], ordered: false),
+                .list([
+                    "**Vary by up to.** Adds a random plus or minus to each gap.",
+                    "**Stop after.** Ends the run after a number of presses.",
+                    "**Repeat.** Fires a fixed number of times per press, with a wait between them."
+                ], ordered: false),
+                .paragraph("The [Macros & Turbo](https://inputconfig.com/presets/built-in/macros-turbo) preset fires the space bar at 12 presses a second from RB. Turbo and toggle combine: rapid fire that stays on until pressed again.")
             ]),
-            HelpSection(heading: "Macros", blocks: [
-                .paragraph("A macro is a list of steps. Each step is an output, with how long to wait before it fires and how long to hold it. Tap presses and releases a key. Hold down keeps a key held while later steps run, which is how Command C style chords are built. Release lets it go. Stop on release ends the macro the moment the control is let go. Macros & Turbo's A button runs copy, switch app, paste as one macro.")
+            HelpSection(heading: "Build a macro", blocks: [
+                .paragraph("A macro is a list of steps, and each step is an output with how long to wait before it fires and how long to hold it."),
+                .list([
+                    "**Tap.** Presses and releases a key.",
+                    "**Hold down.** Keeps a key held while later steps run, which is how Command C style chords are built.",
+                    "**Release.** Lets a held key go.",
+                    "**Stop on release.** Ends the macro the moment the control is let go.",
+                    "**Type Text.** A step that types a whole sentence."
+                ], ordered: false),
+                .paragraph("Steps can send keyboard shortcuts and System Functions, so a macro can mute, open an app, wait and type. Macros & Turbo's A button runs copy, switch app, paste as one macro. If you do it the same way every time, it can be one macro.")
             ]),
-            HelpSection(heading: "Timing that works", blocks: [
-                .paragraph("Most apps read a keystroke with a 30 to 50 ms hold and a 50 ms gap. App switching needs 300 to 500 ms before the next step. If a macro drops characters, lengthen the wait before the step that misses.")
+            HelpSection(heading: "Get the timing right", blocks: [
+                .paragraph("Most apps read a keystroke with a 30 to 50 ms hold and a 50 ms gap. App switching needs 300 to 500 ms before the next step. A repeating macro waits between passes. For turbo and auto click gaps, the [CPS calculator](https://inputconfig.com/tools/cps-calculator) turns presses per second into the Every value in milliseconds. If a macro drops characters, lengthen the wait before the step that misses.")
+            ]),
+            HelpSection(heading: "Make an auto clicker", blocks: [
+                .list([
+                    "**You:** Choose **Repeats until pressed again** and put a Mouse Button output on the row.",
+                    "**InputConfig:** One press starts the output firing at the gap you set; the next press, or the Stop after limit, ends it.",
+                    "**Check:** Press once and clicks start; press again and they stop."
+                ], ordered: false),
+                .paragraph("A click can land wherever the pointer is, or at a fixed point: choose At a fixed point in the output's menu, move the pointer to the spot, and after a spoken three-second countdown the position is taken. Or type the spot in the X and Y fields. The [auto clicker page](https://inputconfig.com/questions/auto-clicker-for-mac) walks through a full setup, and the [auto key presser page](https://inputconfig.com/questions/auto-key-presser-for-mac) does the same for keys. For a ready-made one, activate the built-in [Auto Clicker preset](https://inputconfig.com/presets/built-in/auto-clicker): fn F6 or a controller's right trigger starts and stops left clicks, and the [auto clicker guide](https://inputconfig.com/guides/auto-clicker-on-mac) tunes it step by step. Use a control that types nothing, such as a side button or F13, so starting it never types.")
+            ]),
+            HelpSection(heading: "If it keeps going, or never starts", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Press the control again.** That ends a toggle, an auto clicker or a repeat.",
+                    "**Use the emergency stop.** Control Option Command period releases every key and button the app is holding.",
+                    "**Close the editor.** Outputs are paused while the preset editor is open, except the pointer, clicks, scrolling, and Escape, Return, Tab, the arrows and Space, so a controller can still reach Save and Cancel. Close it and the row starts working."
+                ], ordered: true),
+                .paragraph("The emergency stop ends any runaway repeat at once.")
+            ]),
+            HelpSection(heading: "What turbo on a controller can and cannot do", blocks: [
+                .paragraph("Turbo repeats the outputs a row sends: keys, clicks, scroll steps and MIDI notes. It does not make a controller button itself fire faster inside a game that reads the controller directly, because InputConfig sends keyboard, mouse and MIDI, not a virtual controller. So controller turbo works in games played with keyboard and mouse controls and in apps; for a game that reads the pad natively the turbo has to come from the game or from a turbo controller. Tournaments do not allow macros, and online play follows each game's rules; where macros help is practice, and hands that cannot press two buttons at the same instant. Turbo repeats what InputConfig sends, not what the controller sends.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Toggle.** One press on, one press off.",
+                    "**Turbo.** Repeats while held, with the gap you set.",
+                    "**Macro.** Timed steps, from a shortcut to a whole sentence.",
+                    "**Auto clicker.** Repeats until pressed again, with a Mouse Button output."
+                ], ordered: false),
+                .paragraph("Pick the press mode first, then the output.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can a macro type a sentence?", answer: "Yes, with a Type Text step."),
-                    HelpQuestion(question: "Can turbo and toggle combine?", answer: "Yes. Rapid fire that stays on until pressed again.")
+                    HelpQuestion(question: "Can a macro type a sentence?", answer: "Add a Type Text step."),
+                    HelpQuestion(question: "Can turbo and toggle combine?", answer: "Rapid fire that stays on until pressed again."),
+                    HelpQuestion(question: "Can I put a macro on an arcade stick or fight stick button?", answer: "You can when InputConfig reads the stick. Any button can send two keys at once, turbo, or a timed macro, the same as a pad button. Tournaments do not allow macros and online play follows each game's rules; where it helps is practice, and hands that cannot press two buttons at the same instant."),
+                    HelpQuestion(question: "How do I stop a turbo or auto clicker that keeps going?", answer: "Press the control again, or use the emergency stop, Control Option Command period, which releases every key and button the app is holding."),
+                    HelpQuestion(question: "Why does nothing repeat while I am setting it up?", answer: "Outputs are paused while the preset editor is open, except the pointer, clicks, scrolling, and Escape, Return, Tab, the arrows and Space, so a controller can still reach Save and Cancel. Close the editor and the row starts working.")
                 ])
             ]),
         ],
@@ -861,8 +1728,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "Hold and Double-Tap", url: "https://inputconfig.com/help/hold-and-double-tap"),
             HelpLink(title: "Chords", url: "https://inputconfig.com/help/chords"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
-            HelpLink(title: "Macros Turbo preset", url: "https://inputconfig.com/presets/built-in/macros-turbo"),
+            HelpLink(title: "Macros & Turbo preset", url: "https://inputconfig.com/presets/built-in/macros-turbo"),
             HelpLink(title: "Toggle Mode preset", url: "https://inputconfig.com/presets/built-in/toggle-mode"),
+            HelpLink(title: "A free auto clicker for Mac", url: "https://inputconfig.com/questions/auto-clicker-for-mac"),
+            HelpLink(title: "Auto Clicker preset", url: "https://inputconfig.com/presets/built-in/auto-clicker"),
+            HelpLink(title: "Auto clicking on a Mac, from setup to stop", url: "https://inputconfig.com/guides/auto-clicker-on-mac"),
         ]
     )
 
@@ -871,28 +1741,71 @@ enum HelpGuideLibrary {
         title: "Deadzones",
         category: "Row options",
         url: "https://inputconfig.com/help/deadzones-and-sensitivity",
-        intro: "Every analog row has an inner deadzone, an outer deadzone, an invert switch, and a curve. The inner deadzone is how far the stick has to move before anything happens, which stops drift. The outer deadzone is where the row reaches full output, so a stick with limited travel, or a hand with limited range, still hits maximum.",
+        intro: "Every stick and trigger row in InputConfig has an inner deadzone, which stops drift, and an outer deadzone, where the row reaches full output. Set both in the row's Options, with Adjust live showing the stick while you move it. The outer deadzone means a stick with limited travel, or a hand with limited range, still reaches maximum. For a drifting stick, go straight to [the live plot](#set-them-against-the-live-plot).",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
-                    "Expand Options on a stick or trigger row and press Calibrate.",
+                    "Expand Options on a stick or trigger row and press Adjust live.",
                     "Let go of the stick and watch where the dot rests. That is the drift. Drag the inner deadzone until the dot sits inside it, with a little margin.",
-                    "Push the stick round its full circle and set the outer deadzone where your comfortable maximum is."
+                    "Push the stick around its full circle and set the outer deadzone where your comfortable maximum is."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Every axis at once", blocks: [
-                .paragraph("The device's menu in the editor has Stick settings, which sets the inner deadzone, and the curve if you want, on every axis row for that controller in one go.")
+            HelpSection(heading: "Find the settings", blocks: [
+                .paragraph("Expand Options on a stick or trigger row."),
+                .list([
+                    "**Deadzone.** The inner deadzone, from 1 to 90 percent. Every stick row shows its deadzone, so you can read the number back later.",
+                    "**Adjust live.** Opens the live plot.",
+                    "**Full push at.** The outer deadzone: anything past it counts as all the way.",
+                    "**Invert direction.** Flips a stick axis.",
+                    "**The curve and Variable Sensitivity.** They sit below. See [variable sensitivity](https://inputconfig.com/help/variable-sensitivity)."
+                ], ordered: false),
+                .paragraph("Deadzone is where a stick starts to count; Full push at is where it counts as all the way.")
             ]),
-            HelpSection(heading: "Tremor and limited range", blocks: [
-                .paragraph("A tremor shows as jitter around the centre: a larger inner deadzone removes it, and the Smooth curve keeps the first part of the travel gentle. Limited range shows as never reaching full speed: bring the outer deadzone in until your comfortable maximum counts as full.")
+            HelpSection(heading: "Set them against the live plot", blocks: [
+                .paragraph("The Adjust live sheet draws the stick as a circle with a trail of recent positions, or a trigger as a bar, with sliders for Inner Deadzone and Outer Deadzone. It shows three readings: Current, Peak, and whether the stick is inside the deadzone right now."),
+                .list([
+                    "**You:** Press Adjust live, let go of the stick, and watch where the dot rests.",
+                    "**InputConfig:** Draws the resting position and the deadzone ring, and reads the controller that row's device uses.",
+                    "**Check:** If the dot sits away from the center, that is drift. Drag the inner deadzone until the dot sits inside it, with a little margin, then push the stick around its full circle and set the outer deadzone at your comfortable maximum."
+                ], ordered: false),
+                .paragraph("Reset Trail clears the plot. Save keeps the numbers, and Cancel puts back what was there before. Use the plot rather than guessing.")
+            ]),
+            HelpSection(heading: "Set every axis at once", blocks: [
+                .paragraph("The device's menu in the editor has Stick settings, which sets the inner deadzone on every axis row for that controller in one go. Set them all with Stick settings, then fine-tune single rows in their Options.")
+            ]),
+            HelpSection(heading: "Tune for tremor and limited range", blocks: [
+                .list([
+                    "**A tremor.** It shows as jitter around the center: a larger inner deadzone removes it, and the Smooth curve keeps the first part of the travel gentle.",
+                    "**Limited range.** It shows as never reaching full speed: bring the outer deadzone in until your comfortable maximum counts as full."
+                ], ordered: false),
+                .paragraph("The [tremor and limited range guide](https://inputconfig.com/guides/tremor-and-limited-range) walks through a whole setup. A bigger inner deadzone calms a shake; a smaller outer one shortens a reach.")
+            ]),
+            HelpSection(heading: "Ease the pointer in with Ramp-up", blocks: [
+                .paragraph("A pointer row's Options have Ramp-up: the pointer starts slow when the stick first leaves the deadzone and speeds up to the row's Speed over the time you set. It makes small targets easier to land on without slowing long moves. The pointer stops the moment you let go of the stick.")
             ]),
             HelpSection(heading: "Motion rows", blocks: [
-                .paragraph("Gyro and accelerometer rows have a deadzone too. On the tilt axes the pointer follows the controller's angle and the deadzone is not used. On rate channels movement below it is scaled down smoothly rather than cut, so a shaky hand barely moves the pointer while a slow deliberate tilt still does. Calibrate in a Motion row's Options records the controller's resting zero.")
+                .paragraph("Gyro and accelerometer rows have a deadzone too. On the tilt axes the pointer follows the controller's angle and the deadzone is not used. On rate channels movement below it is scaled down smoothly rather than cut, so a shaky hand barely moves the pointer while a slow deliberate tilt still does. Calibrate in a Motion row's Options records the controller's resting zero. On motion, the deadzone softens small movement instead of cutting it off.")
+            ]),
+            HelpSection(heading: "What happens between inner and outer", blocks: [
+                .paragraph("Below the inner deadzone the row sends nothing, and past the outer deadzone it sends full output. Between the two, the travel is stretched to cover the whole range, so the output starts from zero at the edge of the deadzone instead of jumping, and a stick that stops short still reaches full speed. The curve is applied after that, to what is left. Pointer and key rows check each axis on its own. The output always starts from zero at the deadzone edge, so there is no jump.")
+            ]),
+            HelpSection(heading: "What a deadzone here cannot do", blocks: [
+                .paragraph("It filters what InputConfig sends: keys, clicks, pointer movement, scrolling and MIDI. A game that reads the controller itself still sees the raw stick, so use the game's own setting for that. There is no anti-deadzone: that setting exists to push a small tilt past a game's own deadzone, and InputConfig sends keys and mouse movement rather than a controller, so a game's stick deadzone never sees it. For a game that reads the pad directly, set the deadzone in the game.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Find drift.** Adjust live, hands off, watch the dot.",
+                    "**Set the inner deadzone.** Just past where the dot rests.",
+                    "**Set the outer deadzone.** Where your comfortable push ends."
+                ], ordered: false),
+                .paragraph("Two sliders and a minute with the plot fix most drifting sticks.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "A good default inner deadzone?", answer: "The app defaults to 25 percent, which is safe for a worn stick. A new DualSense is fine at 8 to 12. Use the plot rather than guessing."),
-                    HelpQuestion(question: "Do triggers have deadzones?", answer: "Yes. A trigger is a one-direction axis, and its inner deadzone stops a resting trigger from firing.")
+                    HelpQuestion(question: "Do triggers have deadzones?", answer: "A trigger is a one-direction axis, and its inner deadzone stops a resting trigger from firing."),
+                    HelpQuestion(question: "Does a deadzone here change what a game reads from the controller?", answer: "No. It filters what InputConfig sends: keys, clicks, pointer movement, scrolling and MIDI. A game that reads the controller itself still sees the raw stick, so use the game's own setting for that."),
+                    HelpQuestion(question: "Can I set one deadzone for every stick at once?", answer: "Stick settings, in the device's menu in the editor, sets the inner deadzone on every axis row for that controller in one move. Fine-tune single rows in their Options afterward.")
                 ])
             ]),
         ],
@@ -900,9 +1813,10 @@ enum HelpGuideLibrary {
             HelpLink(title: "Variable Sensitivity", url: "https://inputconfig.com/help/variable-sensitivity"),
             HelpLink(title: "Gyroscope", url: "https://inputconfig.com/help/gyroscope-aim"),
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
-            HelpLink(title: "Deadzone visualizer", url: "https://inputconfig.com/tools/deadzone"),
-            HelpLink(title: "Tremor and limited range of motion", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
-            HelpLink(title: "questions/how-to-fix-controller-stick-drift-on-mac", url: "https://inputconfig.com/questions/how-to-fix-controller-stick-drift-on-mac"),
+            HelpLink(title: "Stick drift tester and deadzone visualizer", url: "https://inputconfig.com/tools/deadzone"),
+            HelpLink(title: "A mouse alternative for tremor and short reach on a Mac", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
+            HelpLink(title: "How to fix controller stick drift on a Mac", url: "https://inputconfig.com/questions/how-to-fix-controller-stick-drift-on-mac"),
+            HelpLink(title: "How to calibrate a controller on a Mac", url: "https://inputconfig.com/questions/how-to-calibrate-a-controller-on-mac"),
         ]
     )
 
@@ -911,25 +1825,49 @@ enum HelpGuideLibrary {
         title: "Variable Sensitivity",
         category: "Row options",
         url: "https://inputconfig.com/help/variable-sensitivity",
-        intro: "A stick or a trigger sends a continuous value. Variable Sensitivity uses that depth to scale the output: a small tilt moves the pointer a little, a full push moves it fast.",
+        intro: "Variable Sensitivity makes a stick or trigger's output follow how far you push it: a small tilt moves the pointer a little, and a full push moves it fast. Switch it on in the Options of a stick or trigger row. It is what makes a stick feel like a mouse instead of a set of arrow keys.",
         sections: [
-            HelpSection(heading: "Turning it on", blocks: [
-                .paragraph("Expand Options on a row whose input is an axis, a trigger, or a motion channel and switch on Variable Sensitivity. Mouse motion and scroll speed are then multiplied by how far the control is pushed, after the deadzone. A MIDI CC output follows the position too. With it off, the output runs at the row's fixed speed whenever the control passes the deadzone.")
-            ]),
-            HelpSection(heading: "Which curve", blocks: [
+            HelpSection(heading: "Turn it on", blocks: [
                 .list([
-                    "Linear for scrolling and MIDI, where the output should mirror the hand.",
-                    "Smooth for pointer control: precision near the centre, speed when you push hard. The friendliest curve for a tremor.",
-                    "Aggressive for aiming, where snapping to full speed matters."
+                    "**You:** Expand Options on a stick or trigger row and switch on Variable Sensitivity.",
+                    "**InputConfig:** Multiplies mouse motion and scroll speed by how far the control is pushed, after the deadzone. A MIDI CC output follows the position too.",
+                    "**Check:** Tilt the stick a little and the pointer creeps; push it all the way and it runs at the row's full speed."
                 ], ordered: false),
-                .paragraph("The Variable Sensitivity preset puts Smooth on the right stick and Aggressive on the left so you can feel them side by side.")
+                .paragraph("With it off, the output runs at the row's fixed speed whenever the control passes the deadzone. A motion row that moves the pointer always follows the tilt this way; a motion row that scrolls scrolls at a steady speed once the tilt passes the deadzone. On for pointing and scrolling, off for anything that should feel like a key.")
             ]),
-            HelpSection(heading: "Speed", blocks: [
-                .paragraph("Each Mouse Motion row has its own speed, the maximum at full push. A preset also has a sensitivity multiplier in its automation section that scales every analog row at once.")
+            HelpSection(heading: "Choose a curve", blocks: [
+                .list([
+                    "**Linear.** For scrolling and MIDI, where the output should mirror the hand.",
+                    "**Smooth.** For pointer control: precision near the center, speed when you push hard. The friendliest curve for a tremor.",
+                    "**Aggressive.** For aiming, where snapping to full speed matters."
+                ], ordered: false),
+                .paragraph("The [Variable Sensitivity](https://inputconfig.com/presets/built-in/variable-sensitivity) preset puts Smooth on the right stick and Aggressive on the left so you can feel them side by side. Try both sticks of that preset before you choose; the difference is easier felt than read.")
+            ]),
+            HelpSection(heading: "Set the speed", blocks: [
+                .paragraph("Each Mouse Motion row has its own speed, the maximum at full push. A preset also has Pointer speed and Scroll speed on its own page: Pointer speed scales every row that moves the pointer, and Scroll speed every row that scrolls. Change one row's speed for one stick, or Pointer speed for the whole preset.")
+            ]),
+            HelpSection(heading: "If the pointer creeps or races", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**It moves when you let go.** The stick rests slightly off center. Raise the inner deadzone, or press Adjust live to see where it rests. See [deadzones](https://inputconfig.com/help/deadzones-and-sensitivity).",
+                    "**It is too fast.** Lower the row's speed, which is the maximum at full push.",
+                    "**Small moves are jumpy.** Switch the curve to Smooth so the first part of the travel stays gentle.",
+                    "**Every pointer row is too fast.** Lower Pointer speed on the preset's page; Scroll speed does the same for scrolling."
+                ], ordered: true),
+                .paragraph("Creeping is a deadzone problem; racing is a speed problem.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Switch it on.** In a stick or trigger row's Options.",
+                    "**Pick a curve.** Smooth for pointing, Linear for scrolling and MIDI, Aggressive for aiming.",
+                    "**Set the speed.** Per row, or Pointer speed and Scroll speed for the preset."
+                ], ordered: false),
+                .paragraph("Smooth plus a sensible speed suits most hands.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Why does the pointer creep when I let go?", answer: "The stick rests slightly off centre. Raise the inner deadzone, or press Calibrate to see where it rests.")
+                    HelpQuestion(question: "Why does the pointer creep when I let go?", answer: "The stick rests slightly off center. Raise the inner deadzone, or press Adjust live to see where it rests."),
+                    HelpQuestion(question: "The stick is too sensitive. How do I slow it down?", answer: "Lower the row's speed, which is the maximum at full push, and switch the curve to Smooth so the first part of the travel stays gentle. To slow every pointer row in a preset at once, use Pointer speed on the preset's page; Scroll speed does the same for scrolling. If the pointer moves when you are not touching the stick, that is drift: raise the inner deadzone.")
                 ])
             ]),
         ],
@@ -937,6 +1875,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Deadzones", url: "https://inputconfig.com/help/deadzones-and-sensitivity"),
             HelpLink(title: "MIDI Output", url: "https://inputconfig.com/help/midi-output"),
             HelpLink(title: "Variable Sensitivity preset", url: "https://inputconfig.com/presets/built-in/variable-sensitivity"),
+            HelpLink(title: "MIDI: CC Dials preset", url: "https://inputconfig.com/presets/built-in/midi-cc-dials"),
         ]
     )
 
@@ -945,28 +1884,83 @@ enum HelpGuideLibrary {
         title: "Vibration",
         category: "Row options",
         url: "https://inputconfig.com/help/haptic-feedback",
-        intro: "Any row can rumble the controller when it fires. It confirms a press without looking, which matters when the output is a macro, a hidden shortcut, or a switch you cannot see. Strength and duration are per row.",
+        intro: "Any row in InputConfig can vibrate the controller when it fires, with a strength and a duration set per row. Tick Vibrate in the Feedback box of a row's Options. I added it so a press can be felt without looking, which matters when the output is a macro, a hidden shortcut, or a switch you cannot see. It is rumble, not Sony's textured haptics or the adaptive triggers. For a walkthrough from scratch, see [how to make a controller vibrate on a Mac](https://inputconfig.com/questions/how-to-make-a-controller-vibrate-on-mac); if a game never vibrates, start with [PS5 controller not vibrating on a Mac](https://inputconfig.com/questions/ps5-controller-not-vibrating-on-mac).",
         sections: [
-            HelpSection(heading: "Turning it on", blocks: [
-                .paragraph("In a row's Options, under Feedback, switch on Vibrate and set Strength and Duration. Duration runs from a tap to two seconds. The Haptic Feedback preset puts four strengths on the four face buttons.")
+            HelpSection(heading: "Turn it on", blocks: [
+                .list([
+                    "**You:** Open a row's Options and tick Vibrate in the Feedback box.",
+                    "**InputConfig:** Shows two sliders, and vibrates the controller each time the row fires.",
+                    "**Check:** Press the control and feel the buzz. The collapsed row shows the setting in its summary, as Vibrate or Vibrate 500 ms."
+                ], ordered: false),
+                .list([
+                    "**Strength.** From 10 to 100 percent in steps of five. New rows start at 60.",
+                    "**Duration.** From Tap to 2.0 seconds in 20 ms steps. Anything under 60 ms is a Tap."
+                ], ordered: false),
+                .paragraph("A row can also vibrate and send nothing else: in the menu where you pick what a row sends, the Feedback section has Vibrate the controller. A buzz you can feel is a confirmation you do not have to look for.")
             ]),
-            HelpSection(heading: "Which controllers", blocks: [
-                .paragraph("The DualSense and DualSense Edge are driven through the app's own report, so the light bar stays what the preset set while they buzz. Xbox and other controllers with haptics support in macOS go through the system's haptics. Pads with no haptics are skipped quietly.")
+            HelpSection(heading: "Feel it before you set it", blocks: [
+                .paragraph("The [Haptic Feedback](https://inputconfig.com/presets/built-in/haptic-feedback) preset puts four strengths on the four face buttons: 30 percent on Cross, 60 on Circle, 85 on Square and 100 on Triangle. Each button also types a letter, A to D, so try it with a text field in front. It turns a PlayStation pad's light bar orange while it runs. It doubles as a motor test: if it buzzes, the controller and the Mac are fine. [How to test controller vibration](https://inputconfig.com/questions/how-to-test-controller-vibration-on-a-mac) has the full test.")
             ]),
-            HelpSection(heading: "Feedback without a press", blocks: [
-                .paragraph("A row with no output can exist just to vibrate: a stick zone at the edge of travel that buzzes when you reach it, or a touchpad zone that confirms you found it.")
+            HelpSection(heading: "Know how it plays", blocks: [
+                .list([
+                    "**Xbox controllers.** A Tap is one short pulse, and anything longer is a steady buzz for that time.",
+                    "**PlayStation pads.** A DualSense makes its rumble with haptic actuators that need about a fifth of a second to reach the strength asked for, so a Tap, or any duration shorter than that, plays as a 220 ms buzz. For a firmer feel, raise Duration.",
+                    "**Repeating rows.** A turbo row vibrates once when it starts repeating, not on every repeat; a toggle row when you switch it on; an auto clicker when you start it."
+                ], ordered: false),
+                .paragraph("On a DualSense, longer is firmer, because short buzzes are stretched to 220 ms anyway.")
+            ]),
+            HelpSection(heading: "Check which controllers rumble", blocks: [
+                .list([
+                    "**DualSense, DualSense Edge and DualShock 4.** Driven through the app's own report, the same one that sets the light bar, so the preset's color stays put while they buzz. Over Bluetooth and USB.",
+                    "**Two PlayStation controllers.** Each row vibrates only the controller its group reads.",
+                    "**Xbox and others with macOS haptics.** They go through the system's haptics.",
+                    "**The 2026 Steam Controller.** It rumbles through its own report while Steam is closed, which is new in 1.6 and experimental.",
+                    "**Pads read directly.** Generic USB pads, arcade sticks and wheels get no rumble, and any pad with no haptics is skipped quietly."
+                ], ordered: false),
+                .paragraph("If the pad has motors macOS or InputConfig can drive, it buzzes; if not, nothing breaks.")
+            ]),
+            HelpSection(heading: "Use it as feedback without a press", blocks: [
+                .paragraph("A row with no output can exist just to vibrate: a [stick zone](https://inputconfig.com/help/cursor-and-stick-regions) at the edge of travel that buzzes when you reach it, or a [touchpad zone](https://inputconfig.com/help/touchpad-regions-and-gestures) that confirms you found it. The [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker) has a switch, Rumble when a trigger clicks, that adds a short buzz at 35 percent to each trigger row that clicks the mouse, so a shot or a swing is felt. Vibration can mark a place, not only a press.")
+            ]),
+            HelpSection(heading: "If it does not vibrate", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Test the motors.** Activate the Haptic Feedback preset and press a face button. If it buzzes, the controller is fine.",
+                    "**Check the row.** Vibrate must be ticked in that row's Feedback box, and the preset must be running.",
+                    "**Check the controller.** Pads InputConfig reads directly, and pads without haptics, are skipped.",
+                    "**Check the game.** InputConfig vibrates on your own bindings; it does not add rumble to a game's events. A Mac game that never asks for rumble stays still."
+                ], ordered: true),
+                .paragraph("If the Haptic Feedback preset buzzes, the problem is the row or the game, never the controller.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .paragraph("InputConfig drives the rumble motors only, with a strength and duration per row. Trigger resistance on the DualSense adaptive triggers and the finer HD haptic effects are not part of it. Rumble, yes; adaptive triggers and textured haptics, no.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Tick Vibrate.** In the row's Feedback box.",
+                    "**Set Strength and Duration.** Raise Duration for a firmer feel on a DualSense.",
+                    "**Test with the preset.** Haptic Feedback buzzes at four strengths."
+                ], ordered: false),
+                .paragraph("Feel every important press, and you can stop looking at the screen to check.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it work over Bluetooth?", answer: "Yes, on the DualSense family over Bluetooth and USB."),
-                    HelpQuestion(question: "Does a turbo row rumble on every repeat?", answer: "Yes, which reads as a continuous buzz while held.")
+                    HelpQuestion(question: "Does it work over Bluetooth?", answer: "It does on the DualSense family and the DualShock 4 over Bluetooth and USB, and on Xbox controllers through macOS."),
+                    HelpQuestion(question: "Does a turbo row rumble on every repeat?", answer: "No. It rumbles once when the row starts repeating, and an auto-click rumbles when you switch it on."),
+                    HelpQuestion(question: "Does it support DualSense adaptive triggers or HD haptics?", answer: "No. InputConfig drives the rumble motors only, with a strength and duration per row. Trigger resistance and the finer haptic effects are not part of it."),
+                    HelpQuestion(question: "Why does a short Tap feel weak on a DualSense?", answer: "Its actuators take about a fifth of a second to reach full strength. InputConfig already stretches short buzzes to 220 ms on PlayStation pads; for a firmer feel, raise Duration."),
+                    HelpQuestion(question: "Why is my PS5 controller not vibrating in a Mac game?", answer: "Usually because the game does not ask for rumble on the Mac. Test the motors with the Haptic Feedback preset; if it buzzes, the controller is fine. InputConfig vibrates on your own bindings, it does not add rumble to a game's events.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "How to make a controller rumble or vibrate on a Mac", url: "https://inputconfig.com/questions/how-to-make-a-controller-vibrate-on-mac"),
+            HelpLink(title: "How to test controller vibration on a Mac", url: "https://inputconfig.com/questions/how-to-test-controller-vibration-on-a-mac"),
+            HelpLink(title: "Haptic Feedback preset", url: "https://inputconfig.com/presets/built-in/haptic-feedback"),
             HelpLink(title: "Spoken Feedback", url: "https://inputconfig.com/help/spoken-feedback"),
             HelpLink(title: "Light Bar", url: "https://inputconfig.com/help/light-bar"),
-            HelpLink(title: "Haptic Feedback preset", url: "https://inputconfig.com/presets/built-in/haptic-feedback"),
+            HelpLink(title: "PS5 controller not vibrating on a Mac", url: "https://inputconfig.com/questions/ps5-controller-not-vibrating-on-mac"),
+            HelpLink(title: "What works with a PS5 DualSense on a Mac", url: "https://inputconfig.com/questions/dualsense-on-mac"),
         ]
     )
 
@@ -975,20 +1969,40 @@ enum HelpGuideLibrary {
         title: "Spoken Feedback",
         category: "Row options",
         url: "https://inputconfig.com/help/spoken-feedback",
-        intro: "Each row can speak a phrase when it fires, through the Mac or through the controller's speaker. Leave the phrase empty and it says the input's name, which is a quick way to learn a layout by ear and a real help to anyone who cannot see the controller.",
+        intro: "Each row in InputConfig can speak a phrase when it fires. Switch on Speak in the Feedback box of a row's Options. Leave the phrase empty and it says the input's name, which is a quick way to learn a layout by ear and a real help to anyone who cannot see the controller.",
         sections: [
-            HelpSection(heading: "Setting it up", blocks: [
-                .paragraph("In a row's Options, under Feedback, switch on Speak. Type the phrase or leave it blank. Choose Mac or Controller. The Spoken Feedback preset gives each face button a phrase, two to the Mac and two to the controller.")
+            HelpSection(heading: "Turn it on", blocks: [
+                .list([
+                    "**You:** In a row's Options, under Feedback, switch on Speak. Type the phrase, or leave it blank.",
+                    "**InputConfig:** Speaks the phrase each time the row fires, alongside whatever the row sends.",
+                    "**Check:** Press the control and hear the phrase, or the input's name if you left it blank."
+                ], ordered: false),
+                .paragraph("The [Spoken Feedback](https://inputconfig.com/presets/built-in/spoken-feedback) preset gives each face button a phrase. A blank phrase is the fastest way to learn which button is which.")
             ]),
-            HelpSection(heading: "The controller speaker", blocks: [
-                .paragraph("Open System Settings, Sound, and under Output pick the controller. The DualSense is an audio device over USB and Bluetooth, so speech plays quietly near your hands without interrupting what the Mac is playing.")
+            HelpSection(heading: "Choose the voice", blocks: [
+                .paragraph("Settings, General, Spoken Feedback Voice. The default is the Mac's system voice from Accessibility, Spoken Content, so a premium voice installed there is the one you hear. Pick any installed voice instead; Preview speaks a sample. More voices install in System Settings, Accessibility, Spoken Content, Manage Voices. Install a premium voice in Spoken Content and InputConfig uses it.")
             ]),
-            HelpSection(heading: "Which voice", blocks: [
-                .paragraph("Settings, General, Spoken Feedback Voice. The default is the Mac's system voice from Accessibility, Spoken Content, so a premium voice installed there is the one you hear. Pick any installed voice instead; Preview speaks a sample.")
+            HelpSection(heading: "Play it through the controller", blocks: [
+                .paragraph("Speech always plays through the Mac's sound output. There is no separate speech output to pick in a row, so to hear it from the controller, make the controller the Mac's output."),
+                .list([
+                    "**You:** Open System Settings, Sound, and under Output pick the controller, if it is listed there.",
+                    "**macOS:** Plays everything the Mac plays through that output, InputConfig's speech included.",
+                    "**Check:** Press a control with Speak on and hear the phrase from the controller. Set the output back to hear the Mac's speakers again."
+                ], ordered: false),
+                .paragraph("Speech goes where the Mac's sound goes.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Switch on Speak.** In the row's Feedback box, with a phrase or blank.",
+                    "**Pick a voice.** Settings, General, Spoken Feedback Voice.",
+                    "**Route the sound.** System Settings, Sound, Output."
+                ], ordered: false),
+                .paragraph("Spoken feedback lets a layout explain itself out loud.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can speech and a key press be on the same row?", answer: "Yes. The output still fires and the phrase plays alongside it.")
+                    HelpQuestion(question: "Can speech and a key press be on the same row?", answer: "The output still fires and the phrase plays alongside it."),
+                    HelpQuestion(question: "Is this the same as Speak Selection?", answer: "No. Spoken feedback speaks a phrase you type when a button fires. Speak Selection is a macOS feature that reads the text you have selected; InputConfig can put it on a button too, see dictation, zoom, and speak selection.")
                 ])
             ]),
         ],
@@ -1004,27 +2018,56 @@ enum HelpGuideLibrary {
         title: "DualSense Edge",
         category: "Controllers",
         url: "https://inputconfig.com/help/dualsense-edge",
-        intro: "Apple's controller framework stops at the standard PlayStation layout, so on most Mac software the Edge's back paddles and FN buttons do nothing. InputConfig reads them from the controller's own data stream, over Bluetooth and USB, so they bind like any other button.",
+        intro: "The DualSense Edge works on a Mac, over Bluetooth or USB-C, on macOS 13.3 or later according to Sony. It pairs like a standard DualSense, by holding Create and PS until the light bar blinks, and games see it as one. The catch is the extras: most Mac games ignore the back paddles and FN buttons, and Sony makes no Edge app for the Mac. InputConfig reads them from the controller's own data stream, over Bluetooth and USB, so they bind like any other button.",
         sections: [
-            HelpSection(heading: "Binding a paddle", blocks: [
-                .paragraph("Press Scan on a row and press the paddle or FN button. A paddle is a good home for Emergency Stop, a chord modifier, or Pause Motion While Held for gyro aim, because it has no job of its own in most games. The Live Visualizer shows the extras as chips that light when pressed.")
+            HelpSection(heading: "Bind a paddle or FN button", blocks: [
+                .list([
+                    "**You:** Press Scan on a row and press the paddle or FN button, then give the row an output.",
+                    "**InputConfig:** Reads the paddle from the controller directly and binds the row to it.",
+                    "**Check:** Open the Live Visualizer and press the paddle. The back buttons are drawn on the controller's back, as you hold it, and the FN buttons under the sticks, each lighting when pressed and showing what it is bound to."
+                ], ordered: false),
+                .paragraph("A paddle is a good home for Emergency Stop, a chord modifier, or Pause Motion While Held for gyro aim, because it has no job of its own in most games. Give the paddles the jobs that would otherwise cost you a second button.")
             ]),
-            HelpSection(heading: "Button numbers", blocks: [
-                .paragraph("Left paddle 16, right paddle 17, FN left 20, FN right 21, mute 15. You never need these with Scan; they are what the input menu shows and what a preset file stores.")
+            HelpSection(heading: "Know the button numbers", blocks: [
+                .paragraph("Left paddle 16, right paddle 17, FN left 20, FN right 21, mute 15. You never need these with Scan; they are what the input menu shows and what a preset file stores. With two PlayStation controllers connected, each controller's paddles bind separately. Scan finds them for you, so the numbers are only for reading a preset file.")
             ]),
             HelpSection(heading: "If the extras stop responding", blocks: [
-                .paragraph("A long Bluetooth session can wedge so the extras go quiet while the sticks and face buttons keep working. Hold the PS button to power the controller off, turn it back on, and they return. The paddles detach; an empty rear socket reports nothing.")
-            ]),
-            HelpSection(heading: "Paddles assigned on a PS5", blocks: [
-                .paragraph("If Sony's profile tool on a PS5 made a paddle mirror another button, the controller sends both. If a paddle seems to fire two things, that is why. Clear it on the PS5, or bind the mirrored button to nothing.")
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Check the paddle is attached.** The paddles detach, and an empty rear socket reports nothing.",
+                    "**Power the controller off and on.** A long Bluetooth session can wedge so the extras go quiet while the sticks and face buttons keep working. Hold the PS button to power it off, turn it back on, and they return.",
+                    "**Clear a PS5 paddle assignment.** If Sony's profile tool on a PS5 made a paddle mirror another button, the controller sends both, so a paddle seems to fire two things. Clear it on the PS5, or bind the mirrored button to nothing."
+                ], ordered: true),
+                .paragraph("A paddle that fires twice is almost always a mirror set on a PS5.")
             ]),
             HelpSection(heading: "Rumble", blocks: [
-                .paragraph("The Edge's motors are driven by the app's own report, and the strength on a row scales them. The Edge gets the classic vibration mode; the newer mode its firmware also offers flattens the motors on this pad.")
+                .paragraph("The Edge's motors are driven by the app's own report, and the strength on a row scales them. The Edge gets the classic vibration mode; the newer mode its firmware also offers flattens the motors on this pad. Rumble on the Edge comes from InputConfig's own report, so it works on your bindings even where a game never vibrates. See [vibration](https://inputconfig.com/help/haptic-feedback).")
+            ]),
+            HelpSection(heading: "What Sony says works on a Mac, and what InputConfig adds", blocks: [
+                .paragraph("Sony's support page for the Edge on other devices lists Bluetooth and USB-C on macOS 13.3 or later. It marks haptic feedback, the touchpad, the light bar, the motion sensors, the Create button, the speaker, the microphone and the headset jack as unavailable on a Mac. For most Mac games that is accurate, because they never ask for those parts."),
+                .list([
+                    "**The touchpad.** InputConfig treats the Edge as a DualSense, so the touchpad works as a trackpad. See [touchpad as a mouse](https://inputconfig.com/help/touchpad-as-mouse).",
+                    "**The gyroscope.** It aims or moves the pointer. See [gyro aim](https://inputconfig.com/help/gyroscope-aim).",
+                    "**The light bar.** It takes a color per preset. See [light bar](https://inputconfig.com/help/light-bar).",
+                    "**The motors.** They rumble as feedback on a press."
+                ], ordered: false),
+                .paragraph("Sony's profile editor runs on a PS5 and, through its Accessories app, on a Windows PC. On a Mac, InputConfig presets do that job: one layout per game or app, switched automatically when that app comes to the front.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Pair it like a DualSense.** Create and PS until the light bar blinks.",
+                    "**Scan the paddles.** They bind like any button, over Bluetooth or USB.",
+                    "**Power-cycle if they go quiet.** Hold PS to turn it off, then on."
+                ], ordered: false),
+                .paragraph("Every button on the Edge is yours to bind on a Mac.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can I map the two FN buttons to different things?", answer: "Yes. They are separate inputs, buttons 20 and 21."),
-                    HelpQuestion(question: "Does the DualShock 4 have any of these?", answer: "No paddles or FN buttons, but its touchpad, light bar, and gyroscope all work.")
+                    HelpQuestion(question: "Can I map the two FN buttons to different things?", answer: "They are separate inputs, buttons 20 and 21."),
+                    HelpQuestion(question: "Does the DualShock 4 have any of these?", answer: "No paddles or FN buttons, but its touchpad, light bar, and gyroscope all work."),
+                    HelpQuestion(question: "Do the DualSense Edge back buttons work on a Mac?", answer: "Not in most Mac software. Apple's controller framework stops at the standard layout, so games and apps never see the paddles or FN buttons. InputConfig reads them from the controller directly, over Bluetooth or USB-C, and each one binds to a key, a click, a macro, or anything else."),
+                    HelpQuestion(question: "Can the Edge paddles run macros on a Mac?", answer: "A paddle row can run a macro, turbo, a hold action, or a chord, like any other button."),
+                    HelpQuestion(question: "Is there DualSense Edge software for Mac?", answer: "Sony does not make one; its profile editor is for the PS5 and Windows. InputConfig is a free, open-source Mac app that maps the paddles and FN buttons and also uses the Edge's touchpad, gyroscope, light bar and rumble.")
                 ])
             ]),
         ],
@@ -1034,6 +2077,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "Gyroscope", url: "https://inputconfig.com/help/gyroscope-aim"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Light Bar", url: "https://inputconfig.com/help/light-bar"),
+            HelpLink(title: "How to connect a PS5 controller to a Mac", url: "https://inputconfig.com/questions/how-to-connect-a-ps5-controller-to-a-mac"),
+            HelpLink(title: "What works with a PS5 DualSense on a Mac", url: "https://inputconfig.com/questions/dualsense-on-mac"),
+            HelpLink(title: "PS5 controller keeps disconnecting from a Mac", url: "https://inputconfig.com/questions/ps5-controller-keeps-disconnecting-from-mac"),
+            HelpLink(title: "Touchpad as a Mouse", url: "https://inputconfig.com/help/touchpad-as-mouse"),
+            HelpLink(title: "Back buttons and paddles on a Mac", url: "https://inputconfig.com/questions/back-buttons-and-paddles-on-mac"),
         ]
     )
 
@@ -1042,25 +2090,69 @@ enum HelpGuideLibrary {
         title: "Light Bar",
         category: "Controllers",
         url: "https://inputconfig.com/help/light-bar",
-        intro: "The DualSense, DualSense Edge, and DualShock 4 have a light bar the app can set, and a preset can carry its own colour so the controller tells you which layout is running.",
+        intro: "You can change the DualSense light bar color from a Mac, and the DualSense Edge's and DualShock 4's too, over Bluetooth or USB. Click the controller at the top of InputConfig's sidebar and pick a color under Light Bar. Each controller can have its own color, and a preset can carry a color of its own so the controller tells you which layout is running. For a color that comes back every time, [give a preset its own color](#give-a-preset-its-own-color).",
         sections: [
-            HelpSection(heading: "Picking a colour", blocks: [
-                .paragraph("Click the controller chip at the top of the sidebar. Under Light Bar, pick a colour, or Custom for the colour well, or Rainbow to cycle. Brightness is Off, Dim, or Bright.")
+            HelpSection(heading: "Pick a color for the controller", blocks: [
+                .list([
+                    "**You:** Click the controller's entry at the top of the sidebar and choose a color under Light Bar.",
+                    "**InputConfig:** Sets the light bar at once, over Bluetooth or USB.",
+                    "**Check:** The light on the controller changes. The color lasts until InputConfig quits; for a color that comes back every time, put it in a preset."
+                ], ordered: false),
+                .list([
+                    "**Ten swatches.** Red, Orange, Yellow, Green, Cyan, Blue, Purple, Pink, White and Off.",
+                    "**Custom.** A color well that applies as soon as you pick.",
+                    "**Rainbow.** Cycles through every color. While it runs, a Speed slider sets how fast, and the swatch reads Stop. Picking any color stops the cycle.",
+                    "**Brightness.** Off, Dim or Bright. Dim is about a quarter of full brightness."
+                ], ordered: false),
+                .paragraph("This is the controller's general color, and each controller keeps its own. Until you pick one, the first controller is green, the second purple, then red, orange, cyan and pink. For a color that sticks, give it to a preset.")
             ]),
-            HelpSection(heading: "A colour per preset", blocks: [
-                .paragraph("Click the light bar strip on the controller drawing in the Live Visualizer. The colour applies when the preset activates, and changes at once if it is already running. Controller's colour clears it.")
+            HelpSection(heading: "Give a preset its own color", blocks: [
+                .list([
+                    "**You:** Select the preset in the sidebar and click the light bar strip above the controller drawing in the Live Visualizer, which reads Not set until you pick one.",
+                    "**InputConfig:** Opens Light bar for this preset, with the same swatches, Custom and Brightness. Rainbow is there too, with its own speed, and runs only while the preset does.",
+                    "**Check:** The color applies when the preset activates, and changes at once if the preset is already running. Controller's color clears it, so the preset leaves the light alone."
+                ], ordered: false),
+                .paragraph("While the preset runs, every connected PlayStation controller shows its color, including one that connects later. When it stops, each controller goes back to its own color, and a Rainbow that was running starts again. The [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker) asks for a light bar color when it builds a layout for a PlayStation pad, and several built-in presets carry one: Minecraft is green, FPS (PS5 DualSense) is PlayStation blue, Haptic Feedback is orange, and Anki is blue. A color per preset tells you at a glance which layout is running.")
+            ]),
+            HelpSection(heading: "Change the PS5 light color from a Mac", blocks: [
+                .paragraph("The PS5 itself does not let you choose: the console and games pick the color. From a Mac you can, and InputConfig sets the light bar on the DualSense, DualSense Edge and DualShock 4 to any color, over Bluetooth or USB, with no PC and nothing else installed. Some macOS versions also show a light color option on the controller's page in System Settings, Game Controllers. What InputConfig adds is a color per preset, Dim and Off, and Rainbow.")
+            ]),
+            HelpSection(heading: "If the color changes back", blocks: [
+                .paragraph("macOS paints the light bar in its own color, and it repaints it at times, for example when you switch apps. InputConfig puts your color back when that happens, and a Rainbow cycle carries on from the color it was showing. Vibration does not reset it either, because on these pads the rumble and the color travel in the same report. After you quit InputConfig, macOS goes back to its own color. Your color holds for as long as InputConfig runs. Turn on [per-app auto-switch](https://inputconfig.com/help/per-app-auto-switch) and give each preset its own color, and the controller shows which app's layout is running.")
+            ]),
+            HelpSection(heading: "Use two PlayStation controllers", blocks: [
+                .paragraph("Since 1.6, two PlayStation controllers connected at once each keep their own general color, and each gets its own rumble, so two players can tell their pads apart. A preset's color is the exception: it goes on every PlayStation controller while that preset runs. To keep two colors during play, leave the preset on Controller's color. The [two controllers page](https://inputconfig.com/questions/how-to-use-two-controllers-on-a-mac) covers the rest of a two-player setup.")
+            ]),
+            HelpSection(heading: "Turn the light off", blocks: [
+                .paragraph("Set Brightness to Off in the controller's popover, or in a preset if you only want it dark for one layout, say a film night. It goes dark at once. The small lights under the touchpad are not part of the light bar setting. [How to turn off the PS5 controller light](https://inputconfig.com/questions/how-to-turn-off-the-ps5-controller-light-on-mac) covers when it comes back on. To turn the whole controller off instead, hold the PS button for about ten seconds; [turning off or disconnecting a controller](https://inputconfig.com/questions/how-to-turn-off-a-controller-connected-to-a-mac) covers that and moving it back to the console. Off is a brightness, so it can belong to one preset only.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**For the controller.** Click its entry in the sidebar and pick a swatch.",
+                    "**For a preset.** Click the strip above the drawing in the Live Visualizer.",
+                    "**For the dark.** Brightness Off, in either place."
+                ], ordered: false),
+                .paragraph("Put the color in a preset and it comes back every time.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can I turn the light off?", answer: "Yes, brightness Off. The player LEDs under the touchpad belong to macOS and stay."),
-                    HelpQuestion(question: "Xbox or Switch?", answer: "No colour light bar on those.")
+                    HelpQuestion(question: "Can I turn the light off?", answer: "Choose Brightness Off, for the controller or for one preset. The small lights under the touchpad are not part of the light bar setting."),
+                    HelpQuestion(question: "Xbox or Switch?", answer: "No color light bar on those."),
+                    HelpQuestion(question: "Do I need Steam or a PC to change the PS5 controller color?", answer: "No. InputConfig sets it from the Mac itself, over Bluetooth or USB-C, with nothing else installed."),
+                    HelpQuestion(question: "Does the color stay when InputConfig is closed?", answer: "No. InputConfig holds the color while it runs, and macOS paints its own once it quits."),
+                    HelpQuestion(question: "Can I dim or turn off the Xbox controller light on a Mac?", answer: "Not with InputConfig. The Xbox button light is not a light bar the app can set, and it stays lit while the controller is on. Holding the Xbox button for about six seconds turns the controller, and the light, off.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "How to turn off the PS5 controller light on a Mac", url: "https://inputconfig.com/questions/how-to-turn-off-the-ps5-controller-light-on-mac"),
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "DualSense Edge", url: "https://inputconfig.com/help/dualsense-edge"),
             HelpLink(title: "Vibration", url: "https://inputconfig.com/help/haptic-feedback"),
+            HelpLink(title: "How to use two controllers on a Mac", url: "https://inputconfig.com/questions/how-to-use-two-controllers-on-a-mac"),
+            HelpLink(title: "How to connect a PS5 controller to a Mac", url: "https://inputconfig.com/questions/how-to-connect-a-ps5-controller-to-a-mac"),
+            HelpLink(title: "How to connect a PS4 controller to a Mac or MacBook", url: "https://inputconfig.com/questions/how-to-connect-a-ps4-controller-to-a-mac"),
+            HelpLink(title: "What works with a PS5 DualSense on a Mac", url: "https://inputconfig.com/questions/dualsense-on-mac"),
         ]
     )
 
@@ -1069,7 +2161,7 @@ enum HelpGuideLibrary {
         title: "Switch Pro Controller",
         category: "Controllers",
         url: "https://inputconfig.com/help/switch-pro-controller",
-        intro: "macOS 13 and later support the Switch Pro Controller natively. It pairs over Bluetooth and shows up as a standard gamepad, so every built-in preset works with it.",
+        intro: "macOS 13 and later support the Switch Pro Controller natively. It pairs over Bluetooth and shows up as a standard gamepad, so every built-in preset works with it. If it is not paired yet, start with [how to connect a Switch Pro Controller to a Mac](https://inputconfig.com/questions/how-to-connect-a-switch-pro-controller-to-a-mac); this page is about using it once it is.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -1078,18 +2170,43 @@ enum HelpGuideLibrary {
                     "Click Connect on Pro Controller when it appears."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "The swapped face buttons", blocks: [
-                .paragraph("Nintendo puts B at the bottom and A on the right, the opposite of Xbox and PlayStation. InputConfig binds by position: button 0 is always the bottom face button, so a preset that says A / Cross fires on what the Switch calls B. To make the letters match on an imported preset, Scan those rows and swap them. FPS (Switch Pro) is built for this pad's positions.")
+            HelpSection(heading: "Use it as a mouse and keyboard", blocks: [
+                .list([
+                    "**Desktop Navigation.** The [Desktop Navigation](https://inputconfig.com/presets/built-in/desktop-navigation) preset puts the pointer on the left stick, scrolling on the right stick, clicks on the triggers, app switching on the bumpers, arrows on the D-pad, click, undo, cut and paste on the face buttons, and select all on the right stick press.",
+                    "**Mouse + Scroll.** The [Mouse + Scroll](https://inputconfig.com/presets/built-in/mouse-scroll) preset is nothing but a mouse.",
+                    "**A game.** Open the Smart Preset Maker and pick it; the layout lands on the Pro Controller by button position."
+                ], ordered: false),
+                .paragraph("To change one control, click its row, choose Scan, and press the button you want. Desktop Navigation turns the Pro Controller into a desktop controller in one click.")
             ]),
-            HelpSection(heading: "What macOS does not pass through", blocks: [
-                .paragraph("The motion sensors and HD rumble. Gyro aim and rumble are unavailable on it; every button, stick, and the D-pad work.")
+            HelpSection(heading: "Mind the swapped face buttons", blocks: [
+                .paragraph("Nintendo puts B at the bottom and A on the right, the opposite of Xbox and PlayStation. InputConfig binds by position: button 0 is always the bottom face button, so a preset that says A / Cross fires on what the Switch calls B. To make the letters match on an imported preset, Scan those rows and swap them. FPS (Switch Pro) is built for this pad's positions."),
+                .paragraph("InputConfig 1.6 fixed the face buttons, where pressing A fired the rows meant for B. When the controller first connects, InputConfig offers to update rows recorded on it before 1.6, with a checkbox for each preset; Settings, Advanced, Check Older Presets Again offers it once more."),
+                .paragraph("Bind by pressing the button, and the printed letter never matters.")
             ]),
             HelpSection(heading: "If it does not pair", blocks: [
-                .paragraph("It stays paired to the last Switch it was used with. On the Switch, open System Settings, Controllers and Sensors, Disconnect Controllers, then pair with the Mac.")
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Unpair it from the Switch.** It stays paired to the last Switch it was used with. On the Switch, open System Settings, Controllers and Sensors, Disconnect Controllers.",
+                    "**Pair it again.** Hold the Sync button until the player LEDs run back and forth, then click Connect in System Settings, Bluetooth on the Mac.",
+                    "**Use Bluetooth, not the cable.** It charges over USB-C but does not send input over the cable on macOS."
+                ], ordered: true),
+                .paragraph("A Pro Controller that will not pair is usually still married to a Switch.")
+            ]),
+            HelpSection(heading: "What it cannot do on a Mac", blocks: [
+                .paragraph("macOS does not pass through the motion sensors or HD rumble, so gyro aim and rumble are unavailable on it. Every button, stick and the D-pad work. Buttons and sticks, yes; gyro and rumble, no.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Pair over Bluetooth.** Sync button, then Connect in System Settings, Bluetooth.",
+                    "**Activate Desktop Navigation.** Or make a game layout with the Smart Preset Maker.",
+                    "**Accept the 1.6 update.** If InputConfig offers it for older presets, tick the ones you made on this controller."
+                ], ordered: false),
+                .paragraph("Bind by position and the swapped letters stop mattering.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it work by cable?", answer: "It charges over USB-C but does not send input over the cable on macOS. Use Bluetooth.")
+                    HelpQuestion(question: "Does it work by cable?", answer: "It charges over USB-C but does not send input over the cable on macOS. Use Bluetooth."),
+                    HelpQuestion(question: "Can I use a Switch Pro Controller as a mouse on a Mac?", answer: "You can with InputConfig. Activate the built-in Desktop Navigation preset and the left stick moves the pointer, the right stick scrolls, and the triggers click.")
                 ])
             ]),
         ],
@@ -1097,7 +2214,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "Joy-Cons", url: "https://inputconfig.com/help/joy-cons"),
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
-            HelpLink(title: "FPS Switch Pro preset", url: "https://inputconfig.com/presets/built-in/fps-switch-pro"),
+            HelpLink(title: "FPS (Switch Pro) preset", url: "https://inputconfig.com/presets/built-in/fps-switch-pro"),
+            HelpLink(title: "How to connect a Switch Pro Controller to a Mac", url: "https://inputconfig.com/questions/how-to-connect-a-switch-pro-controller-to-a-mac"),
+            HelpLink(title: "Desktop Navigation preset", url: "https://inputconfig.com/presets/built-in/desktop-navigation"),
+            HelpLink(title: "How to use a game controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-game-controller-as-a-mouse-on-mac"),
+            HelpLink(title: "Switch Pro Controller not working on a Mac", url: "https://inputconfig.com/questions/switch-pro-controller-not-working-on-mac"),
         ]
     )
 
@@ -1106,7 +2227,7 @@ enum HelpGuideLibrary {
         title: "Joy-Cons",
         category: "Controllers",
         url: "https://inputconfig.com/help/joy-cons",
-        intro: "Joy-Cons connect to a Mac one at a time, each as its own controller. macOS 13 and later can also combine them into a pair. Either way works; pick one and build the preset for it.",
+        intro: "Joy-Cons work on a Mac: they connect one at a time over Bluetooth, each as its own controller, and macOS 13 and later can also combine them into a pair. Either way works; pick one and build the preset for it. The pairing steps, and what to do when one will not connect, are on [how to connect Joy-Cons to a Mac](https://inputconfig.com/questions/how-to-connect-joy-cons-to-a-mac).",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
@@ -1115,25 +2236,55 @@ enum HelpGuideLibrary {
                     "Open System Settings, Bluetooth and click Connect on Joy-Con (L) or Joy-Con (R). Repeat for the other one."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "One Joy-Con on its own", blocks: [
-                .paragraph("Held sideways, a single Joy-Con is a small gamepad: four face buttons, two shoulder buttons, a stick, and a couple of system buttons. It is a good one-handed controller for reading, presentations, and media. Sideways, the stick's axes are a quarter turn off; bind directions with Scan by pushing the stick the way you want and they come out right.")
+            HelpSection(heading: "Use one Joy-Con on its own", blocks: [
+                .paragraph("Held sideways, a single Joy-Con is a small gamepad: four face buttons, two shoulder buttons, a stick and a couple of system buttons. It is a good one-handed controller for reading, presentations and media."),
+                .list([
+                    "**You:** Bind each stick direction with Scan, pushing the stick the way you want it to go.",
+                    "**InputConfig:** Records the direction the stick really sends, so the quarter-turn offset of a sideways Joy-Con comes out right.",
+                    "**Check:** Push the stick and watch the pointer, or the Live Visualizer, move the way you pushed."
+                ], ordered: false),
+                .paragraph("InputConfig 1.6 numbers a single Joy-Con's controls like other controllers, so rows made on one before 1.6 may need to be scanned again. Scan the directions instead of picking them, and sideways stops being a problem.")
             ]),
-            HelpSection(heading: "Both as a pair", blocks: [
-                .paragraph("With both connected, macOS may also show a combined Joy-Con Pair that behaves like a full-size gamepad. Bindings made on the pair do not transfer to a single Joy-Con, so pick one mode per preset.")
+            HelpSection(heading: "Use both as a pair", blocks: [
+                .paragraph("With both connected, macOS may also show a combined Joy-Con Pair that behaves like a full-size gamepad. Bindings made on the pair do not transfer to a single Joy-Con. Two people can also use one Joy-Con each: each is its own slot, so a preset can bind the two differently. Pick one mode per preset: a pair, or single Joy-Cons.")
             ]),
-            HelpSection(heading: "What macOS does not pass through", blocks: [
-                .paragraph("The IR camera, NFC, accelerometer, and gyroscope. Buttons and sticks are.")
+            HelpSection(heading: "Make a Joy-Con a one-handed mouse", blocks: [
+                .paragraph("A single sideways Joy-Con has a stick and enough buttons for a whole pointer, and the [one-handed Mac guide](https://inputconfig.com/guides/one-handed-mac) has a Joy-Con One Hand preset to download."),
+                .list([
+                    "**Point.** The stick moves the pointer.",
+                    "**Click and confirm.** The four face buttons are click, right click, Escape and Return.",
+                    "**Scroll.** The two rail buttons scroll, with a hold for Page Up and Page Down.",
+                    "**Dictate and drag.** Minus or Plus starts dictation, and a stick click toggles drag."
+                ], ordered: false),
+                .paragraph("It suits reading on the sofa as much as one-handed work, and [Anki reviews](https://inputconfig.com/guides/anki-from-a-controller) fit on one Joy-Con too. One Joy-Con is enough to run the whole Mac.")
+            ]),
+            HelpSection(heading: "What it cannot do on a Mac", blocks: [
+                .paragraph("macOS does not pass through the IR camera, NFC, accelerometer or gyroscope; buttons and sticks come through. Buttons and sticks only.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Pair each one.** Hold Sync on the rail, then Connect in System Settings, Bluetooth.",
+                    "**Choose single or pair.** Bindings do not carry between the two.",
+                    "**Scan the stick.** Push it the way you want and the direction comes out right."
+                ], ordered: false),
+                .paragraph("Start with the Joy-Con One Hand preset and change what you like.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can two people use one Joy-Con each?", answer: "Yes. Each is its own slot, so a preset can bind the two differently.")
+                    HelpQuestion(question: "Can two people use one Joy-Con each?", answer: "Each is its own slot, so a preset can bind the two differently."),
+                    HelpQuestion(question: "Can I use a Joy-Con as a mouse on a Mac?", answer: "With InputConfig the stick moves the pointer and the buttons click. The one-handed Mac guide has a ready Joy-Con One Hand preset to download."),
+                    HelpQuestion(question: "My Joy-Con stick drifts. Can the Mac fix it?", answer: "It can hide it for anything InputConfig drives. Open Options on the stick row, press Adjust live, let go of the stick and raise the deadzone until the dot rests inside it. A game that reads the Joy-Con itself needs its own deadzone setting. More in [stick drift on a Mac](https://inputconfig.com/questions/how-to-fix-controller-stick-drift-on-mac).")
                 ])
             ]),
         ],
         related: [
             HelpLink(title: "Switch Pro Controller", url: "https://inputconfig.com/help/switch-pro-controller"),
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
-            HelpLink(title: "Using a Mac one-handed", url: "https://inputconfig.com/guides/one-handed-mac"),
+            HelpLink(title: "Use a Mac with one hand", url: "https://inputconfig.com/guides/one-handed-mac"),
+            HelpLink(title: "How to connect a Switch Pro Controller to a Mac", url: "https://inputconfig.com/questions/how-to-connect-a-switch-pro-controller-to-a-mac"),
+            HelpLink(title: "How to connect Joy-Cons to a Mac", url: "https://inputconfig.com/questions/how-to-connect-joy-cons-to-a-mac"),
+            HelpLink(title: "Anki from a controller", url: "https://inputconfig.com/guides/anki-from-a-controller"),
+            HelpLink(title: "How to use a game controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-game-controller-as-a-mouse-on-mac"),
         ]
     )
 
@@ -1142,39 +2293,103 @@ enum HelpGuideLibrary {
         title: "8BitDo",
         category: "Controllers",
         url: "https://inputconfig.com/help/8bitdo-controllers",
-        intro: "8BitDo pads run in several modes and the mode decides how the Mac sees them. Apple mode gives the fullest support. InputConfig also reads the X and D modes directly, so most 8BitDo pads map in any mode.",
+        intro: "On a Mac, put an 8BitDo pad in D mode, or on a pad without a switch hold B and Start to turn it on. That is what 8BitDo's own instructions for Apple devices say, for macOS 13.2 and later: slide the switch to D on the Pro 2, or hold B and Start on an SN30 Pro or SN30 Pro+. In that mode the Mac lists the pad as a game controller and every game with controller support sees it. InputConfig maps it like any other controller, and it also reads 8BitDo pads in some modes macOS ignores. If yours is in another mode, [the modes](#pick-the-right-mode) say what each one does on a Mac.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
                     "Turn the controller off.",
-                    "Slide the switch on the back to A.",
+                    "Slide the switch on the back to D, or on a pad without a switch hold B and Start to turn it on.",
                     "Turn it on and reconnect. It appears in InputConfig with full button support."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "The modes", blocks: [
+            HelpSection(heading: "Pick the right mode", blocks: [
                 .list([
-                    "A, Apple: native. Use this.",
-                    "S, Switch: seen as a Pro Controller on macOS 13 and later, with Nintendo's swapped A and B.",
-                    "X, XInput and D, DirectInput: not native, read directly by InputConfig."
-                ], ordered: false)
+                    "**D.** The mode 8BitDo lists for Apple devices on models with a switch, including the Pro 2. Use this.",
+                    "**A.** A position on the Pro 2's switch. Older guides, and an earlier version of this page, said to use it on a Mac; 8BitDo's current manual gives D for Apple devices instead. If a pad in A already works for you, it can stay there.",
+                    "**S, Switch.** The pad presents itself as a Switch controller, with Nintendo's swapped A and B. macOS 13 and later support the Switch Pro Controller, but S is not the mode 8BitDo lists for Apple devices.",
+                    "**X, XInput.** The Windows mode. macOS does not treat it as a game controller, so games ignore it. InputConfig has built-in profiles for 8BitDo pads that report in X mode over a USB cable, the Ultimate 2C Wired among them."
+                ], ordered: false),
+                .paragraph("If a pad in the wrong mode is connected, InputConfig's main window says it detected an 8BitDo controller in that mode and names the mode to use."),
+                .paragraph("D on a pad with a switch is the answer almost every time.")
             ]),
-            HelpSection(heading: "Pads without a switch", blocks: [
-                .paragraph("Some older and budget models set the mode at power-on: hold B while pressing Start for Apple mode. The wired Ultimate 2C has no Apple mode; InputConfig reads it in its default mode when plugged in.")
+            HelpSection(heading: "Set a pad without a switch", blocks: [
+                .list([
+                    "**SN30 Pro and SN30 Pro+.** They pick their mode at power-on. For a Mac, hold B and Start together to turn the pad on, then hold Pair for three seconds the first time.",
+                    "**Ultimate 2C Wired.** It has no Apple mode at all. Plugged in while you hold X it is in its Windows mode, and InputConfig reads it there with a profile written for it; holding B while you plug it in gives its Android mode instead."
+                ], ordered: false),
+                .paragraph("The buttons you hold at power-on are the mode switch on these pads.")
             ]),
-            HelpSection(heading: "Firmware", blocks: [
-                .paragraph("Apple mode arrived or improved in firmware from early 2023. If a pad in A mode will not connect, update it with 8BitDo's firmware tool. FPS (8BitDo) is built for the Pro 2, Ultimate, and SN30 Pro+ in Apple mode.")
+            HelpSection(heading: "Update the firmware first if it will not pair", blocks: [
+                .paragraph("Apple support needs macOS 13.2 or later on the Mac and recent firmware on the pad, so an older 8BitDo may need an update before it pairs."),
+                .list([
+                    "**Ultimate Software V2.** For newer controllers, on macOS 13 or later.",
+                    "**Ultimate Software.** The original version, for older controllers.",
+                    "**Upgrade Tool.** For firmware."
+                ], ordered: false),
+                .paragraph("An old pad that refuses to pair usually needs the Upgrade Tool, not a new mode.")
+            ]),
+            HelpSection(heading: "Map it with InputConfig", blocks: [
+                .paragraph("For a game that already supports controllers, macOS is enough: pair the pad in D mode and play. InputConfig is for everything else: it turns the pad's buttons, sticks and triggers into keys, mouse movement, clicks, scrolling, macros and Mac shortcuts, so an 8BitDo works in games with no controller support, in a browser, or across the desktop."),
+                .list([
+                    "**Read directly.** An 8BitDo pad that InputConfig reads outside Apple's controller support shows up in Settings, Devices marked as detected over raw HID, and maps like any other controller.",
+                    "**Opened by hand.** If one does not appear, tick it under InputConfig, Devices in the menu bar.",
+                    "**Bound by pressing.** Press Scan on a row and press the button: the row is bound, whatever the label on the button says.",
+                    "**Ready layout.** FPS (8BitDo) is built for the Pro 2 and SN30 Pro+ in D mode."
+                ], ordered: false),
+                .paragraph("Scan binds what the pad sends, so the letters printed on it never get in the way.")
+            ]),
+            HelpSection(heading: "Check the back buttons: P1, P2, L4 and R4", blocks: [
+                .paragraph("The back buttons on 8BitDo pads, P1 and P2 on the Pro 2 and L4 and R4 on the Ultimate 2C, arrive one of two ways, depending on the pad and its mode. Either they are buttons of their own, which InputConfig reads as the left and right back buttons, or they are a copy of a button you assign, and the Mac receives that button."),
+                .list([
+                    "**You:** Press Scan on a row and press the back button.",
+                    "**InputConfig:** Binds the row to whatever the back button sends.",
+                    "**Check:** If the row fills with a back button or the button you assigned, it works. If nothing arrives, the back button has no assignment in this mode."
+                ], ordered: false),
+                .paragraph("The Ultimate 2C assigns its back buttons on the controller itself, with no software; the Pro 2 and other models use 8BitDo's Ultimate Software. 8BitDo says that software does not support the pad's Mac mode, so a back button set up in another mode may not carry over. To give a back button a job of its own, assign it a button you never press in what you are doing, such as a stick click, then bind that button to a key, a click or a macro."),
+                .paragraph("InputConfig 1.6 fixed 8BitDo back buttons, which earlier versions read as a DualSense Edge's Fn buttons, and offers to update rows recorded on them before. [Back buttons and paddles on a Mac](https://inputconfig.com/questions/back-buttons-and-paddles-on-mac) compares every controller. One Scan tells you whether a back button works in the mode you are in.")
+            ]),
+            HelpSection(heading: "If it does not respond", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Switch to the Mac mode.** D on a pad with a switch, or B and Start at power-on on one without.",
+                    "**Tick it by hand.** Under InputConfig, Devices in the menu bar.",
+                    "**Check the battery and other pairings.** A pad still paired to a Switch nearby, or low on charge, drops out.",
+                    "**Update the firmware.** With 8BitDo's Upgrade Tool, then pair it again."
+                ], ordered: true),
+                .paragraph("Most 8BitDo trouble on a Mac is the mode, so start there.")
+            ]),
+            HelpSection(heading: "What it cannot do on a Mac", blocks: [
+                .paragraph("8BitDo says rumble and motion controls are not supported on Apple devices, so InputConfig's vibrate option and gyro aim skip these pads. Every button, stick, trigger and the D-pad work. Buttons and sticks, yes; rumble and gyro, no.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Mode.** D, or B and Start at power-on.",
+                    "**Not pairing.** Update the firmware with the Upgrade Tool.",
+                    "**Back buttons.** Scan one to see what it sends in this mode."
+                ], ordered: false),
+                .paragraph("Get the mode right and an 8BitDo is an ordinary Mac controller.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Dongle or Bluetooth?", answer: "Both work. Bluetooth in A mode is simplest."),
-                    HelpQuestion(question: "Do the Pro 2's back buttons work?", answer: "They mirror other buttons, set on the controller with 8BitDo's software, so they send whatever they mirror. They are not separate inputs like the DualSense Edge paddles.")
+                    HelpQuestion(question: "Dongle or Bluetooth?", answer: "Both work. Bluetooth in D mode is simplest."),
+                    HelpQuestion(question: "Do the Pro 2's back buttons work?", answer: "Depending on the mode, they arrive as buttons of their own, which InputConfig reads as the left and right back buttons, or as copies of other buttons set with 8BitDo's software. Press Scan on a row and press one to see which."),
+                    HelpQuestion(question: "Does rumble work on an 8BitDo controller on a Mac?", answer: "No. 8BitDo says rumble and motion controls are not supported on Apple devices, so games and InputConfig cannot vibrate these pads or use their motion sensors. Buttons, sticks, triggers and the D-pad all work."),
+                    HelpQuestion(question: "Can I update 8BitDo firmware on a Mac?", answer: "8BitDo's Upgrade Tool runs on macOS 10.13 or later, and Ultimate Software V2 (macOS 13 or later) updates and remaps its newer controllers. An older pad may need the update before it pairs with a Mac."),
+                    HelpQuestion(question: "Which mode is Mac mode on an 8BitDo controller?", answer: "D, on models with a mode switch such as the Pro 2. The SN30 Pro and SN30 Pro+ have no switch: hold B and Start to turn them on."),
+                    HelpQuestion(question: "Why does my 8BitDo keep disconnecting from my Mac?", answer: "Check the mode first: D, the mode 8BitDo lists for Apple devices, is the most reliable on a Mac. Then the battery, and whether the pad is still paired to a Switch or another device nearby. Many 8BitDo pads also switch themselves off after a while with no input, which looks like a drop when you pause. If it drops in D mode with a full battery, update the firmware with 8BitDo's tool and pair it again."),
+                    HelpQuestion(question: "Can I use 8BitDo Ultimate Software on a Mac?", answer: "8BitDo lists its Ultimate Software for Windows and for phones, and says it does not support the controller's Mac mode. To remap buttons on a Mac, including the back buttons, a mapper works in every mode the Mac can read: InputConfig binds any button to a key, a click or a macro.")
                 ])
             ]),
         ],
         related: [
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
-            HelpLink(title: "FPS 8Bitdo preset", url: "https://inputconfig.com/presets/built-in/fps-8bitdo"),
+            HelpLink(title: "FPS (8BitDo) preset", url: "https://inputconfig.com/presets/built-in/fps-8bitdo"),
+            HelpLink(title: "How to connect an 8BitDo controller to a Mac", url: "https://inputconfig.com/questions/how-to-connect-an-8bitdo-controller-to-a-mac"),
+            HelpLink(title: "8BitDo controller not working on a Mac", url: "https://inputconfig.com/questions/8bitdo-controller-not-working-on-mac"),
+            HelpLink(title: "Scan", url: "https://inputconfig.com/help/scan-to-bind"),
+            HelpLink(title: "How to use a game controller as a mouse on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-game-controller-as-a-mouse-on-mac"),
+            HelpLink(title: "Back buttons and paddles on a Mac", url: "https://inputconfig.com/questions/back-buttons-and-paddles-on-mac"),
         ]
     )
 
@@ -1183,28 +2398,36 @@ enum HelpGuideLibrary {
         title: "Stadia Controller",
         category: "Controllers",
         url: "https://inputconfig.com/help/stadia-controller",
-        intro: "A good Bluetooth pad, cheap now. It has to be unlocked once with Google's Bluetooth update tool before it pairs with anything but Stadia. After that it is an ordinary gamepad on the Mac.",
+        intro: "The Stadia controller works on a Mac over Bluetooth, but only if it was switched to Bluetooth mode with Google's update. After that it is an ordinary gamepad with an Xbox-style layout. Google's update page, stadia.google.com/controller, no longer loads (it returned an error when checked in September 2026), so a controller that was never switched cannot be updated through Google now. If you are buying one second hand, ask whether it was.",
         sections: [
             HelpSection(heading: "Steps", blocks: [
                 .list([
-                    "Open stadia.google.com/controller in Chrome and follow Google's steps to apply the Bluetooth update. This is permanent.",
-                    "Hold the Stadia, Y, and A buttons together for two seconds and release. The light pulses.",
+                    "Make sure the controller was switched to Bluetooth mode with Google's update. Google's page for it no longer loads, so a controller that was never switched cannot be switched now.",
+                    "Hold the Stadia, Y and A buttons together for two seconds and release. The light pulses.",
                     "Open System Settings, Bluetooth and click Connect on Stadia Controller."
                 ], ordered: true)
             ]),
-            HelpSection(heading: "Layout", blocks: [
-                .paragraph("Xbox arrangement: A bottom, B right, X left, Y top. Any preset built for an Xbox pad works, including FPS (Xbox). The Assistant and Capture buttons report as extra buttons and bind too.")
+            HelpSection(heading: "Check whether yours was switched", blocks: [
+                .paragraph("Google's Bluetooth update was permanent, so a controller switched years ago is still in Bluetooth mode today. To test one, hold Stadia, Y and A together for two seconds and release. If the light pulses and Stadia Controller appears in System Settings, Bluetooth, it was switched and pairs normally. If it never appears, it is still in Stadia mode."),
+                .paragraph("The pairing test is the quickest way to know whether a second-hand Stadia pad will work.")
+            ]),
+            HelpSection(heading: "Use its layout", blocks: [
+                .paragraph("It uses the Xbox arrangement: A bottom, B right, X left, Y top. Any preset built for an Xbox pad works, including FPS (Xbox). The Assistant and Capture buttons report as extra buttons and bind too. Treat it as an Xbox pad and every Xbox layout fits.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .paragraph("It has no wired mode on a Mac: Bluetooth only, once switched. A controller that was never switched cannot be switched through Google any more. Bluetooth mode is the only way it works with a Mac.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it work by cable?", answer: "No. Bluetooth only, once unlocked.")
+                    HelpQuestion(question: "Does it work by cable?", answer: "No. Bluetooth only, once unlocked."),
+                    HelpQuestion(question: "Can I still switch a Stadia controller to Bluetooth mode?", answer: "Not through Google: its update page no longer loads. A controller that was switched earlier pairs normally. Hold Stadia, Y, and A for two seconds; if the light pulses and it appears in System Settings, Bluetooth, it was switched.")
                 ])
             ]),
         ],
         related: [
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
-            HelpLink(title: "FPS Xbox preset", url: "https://inputconfig.com/presets/built-in/fps-xbox"),
+            HelpLink(title: "FPS (Xbox) preset", url: "https://inputconfig.com/presets/built-in/fps-xbox"),
         ]
     )
 
@@ -1213,29 +2436,88 @@ enum HelpGuideLibrary {
         title: "Steam Controller",
         category: "Controllers",
         url: "https://inputconfig.com/help/steam-controller",
-        intro: "The Steam Controller does not speak Apple's controller protocol, so InputConfig reads its raw reports directly, wired or through the dongle. All twenty-three buttons, both trackpads, the stick, and the analog triggers bind.",
+        intro: "Both Steam Controllers work on a Mac: with Steam open, Steam drives them, and with Steam closed, InputConfig reads them. Valve has made two: the original from 2015, with one stick and two round trackpads, and a model released on 4 May 2026, with two thumbsticks and square trackpads under them. InputConfig reads the original wired or through its USB dongle, and the 2026 model on a USB cable, over Bluetooth, or through its Steam Controller Puck (experimental). Neither speaks Apple's controller protocol, so InputConfig reads their raw reports itself, which is how every button, both trackpads and the triggers become things you can bind. To use every button outside Steam, read [using it without Steam](#use-it-without-steam) first.",
         sections: [
-            HelpSection(heading: "How it is read", blocks: [
-                .paragraph("A helper inside the app opens the controller without seizing it and switches off lizard mode, the controller's built-in keyboard and mouse emulation that would fight your bindings. The controller turns lizard mode back on if it hears nothing for a while, so the helper repeats the command every 800 milliseconds while a preset runs.")
+            HelpSection(heading: "Use it with Steam", blocks: [
+                .paragraph("Steam drives the controller itself. It works in Big Picture, and in a game Steam launched it works through Steam Input, the layout on the game's controller page. The weak spot on macOS is everything outside Big Picture: an Apple Community thread from February 2026 describes an original Steam Controller on macOS 26.3 that works in Big Picture and is ignored on the desktop and in games, even after checking Steam's permissions."),
+                .paragraph("If that matches what you see, climb this ladder, smallest step first:"),
+                .list([
+                    "**Allow Input Monitoring for Steam.** In System Settings, Privacy & Security, Input Monitoring.",
+                    "**Quit Steam fully and open it again.** So it picks up the permission.",
+                    "**Fix it per game.** The [works in Steam but not in the game](https://inputconfig.com/questions/controller-works-in-steam-but-not-in-game-on-mac) page has the per-game fixes, and [using a controller with Steam on a Mac](https://inputconfig.com/questions/how-to-use-a-controller-with-steam-on-mac) covers the setup from the start."
+                ], ordered: true),
+                .paragraph("Inside Steam, Steam is in charge of the controller.")
             ]),
-            HelpSection(heading: "Running alongside Steam", blocks: [
-                .paragraph("Steam also manages lizard mode, and the two fight; it looks like flicker or bindings that come and go. Quit Steam, or disable the controller in Steam's settings.")
+            HelpSection(heading: "Use it without Steam", blocks: [
+                .paragraph("With Steam closed, the controller falls back to lizard mode, its own mouse and keyboard emulation. macOS then sees a mouse rather than a game controller: you can move the pointer and click, and that is all."),
+                .list([
+                    "**You:** Quit Steam, or turn the controller off in Steam's settings, then activate a preset.",
+                    "**InputConfig:** Switches lizard mode off while the preset runs, and back on when the preset stops or the app quits, so the controller's own mouse and keys return.",
+                    "**Check:** Every button and both trackpads do what the preset says. If bindings come and go or the pointer flickers, Steam is still running."
+                ], ordered: false),
+                .paragraph("Steam and InputConfig cannot both drive the controller, so close one before you use the other.")
             ]),
-            HelpSection(heading: "Layout", blocks: [
-                .paragraph("The built-in Steam Controller preset puts the pointer on the right trackpad, clicks on the triggers, keys on the face buttons and grips, and scrolling on the left pad. Axes 0 and 1 are the stick while it is in use, otherwise the left trackpad; 2 and 3 are the right trackpad; 4 and 5 the triggers.")
+            HelpSection(heading: "The original Steam Controller (2015)", blocks: [
+                .list([
+                    "**How it is read.** A helper inside the app opens the controller without seizing it, switches lizard mode off, and repeats the command every 800 milliseconds while a preset runs.",
+                    "**Buttons.** All twenty-two bind, including the two grip buttons on the back, along with the stick, both trackpads and the analog triggers.",
+                    "**Axes.** 0 and 1 are the stick, 2 and 3 the right trackpad, 4 and 5 the triggers, and 6 and 7 the left trackpad while a finger is on it.",
+                    "**Gyro.** Not read.",
+                    "**Dongle.** It is USB-A, so a MacBook with only USB-C ports needs an adapter.",
+                    "**Built-in preset.** The [Steam Controller](https://inputconfig.com/presets/built-in/steam-controller) preset puts the pointer on the right trackpad, clicks on the triggers and on a right trackpad press, Return, Escape, Tab and Space on A, B, X and Y, and Shift and Option on the grips."
+                ], ordered: false),
+                .paragraph("InputConfig 1.6 fixed its buttons, the stick click and the wireless connection. The original needs nothing but InputConfig and Steam closed.")
+            ]),
+            HelpSection(heading: "The 2026 Steam Controller (experimental)", blocks: [
+                .paragraph("InputConfig reads it itself, with no helper, following the protocol in the open source SDL library. This support was built from the published protocol without the controller in hand, so it is marked Experimental."),
+                .list([
+                    "**Buttons.** A, B, X and Y, the bumpers, both stick presses, View, Menu, Steam, Quick Access, and the four back buttons L4, R4, L5 and R5.",
+                    "**Triggers.** Analog, and the click at the end of the pull counts as fully pressed.",
+                    "**Trackpads.** They bind as clicks, touches and axes: 6 and 7 the left, 8 and 9 the right, 10 and 11 how hard each is pressed.",
+                    "**Touch.** The sticks and grips also report a touch, which binds like a button.",
+                    "**Gyro, rumble and battery.** The gyro drives Motion rows, Haptic feedback on a row rumbles it, and its battery shows with the controller.",
+                    "**Lizard mode.** It goes off while a preset runs, sent again every 2 seconds, and comes back when the preset stops.",
+                    "**The Puck.** Up to four controllers each get a slot of their own when they turn on, and lose it when they turn off.",
+                    "**Bluetooth.** macOS can present the controller together with its lizard-mode keyboard, which InputConfig reads only when Input Monitoring is already allowed for it. If it does not appear over Bluetooth, use the cable or the Puck, or allow Input Monitoring for InputConfig in System Settings, Privacy & Security."
+                ], ordered: false),
+                .paragraph("The built-in [Steam Controller (2026)](https://inputconfig.com/presets/built-in/steam-controller-2026) preset moves the pointer with the right trackpad, scrolls with the left trackpad and the right stick, and holds Shift and Option on L4 and R4. [How to use the 2026 Steam Controller on a Mac](https://inputconfig.com/questions/new-steam-controller-on-mac) walks through it step by step. If Bluetooth gives you trouble, the cable or the Puck is the reliable path.")
+            ]),
+            HelpSection(heading: "Use the trackpads on both models", blocks: [
+                .paragraph("On both controllers, both pads work as trackpads: a row can follow a finger sliding on either one, a tap, a double tap or a press. On a Touchpad row, pick Right pad or Left pad; a Touchpad Gesture row picks the tap or double tap and the pad from its menu. Each pad reads one finger, so there is no two-finger tap. A Steam Controller's pads are read on their own, so a Steam Controller and a DualSense can both use their touch surfaces in one preset. Each pad is a one-finger trackpad of its own. [The trackpads as a mouse](https://inputconfig.com/questions/steam-controller-trackpad-as-a-mouse-on-mac) covers speed and scrolling.")
+            ]),
+            HelpSection(heading: "Name the buttons and see them live", blocks: [
+                .paragraph("The Live Visualizer draws both models, each control where it sits, with what it is bound to listed down both sides. Choosing a Steam Controller under Valve in its menu names the preset's buttons the way that controller prints them, back buttons included, in the editor and the visualizer alike. Pick the model once and every name matches the controller in your hands.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**With Steam.** Steam drives it; if it is ignored outside Big Picture, allow Input Monitoring for Steam and restart Steam.",
+                    "**Without Steam.** Quit Steam and activate a preset; InputConfig turns lizard mode off while it runs.",
+                    "**The 2026 model.** Experimental, on a cable, Bluetooth or the Puck."
+                ], ordered: false),
+                .paragraph("One app at a time drives a Steam Controller: Steam or InputConfig.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Is the Steam Deck supported?", answer: "No."),
-                    HelpQuestion(question: "Does the gyro work?", answer: "Not yet. Motion rows do nothing on it.")
+                    HelpQuestion(question: "Does the Steam Controller work on a Mac?", answer: "It works with Steam: in Big Picture and in games Steam launches, though on recent macOS some people find it ignored outside Big Picture. Without Steam it is a basic mouse in lizard mode. To use every button in any app or game, quit Steam and map it with InputConfig."),
+                    HelpQuestion(question: "Does the new 2026 Steam Controller work with InputConfig?", answer: "It works as an experimental feature: on a USB cable, over Bluetooth, or through the Steam Controller Puck. Every button, the four back buttons, both trackpads, the gyro, rumble and the battery level work. Quit Steam first, since Steam takes the controller over while it runs."),
+                    HelpQuestion(question: "How do I turn off lizard mode on a Mac?", answer: "Run Steam, which takes the controller over while it is open, or quit Steam and start an InputConfig preset. The app turns lizard mode off and keeps it off while the preset runs, sending the command again (every 800 milliseconds on the original, every 2 seconds on the 2026 model) because the controller switches it back on when it hears nothing."),
+                    HelpQuestion(question: "Wired or with the dongle?", answer: "Both, for either model. The original reads on a USB cable or through Valve's wireless USB-A dongle. The 2026 model, an experimental feature in 1.6, reads on a USB-C cable, over Bluetooth, or through the Steam Controller Puck."),
+                    HelpQuestion(question: "Does the gyro work?", answer: "On the 2026 model, yes, as part of its experimental support: Motion rows read it. On the original, not yet."),
+                    HelpQuestion(question: "Do the back buttons work on a Mac?", answer: "The original's two grip buttons and the 2026 model's L4, R4, L5 and R5 (experimental) are separate inputs, so each can be any key, click or macro. Quit Steam first, or it takes the controller back."),
+                    HelpQuestion(question: "Is the Steam Deck supported?", answer: "No.")
                 ])
             ]),
         ],
         related: [
-            HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
-            HelpLink(title: "Gyroscope", url: "https://inputconfig.com/help/gyroscope-aim"),
+            HelpLink(title: "How to use the 2026 Steam Controller on a Mac", url: "https://inputconfig.com/questions/new-steam-controller-on-mac"),
+            HelpLink(title: "Using a Steam Controller's trackpads as a mouse on a Mac", url: "https://inputconfig.com/questions/steam-controller-trackpad-as-a-mouse-on-mac"),
             HelpLink(title: "Steam Controller preset", url: "https://inputconfig.com/presets/built-in/steam-controller"),
-            HelpLink(title: "questions/controller-works-on-mac-but-not-in-steam", url: "https://inputconfig.com/questions/controller-works-on-mac-but-not-in-steam"),
+            HelpLink(title: "Steam Controller (2026) preset", url: "https://inputconfig.com/presets/built-in/steam-controller-2026"),
+            HelpLink(title: "Steam Input outside Steam on a Mac", url: "https://inputconfig.com/questions/steam-input-outside-steam-on-mac"),
+            HelpLink(title: "How to use a controller with Steam on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-controller-with-steam-on-mac"),
+            HelpLink(title: "Controller works in Steam but not in the game on a Mac", url: "https://inputconfig.com/questions/controller-works-in-steam-but-not-in-game-on-mac"),
+            HelpLink(title: "Gyroscope", url: "https://inputconfig.com/help/gyroscope-aim"),
+            HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
         ]
     )
 
@@ -1244,23 +2526,43 @@ enum HelpGuideLibrary {
         title: "Access Controller",
         category: "Controllers",
         url: "https://inputconfig.com/help/access-controller-no-input",
-        intro: "The Access Controller works on a Mac over Bluetooth or USB-C with nothing to install. The app ships a desktop preset for it, and the automatic layout knows its shape: one stick, eight button sockets, PS and Options. Switches on its expansion ports are ordinary buttons.",
+        intro: "The PlayStation Access Controller works on a Mac, over Bluetooth or USB-C, with nothing to install. The app ships a desktop preset for it, and the automatic layout knows its shape: one stick, eight button sockets, PS and Options, plus rows for the triggers, stick clicks and a right stick, which its profiles can assign. Switches on its expansion ports are ordinary buttons. If a socket sends nothing, the controller's profile is the reason, and the ladder below fixes it.",
         sections: [
-            HelpSection(heading: "Connecting", blocks: [
-                .paragraph("By cable, plug it in. By Bluetooth, hold the PS button and the profile button together until the light flashes, then connect it in System Settings, Bluetooth. A second Access Controller gets its own slot.")
+            HelpSection(heading: "Connect it", blocks: [
+                .paragraph("By cable, plug it in. By Bluetooth, hold the PS button and the profile button together until the light flashes, then connect it in System Settings, Bluetooth. A second Access Controller gets its own slot. Cable or Bluetooth, it needs no driver.")
             ]),
-            HelpSection(heading: "What the Mac sees", blocks: [
-                .paragraph("The eight sockets send whatever the current on-device profile assigns them; with the default profile that is Cross, Circle, Square, Triangle, L1, R1, L2, R2. macOS reports it in the DualSense family, so the sidebar chip says DualSense. The name is cosmetic.")
+            HelpSection(heading: "Know what the Mac sees", blocks: [
+                .paragraph("Each button sends whatever the current on-device profile assigns it. Out of the box, Sony's base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick as the left stick; the other sockets send nothing until a profile made on a PS5 gives them buttons. macOS reports it in the DualSense family, so the controller's entry in the sidebar says DualSense, which is only a name. With the base profile, only the center button, socket 5 and socket 7 send anything.")
             ]),
-            HelpSection(heading: "The built-in preset", blocks: [
-                .paragraph("Access Controller in Desktop & Productivity runs the whole desktop from one hand: the stick is the pointer, the sockets click, double-click, scroll, and send Return and Space, L2 holds Command, Options and PS open Mission Control and Spotlight. If your profile assigns the sockets differently, Scan a row and press the socket you mean.")
+            HelpSection(heading: "Use the built-in preset", blocks: [
+                .paragraph("Access Controller, in Desktop & Productivity, runs the whole desktop from one hand."),
+                .list([
+                    "**With the base profile.** The stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight.",
+                    "**With a PS5 profile.** Give the other sockets Square, Triangle, L1, R1, L2, R2 and Create, and the preset's other rows come alive: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control.",
+                    "**The PS button.** It stays with macOS and never reaches an app, so nothing is bound to it."
+                ], ordered: false),
+                .paragraph("If your profile assigns the sockets differently, Scan a row and press the socket you mean. Scan the socket you want, and the preset follows your profile instead of Sony's.")
             ]),
             HelpSection(heading: "If a socket sends nothing", blocks: [
-                .paragraph("The controller stores three profiles, and a profile made on a PS5 can leave sockets unassigned. The lit profile light is the current one; press the profile button to cycle and try Scan after each. If no profile sends input, connect it to a PS5 and assign the sockets or restore the default profile.")
+                .paragraph("The controller stores three profiles, and a profile made on a PS5 can leave sockets unassigned. Climb this ladder, smallest step first:"),
+                .list([
+                    "**Check the lit profile.** The lit profile light is the current one.",
+                    "**Cycle the profiles.** Press the profile button and try Scan after each.",
+                    "**Fix it on a PS5.** If no profile sends input, connect the controller to a PS5 and assign the sockets, or restore the default profile."
+                ], ordered: true),
+                .paragraph("A silent socket is a profile setting, not a broken controller.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Connect.** Cable, or PS and the profile button for Bluetooth.",
+                    "**Activate Access Controller.** Stick, center button, socket 5 and socket 7 work with the base profile.",
+                    "**More sockets.** Assign them in a PS5 profile, then Scan them."
+                ], ordered: false),
+                .paragraph("The profile on the controller decides what the Mac can hear.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can its stick do one-stick driving?", answer: "Yes. That is one of the setups it was built for.")
+                    HelpQuestion(question: "Can its stick do one-stick driving?", answer: "That is one of the setups it was built for.")
                 ])
             ]),
         ],
@@ -1269,6 +2571,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
             HelpLink(title: "The PlayStation Access Controller on a Mac", url: "https://inputconfig.com/guides/playstation-access-controller"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
+            HelpLink(title: "Map every button at once", url: "https://inputconfig.com/questions/map-every-controller-button-at-once"),
         ]
     )
 
@@ -1277,41 +2580,101 @@ enum HelpGuideLibrary {
         title: "Other Controllers",
         category: "Controllers",
         url: "https://inputconfig.com/help/other-controllers",
-        intro: "Anything Apple's framework knows works with no setup. Anything it does not is read directly as a raw HID device, which brings in most generic pads, fight sticks, wheels, and older controllers.",
+        intro: "InputConfig reads every controller Apple's framework knows with no setup, and reads most others itself as raw HID devices. That brings in most generic pads, fight sticks, wheels, flight sticks and older controllers. This page lists both groups, the few things that cannot be read, and what to try when a pad does not appear. If yours does not show up, go to [the detection ladder](#if-a-controller-is-not-detected).",
         sections: [
-            HelpSection(heading: "No setup", blocks: [
+            HelpSection(heading: "Controllers that need no setup", blocks: [
                 .list([
-                    "PlayStation DualSense, DualSense Edge, DualShock 4, and the Access Controller.",
-                    "Xbox One, Series, and Elite, over Bluetooth or USB. The Xbox Adaptive Controller, with its switch ports as buttons.",
-                    "Switch Pro Controller and Joy-Cons on macOS 13 and later.",
-                    "Stadia, once unlocked.",
-                    "Any MFi gamepad, including the Backbone, Razer Kishi, and SteelSeries Nimbus."
-                ], ordered: false)
+                    "**PlayStation.** DualSense, [DualSense Edge](https://inputconfig.com/help/dualsense-edge), DualShock 4, and the [Access Controller](https://inputconfig.com/guides/playstation-access-controller).",
+                    "**Xbox.** Xbox One, Series and Elite, over Bluetooth, or over USB on macOS 15 Sequoia or later. The Xbox Adaptive Controller, with its switch ports as buttons.",
+                    "**Nintendo.** [Switch Pro Controller](https://inputconfig.com/help/switch-pro-controller) and [Joy-Cons](https://inputconfig.com/help/joy-cons) on macOS 13 and later.",
+                    "**Stadia.** [Stadia](https://inputconfig.com/help/stadia-controller), once switched to Bluetooth mode.",
+                    "**MFi gamepads.** Any MFi gamepad."
+                ], ordered: false),
+                .paragraph("If macOS lists it under Game Controllers, InputConfig reads it.")
             ]),
-            HelpSection(heading: "Read as raw HID", blocks: [
+            HelpSection(heading: "Controllers InputConfig reads itself", blocks: [
                 .list([
-                    "8BitDo pads in X and D modes.",
-                    "Generic USB gamepads and arcade sticks.",
-                    "DualShock 3 over USB.",
-                    "Logitech F310, F510, and F710 with the switch on D.",
-                    "Wheels and flight sticks: every axis and button binds; force feedback is not driven."
-                ], ordered: false)
+                    "**8BitDo.** Pads in X and D modes. See [8BitDo](https://inputconfig.com/help/8bitdo-controllers).",
+                    "**Generic pads and arcade sticks.** Generic USB gamepads, and arcade sticks and leverless controllers in their PC or DirectInput mode. In Xbox or XInput mode most sticks speak the wired Xbox 360 protocol and cannot be read. See [arcade sticks on a Mac](https://inputconfig.com/questions/how-to-use-an-arcade-stick-on-a-mac).",
+                    "**2026 Steam Controller.** On a cable, over Bluetooth, or through its Puck (experimental). It has its own [Steam Controller page](https://inputconfig.com/help/steam-controller).",
+                    "**Pads in the SDL GameControllerDB.** Pads listed in the community database, such as 8BitDo in DirectInput mode and USB SNES pads, get their buttons named and placed like any other controller.",
+                    "**Logitech F310, F510 and F710.** With the switch on D. In D mode their triggers are buttons, not analog. See [Logitech pads on a Mac](https://inputconfig.com/questions/how-to-connect-a-logitech-controller-to-a-mac).",
+                    "**Wheels, flight sticks, throttles and pedals.** Every button, the X, Y, Z and rotation axes, sliders and dials at any resolution, and every hat switch. Force feedback is not driven. See [flight sticks and HOTAS](https://inputconfig.com/questions/how-to-connect-a-flight-stick-or-hotas-to-a-mac).",
+                    "**Two-player adapters.** Two-player adapters and dual arcade encoders give each player a controller of their own."
+                ], ordered: false),
+                .paragraph("Other controllers, joysticks and wheels are read as well, shown in a generic drawing. Many controllers that macOS ignores still work in InputConfig.")
+            ]),
+            HelpSection(heading: "Xbox 360 and XInput pads", blocks: [
+                .paragraph("Wired Xbox 360 pads, the Xbox 360 wireless receiver, and many third-party XInput pads cannot be read by macOS, and the wired Xbox 360 protocol cannot be read by a sandboxed app either. InputConfig, Devices lists such a pad grayed out, with the reason."),
+                .list([
+                    "**Switch the pad's mode.** DInput, PC or Switch mode, if it has one.",
+                    "**Use Bluetooth.** If the pad supports it. A genuine Xbox 360 pad and its receiver have no Bluetooth.",
+                    "**Check your macOS.** Wired Xbox One and Series pads need macOS 15 Sequoia or later; on macOS 14 use Bluetooth."
+                ], ordered: true),
+                .paragraph("An XInput-only pad needs another mode, because nothing on a Mac can read it as it is.")
+            ]),
+            HelpSection(heading: "Set up an Xbox Elite Series 2", blocks: [
+                .paragraph("Use the default profile, with no profile light lit. Then each paddle reports as P1 to P4 on its own; in a custom profile a paddle copies another button and the Mac only sees that button. P1 and P2 are on the right, P3 and P4 on the left. Default profile, no light: that is the setting that makes the paddles separate.")
+            ]),
+            HelpSection(heading: "Connect switch interfaces and sip and puff devices", blocks: [
+                .paragraph("Switch interfaces such as the AbleNet Hitch and Blue2, Pretorian, RJ Cooper and Tecla, and sip and puff devices such as the Origin Swifty, work in the mode that sends joystick buttons or F13 to F19. In Space or Enter mode the key also reaches the app in front, since InputConfig listens alongside macOS. Prefer the joystick button or F13 to F19 mode, so a switch press never types.")
+            ]),
+            HelpSection(heading: "Connect a Stream Deck (experimental)", blocks: [
+                .paragraph("Stream Deck support is experimental in 1.6."),
+                .list([
+                    "**You:** Connect the Stream Deck from InputConfig, Devices, then press Scan on a row and press a key.",
+                    "**InputConfig:** Reads its keys as Key 1, Key 2 and so on, a Stream Deck Pedal's as Left, Middle and Right pedal, and a Neo's touch points as Left and Right touch.",
+                    "**Check:** The row fills with the key. If Elgato's app also acts on the press, leave that key empty in Elgato's app, or quit it."
+                ], ordered: false),
+                .paragraph("Elgato's app can also send F13 to F19, and InputConfig binds those like any key. Give each key to one app only, Elgato's or InputConfig.")
             ]),
             HelpSection(heading: "If a controller is not detected", blocks: [
-                .paragraph("Confirm the Mac sees it in System Settings, Bluetooth or System Information, USB. Click Refresh Controllers in the controller chip. Try another mode switch position. Power it off and on. Tick it under InputConfig, Devices in the menu bar to open it by hand. The Xbox 360's wired protocol cannot be read by a sandboxed app.")
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Confirm the Mac sees it.** In System Settings, Bluetooth, or System Information, USB. If the Mac does not see it either, start with [controller not recognized on a Mac](https://inputconfig.com/questions/controller-not-recognized-on-mac).",
+                    "**Refresh.** Click Refresh Controllers in a controller's popover, or Refresh in Settings, Devices.",
+                    "**Try another mode.** Move the mode switch to another position.",
+                    "**Power it off and on.** A fresh connection often fixes a quiet pad.",
+                    "**Open it by hand.** Tick it under InputConfig, Devices in the menu bar."
+                ], ordered: true),
+                .paragraph("Start with whether the Mac sees it; everything after that is InputConfig's side.")
+            ]),
+            HelpSection(heading: "What it cannot read", blocks: [
+                .list([
+                    "**Controller emulation.** InputConfig sends keyboard and mouse events, not a virtual controller, so a game that only accepts a gamepad needs the real gamepad.",
+                    "**TrackIR.** Not read.",
+                    "**Gaming mouse DPI and profile buttons.** They are handled inside the mouse and not read.",
+                    "**Force feedback.** Not driven on wheels and flight sticks."
+                ], ordered: false),
+                .paragraph("If a device sends its input only to games, InputConfig cannot see it.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Apple-supported pads.** No setup at all.",
+                    "**Everything else.** Read as raw HID, with a few experimental newcomers.",
+                    "**Missing.** Check the Mac sees it, refresh, try another mode, then tick it under Devices."
+                ], ordered: false),
+                .paragraph("If the Mac can see a controller, there is usually a way to make InputConfig read it.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does InputConfig emulate a controller for games that require one?", answer: "No. It sends keyboard and mouse events. A game that only accepts a gamepad needs the real gamepad.")
+                    HelpQuestion(question: "Does InputConfig emulate a controller for games that require one?", answer: "No. It sends keyboard and mouse events. A game that only accepts a gamepad needs the real gamepad."),
+                    HelpQuestion(question: "Can InputConfig read a HOTAS stick and throttle together?", answer: "When the stick and the throttle plug in separately, they are two devices, and each gets its own slot. One preset holds rows for both, and rudder pedals can be a third slot."),
+                    HelpQuestion(question: "Does InputConfig work with a fight stick or a leverless controller?", answer: "It does in the controller's PC or DirectInput mode, where it reads as a raw HID device: the lever or direction buttons arrive as a D-pad and every button can be bound. Xbox or XInput mode usually cannot be read. SOCD cleaning stays in the controller's own settings."),
+                    HelpQuestion(question: "My joystick moves the pointer on its own and InputConfig does not list it. Why?", answer: "It presents to the Mac as a mouse, not a joystick. Joystick mice and wheelchairs in Bluetooth mouse mode work this way. They need no mapper to move the pointer, and InputConfig can still use their buttons as Mouse inputs and the pointer they move for screen regions.")
                 ])
             ]),
         ],
         related: [
+            HelpLink(title: "What controllers work with a Mac", url: "https://inputconfig.com/questions/what-controllers-work-with-a-mac"),
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "8BitDo", url: "https://inputconfig.com/help/8bitdo-controllers"),
             HelpLink(title: "Steam Controller", url: "https://inputconfig.com/help/steam-controller"),
             HelpLink(title: "Access Controller", url: "https://inputconfig.com/help/access-controller-no-input"),
-            HelpLink(title: "questions/how-to-use-a-joystick-on-a-mac", url: "https://inputconfig.com/questions/how-to-use-a-joystick-on-a-mac"),
+            HelpLink(title: "How to connect a joystick to a Mac", url: "https://inputconfig.com/questions/how-to-use-a-joystick-on-a-mac"),
+            HelpLink(title: "How to connect and use a racing wheel on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-racing-wheel-on-a-mac"),
+            HelpLink(title: "Arcade sticks, fight sticks and leverless controllers on a Mac", url: "https://inputconfig.com/questions/how-to-use-an-arcade-stick-on-a-mac"),
+            HelpLink(title: "Adaptive controllers that work on a Mac", url: "https://inputconfig.com/guides/adaptive-controllers-on-mac"),
         ]
     )
 
@@ -1320,31 +2683,102 @@ enum HelpGuideLibrary {
         title: "Live Visualizer",
         category: "The app",
         url: "https://inputconfig.com/help/live-visualizer",
-        intro: "Every preset's page has a Live Visualizer: a live mirror of every connected device, one panel per slot. It answers two questions all the time: is the Mac seeing this control, and what is it bound to.",
+        intro: "The Live Visualizer is a live drawing of each device a preset uses, one panel per controller group, on every preset's page. It answers two questions at a glance: is the Mac seeing this control, and what is it bound to. It shows input whether or not the preset is running, so it doubles as a controller tester. To check a controller, see [testing a controller with it](#test-a-controller-with-it).",
         sections: [
-            HelpSection(heading: "Templates", blocks: [
-                .paragraph("Auto-detect picks the template that matches the slot's rows, and the picker on the panel overrides it: Controller, Keyboard, Mouse & Trackpad, Touchpad, Screen, or MIDI Instrument. The controller map mirrors the pad, with the D-pad, both sticks, and the face buttons on one row the way they sit on the pad, the touchpad and any extra buttons below, and the Edge's paddles and FN buttons as chips. Keyboard draws a MacBook keyboard and lights keys as you press them. Mouse & Trackpad draws both and shows clicks, scrolling, the scroll gesture, double clicks, and Force Touch. Screen shows one display with the preset's regions on it, with a picker for which display. The MIDI layout has a keyboard shaded by velocity, a dial per knob, and an event log.")
+            HelpSection(heading: "Read the controller drawing", blocks: [
+                .paragraph("In 1.6 the drawing is your actual controller, from 19 models: PlayStation, Xbox, Nintendo, Stadia, both Steam Controllers, 8BitDo, the Logitech G29 and G923, and generic gamepads. Other controllers, joysticks and wheels are read as well, shown in a generic drawing. Every control sits where it does on the real thing, as you hold it: the face in the middle, the bumpers and triggers on a strip above, and paddles or back buttons on a strip below, labeled Back. Buttons carry the legend printed on them, in the printed color where there is one, and light green while pressed."),
+                .list([
+                    "**Sticks.** A dot follows the stick, and pressing it in lights the circle.",
+                    "**Triggers and pedals.** An analog one fills with the pull and shows its percentage, with an orange line where the preset's row starts to count, which is its deadzone. A digital trigger, such as ZL and ZR on a Switch pad, only lights.",
+                    "**Touchpads.** On a DualSense or DualShock 4 a dot follows each finger, the first mint and the second cyan, and the preset's touchpad zones are drawn on the pad, the one under a finger filled.",
+                    "**Light bar.** Drawn in the preset's color, or in the color the controller shows now. The strip above the drawing sets the preset's color.",
+                    "**Wheels.** The rim turns with the real one, with the angle written beside it in degrees when the wheel's range is known, such as 900 for a Logitech G29. Pedals are bars with their percentage.",
+                    "**Motion.** On a controller with motion sensors, a widget under the drawing turns as you tilt it."
+                ], ordered: false),
+                .paragraph("A USB device no model matches is drawn as a labeled grid of what it reports: each stick pair as a stick, each hat as a D-pad, every other axis as a named bar, and every button numbered. If a control lights green, the Mac is reading it.")
             ]),
-            HelpSection(heading: "Click to jump", blocks: [
-                .paragraph("Click any control and the editor opens at its row. The row numbers in the editor match the numbers on the map.")
+            HelpSection(heading: "Read the key down both sides", blocks: [
+                .paragraph("What each control does in this preset is written in a key down both sides of the drawing, with a line from each entry to its control, so no label ever sits on a control or on another label. An entry is the row's note when it has one, otherwise its output, with a count when more than one row uses the control (Jump +1). A control too small to hold its own name gets the name in the key too. While a control is in use, its line and entry turn green.")
             ]),
-            HelpSection(heading: "Edit Layout and zoom", blocks: [
-                .paragraph("Edit Layout, on the title row, lets you drag widgets and saves the arrangement per controller model. The zoom slider beside it enlarges the map, and a zoomed map can be dragged around. The circles in the corner change the background: Normal, Blueprint, Black, or Slate.")
+            HelpSection(heading: "Pick what a panel shows", blocks: [
+                .paragraph("The menu at the top of each panel picks what it shows: Automatic, Screen, Keyboard, Touchpad, Mouse and MIDI, then Connected and a menu for each maker: Xbox, PlayStation, Nintendo and the rest."),
+                .list([
+                    "**Connected.** Connected lists the controllers plugged in now; picking one makes the group read that controller and draws it as itself.",
+                    "**Every model by maker.** Below that is every model, some with versions to choose from, such as the 8BitDo Pro 2 or SN30 Pro+, or the Elite Series 2 with or without paddles. Picking a model draws the group as that model, with nothing connected or with another controller lighting it, and names the preset's buttons that way. On a preset with several controller groups it names them only while no names are set.",
+                    "**Automatic.** Goes back to drawing whatever is connected."
+                ], ordered: false),
+                .paragraph("A line under the drawing says when it is not simply the connected controller: the model was not recognized and a standard gamepad is shown, or nothing is connected and the group's model is shown, or the drawing is the controller the preset is made for and the connected pad lights it. Another line says what that model never sends to a Mac, such as the Xbox Elite's profile button or a Joy-Con's SL and SR, so a dark control is not taken for a fault. A button the drawing has no place for is listed under it as Also reported."),
+                .paragraph("A group set to one controller reads another of the same family while its own is away, such as a DualSense Edge for a DualSense. Otherwise the panel says Waiting for that controller, with Use the connected controller to switch. Read the line under the drawing whenever it looks wrong; it says why.")
             ]),
-            HelpSection(heading: "Reading it for troubleshooting", blocks: [
-                .paragraph("A control that does not light is not reaching the Mac: check the connection, the mode switch, or the Access Controller's profile. A stick that sits off centre at rest is drifting; that is the number for its deadzone. A trigger that shows a few percent at rest needs a small inner deadzone.")
+            HelpSection(heading: "Use the other maps", blocks: [
+                .list([
+                    "**Keyboard.** Draws a MacBook keyboard and lights keys as you press them, adding a numeric keypad and F13 to F19 when the preset binds those keys.",
+                    "**Mouse.** Draws a mouse and a trackpad and shows clicks, side buttons 4 and 5, scrolling in four directions, the scroll gesture, double clicks and a Force Touch gauge. Force Touch is read only while InputConfig is the front window.",
+                    "**Touchpad.** Shows the controller's touchpad large, with its zones.",
+                    "**Screen.** Shows one display in its real shape with the preset's screen regions, a menu to pick the display or Follow the pointer, and Draw a screen region, which opens the editor with a new region row and the drawing sheet.",
+                    "**MIDI.** A keyboard shaded by velocity, a dial for every knob, pitch bend and aftertouch, a channel strip and an event log."
+                ], ordered: false),
+                .paragraph("Keyboard and Mouse work with no preset running, and both need the Accessibility permission to show live keys and clicks. Bound keys and inputs are drawn at full strength and the rest dimmed. Every kind of input has a map, so you can check anything before you bind it.")
+            ]),
+            HelpSection(heading: "Click a control to jump to its row", blocks: [
+                .list([
+                    "**You:** Click any control in the drawing.",
+                    "**InputConfig:** Opens a popover that names it, says how many rows in the preset use it, and lists each one in words.",
+                    "**Check:** Pick a row and the editor opens there, with the row lit for a moment so it is easy to find. A control nothing uses says so and offers Open the editor."
+                ], ordered: false),
+                .paragraph("The motion widget's popover also has Reset gyroscope, which re-zeroes it now, for a model that has wandered: hold the controller flat and still, then click it. The fastest way to find a row is to click its control.")
+            ]),
+            HelpSection(heading: "Edit Layout, zoom and background", blocks: [
+                .list([
+                    "**Edit Layout.** On the title row, lets you drag the parts of the keyboard, mouse and touchpad maps and saves the arrangement; Reset puts them back. A drawn controller keeps its real layout.",
+                    "**Zoom.** The slider beside it enlarges the map, and a zoomed map can be dragged around.",
+                    "**Background.** The circles in the corner change it: Normal, Blueprint, Black or Slate."
+                ], ordered: false),
+                .paragraph("Zoom in when a control is too small to read.")
+            ]),
+            HelpSection(heading: "Test a controller with it", blocks: [
+                .list([
+                    "**A control that never lights.** It is not reaching the Mac: check the connection, the mode switch, or the Access Controller's profile.",
+                    "**A stick dot off the crosshair.** The stick is drifting; Adjust live on its row shows the exact number to set as its deadzone.",
+                    "**A trigger at a few percent at rest.** It needs a small deadzone."
+                ], ordered: false),
+                .paragraph("For the order to test things in, see [how to test a controller on a Mac](https://inputconfig.com/questions/how-to-test-if-a-controller-works-on-a-mac); for a DualSense, [the PS5 controller tester](https://inputconfig.com/questions/ps5-controller-tester-on-mac); for wheels and flight sticks, [testing a wheel or joystick](https://inputconfig.com/questions/how-to-test-a-racing-wheel-or-joystick-on-a-mac). If it lights here, the Mac has it; if it does not, no preset can use it.")
+            ]),
+            HelpSection(heading: "If it draws the wrong controller", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Read the line under the drawing.** It says whether the preset is made for another controller or a model was picked for the group.",
+                    "**Pick yours under Connected.** The group reads that controller and draws it as itself.",
+                    "**Choose Automatic.** The panel goes back to drawing whatever is connected."
+                ], ordered: true),
+                .paragraph("A DualSense drawn as an Xbox pad is a choice someone made, and one click undoes it.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Check input.** A control that lights is reaching the Mac.",
+                    "**Check bindings.** The key down both sides says what each control does.",
+                    "**Jump to a row.** Click the control, then pick the row."
+                ], ordered: false),
+                .paragraph("Open the Live Visualizer first whenever something does not work.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does it cost performance?", answer: "It only draws when data changes and pauses while the editor is open."),
-                    HelpQuestion(question: "Can I see a controller the preset does not bind?", answer: "Yes. Every connected device gets a panel.")
+                    HelpQuestion(question: "Does it cost performance?", answer: "It draws only when something changes, goes idle when nothing moves, and pauses while the preset editor is open."),
+                    HelpQuestion(question: "Does the preset have to be running?", answer: "No. The panel shows live input for the preset you clicked, running or not."),
+                    HelpQuestion(question: "Can I see a controller the preset does not bind?", answer: "Every connected controller gets a panel, as well as every controller group in the preset."),
+                    HelpQuestion(question: "Why is my DualSense drawn as an Xbox controller?", answer: "Either the preset is made for an Xbox controller, or a model was picked for the group from a maker's menu. The line under the drawing says which. Pick your controller under Connected, or choose Automatic, to draw it as itself."),
+                    HelpQuestion(question: "Does it work with VoiceOver?", answer: "Each control is announced by name with its live value, and what it does in the preset is read as its hint.")
                 ])
             ]),
         ],
         related: [
             HelpLink(title: "The Binding Editor", url: "https://inputconfig.com/help/binding-editor"),
             HelpLink(title: "Deadzones", url: "https://inputconfig.com/help/deadzones-and-sensitivity"),
+            HelpLink(title: "How to test a controller on a Mac", url: "https://inputconfig.com/questions/how-to-test-if-a-controller-works-on-a-mac"),
+            HelpLink(title: "See what every button on your controller does", url: "https://inputconfig.com/questions/see-what-each-controller-button-does-on-mac"),
+            HelpLink(title: "Which button is which on a controller, checked on a Mac", url: "https://inputconfig.com/questions/which-button-is-which-on-a-controller-on-mac"),
             HelpLink(title: "MIDI Devices", url: "https://inputconfig.com/help/midi-as-input"),
+            HelpLink(title: "Stick drift tester and deadzone visualizer", url: "https://inputconfig.com/tools/deadzone"),
         ]
     )
 
@@ -1353,26 +2787,105 @@ enum HelpGuideLibrary {
         title: "Auto-Switch",
         category: "The app",
         url: "https://inputconfig.com/help/per-app-auto-switch",
-        intro: "Each preset has an automation section: which apps it belongs to, what to launch when it activates, and how to treat the pointer while it runs. Set once, a game layout, a browser layout, and a music layout hand off to each other on their own.",
+        intro: "InputConfig switches presets by itself when you change apps. Each preset can name the apps it belongs to: when one of them comes to the front, its preset takes over, and when you leave, the one you had before comes back. Turn on Switch presets when the front app changes in Settings, Advanced, then list the apps in each preset. A game wants the sticks as movement and the mouse, a browser wants them as a pointer and scroll, and a music app wants play, pause and the next track. You set it once and stop thinking about it. If a preset does not take over, go to [the switching ladder](#if-it-does-not-switch).",
         sections: [
-            HelpSection(heading: "Auto-switch by app", blocks: [
-                .paragraph("In the editor, under Automation & Gaming Utilities, add the apps the preset belongs to. When one comes to the front, the preset activates. Automatic switching is off until you turn it on in Settings, Advanced. An app with no preset leaves the current one running, so a desktop preset with no app list is the fallback. If two presets claim the same app, the first in sidebar order wins.")
-            ]),
-            HelpSection(heading: "Launch on activate", blocks: [
-                .paragraph("A preset can open an app or a URL when it activates. Imported presets have this cleared for safety; add it deliberately.")
-            ]),
-            HelpSection(heading: "The pointer", blocks: [
+            HelpSection(heading: "Set it up", blocks: [
                 .list([
-                    "Confine cursor keeps the pointer on the main screen with a buffer from the edge, so a stick never pushes it onto a second display or out of a game window.",
-                    "Auto-recenter moves the pointer back to the middle at an interval, for games with relative mouse look.",
-                    "Hide cursor hides the pointer while the preset runs.",
-                    "Sensitivity multiplier scales every analog row at once."
+                    "In Settings, Advanced, turn on **Switch presets when the front app changes**. It is off until you do, so nothing moves without you asking. The same switch appears in the editor while it is off.",
+                    "Open the preset you want for a game or app and expand **Automation & Gaming Utilities** at the bottom of the editor.",
+                    "Under **Activate when these apps are in front**, press the plus button and pick the app. For a Steam game, pick the game's own app, not Steam.",
+                    "Repeat for your other presets. Leave your everyday desktop preset with no apps listed; it is the one you come back to."
+                ], ordered: true),
+                .paragraph("**Finder, Go, Go to Folder:** Where Steam keeps its games, so you can pick a game's own app."),
+                .paragraph("**What happens:** The folder of installed Steam games opens. Each game's app is inside its own folder."),
+                .paragraph("The activity log in the main window records every automatic switch and the app that caused it, which is the quickest way to check it is doing what you expect. Leave one preset with no apps: that is home.")
+            ]),
+            HelpSection(heading: "Know how switching behaves", blocks: [
+                .list([
+                    "**Back to where you were.** When you switch to an app that no preset lists, the preset that was running before the first automatic switch comes back. If nothing was running, the engine stops.",
+                    "**Between listed apps.** Moving between two listed apps keeps that original preset as the one to return to.",
+                    "**Your choice wins.** If you pick a preset by hand in the meantime, auto-switch leaves your choice alone.",
+                    "**InputConfig's own window.** It never triggers a switch.",
+                    "**Many apps per preset.** One preset can list as many apps as you like, such as Safari, Chrome and Firefox on one browser layout.",
+                    "**Two presets, one app.** If two presets list the same app, the one higher in the sidebar wins.",
+                    "**Full-screen games.** The switch happens when the game becomes the front app."
                 ], ordered: false),
-                .paragraph("Game presets from the Smart Preset Maker turn confine, recenter, and hide on.")
+                .paragraph("This works for any input the app reads, not only game controllers: a MIDI pad, a mouse's side buttons, or a tap on a MacBook change jobs with the app too. Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens. Auto-switch always gives you back the preset you had.")
+            ]),
+            HelpSection(heading: "Guard the pointer in games", blocks: [
+                .list([
+                    "**Confine cursor.** Keeps the pointer a set distance from the edges of the screen it is on, so a stick never pushes it off the edge or out of a full-screen game, and the game camera keeps turning.",
+                    "**Auto-recenter.** Moves the pointer back to the middle at an interval, for games with relative mouse look.",
+                    "**Hide cursor.** Hides the pointer while the preset runs.",
+                    "**Pointer speed and Scroll speed.** Pointer speed scales every pointer row at once, and Scroll speed every scroll row.",
+                    "**Where they apply.** When the preset lists apps under Activate when these apps are in front, confine, recenter and hide act only while one of those is in front. Otherwise they pause only while InputConfig or the Finder is in front, so the game keeps them, including one started from Steam or a launcher."
+                ], ordered: false),
+                .paragraph("Game presets from the Smart Preset Maker turn confine, recenter and hide on. Confine plus hide is what makes a stick behave in a mouse-look game.")
+            ]),
+            HelpSection(heading: "Open an app when a preset starts", blocks: [
+                .paragraph("A preset can open an app or a URL when it activates. Imported presets have this cleared for safety, so add it deliberately. A preset can bring its own app with it.")
+            ]),
+            HelpSection(heading: "A layout for every app: an example", blocks: [
+                .list([
+                    "**Desktop, no apps listed.** A stick moves the pointer, a trigger clicks, the other stick scrolls. Start from the built-in [Desktop Navigation](https://inputconfig.com/presets/built-in/desktop-navigation) preset.",
+                    "**Minecraft.** The [Minecraft layout](https://inputconfig.com/presets/minecraft) from the Smart Preset Maker, with the pointer confined and hidden. Java Edition runs as its own Java process, not the launcher, so leave the app list empty, and the guards run everywhere except InputConfig and the Finder.",
+                    "**Browser, listing Safari and Chrome.** Tabs on the triggers, back and forward on the bumpers, from the [Web Browsing](https://inputconfig.com/presets/built-in/web-browsing) preset.",
+                    "**Anki.** The built-in [Anki preset](https://inputconfig.com/presets/built-in/anki) already lists Anki, so it steps in the moment you open your decks."
+                ], ordered: false),
+                .paragraph("Open Minecraft and the game layout is live. Switch to Safari and the browser layout takes over. Click the desktop and the pointer layout is back. The same idea works for a MIDI pad that sends Final Cut shortcuts in Final Cut and scene changes in OBS, or mouse side buttons that change tabs in a browser and undo in an editor. Three or four presets cover most people's whole day.")
+            ]),
+            HelpSection(heading: "Switch by hand", blocks: [
+                .paragraph("Automatic switching is optional, and every other way to change presets works with it or without it:"),
+                .list([
+                    "**A key per preset.** Set in the Key field at the top of the editor.",
+                    "**A global shortcut.** In Settings, General, it toggles the most recent preset.",
+                    "**The menu bar.** The [menu bar](https://inputconfig.com/help/menu-bar) icon lists every preset.",
+                    "**The controller itself.** The App Action outputs Next Preset and Previous Preset step through the presets in the same folder, and Activate Preset jumps to one by name. Put a game's variants (driving, flying, menus) in one folder and one button cycles them."
+                ], ordered: false),
+                .paragraph("A preset you pick by hand always stays until you change it.")
+            ]),
+            HelpSection(heading: "If it does not switch", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Check the switch.** Switch presets when the front app changes, in Settings, Advanced, must be on.",
+                    "**Check the app list.** The app must be under Activate when these apps are in front. For a Steam game, list the game's own app, not Steam.",
+                    "**Check for a duplicate.** If two presets list the same app, the one higher in the sidebar wins.",
+                    "**Read the activity log.** It records every automatic switch and the app that caused it."
+                ], ordered: true),
+                .paragraph("The activity log shows exactly what auto-switch saw.")
+            ]),
+            HelpSection(heading: "What macOS and Steam already do", blocks: [
+                .paragraph("Two things on a Mac already switch controller settings by app, and for some people they are enough."),
+                .list([
+                    "**System Settings, Game Controllers.** It keeps a profile per app for each controller. It can swap one controller button for another and change what the Home button does, and it applies itself when that game runs. It only affects games that already support controllers, and it cannot send keys or move the pointer. See [where controller mappings live](https://inputconfig.com/questions/where-are-controller-mappings-on-macos).",
+                    "**Steam Input.** It keeps a layout per Steam game and can send keys, but it only switches layouts for games launched through Steam."
+                ], ordered: false),
+                .paragraph("InputConfig's auto-switch covers the rest: every app on the Mac, including ones with no controller support at all, with keys, clicks, pointer movement, scrolling, macros and MIDI. They can all be on at once; if a game already reads your controller natively, give it a preset with nothing bound, or leave it off every list. Use the game's own controller support where it exists, and InputConfig everywhere else.")
+            ]),
+            HelpSection(heading: "What it cannot do", blocks: [
+                .list([
+                    "**Switch by website.** Auto-switch follows the app in front, not the tab or the site. For a browser game, keep it in a browser you use only for games, or pick the preset from the menu bar when you start playing.",
+                    "**Take orders from Shortcuts.** InputConfig does not add actions to the Shortcuts app, so a Shortcuts automation cannot choose a preset. The other direction works: any button, pad, key or tap can run one of your Shortcuts with the Run Siri Shortcut output. See [how to run a Shortcut from a controller](https://inputconfig.com/questions/how-to-run-a-shortcut-from-a-controller-on-mac)."
+                ], ordered: false),
+                .paragraph("Auto-switch follows apps, nothing finer.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Turn it on.** Settings, Advanced, Switch presets when the front app changes.",
+                    "**List the apps.** Automation & Gaming Utilities, Activate when these apps are in front.",
+                    "**Keep one home preset.** With no apps, for everything else."
+                ], ordered: false),
+                .paragraph("Set it once, and the controller changes jobs whenever you change apps.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Does auto-switch work with full-screen games?", answer: "Yes. The switch happens when the game becomes the front app.")
+                    HelpQuestion(question: "Does auto-switch work with full-screen games?", answer: "The switch happens when the game becomes the front app."),
+                    HelpQuestion(question: "Can a preset switch by website instead of by app?", answer: "No. Auto-switch follows the app in front, not the tab or the site. For a browser game, keep it in a browser you use only for games, or pick the preset from the menu bar when you start playing."),
+                    HelpQuestion(question: "What happens when I leave the app?", answer: "The preset you had before the automatic switch comes back. If nothing was running before, the engine stops. If you picked a different preset by hand while you were in the app, that choice stays."),
+                    HelpQuestion(question: "Does it work with Steam games?", answer: "Add the game's own app to the preset's list, not Steam itself. The Steam games folder is inside your Library, under Application Support, Steam, steamapps, common."),
+                    HelpQuestion(question: "Can one preset cover several apps?", answer: "Add as many apps as you like to one preset, for example Safari, Chrome and Firefox on one browser layout."),
+                    HelpQuestion(question: "Can I pause auto-switching?", answer: "Turn off Switch presets when the front app changes in Settings, Advanced. The app lists stay saved in each preset for when you turn it back on."),
+                    HelpQuestion(question: "Is this the same as the profiles in System Settings?", answer: "No. The Game Controllers profiles in System Settings swap controller buttons inside games that support controllers. InputConfig presets send keys, clicks, pointer movement and more in any app, and switch with the front app.")
                 ])
             ]),
         ],
@@ -1380,6 +2893,11 @@ enum HelpGuideLibrary {
             HelpLink(title: "Presets and Folders", url: "https://inputconfig.com/help/presets-and-folders"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Smart Preset Maker", url: "https://inputconfig.com/help/smart-preset-maker"),
+            HelpLink(title: "Per-app keyboard shortcuts on a Mac", url: "https://inputconfig.com/questions/per-app-keyboard-shortcuts-on-mac"),
+            HelpLink(title: "Where are controller mappings on macOS?", url: "https://inputconfig.com/questions/where-are-controller-mappings-on-macos"),
+            HelpLink(title: "How to use mouse side buttons on a Mac", url: "https://inputconfig.com/questions/how-to-use-mouse-side-buttons-on-mac"),
+            HelpLink(title: "Menu Bar", url: "https://inputconfig.com/help/menu-bar"),
+            HelpLink(title: "How to run a Shortcut from a controller or any button on a Mac", url: "https://inputconfig.com/questions/how-to-run-a-shortcut-from-a-controller-on-mac"),
         ]
     )
 
@@ -1388,25 +2906,49 @@ enum HelpGuideLibrary {
         title: "Emergency Stop",
         category: "The app",
         url: "https://inputconfig.com/help/emergency-stop",
-        intro: "A preset can take over the keyboard and mouse completely. The emergency stop is the way out that cannot fail. It only ever stops: it halts the engine, lets go of every key, mouse button, note, and motor the app is holding, and gives the pointer back.",
+        intro: "The emergency stop is the way out of a preset that has taken over the keyboard and mouse, and it cannot fail. It only ever stops: it halts the engine, lets go of every key, mouse button, note and motor the app is holding, stops any haptic, and gives the pointer back. It is set up out of the box, so the one thing to do is remember it.",
         sections: [
-            HelpSection(heading: "Three ways to trigger it", blocks: [
+            HelpSection(heading: "Stop it three ways", blocks: [
                 .list([
-                    "The keyboard shortcut: Control Option Command and the period key, from anywhere. Change it in Settings, General, Emergency Stop.",
-                    "Hold a button on the controller: Back / Share / View for three seconds. The button and the hold, one to five seconds, are in the same place in Settings. This works whatever the preset maps that button to, and it is the one to remember.",
-                    "The menu bar: click the InputConfig icon and press Emergency Stop."
-                ], ordered: false)
+                    "**Hold two buttons on the controller.** Back and Start together for three seconds: View and Menu on an Xbox pad, Create and Options on a DualSense, Minus and Plus on a Switch pad. A buzz comes one second in, so you can let go if you did not mean it. This works whatever the preset maps those buttons to, and a normal press still does what the preset says. On a PlayStation Access Controller, hold socket 7 (Options) alone, because its base profile never sends Create. The hold does not take Create or Share from macOS: they keep their screenshot action unless a running preset has a row on them.",
+                    "**Press the keyboard shortcut.** Control Option Command and the period key, from anywhere. On a layout such as Dvorak that puts the period on another key, it is the key that types a period; on AZERTY, where the period needs Shift, it stays on the key that types a colon. Settings, General, Emergency Stop shows the chord for your keyboard.",
+                    "**Use the menu bar.** Click the InputConfig icon and press Emergency Stop."
+                ], ordered: false),
+                .paragraph("Settings, General, Emergency Stop holds all of it: the shortcut, the controller button, and the hold, from one to five seconds. With Start (Menu / Options / Plus) held too turns the Start part off, and a different button picked there works on its own. Whichever way it fires, InputConfig plays a sound and says the stop aloud. The controller hold is the one to remember, because it works when the keyboard and mouse are not yours.")
             ]),
             HelpSection(heading: "Give any control its own stop", blocks: [
-                .paragraph("Set a row's output type to App Action and choose Emergency Stop. A back paddle, an unused face button, or a switch on an Access Controller port all work well.")
+                .list([
+                    "**You:** Set a row's output type to App Action and choose Emergency Stop. A back paddle, an unused face button, or a switch on an Access Controller port all work well.",
+                    "**InputConfig:** Stops everything the moment that row fires.",
+                    "**Check:** Activate the preset and press the control. The preset turns off and every held key and button is let go."
+                ], ordered: false),
+                .paragraph("A paddle you never touch by accident is the best home for it.")
             ]),
-            HelpSection(heading: "When a game swallows the shortcut", blocks: [
-                .paragraph("A full-screen game can eat system shortcuts. The controller hold and a bound Emergency Stop run inside the app's own polling, so they keep working when the shortcut cannot get through.")
+            HelpSection(heading: "If the stop does not seem to work", blocks: [
+                .paragraph("Climb this ladder, smallest step first:"),
+                .list([
+                    "**Use the controller hold.** A full-screen game can eat system shortcuts. The controller hold and a bound Emergency Stop run inside the app's own polling, so they keep working when the shortcut cannot get through.",
+                    "**Check who owns the shortcut.** Only one app can register a system-wide shortcut. InputConfig says so instead of failing quietly, and Settings names the shortcut or app that holds it. Change it in one of the two apps.",
+                    "**Use the menu bar.** Click the InputConfig icon and press Emergency Stop."
+                ], ordered: true),
+                .paragraph("The controller hold keeps working even when the preset owns the keyboard and mouse.")
+            ]),
+            HelpSection(heading: "What it leaves alone", blocks: [
+                .paragraph("The emergency stop deletes nothing. The preset is untouched and can be activated again, and an auto clicker or turbo stops at once because the engine stops. After a stop by the controller hold, let go and hold the same buttons again to start the preset that was running; that works for 10 minutes after the stop. Stopping is always safe to try.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Controller.** Hold Back and Start together for three seconds.",
+                    "**Keyboard.** Control Option Command period.",
+                    "**Menu bar.** Emergency Stop."
+                ], ordered: false),
+                .paragraph("Learn the controller hold today, before you ever need it.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Does it delete anything?", answer: "No. The preset is untouched and can be activated again."),
-                    HelpQuestion(question: "Another app already owns the shortcut. What now?", answer: "Only one app can register a system-wide shortcut. InputConfig says so instead of failing quietly; change it in one of the two apps.")
+                    HelpQuestion(question: "Another app already owns the shortcut. What now?", answer: "Only one app can register a system-wide shortcut. InputConfig says so instead of failing quietly; change it in one of the two apps."),
+                    HelpQuestion(question: "Does it stop an auto clicker or turbo?", answer: "It halts the engine, so a repeating click or key stops at once and anything held is released.")
                 ])
             ]),
         ],
@@ -1422,25 +2964,37 @@ enum HelpGuideLibrary {
         title: "Menu Bar",
         category: "The app",
         url: "https://inputconfig.com/help/menu-bar",
-        intro: "The menu bar icon is the app without the window: start and stop the current preset, switch presets, see what is connected and what the engine is doing, and reach the Emergency Stop.",
+        intro: "The InputConfig icon in the menu bar is the app without the window. Click it to start and stop the current preset, switch presets, see what is connected and what the engine is doing, and reach the Emergency Stop. With the Dock icon hidden, it is the whole app.",
         sections: [
-            HelpSection(heading: "What is in it", blocks: [
+            HelpSection(heading: "Use the popover", blocks: [
                 .list([
-                    "Start / Stop the selected preset.",
-                    "Every preset, in sidebar order.",
-                    "How many controllers are connected.",
-                    "New Preset, Smart Preset, Statistics.",
-                    "Emergency Stop, with its shortcut beside it.",
-                    "Engine status with CPU and memory use.",
-                    "Quit, the tip jar, the main window, Settings."
-                ], ordered: false)
+                    "**Start and Stop.** Starts or stops the selected preset.",
+                    "**Presets.** Every preset, in sidebar order. With the favorites filter on, only your starred presets.",
+                    "**Controllers.** How many are connected.",
+                    "**New Preset, Smart Preset and Statistics.** Shortcuts to the same sheets as in the window.",
+                    "**Emergency Stop.** With its keyboard shortcut beside it.",
+                    "**Engine status.** With CPU and memory use.",
+                    "**The bottom row.** Quit, the tip jar, What's New (the sparkles button), the main window and Settings. See [what changed in each version](https://inputconfig.com/help/whats-new)."
+                ], ordered: false),
+                .paragraph("The Emergency Stop is always one click away here.")
             ]),
-            HelpSection(heading: "Menu-bar-only mode", blocks: [
-                .paragraph("Settings, General can hide the Dock icon. With launch at login and auto-switch set up, the app becomes something you set once and stop thinking about.")
+            HelpSection(heading: "Read the icon", blocks: [
+                .paragraph("The icon turns green while a preset runs, and orange when a running preset needs the Accessibility permission. Rows start working the moment the permission is granted. Settings, General picks which glyph it uses. Orange means macOS is still waiting for your permission.")
+            ]),
+            HelpSection(heading: "Run it from the menu bar only", blocks: [
+                .paragraph("Settings, General can hide the Dock icon; one of the two always stays on, so you can always reach the app. With launch at login and auto-switch set up, the app becomes something you set once and stop thinking about. The editor is still there: click the icon and open the window from the popover. Menu-bar-only mode keeps every feature, minus the Dock icon.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Start and switch.** Start, then pick a preset.",
+                    "**Stop in an emergency.** Emergency Stop, or its shortcut.",
+                    "**Watch the color.** Green is running, orange needs the permission."
+                ], ordered: false),
+                .paragraph("Everything you need while a preset runs fits in this one popover.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Can I switch presets from the controller?", answer: "Yes. App Action outputs include Next Preset, Previous Preset, and Activate a specific preset.")
+                    HelpQuestion(question: "Can I switch presets from the controller?", answer: "App Action outputs include Next Preset, Previous Preset, and Activate a specific preset.")
                 ])
             ]),
         ],
@@ -1448,6 +3002,7 @@ enum HelpGuideLibrary {
             HelpLink(title: "Settings", url: "https://inputconfig.com/help/settings"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Auto-Switch", url: "https://inputconfig.com/help/per-app-auto-switch"),
+            HelpLink(title: "Statistics", url: "https://inputconfig.com/help/statistics"),
         ]
     )
 
@@ -1456,36 +3011,69 @@ enum HelpGuideLibrary {
         title: "Settings",
         category: "The app",
         url: "https://inputconfig.com/help/settings",
-        intro: "Settings opens from the gear at the top right or from the menu bar icon. Four tabs: General, Advanced, Devices, About.",
+        intro: "Settings holds InputConfig's app-wide choices in four tabs: General, Advanced, Devices and About. Open it from the gear at the top right of the window or from the menu bar icon. Most people only ever need two things here: the permission status and the emergency stop.",
         sections: [
             HelpSection(heading: "General", blocks: [
                 .list([
-                    "Accessibility permission: whether macOS has granted it, with a button to the right pane of System Settings.",
-                    "Text size, bold text, reduce transparency, reduce motion.",
-                    "Emergency stop: the shortcut, and the controller button and hold, one to five seconds.",
-                    "Spoken feedback voice.",
-                    "Launch at login. Dock and menu bar: show the app in either or both, and pick the menu bar glyph; it turns green while a preset runs.",
-                    "Global shortcut: toggles the most recent preset from anywhere.",
-                    "Reveal Data Folder, Export Backup, Restore from Backup."
-                ], ordered: false)
+                    "**Accessibility.** Whether macOS has granted the permission, with a button to the right pane of System Settings.",
+                    "**Accent color.** Automatic follows System Settings, and the last swatch picks any color.",
+                    "**Text and motion.** Text size runs from Small to Huge, with bold text, higher contrast text, reduce transparency and reduce motion. Higher contrast text brightens hints and status lines, and turns on with the Mac's Increase Contrast. These apply to this app only.",
+                    "**Scan.** How long Scan waits for a press: 10, 20 or 40 seconds, 1 minute, or until canceled. 20 seconds is the default, and a timeout is said aloud.",
+                    "**Emergency stop.** The keyboard shortcut, and the controller hold: Back and Start together by default, or one button you pick, held one to five seconds. See [emergency stop](https://inputconfig.com/help/emergency-stop).",
+                    "**Spoken feedback voice.** The system voice, or any installed voice, with Preview.",
+                    "**Launch at login.** macOS needs you to allow InputConfig in Login Items first.",
+                    "**Dock and menu bar.** Show the app in either or both; one of them always stays on so you can reach the app. Pick the menu bar glyph, which turns green while a preset runs.",
+                    "**Global shortcut.** Toggles the most recent preset from anywhere. If another app owns it, the switch turns off."
+                ], ordered: false),
+                .paragraph("Check the Accessibility line first whenever presets do nothing.")
             ]),
             HelpSection(heading: "Advanced", blocks: [
                 .list([
-                    "Polling rate: 60, 120, 180, or 240 Hz. 120 is the default; 180 and 240 are for aiming and cost a little CPU. A separate rate for battery and mains switches the moment the power source changes.",
-                    "Automatic preset switching: the global switch for auto-switch by app.",
-                    "Reset Settings to Default. Presets, folders, statistics, and calibration are untouched."
-                ], ordered: false)
+                    "**Polling rate.** 60, 120, 180 or 240 Hz. 120 is the default; 180 and 240 are for aiming and cost a little CPU. A separate rate for battery and mains switches the moment the power source changes.",
+                    "**Automatic preset switching.** Switch presets when the front app changes, the global switch for [auto-switch by app](https://inputconfig.com/help/per-app-auto-switch).",
+                    "**Restore active preset after a crash.** InputConfig asks before starting it again, and starts it by itself after 20 seconds with no answer.",
+                    "**Detect freezes and save diagnostics.** After 15 seconds frozen, the active preset is saved, so a force quit loses nothing.",
+                    "**Show the activity log.** At the bottom of the main window. Save Report makes a file to send with a bug report.",
+                    "**Data and storage.** Reveal Data Folder, Export Backup, Restore from Backup, Restore Built-in Presets, which puts back any built-in preset you deleted, and Check Older Presets Again, which moves rows recorded on a controller before 1.6 to the controls 1.6 reads. See [where your data lives](https://inputconfig.com/help/data-and-backups).",
+                    "**Reset Settings to Default.** Presets, folders and backups stay, and so do statistics and motion calibration."
+                ], ordered: false),
+                .paragraph("120 Hz suits almost everyone; go higher only for aiming.")
             ]),
             HelpSection(heading: "Devices", blocks: [
-                .paragraph("Every connected device: controllers with slot number, battery, connection type, and whether motion is available. Raw HID controllers appear here too. InputConfig, Devices in the menu bar lists everything the Mac can see, with a tick on what the app reads; tick a device to connect it by hand.")
+                .paragraph("Every connected device is listed: each controller with its slot number and its physical buttons, each with the button number a row uses. Raw HID controllers appear here too, marked as detected over raw HID, and Refresh looks for controllers again. Face button names sets the letters for pads other than PlayStation, Switch, Stadia, GameCube and Steam controllers (the GameCube controller and the 2026 Steam Controller are experimental in 1.6), including the many that report themselves as Xbox pads, and Positions puts North, South, East and West on every pad. InputConfig, Devices in the menu bar lists everything the Mac can see, with a tick on what the app reads; tick a device to connect it by hand. Only the names change, never the presets.")
             ]),
             HelpSection(heading: "About", blocks: [
-                .paragraph("Version and build, the changelog, the tip jar, and why the app exists.")
+                .paragraph("Version and build, View Changelog for every version, the tip jar, and why the app exists. The same release notes are on the [What's new](https://inputconfig.com/help/whats-new) page. Settings, About is where to read your version number.")
+            ]),
+            HelpSection(heading: "The Accessibility permission", blocks: [
+                .paragraph("Accessibility is the main permission InputConfig asks macOS for, because macOS only delivers keystrokes, clicks and pointer movement from an app that has it. Game controllers and MIDI devices are read without any permission, and your Mac's keyboard and mouse are read through Accessibility. Two other permissions come up only in special cases:"),
+                .list([
+                    "**Input Monitoring.** Only for a controller that also presents itself as a keyboard, such as some arcade sticks and macro pads. The Devices menu item for such a pad opens that pane of System Settings, and the pad is read when InputConfig comes back to the front after you allow it.",
+                    "**Bluetooth.** macOS may ask only when you use Disconnect on a Bluetooth controller's entry at the top of the sidebar."
+                ], ordered: false),
+                .paragraph("[What the permission allows, and how to judge any app that asks for it](https://inputconfig.com/questions/accessibility-permission-on-mac)."),
+                .paragraph("If presets do nothing in other apps, climb this ladder:"),
+                .list([
+                    "**Check Settings, General.** It shows whether the permission is granted.",
+                    "**Open System Settings.** The button there opens Privacy & Security, Accessibility. Switch InputConfig on.",
+                    "**Remove it and add it again.** If it is on and presets still do nothing, remove it with the minus button, add it again, and relaunch."
+                ], ordered: true),
+                .paragraph("Accessibility is the one permission every setup needs. Bluetooth is asked for only when you disconnect a wireless controller from the app, and Input Monitoring only for a controller that also acts as a keyboard.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**General.** Permission status, emergency stop, text size, Dock and menu bar.",
+                    "**Advanced.** Polling rate, auto-switch, crash recovery, backups.",
+                    "**Devices.** What is connected, and face button names."
+                ], ordered: false),
+                .paragraph("Set the emergency stop the way you like it, and leave the rest at the defaults until you need them.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Which polling rate for games?", answer: "120 or 240 for aiming with a stick or gyro. Desktop use is fine at 60."),
-                    HelpQuestion(question: "Does menu-bar-only mode still allow the editor?", answer: "Yes. Click the icon and open the window from the popover.")
+                    HelpQuestion(question: "Does menu-bar-only mode still allow the editor?", answer: "Click the icon and open the window from the popover."),
+                    HelpQuestion(question: "Does InputConfig need Input Monitoring?", answer: "Only for a controller that also presents itself as a keyboard, such as some arcade sticks and macro pads; the Devices menu item for such a pad opens the setting. Accessibility is the main permission. Game controllers and MIDI devices are read without either permission, and your Mac's keyboard and mouse are read through Accessibility."),
+                    HelpQuestion(question: "How do I see which version of InputConfig I have?", answer: "Open Settings, About. It shows the version and build number, and View Changelog lists what changed in every version. The current release is described on the [What's new](https://inputconfig.com/help/whats-new) page.")
                 ])
             ]),
         ],
@@ -1502,10 +3090,19 @@ enum HelpGuideLibrary {
         title: "Statistics",
         category: "The app",
         url: "https://inputconfig.com/help/statistics",
-        intro: "The Statistics sheet, from the chart icon at the top of the window or the menu bar, shows lifetime usage: time with a controller connected, time with a preset active, and how much output the app has sent. It is a small file in the app's folder and never leaves the Mac.",
+        intro: "The Statistics sheet shows lifetime usage on this Mac: time with a controller connected, time with a preset active, and how much output the app has sent. Open it from the chart icon at the top of the window or from the menu bar. It is a small file in the app's folder and never leaves the Mac.",
         sections: [
-            HelpSection(heading: "What is counted", blocks: [
-                .paragraph("Controller time, preset time, button presses seen, keystrokes sent, clicks sent, MIDI events sent, mouse motion in pixels, scroll ticks, touchpad updates, macros run, preset activations, days tracked, and a chart of the presets you activate most. Reset Statistics starts over.")
+            HelpSection(heading: "See what is counted", blocks: [
+                .list([
+                    "**Time.** Controller time, preset time, and each controller's own time.",
+                    "**Input.** Button presses seen and touchpad updates.",
+                    "**Output.** Keystrokes sent, clicks sent, MIDI events sent, mouse motion in pixels, scroll ticks and macros run.",
+                    "**Presets.** Preset activations, days tracked, and a chart of the presets you activate most."
+                ], ordered: false),
+                .paragraph("Input from the Mac's own keyboard counts only when a keyboard row in a running preset matches. The top presets chart is a quick way to see which layouts earn their place.")
+            ]),
+            HelpSection(heading: "Keep it or reset it", blocks: [
+                .paragraph("The counts live in stats.json in the app's data folder. Reset Statistics starts over. Nothing here is ever sent anywhere.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
@@ -1524,34 +3121,52 @@ enum HelpGuideLibrary {
         title: "Data and Backups",
         category: "The app",
         url: "https://inputconfig.com/help/data-and-backups",
-        intro: "Every preset, folder, snapshot, statistic, and calibration lives in the app's own container on your Mac. Updates replace the app and leave the container alone. Nothing is ever sent anywhere.",
+        intro: "Every preset, folder, snapshot, statistic and calibration lives in InputConfig's own container on your Mac. App Store updates replace the app and leave the container alone, and nothing is ever sent anywhere. Settings, Advanced has the three buttons you need: Reveal Data Folder, Export Backup and Restore from Backup.",
         sections: [
-            HelpSection(heading: "Where", blocks: [
-                .paragraph("Settings, General, Reveal Data Folder opens it. The path is ~/Library/Containers/com.inputconfig.app/Data/Library/Application Support/InputConfig/."),
+            HelpSection(heading: "Find the data folder", blocks: [
+                .paragraph("Settings, Advanced, Reveal Data Folder opens it in the Finder."),
+                .paragraph("**Finder, Go, Go to Folder:** Paste this path to open the same folder by hand."),
+                .paragraph("**What happens:** The folder opens, with one subfolder for presets and one for their saved versions."),
                 .list([
-                    "presets: one JSON file per preset, the same files Export writes and Import reads.",
-                    "versions: the last ten saves of each preset, for Revert.",
-                    "groups.json: folders, colours, order.",
-                    "stats.json: lifetime statistics.",
-                    "motionCalibration.json: each controller's resting zero."
-                ], ordered: false)
+                    "**presets.** One JSON file per preset, the same files Export writes and Import reads.",
+                    "**versions.** The last ten saves of each preset, for Revert.",
+                    "**groups.json.** Folders, colors and order.",
+                    "**stats.json.** Lifetime statistics.",
+                    "**motionCalibration.json.** Each controller's resting zero."
+                ], ordered: false),
+                .paragraph("Your whole setup is a handful of plain files in one folder.")
             ]),
-            HelpSection(heading: "Backup and moving to a new Mac", blocks: [
-                .paragraph("Settings, General, Export Backup writes every preset, folder, and setting into one file. Restore from Backup reads it back. Export on the old Mac, install on the new one, restore.")
+            HelpSection(heading: "Back up, or move to a new Mac", blocks: [
+                .list([
+                    "**You:** On the old Mac, click Settings, Advanced, Export Backup. On the new Mac, install InputConfig and click Restore from Backup.",
+                    "**InputConfig:** Writes every preset, folder and setting into one file, and reads it back on the other Mac without duplicating the built-in presets.",
+                    "**Check:** InputConfig says what it restored, and your presets are in the sidebar."
+                ], ordered: false),
+                .paragraph("iCloud does not sync presets, because the app makes no network connections. Export a backup and copy the file yourself; that one file is the whole setup.")
             ]),
-            HelpSection(heading: "Uninstalling", blocks: [
-                .paragraph("Drag the app to the Trash. The container stays until you delete it, so a reinstall picks up where you left off.")
+            HelpSection(heading: "Uninstall without losing anything", blocks: [
+                .paragraph("Drag the app to the Trash. The container stays until you delete it, so a reinstall picks up where you left off. Removing the app never removes your presets.")
+            ]),
+            HelpSection(heading: "The short version", blocks: [
+                .list([
+                    "**Where.** Settings, Advanced, Reveal Data Folder.",
+                    "**Backup.** Export Backup writes one file; Restore from Backup reads it.",
+                    "**Updates.** They never touch the container."
+                ], ordered: false),
+                .paragraph("Make a backup before you change a lot, and keep the file somewhere you back up anyway.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Does iCloud sync my presets?", answer: "No. The app makes no network connections. Export a backup and copy the file yourself."),
-                    HelpQuestion(question: "Can I edit the preset files directly?", answer: "Yes, they are plain JSON. Quit the app first so it does not overwrite your change.")
+                    HelpQuestion(question: "Can I edit the preset files directly?", answer: "They are plain JSON. Quit the app first so it does not overwrite your change."),
+                    HelpQuestion(question: "Will an InputConfig update erase my presets?", answer: "No. An App Store update replaces the app and leaves its container alone, so presets, folders, statistics and calibration carry over. Presets saved by a newer version still open in an older one. What changed in each version is on the [What's new](https://inputconfig.com/help/whats-new) page.")
                 ])
             ]),
         ],
         related: [
             HelpLink(title: "Presets and Folders", url: "https://inputconfig.com/help/presets-and-folders"),
             HelpLink(title: "Your First Preset", url: "https://inputconfig.com/help/first-preset"),
+            HelpLink(title: "What's new in InputConfig", url: "https://inputconfig.com/help/whats-new"),
         ]
     )
 
@@ -1560,51 +3175,96 @@ enum HelpGuideLibrary {
         title: "Accessibility",
         category: "The app",
         url: "https://inputconfig.com/help/accessibility-features",
-        intro: "InputConfig exists because its author needed it. This is everything in the app that was put there for accessibility.",
+        intro: "This is every accessibility feature in InputConfig in one place, and none of it is paid. I built InputConfig because my hands do not work well, so most of the app started here. Each item links to the page that explains it, and the guides at the end walk through whole setups.",
         sections: [
             HelpSection(heading: "Input from whatever works", blocks: [
                 .list([
-                    "The PlayStation Access Controller and the Xbox Adaptive Controller, with switches on their ports as buttons.",
-                    "Any gamepad, joystick, wheel, or arcade stick the Mac can see, MIDI pads and knobs, the Mac's own keyboard, mouse, and trackpad, and headset or hearing aid buttons.",
-                    "Tap the Mac: a knock on the laptop as an input, no hardware.",
-                    "Screen regions: areas of a display that act as inputs.",
-                    "Motion: a pointer moved by tilting the controller, for hands that cannot work a stick."
-                ], ordered: false)
+                    "**Adaptive controllers.** The PlayStation Access Controller and the Xbox Adaptive Controller, with switches on their ports as buttons. See [adaptive controllers on a Mac](https://inputconfig.com/guides/adaptive-controllers-on-mac).",
+                    "**Anything the Mac can see.** Any gamepad, joystick, wheel or arcade stick, MIDI pads and knobs, the Mac's own keyboard, mouse and trackpad, and headset or hearing aid buttons.",
+                    "**A knock on the laptop.** [Tap the Mac](https://inputconfig.com/help/tap-the-mac) needs no hardware: a knuckle or the side of a hand works as a button for someone who cannot reach one. Tap the Mac was tested on M4 MacBooks and did not work on an M1 Pro in our testing; the calibrator's status chip tells you whether yours listens. See [which MacBooks have the sensor](https://inputconfig.com/questions/does-my-macbook-have-an-accelerometer).",
+                    "**Screen regions.** Areas of a display that act as inputs, for anyone who can move the pointer but has few buttons. See [screen regions](https://inputconfig.com/help/cursor-and-stick-regions).",
+                    "**Motion.** A pointer moved by tilting the controller, for hands that cannot work a stick. See [gyro aim](https://inputconfig.com/help/gyroscope-aim)."
+                ], ordered: false),
+                .paragraph("Start from the control that works best for your body, and map everything to it.")
             ]),
-            HelpSection(heading: "A few controls doing a lot", blocks: [
+            HelpSection(heading: "Do a lot with a few controls", blocks: [
                 .list([
-                    "Automatic layout of every control the device has.",
-                    "One-stick driving.",
-                    "Hold, double tap, and chords: three or more outputs per control.",
-                    "Toggle: sticky keys and held mouse buttons for one-handed dragging.",
-                    "Macros and Type Text.",
-                    "Auto-switch by app."
-                ], ordered: false)
+                    "**Automatic layout.** A row for every control the device has, in one press.",
+                    "**One-stick driving.** A whole vehicle on one stick. See [one-stick driving](https://inputconfig.com/help/one-stick-driving).",
+                    "**Hold, double tap and chords.** Three or more outputs per control. See [hold and double tap](https://inputconfig.com/help/hold-and-double-tap).",
+                    "**Toggle.** Sticky keys, and held mouse buttons for one-handed dragging.",
+                    "**Macros and Type Text.** A sequence or a whole phrase from one press.",
+                    "**Auto-switch by app.** The right layout appears with the app."
+                ], ordered: false),
+                .paragraph("One switch can do three jobs, and a second switch can double that.")
             ]),
-            HelpSection(heading: "The Mac's own accessibility on a button", blocks: [
-                .paragraph("Dictation, Zoom, Speak Selection, VoiceOver commands, and Siri Shortcuts as outputs.")
+            HelpSection(heading: "Put the Mac's own accessibility on a button", blocks: [
+                .paragraph("Dictation, Zoom, Speak Selection, VoiceOver commands and Siri Shortcuts can all be outputs. Start Dictation presses the Mac's own dictation key, so it works from a mouse button, a switch or a knock, even on a keyboard with no microphone key. See [dictation, zoom and speak selection](https://inputconfig.com/help/dictation-zoom-speak) and [starting dictation from any button](https://inputconfig.com/questions/how-to-start-dictation-from-any-button-on-mac). Dictation on a big button is often the single most useful thing to set up.")
             ]),
-            HelpSection(heading: "Tuning for the hand", blocks: [
-                .paragraph("Inner and outer deadzones with a live plot, sensitivity curves with Smooth for precision near the centre, adjustable hold thresholds and double-tap windows, a sensitivity multiplier per preset.")
+            HelpSection(heading: "Tune it for the hand", blocks: [
+                .list([
+                    "**Deadzones with a live plot.** Inner and outer, set while you watch the stick. See [deadzones](https://inputconfig.com/help/deadzones-and-sensitivity).",
+                    "**Curves.** Smooth for precision near the center.",
+                    "**Timing.** Adjustable hold thresholds and double-tap windows.",
+                    "**Speed.** Pointer speed and Scroll speed for a whole preset, and Ramp-up for small targets."
+                ], ordered: false),
+                .paragraph("A larger inner deadzone and the Smooth curve calm most tremors.")
             ]),
-            HelpSection(heading: "Feedback that is not visual", blocks: [
-                .paragraph("Spoken feedback per row, rumble per row, a light bar colour per preset.")
+            HelpSection(heading: "Get feedback that is not visual", blocks: [
+                .list([
+                    "**Speech.** A phrase per row, or the input's name. See [spoken feedback](https://inputconfig.com/help/spoken-feedback).",
+                    "**Rumble.** A buzz per row. See [vibration](https://inputconfig.com/help/haptic-feedback).",
+                    "**Light.** A light bar color per preset. See [light bar](https://inputconfig.com/help/light-bar)."
+                ], ordered: false),
+                .paragraph("Hear or feel every press, and you never have to look to check.")
             ]),
-            HelpSection(heading: "The app itself", blocks: [
-                .paragraph("Text size up to Huge, bold text, reduced transparency and motion, VoiceOver support in the scanner and the editor, a Cancel button on the scanner for people without a keyboard, and an emergency stop that always works. No account, no network, nothing locked.")
+            HelpSection(heading: "Use the app itself comfortably", blocks: [
+                .list([
+                    "**Text and display.** Text size from Small to Huge, bold text, higher contrast text, and reduced transparency and motion, for the app itself.",
+                    "**Typed places.** A screen region, stick zone or touchpad zone can be placed with typed Left, Top, Width and Height fields in percent, and a fixed click point with X and Y fields, instead of dragging.",
+                    "**Time to press.** Scan waits as long as you set in Settings, General, Scan, up to until canceled, and says aloud when it times out.",
+                    "**VoiceOver.** Every field in the binding editor and the visualizers is named, and the keyboard focus ring is there.",
+                    "**No keyboard needed.** A Cancel button on the scanner, and while the editor is open the controller still moves the pointer, clicks, and sends Escape, Return, Tab, the arrows and Space.",
+                    "**A way out.** An [emergency stop](https://inputconfig.com/help/emergency-stop) that always works, from the controller alone.",
+                    "**Nothing to sign up for.** No account, no network, nothing locked."
+                ], ordered: false),
+                .paragraph("You can set up InputConfig with the controller you will use it with.")
+            ]),
+            HelpSection(heading: "What to do next", blocks: [
+                .paragraph("Pick the guide closest to your situation:"),
+                .list([
+                    "**Tremor, arthritis or limited range.** [A mouse alternative for tremor and arthritis](https://inputconfig.com/guides/tremor-and-limited-range).",
+                    "**One hand.** [Using a Mac with one hand](https://inputconfig.com/guides/one-handed-mac).",
+                    "**One or two switches.** [A single switch or a few buttons](https://inputconfig.com/guides/single-switch-and-few-buttons).",
+                    "**Setting it up for someone else.** [The occupational therapist setup](https://inputconfig.com/guides/occupational-therapist-setup). Export Backup makes the whole setup one file."
+                ], ordered: false),
+                .paragraph("Start with the guide, then tune the details with the pages above.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
                     HelpQuestion(question: "Is any of this paid?", answer: "No. The tip jar unlocks nothing."),
-                    HelpQuestion(question: "Can an occupational therapist set it up for a client?", answer: "Yes. Export Backup makes the whole setup one file.")
+                    HelpQuestion(question: "Can an occupational therapist set it up for a client?", answer: "Export Backup makes the whole setup one file."),
+                    HelpQuestion(question: "Does the Xbox Adaptive Controller work with a Mac?", answer: "It works with no setup. Switches plugged into its ports arrive as buttons, and each one binds like any other button."),
+                    HelpQuestion(question: "Is there a setup for tremor, arthritis, or one hand?", answer: "Each has a guide: [a mouse alternative for tremor and arthritis](https://inputconfig.com/guides/tremor-and-limited-range), [using a Mac with one hand](https://inputconfig.com/guides/one-handed-mac), and, for wrist and finger pain, [a mouse alternative for carpal tunnel and RSI](https://inputconfig.com/questions/mouse-alternative-for-carpal-tunnel-on-mac).")
                 ])
             ]),
         ],
         related: [
-            HelpLink(title: "A controller for an older parent", url: "https://inputconfig.com/guides/controller-for-an-older-parent"),
+            HelpLink(title: "Setting up a Mac for an elderly parent", url: "https://inputconfig.com/guides/controller-for-an-older-parent"),
             HelpLink(title: "The PlayStation Access Controller on a Mac", url: "https://inputconfig.com/guides/playstation-access-controller"),
-            HelpLink(title: "Using a Mac without a keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
-            HelpLink(title: "Tremor and limited range of motion", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
+            HelpLink(title: "How to use a Mac without a mouse or keyboard", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
+            HelpLink(title: "A mouse alternative for tremor and short reach on a Mac", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
+            HelpLink(title: "The Xbox Adaptive Controller on a Mac", url: "https://inputconfig.com/guides/xbox-adaptive-controller"),
+            HelpLink(title: "One, two, or four switches", url: "https://inputconfig.com/guides/single-switch-and-few-buttons"),
+            HelpLink(title: "Use a Mac with one hand", url: "https://inputconfig.com/guides/one-handed-mac"),
+            HelpLink(title: "One-stick driving, set up properly", url: "https://inputconfig.com/guides/one-stick-driving-setup"),
+            HelpLink(title: "Computer access on a Mac: assessing and setting up a client", url: "https://inputconfig.com/guides/occupational-therapist-setup"),
+            HelpLink(title: "How to use a Mac hands-free", url: "https://inputconfig.com/questions/how-to-use-a-mac-hands-free"),
+            HelpLink(title: "Adaptive controllers that work on a Mac", url: "https://inputconfig.com/guides/adaptive-controllers-on-mac"),
+            HelpLink(title: "Assistive technology on a Mac for students with physical disabilities", url: "https://inputconfig.com/guides/assistive-technology-for-students-on-a-mac"),
+            HelpLink(title: "Using a joystick as your Mac's mouse", url: "https://inputconfig.com/guides/joystick-mouse-for-mac"),
+            HelpLink(title: "Free assistive technology on a Mac", url: "https://inputconfig.com/questions/free-assistive-technology-for-mac"),
+            HelpLink(title: "About InputConfig", url: "https://inputconfig.com/about"),
         ]
     )
 
@@ -1655,84 +3315,42 @@ enum HelpGuideLibrary {
 
     /// Longer walkthroughs on the site, one per situation. Not mirrored here.
     static let accessibilityGuides: [HelpWebLink] = [
-        HelpWebLink(title: "A controller for an older parent", detail: "A step-by-step guide to giving an older parent a game controller instead of a mouse and keyboard on a Mac: which controller, a calm layout, spoken feedback, big text, dictation, and a preset you can download.", url: "https://inputconfig.com/guides/controller-for-an-older-parent"),
-        HelpWebLink(title: "The PlayStation Access Controller on a Mac", detail: "Use Sony's Access Controller to run a Mac: pairing, the profile that sends nothing, a desktop layout for its eight buttons and stick, and 3.5 mm switches.", url: "https://inputconfig.com/guides/playstation-access-controller"),
-        HelpWebLink(title: "The Xbox Adaptive Controller on a Mac", detail: "Set up the Xbox Adaptive Controller on a Mac with InputConfig: pairing, how its 19 switch ports and two large buttons appear, mapping external switches and joysticks, and a downloadable desktop layout.", url: "https://inputconfig.com/guides/xbox-adaptive-controller"),
-        HelpWebLink(title: "Using a Mac without a keyboard", detail: "How to use a Mac with no keyboard at all: a controller for the pointer and the essential keys, dictation on a button, Type Text for the phrases you type most, on-screen options, and a knock on the MacBook as an input.", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
-        HelpWebLink(title: "Tremor and limited range of motion", detail: "Tune a controller for a hand tremor or limited range of motion on a Mac: inner deadzones from a live plot, outer deadzones for short travel, the Smooth curve, slow pointer speed, longer hold and double-tap windows, and a preset to start from.", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
-        HelpWebLink(title: "One, two, or four switches", detail: "Layouts for very few inputs on a Mac: how one switch can carry three actions with hold and double tap, two-switch and four-switch pointer schemes, cursor regions as extra inputs, and spoken feedback so nothing needs to be seen.", url: "https://inputconfig.com/guides/single-switch-and-few-buttons"),
-        HelpWebLink(title: "Using a Mac one-handed", detail: "One-handed Mac setups with InputConfig: a single Joy-Con held sideways as a complete pointer and key set, one half of a keyboard remapped so the other half is reachable, and mouse buttons that carry keys.", url: "https://inputconfig.com/guides/one-handed-mac"),
-        HelpWebLink(title: "One-stick driving, set up properly", detail: "A complete setup for driving games on a Mac from one joystick with InputConfig's one-stick driving: axis choice, throttle pulsing, steering by mouse or keys, reverse gear timing, game settings that help, and which games work.", url: "https://inputconfig.com/guides/one-stick-driving-setup"),
+        HelpWebLink(title: "Setting up a Mac for an elderly parent", detail: "Setting up a Mac for an older parent: a bigger pointer and text, an easier mouse or a game controller in its place, dictation on a button, and a free layout.", url: "https://inputconfig.com/guides/controller-for-an-older-parent"),
+        HelpWebLink(title: "The PlayStation Access Controller on a Mac", detail: "Sony's Access Controller works on a Mac. What its base profile sends, the built-in preset, sockets and switches, and why some sockets send nothing.", url: "https://inputconfig.com/guides/playstation-access-controller"),
+        HelpWebLink(title: "Adaptive controllers that work on a Mac", detail: "Which adaptive controllers work on a Mac and how each shows up: PlayStation Access, Xbox Adaptive Controller, QuadStick, switch interfaces, AbleNet Hitch.", url: "https://inputconfig.com/guides/adaptive-controllers-on-mac"),
+        HelpWebLink(title: "The Xbox Adaptive Controller on a Mac", detail: "Use the Xbox Adaptive Controller as a Mac keyboard and mouse: pairing, what its 19 switch ports send, external switches and joysticks, and a free layout.", url: "https://inputconfig.com/guides/xbox-adaptive-controller"),
+        HelpWebLink(title: "How to use a Mac without a mouse or keyboard", detail: "Use a Mac with no mouse or keyboard: the macOS built-ins first (Voice Control, Mouse Keys, head pointer), then a controller or switch for pointer and keys.", url: "https://inputconfig.com/guides/mac-without-a-keyboard"),
+        HelpWebLink(title: "A mouse alternative for tremor and short reach on a Mac", detail: "No SteadyMouse on a Mac? Set up a game controller for tremor, arthritis, or short reach: wide deadzones, a slow curve, hold-to-click, and a free preset.", url: "https://inputconfig.com/guides/tremor-and-limited-range"),
+        HelpWebLink(title: "One, two, or four switches", detail: "One switch can do three things on a Mac: press, hold, double press. Layouts for one to four switches, USB switch interfaces, and macOS Switch Control.", url: "https://inputconfig.com/guides/single-switch-and-few-buttons"),
+        HelpWebLink(title: "Use a Mac with one hand", detail: "Run a Mac with one hand, left or right: a single Joy-Con as pointer and keys, a controller beside a mouse, Sticky Keys for shortcuts, mouse buttons with jobs.", url: "https://inputconfig.com/guides/one-handed-mac"),
+        HelpWebLink(title: "One-stick driving, set up properly", detail: "Drive in keyboard-driven Mac racing games from one joystick: push to go, pull to brake, snap back twice for reverse. For the Access Controller or any stick.", url: "https://inputconfig.com/guides/one-stick-driving-setup"),
+        HelpWebLink(title: "Assistive technology on a Mac for students with physical disabilities", detail: "For special education teachers, OTs and school AT teams: switches, adaptive controllers and gamepads as mouse and keys on a school Mac. Free, no account.", url: "https://inputconfig.com/guides/assistive-technology-for-students-on-a-mac"),
+        HelpWebLink(title: "A controller for a child on a Mac", detail: "Set up a game controller for a child on a Mac: pads for small hands, Minecraft, Roblox and browser games, two players, and a stop button that always works.", url: "https://inputconfig.com/guides/controller-setup-for-a-child"),
+        HelpWebLink(title: "Using a joystick as your Mac's mouse", detail: "Use a joystick as a mouse on a Mac: a joystick mouse, a USB or adaptive joystick, a chin or mouth stick. A slow, precise pointer and easy clicks, free.", url: "https://inputconfig.com/guides/joystick-mouse-for-mac"),
     ]
     static let workAndPlayGuides: [HelpWebLink] = [
-        HelpWebLink(title: "A MIDI controller as a control surface", detail: "For producers and audio artists: use a MIDI keyboard, pad controller, or knob box to run the Mac and the DAW at once with InputConfig. Knob modes, hardware volume, transport and shortcut pads, channel splits, Bluetooth MIDI, and a downloadable DAW remote preset.", url: "https://inputconfig.com/guides/midi-control-surface"),
-        HelpWebLink(title: "A game controller as a MIDI instrument", detail: "Play a DAW from a DualSense or Xbox controller on a Mac: face buttons as notes or drum pads, sticks as pitch bend and modulation, triggers as expression, gyro as a filter sweep, and transport on the shoulders. Setup and a scale-mapped preset to download.", url: "https://inputconfig.com/guides/gamepad-as-midi-instrument"),
-        HelpWebLink(title: "A streaming deck from a gamepad or MIDI pad", detail: "Build a streaming control deck on a Mac with InputConfig: OBS scene switching and mute on F13 to F19 hotkeys, Siri Shortcuts for lights and Do Not Disturb, spoken confirmation, and per-app auto-switch. A preset to download.", url: "https://inputconfig.com/guides/streaming-deck"),
-        HelpWebLink(title: "Play any Mac game with a controller", detail: "How to play keyboard-and-mouse games on a Mac with a PS5, Xbox, or Switch controller using InputConfig: the Smart Preset Maker, stick aim tuning, confine and recenter, polling rate, gyro, and fixing the usual problems.", url: "https://inputconfig.com/guides/play-any-game-with-a-controller"),
-        HelpWebLink(title: "Working from a controller", detail: "A complete office layout for a game controller on a Mac with InputConfig: chord layers for editing shortcuts, Type Text for your details, dictation for prose, app switching, window management, and a downloadable preset.", url: "https://inputconfig.com/guides/controller-instead-of-keyboard-for-work"),
-        HelpWebLink(title: "A spare keyboard as a macro deck", detail: "Use a cheap USB numpad or a second keyboard as a dedicated macro deck on a Mac with InputConfig: keys captured per device so the main keyboard is untouched, macros with timing, Type Text, app launchers, and a preset to download.", url: "https://inputconfig.com/guides/spare-keyboard-macro-deck"),
-        HelpWebLink(title: "Browsing, video, and reading from the couch", detail: "A living-room setup for a Mac or a Mac plugged into a TV: browse the web, control video, read, and manage volume from a game controller with InputConfig. Presets for browsing, media, and reading, and tips for a TV screen.", url: "https://inputconfig.com/guides/couch-browsing-and-media"),
-        HelpWebLink(title: "A controller as an editing shuttle", detail: "Use a game controller as an editing shuttle on a Mac with InputConfig: J K L on the triggers and stick, frame stepping on the D-pad, in and out points, cuts, and tool switching on chords, with a preset for Final Cut Pro to download.", url: "https://inputconfig.com/guides/video-editing-shuttle"),
-        HelpWebLink(title: "A controller for drawing and photo editing", detail: "Use a game controller as a shortcut deck and modifier set for drawing and photo editing on a Mac with InputConfig: tools on the face buttons, brush size on a stick, modifiers in toggle mode, undo under the thumb, and a preset to download.", url: "https://inputconfig.com/guides/drawing-and-photo-editing"),
-        HelpWebLink(title: "Anki from a controller", detail: "Review Anki flashcards from the sofa with a game controller on a Mac: the built-in InputConfig Anki preset explained, the answer buttons, undo and audio replay on the bumpers, mark and bury on the stick clicks, and a light bar colour.", url: "https://inputconfig.com/guides/anki-from-a-controller"),
-        HelpWebLink(title: "Emulators and retro games", detail: "Map a controller for emulators and retro games on a Mac that never had controller support: DOSBox, ScummVM, browser-based ports, old Mac games, and text-mode games, with InputConfig. Layouts and settings that work.", url: "https://inputconfig.com/guides/emulators-and-retro-games"),
-        HelpWebLink(title: "Assessing and building a setup for a client", detail: "A working method for occupational therapists and assistive technology specialists setting up InputConfig for a client on a Mac: assessment with the Live Visualizer, choosing inputs, building in layers, documenting with Export Backup, and handing over.", url: "https://inputconfig.com/guides/occupational-therapist-setup"),
-    ]
-
-    /// Short answers on the site, one question each. Not mirrored here.
-    static let questions: [HelpWebLink] = [
-        HelpWebLink(title: "How to connect a controller to a Mac", detail: "Connect a game controller to a Mac over Bluetooth or USB in under a minute: the pairing button for every PlayStation, Xbox, Switch, and 8BitDo pad, how to check the Mac sees it, and what to do when a game does not.", url: "https://inputconfig.com/questions/how-to-connect-a-controller-to-a-mac"),
-        HelpWebLink(title: "How to connect a PS5 controller to a Mac", detail: "Pair a PS5 DualSense controller with a Mac over Bluetooth by holding PS and Create, or plug in USB-C. Which features work on a Mac (light bar, touchpad, gyro, haptics), why it disconnects, and how to use it in games that do not support it.", url: "https://inputconfig.com/questions/how-to-connect-a-ps5-controller-to-a-mac"),
-        HelpWebLink(title: "How to connect a PS4 controller to a Mac", detail: "Pair a PS4 DualShock 4 with a Mac: hold PS and Share until the light bar flashes, then connect in Bluetooth settings, or use a micro-USB cable. What works, what does not, and how to use it in games without controller support.", url: "https://inputconfig.com/questions/how-to-connect-a-ps4-controller-to-a-mac"),
-        HelpWebLink(title: "How to connect an Xbox controller to a Mac", detail: "Pair an Xbox Series X|S, Xbox One, or Elite Series 2 controller with a Mac over Bluetooth, or plug in USB-C. Which Xbox controllers have Bluetooth, the firmware update that fixes pairing, and why the wired Xbox 360 pad does not work.", url: "https://inputconfig.com/questions/how-to-connect-an-xbox-controller-to-a-mac"),
-        HelpWebLink(title: "How to connect a Switch Pro Controller or Joy-Cons to a Mac", detail: "Pair a Nintendo Switch Pro Controller or Joy-Cons with a Mac over Bluetooth: the Sync button, macOS 13 or later, pairing each Joy-Con on its own, and using them in games that do not support them.", url: "https://inputconfig.com/questions/how-to-connect-a-switch-pro-controller-to-a-mac"),
-        HelpWebLink(title: "How to connect an 8BitDo controller to a Mac", detail: "Pair any 8BitDo controller with a Mac: which position the mode switch should be in, what to do on models without a switch, and why it works in some games and not others.", url: "https://inputconfig.com/questions/how-to-connect-an-8bitdo-controller-to-a-mac"),
-        HelpWebLink(title: "How to use a joystick on a Mac", detail: "Use a USB joystick, HOTAS, flight stick, racing wheel, or arcade stick on a Mac: what macOS does with plain HID devices, which apps read them directly, and how to use one in any game or app that does not.", url: "https://inputconfig.com/questions/how-to-use-a-joystick-on-a-mac"),
-        HelpWebLink(title: "Controller connected but not working on a Mac", detail: "Your Mac lists the controller but a game or app ignores it. Why that happens on macOS (native games, Steam, CrossOver, browser games, apps that are not games) and the fix for each, including mapping the controller to the keyboard.", url: "https://inputconfig.com/questions/controller-connected-but-not-working-on-mac"),
-        HelpWebLink(title: "PS5 controller keeps disconnecting from a Mac", detail: "A DualSense that drops off a Mac every few minutes is nearly always one of six things: still paired to a PS5, low battery, a stale pairing, a bad hub, Bluetooth interference, or an old Mac. How to tell which, and the fix for each.", url: "https://inputconfig.com/questions/ps5-controller-keeps-disconnecting-from-mac"),
-        HelpWebLink(title: "Xbox controller will not connect to a Mac", detail: "An Xbox controller that will not pair with a Mac is usually a model without Bluetooth, old firmware, or a pad still bound to an Xbox. How to tell which Xbox controller you have and the fix for each.", url: "https://inputconfig.com/questions/xbox-controller-wont-connect-to-mac"),
-        HelpWebLink(title: "Controller works on a Mac but not in Steam", detail: "The Mac sees your controller and Steam games ignore it. Steam Input settings for PlayStation, Xbox, and Switch pads, the Input Monitoring permission macOS wants, the games that ignore Steam Input on Mac, and the mapping fallback that always works.", url: "https://inputconfig.com/questions/controller-works-on-mac-but-not-in-steam"),
-        HelpWebLink(title: "Using a controller with CrossOver and Game Porting Toolkit games on a Mac", detail: "Windows games running on a Mac through CrossOver, Whisky, or Apple's Game Porting Toolkit often do not see a controller, or see it as the wrong one. What passes through, what does not, and the keyboard-mapping fix that works in every case.", url: "https://inputconfig.com/questions/use-a-controller-with-crossover-games-on-mac"),
-        HelpWebLink(title: "How to play Minecraft with a controller on a Mac", detail: "Minecraft Java Edition on a Mac has no controller support built in. The two ways to add it: a mod (Controllable for Forge, MidnightControls for Fabric) or mapping the controller to the keyboard with a free app, with a ready-made Minecraft layout. Which to pick and how.", url: "https://inputconfig.com/questions/how-to-play-minecraft-with-a-controller-on-mac"),
-        HelpWebLink(title: "How to play Roblox with a controller on a Mac", detail: "Roblox on Mac has gamepad support, but it is built around Xbox pads and many experiences ignore it. How to connect a PS5, Xbox, or Switch controller for Roblox on a Mac, and what to do in the games that do not respond.", url: "https://inputconfig.com/questions/how-to-play-roblox-with-a-controller-on-mac"),
-        HelpWebLink(title: "Can you play Fortnite on a Mac with a controller?", detail: "Fortnite has not run on the Mac since 2020, but it plays on a Mac through Xbox Cloud Gaming or GeForce NOW in a browser, with a controller. How to set it up, which pads work, and the fix when the stream does not see the controller.", url: "https://inputconfig.com/questions/can-you-play-fortnite-on-mac-with-a-controller"),
-        HelpWebLink(title: "How to play Genshin Impact on a Mac with a controller", detail: "There is no Mac version of Genshin Impact. The ways Mac players run it, PlayCover for the iOS build, a Wine launcher for the Windows build, and cloud streaming, and how a controller works in each.", url: "https://inputconfig.com/questions/how-to-play-genshin-impact-on-mac-with-a-controller"),
-        HelpWebLink(title: "How to use a game controller as a mouse on a Mac", detail: "Turn a PS5, Xbox, Switch, or any game controller into a mouse for a Mac: a stick moves the pointer, a trigger clicks, the other stick scrolls, with a free app and a built-in preset. For the sofa, for accessibility, or just because.", url: "https://inputconfig.com/questions/how-to-use-a-game-controller-as-a-mouse-on-mac"),
-        HelpWebLink(title: "How to control a Mac with a game controller", detail: "Use a game controller as a remote for a Mac: play, pause, and volume on the buttons, a pointer on the stick, tabs and pages on the shoulders, slides for a presentation. What a free mapper can do, with presets for each job.", url: "https://inputconfig.com/questions/how-to-control-a-mac-with-a-game-controller"),
-        HelpWebLink(title: "How to remap controller buttons on a Mac", detail: "Remap a PS5, Xbox, Switch, or any controller's buttons on a Mac: inside a game, through Steam Input, on the controller itself for the Edge and Elite, or system-wide with a free mapper that turns any button into any key, click, or action.", url: "https://inputconfig.com/questions/how-to-remap-controller-buttons-on-mac"),
-        HelpWebLink(title: "How to test whether a controller works on a Mac", detail: "Three ways to test whether a game controller works on a Mac and see every button, stick, and trigger live: System Settings on macOS 13 and later, a browser tool, and a live visualizer that also shows drift and deadzones.", url: "https://inputconfig.com/questions/how-to-test-if-a-controller-works-on-a-mac"),
-        HelpWebLink(title: "How to fix controller stick drift on a Mac", detail: "A stick that moves the camera or pointer on its own is drift, and on a Mac the fix is a deadzone: in the game, in Steam, or system-wide with a free mapper. How to measure the drift and set the smallest deadzone that hides it.", url: "https://inputconfig.com/questions/how-to-fix-controller-stick-drift-on-mac"),
-        HelpWebLink(title: "How to use two controllers on a Mac", detail: "Connect two or more game controllers to one Mac for local co-op: pairing several pads, how macOS and games number them, what to do when a game only sees one, and mapping each pad to its own keys.", url: "https://inputconfig.com/questions/how-to-use-two-controllers-on-a-mac"),
-        HelpWebLink(title: "Free controller mapper for Mac: the honest list", detail: "Every app that maps a game controller to the keyboard and mouse on a Mac, free and paid, what each does, which ones are still maintained, and how to pick. Written by the maker of one of them, so the bias is stated up front.", url: "https://inputconfig.com/questions/free-controller-mapper-for-mac"),
-        HelpWebLink(title: "How to use a controller with browser games on a Mac", detail: "Play browser games on a Mac with a controller: which sites read a pad directly through the Gamepad API, how cloud gaming uses it, and how to play the keyboard-only web games, emulators, and Flash-era ports that never will.", url: "https://inputconfig.com/questions/how-to-use-a-controller-with-browser-games-on-mac"),
-        HelpWebLink(title: "Can you use the PS5 controller's touchpad as a trackpad on a Mac?", detail: "The DualSense and DualShock 4 touchpad works as a trackpad on a Mac with a free app: one finger moves the pointer, tap to click, two fingers scroll, plus regions and gestures. How it works and how to set it up.", url: "https://inputconfig.com/questions/can-you-use-the-ps5-touchpad-as-a-trackpad-on-mac"),
-        HelpWebLink(title: "How to use gyro aim on a Mac", detail: "Aim with the controller's gyroscope in any Mac game: which controllers have one, how a free app turns tilt into mouse movement, the settings that make it feel right, and re-zeroing from the pad.", url: "https://inputconfig.com/questions/how-to-use-gyro-aim-on-a-mac"),
-        HelpWebLink(title: "Controller input lag on a Mac", detail: "Why a controller feels laggy on a Mac and what fixes it: Bluetooth latency versus a cable, interference, polling rate, the game's own delay, cloud streaming, and how a mapper affects it.", url: "https://inputconfig.com/questions/controller-input-lag-on-mac"),
-        HelpWebLink(title: "Can you play League of Legends with a controller on a Mac?", detail: "League of Legends has no controller support on any platform. It can be played from a controller on a Mac with a mapper, which is an accessibility answer more than a competitive one. What works, what does not, and the layout that makes it playable.", url: "https://inputconfig.com/questions/can-you-play-league-of-legends-with-a-controller-on-mac"),
-        HelpWebLink(title: "Controller connected but not detected", detail: "When macOS lists a gamepad but InputConfig does not pick it up, the Devices menu connects it directly: any Bluetooth or USB device, remembered by make and model, read bit by bit if it has no known layout.", url: "https://inputconfig.com/questions/controller-connected-but-not-detected-on-mac"),
-        HelpWebLink(title: "Map every button at once", detail: "InputConfig 1.5 lays out every control a connected controller presents, in sections, ready to bind: sticks, triggers, D-pad, buttons, paddles, touchpad, and gyro only when the controller has them.", url: "https://inputconfig.com/questions/map-every-controller-button-at-once"),
-        HelpWebLink(title: "Where are controller mappings on macOS?", detail: "macOS keeps controller mappings in three places: System Settings > Game Controllers for games that already support pads, Steam Input for Steam, and a mapper app such as InputConfig for everything else. Where each lives and what each can do.", url: "https://inputconfig.com/questions/where-are-controller-mappings-on-macos"),
-        HelpWebLink(title: "How to map a controller to keyboard keys on a Mac", detail: "How to map any PS5, Xbox or Switch controller to keyboard keys and mouse movement on a Mac with the free InputConfig mapper: connect, scan a button, pick a key, activate. Works in every app, not only games.", url: "https://inputconfig.com/questions/how-to-map-a-controller-to-keyboard-on-mac"),
-        HelpWebLink(title: "How to use a PS5 controller as a mouse on a Mac", detail: "Turn a PS5 DualSense into a mouse for your Mac: left stick moves the pointer, right stick scrolls, triggers click, the touchpad works as a trackpad. Free with InputConfig, no drivers.", url: "https://inputconfig.com/questions/how-to-use-a-ps5-controller-as-a-mouse-on-mac"),
-        HelpWebLink(title: "How to use an Xbox controller as a mouse on a Mac", detail: "Turn an Xbox Wireless, Series X|S, One or Elite controller into a mouse for your Mac: sticks move and scroll, triggers click, D-pad sends arrows. Free with InputConfig, no drivers.", url: "https://inputconfig.com/questions/how-to-use-an-xbox-controller-as-a-mouse-on-mac"),
-        HelpWebLink(title: "Xbox controller keyboard mapping on a Mac", detail: "Map an Xbox controller's buttons, sticks and triggers to keyboard keys on a Mac, for games that ignore the pad and for apps that never had controller support. Free with InputConfig.", url: "https://inputconfig.com/questions/xbox-controller-keyboard-mapping-on-mac"),
-        HelpWebLink(title: "PS5 controller keyboard mapping on a Mac", detail: "Map a PS5 DualSense's buttons, sticks, triggers and touchpad to keyboard keys on a Mac, for games that ignore the pad and apps that never had controller support. Free with InputConfig.", url: "https://inputconfig.com/questions/ps5-controller-keyboard-mapping-on-mac"),
-        HelpWebLink(title: "PS5 controller not working on a Mac", detail: "A PS5 DualSense is connected to the Mac but does nothing in a game, in Steam, in Minecraft or Roblox. What is happening in each case and the fix, in order.", url: "https://inputconfig.com/questions/ps5-controller-not-working-on-mac"),
-        HelpWebLink(title: "Controller not recognized on a Mac", detail: "The Mac does not recognize the controller, or it connects and nothing works. The three different problems that get called not recognized, how to tell them apart, and the fix for each.", url: "https://inputconfig.com/questions/controller-not-recognized-on-mac"),
-        HelpWebLink(title: "Enjoyable for Mac", detail: "Enjoyable is a free, open-source Mac joystick-to-keyboard mapper by Joe Wreschnig, last updated in 2016. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/enjoyable-for-mac"),
-        HelpWebLink(title: "Joystick Mapper alternative for Mac", detail: "Joystick Mapper is a paid Mac App Store mapper whose last update was in November 2019. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/joystick-mapper-free-alternative"),
-        HelpWebLink(title: "JoyToKey for Mac", detail: "JoyToKey is Windows-only and has no Mac version; running it in a virtual machine does not give it the controller or the Mac's keyboard. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/joytokey-for-mac"),
-        HelpWebLink(title: "reWASD for Mac", detail: "reWASD is Windows-only; its developers have said a macOS version is not planned. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/rewasd-for-mac"),
-        HelpWebLink(title: "DS4Windows for Mac", detail: "DS4Windows makes a PlayStation controller look like an Xbox controller to Windows games. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/ds4windows-for-mac"),
-        HelpWebLink(title: "AntiMicroX on Mac", detail: "AntiMicroX is a free, open-source mapper for Windows and Linux. The free Mac alternative and how it compares.", url: "https://inputconfig.com/questions/antimicrox-on-mac"),
-        HelpWebLink(title: "Do you need a controller driver on a Mac?", detail: "Modern controllers need no driver on a Mac: PlayStation, Xbox Bluetooth, Switch Pro and 8BitDo pads are supported by macOS itself. Which legacy pads still need one, and what to use instead of 360Controller.", url: "https://inputconfig.com/questions/controller-driver-mac"),
-        HelpWebLink(title: "What macOS can do with a controller on its own", detail: "Everything built into macOS for game controllers: System Settings > Game Controllers profiles, the Games app, Switch Control, and what none of them can do. Where a mapper picks up.", url: "https://inputconfig.com/questions/macos-built-in-controller-settings"),
+        HelpWebLink(title: "A MIDI controller as a control surface", detail: "Turn a MIDI keyboard, pad controller or knob box into Mac shortcuts, a volume fader and a DAW remote while it keeps playing. Free, no drivers.", url: "https://inputconfig.com/guides/midi-control-surface"),
+        HelpWebLink(title: "Gamepad to MIDI: a game controller as a MIDI instrument", detail: "Turn a PS5, Xbox or Switch controller into a free MIDI controller on a Mac: notes on buttons, pitch bend and CC on sticks and triggers, into Logic or Ableton.", url: "https://inputconfig.com/guides/gamepad-as-midi-instrument"),
+        HelpWebLink(title: "A free Stream Deck alternative from a gamepad or MIDI pad", detail: "A free Stream Deck alternative for Mac from a game controller, MIDI pad or foot pedal you own: OBS scenes and mute on F13 to F19, Siri Shortcuts, spoken cues.", url: "https://inputconfig.com/guides/streaming-deck"),
+        HelpWebLink(title: "Play any Mac game with a controller", detail: "Play Mac games that ignore controllers with a PS5, Xbox or Switch pad: ready layouts for 290+ games, aim tuning, gyro, and fixes for doubled input.", url: "https://inputconfig.com/guides/play-any-game-with-a-controller"),
+        HelpWebLink(title: "Working from a controller", detail: "Email, documents and browsing on a Mac from a game controller: two chord layers for editing and apps, dictation for writing, and a free preset to download.", url: "https://inputconfig.com/guides/controller-instead-of-keyboard-for-work"),
+        HelpWebLink(title: "A macro deck from a numpad, MIDI pad, or controller", detail: "Build a free macro pad on a Mac from a numpad, MIDI pad, game controller or F13 to F19 keys: app launchers, timed macros and typed phrases.", url: "https://inputconfig.com/guides/spare-keyboard-macro-deck"),
+        HelpWebLink(title: "A Mac on the TV, run from the couch with a controller", detail: "Run a Mac mini or MacBook on a TV from the sofa with any game controller: web, YouTube, Netflix, Plex and VLC, volume and typing. Free, open source.", url: "https://inputconfig.com/guides/couch-browsing-and-media"),
+        HelpWebLink(title: "A video editing controller from a gamepad or MIDI knobs", detail: "Use a game controller as a video editing controller for Final Cut Pro, Premiere or Resolve on a Mac: J K L on the triggers, frame steps, marks. Free preset.", url: "https://inputconfig.com/guides/video-editing-shuttle"),
+        HelpWebLink(title: "A game controller as a shortcut remote for drawing and photo editing", detail: "Use a PS5, Xbox, 8BitDo or single Joy-Con as a free left-hand shortcut remote for drawing and photo editing on a Mac: tools, brush size, undo, modifiers.", url: "https://inputconfig.com/guides/drawing-and-photo-editing"),
+        HelpWebLink(title: "Anki from a controller", detail: "Anki on a Mac from any controller: the free built-in preset, Space for show and Good, Again, Hard, Easy on the face buttons, and 8BitDo, PS5, Xbox setups.", url: "https://inputconfig.com/guides/anki-from-a-controller"),
+        HelpWebLink(title: "A controller for DOSBox, ScummVM, and retro games on a Mac", detail: "Controller mapping for DOSBox, ScummVM, browser arcade ports and old Mac games that only know a keyboard, plus where each emulator keeps its pad settings.", url: "https://inputconfig.com/guides/emulators-and-retro-games"),
+        HelpWebLink(title: "Computer access on a Mac: assessing and setting up a client", detail: "How OTs and AT specialists assess and set up computer access on a Mac: a live input check, choosing inputs, a setup built in layers, and a clean handover.", url: "https://inputconfig.com/guides/occupational-therapist-setup"),
+        HelpWebLink(title: "Control stage lights with a game controller", detail: "Run DMX lights from an Xbox or PlayStation controller on a Mac. The triggers become dimmer faders and the buttons become scenes in QLC+ or Lightkey.", url: "https://inputconfig.com/guides/game-controller-lighting-control"),
+        HelpWebLink(title: "Game controller to OSC on a Mac", detail: "Send OSC from an Xbox or PlayStation controller on a Mac: InputConfig sends MIDI, and the free Chataigne turns it into OSC for Resolume or TouchDesigner.", url: "https://inputconfig.com/guides/gamepad-to-osc-on-mac"),
+        HelpWebLink(title: "A game controller as a QLab GO button", detail: "Run QLab cues from an Xbox or PlayStation controller on a Mac: GO, next and previous cue, Pause All, and Panic over MIDI, even with QLab in the background.", url: "https://inputconfig.com/guides/qlab-cue-remote-gamepad"),
     ]
 
     /// Interactive references on the site.
     static let tools: [HelpWebLink] = [
-        HelpWebLink(title: "Deadzone visualizer", detail: "An interactive stick plot for tuning a controller deadzone: drag a virtual stick or connect a real controller.", url: "https://inputconfig.com/tools/deadzone"),
-        HelpWebLink(title: "Key code finder", detail: "Press a key to see the HID usage code InputConfig stores for it and the name the editor shows, or search the full table.", url: "https://inputconfig.com/tools/key-codes"),
+        HelpWebLink(title: "CPS, milliseconds and clicks per minute calculator", detail: "Turn clicks per second into milliseconds and clicks per minute, see what a Mac auto clicker really sends, and test your own CPS in 5 or 10 seconds.", url: "https://inputconfig.com/tools/cps-calculator"),
+        HelpWebLink(title: "Stick drift tester and deadzone visualizer", detail: "Test a PS5, Xbox or Switch controller for stick drift in your browser: see the resting position, get a suggested deadzone, and try Linear or Smooth curves.", url: "https://inputconfig.com/tools/deadzone"),
+        HelpWebLink(title: "Key code finder", detail: "Press any key to see its HID usage code, or search every Mac key: letters, F1 to F24, modifiers, keypad, media keys. Space is 44, F13 is 104.", url: "https://inputconfig.com/tools/key-codes"),
         HelpWebLink(title: "MIDI reference", detail: "A searchable reference for MIDI mapping: every Control Change number 0 to 127 with its standard name, a note number to name converter.", url: "https://inputconfig.com/tools/midi-cc"),
         HelpWebLink(title: "Preset chooser", detail: "Answer two or three questions about your device and what you want to do, and get the InputConfig preset, guide, or Smart Preset Maker layout that fits.", url: "https://inputconfig.com/tools/preset-chooser"),
     ]

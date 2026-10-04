@@ -10,6 +10,9 @@ import GameController
 extension Notification.Name {
     static let inputConfigShowStats              = Notification.Name("InputConfig.ShowStats")
     static let inputConfigOpenAbout              = Notification.Name("InputConfig.OpenAbout")
+    static let inputConfigOpenSettings           = Notification.Name("InputConfig.OpenSettings")
+    /// Cmd-N and the menu bar's New Preset: make one the way the sidebar does.
+    static let inputConfigNewPreset              = Notification.Name("InputConfig.NewPreset")
     static let inputConfigOpenSmartMaker         = Notification.Name("InputConfig.OpenSmartMaker")
     static let inputConfigToggleActivePreset     = Notification.Name("InputConfig.ToggleActive")
     static let inputConfigOpenTouchpadCalibration = Notification.Name("InputConfig.OpenTouchpadCal")
@@ -41,14 +44,25 @@ extension Notification.Name {
 /// type-checker's limit; an inline onReceive here fails to compile.
 private struct OpenAboutObserver: ViewModifier {
     @Binding var tab: SettingsView.SettingsTab?
+    /// False while the editor or another sheet is up: a second sheet does
+    /// not show over it, and the tab left set kept every later sheet,
+    /// Settings included, from opening. The window still comes forward.
+    let canPresent: () -> Bool
     func body(content: Content) -> some View {
         content.onReceive(
             NotificationCenter.default.publisher(for: .inputConfigOpenAbout)
-        ) { _ in tab = .about }
+        ) { _ in if canPresent() { tab = .about } }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .inputConfigOpenSettings)
+        ) { _ in
+            if MenuBarController.takePendingMainAction(.settings), canPresent() { tab = .general }
+        }
     }
 }
 
 struct ContentView: View {
+    @Environment(\.appTextScale) private var editorTextScale
+    private var maxSheetWidth: CGFloat { max(900, (NSScreen.main?.visibleFrame.width ?? 1440) - 40) }
     @EnvironmentObject var presetStore: PresetStore
     @EnvironmentObject var controllerService: GameControllerService
     @EnvironmentObject var mappingEngine: MappingEngine
@@ -67,8 +81,10 @@ struct ContentView: View {
     /// The welcome sheet has been shown once on this Mac.
     @AppStorage("InputConfig.welcomeIntroSeen") private var welcomeIntroSeen = false
     @State private var showingWelcomeIntro = false
-    /// Shows the developer activity log pinned under the detail pane. Off by
-    /// default so the shipping UI is clean; toggled from Settings → Advanced.
+    /// Shows the activity log pinned under the detail pane. On until turned
+    /// off in Settings. The engine's detailed press lines, which cost CPU,
+    /// follow this key only once it has been set by hand (it reads it as off
+    /// when unset), so the default view stays cheap.
     @AppStorage("InputConfig.showDebugLog") private var showDebugLog = true
     @State private var showingSmartMaker = false
     /// The bundle's marketing version, e.g. "1.3".
@@ -101,6 +117,50 @@ struct ContentView: View {
     @State private var showingImportSheet = false
     @State private var presentedDemoKind: FeatureDemoKind?
     @State private var showingStats: Bool = false
+    private var canPresentSheet: Bool { editingPreset == nil && !anotherSheetIsUp }
+
+    /// A sheet asked for from a menu or the menu bar: only when none is up.
+    private func requestSheet(_ kind: MenuBarController.PendingMainAction) {
+        _ = MenuBarController.takePendingMainAction(kind)
+        guard canPresentSheet else { return }
+        switch kind {
+        case .statistics: showingStats = true
+        case .smartMaker: showingSmartMaker = true
+        case .whatsNew: whatsNewSince = nil; showingWhatsNew = true
+        default: break
+        }
+    }
+
+    private func requestCalibration(touchpad: Bool) {
+        guard canPresentSheet else { return }
+        if touchpad { showingTouchpadCalibrationFromMenu = true } else { showingMotionCalibrationFromMenu = true }
+    }
+
+    /// Not over an open editor: closing it for the tour lost every unsaved
+    /// change and left its draft regions live.
+    private func requestTutorial() {
+        guard OpenEditor.current == nil else { NSSound.beep(); return }
+        startTutorial()
+    }
+
+    /// Statistics, the maker or What's New asked for from the menu bar
+    /// before this window existed.
+    private func takePendingSheets() {
+        for kind in [MenuBarController.PendingMainAction.statistics, .smartMaker, .whatsNew]
+        where MenuBarController.pendingMainAction == kind {
+            requestSheet(kind)
+        }
+    }
+
+    /// True while a sheet other than the editor is up. New Preset waits
+    /// for it, since a second sheet cannot show over it.
+    private var anotherSheetIsUp: Bool {
+        showingStats || settingsSheetTab != nil || showingSmartMaker || showingWhatsNew
+            || showingWelcomeIntro || showingAccessibilityIntro || showingImportSheet
+            || presentedDemoKind != nil || showingTouchpadCalibrationFromMenu
+            || showingMotionCalibrationFromMenu || !presetStore.importReviewQueue.isEmpty
+            || creatingGroupForPreset != nil || renamingGroup != nil
+    }
     /// The settings sheet, presented item-style so the tab travels WITH
     /// the presentation: nil = closed, otherwise the tab to open on.
     /// (A Bool + separate tab state raced: SwiftUI could present with the
@@ -109,12 +169,20 @@ struct ContentView: View {
     @State private var settingsSheetTab: SettingsView.SettingsTab? = nil
     @State private var showingTouchpadCalibrationFromMenu: Bool = false
     @State private var showingMotionCalibrationFromMenu: Bool = false
-    /// Carries a preset waiting for the user to acknowledge a calibration
-    /// prompt before its mapping engine starts.
-    @State private var pendingActivation: (preset: Preset, reqs: CalibrationRequirements)?
     /// Tracks whether the mapping engine was running when the user opened the
     /// preset editor, so we can flag that in the editor's banner and decide
     /// whether to offer to re-activate on close.
+    /// Permanent deletes waiting for their confirmation.
+    @State private var confirmingEmptyTrash = false
+    @State private var pendingPresetDelete: UUID?
+    @State private var pendingFolderDelete: UUID?
+    /// A sidebar folder waiting for Delete Folder to be confirmed.
+    @State private var folderPendingDelete: UUID?
+    /// The preset the Quick Tour borrowed, as it was before, to put back.
+    @State private var tutorialPresetSnapshot: Preset?
+    @Environment(\.openWindow) private var openWindow
+    /// Whether outputs were already paused when the editor opened.
+    @State private var outputsPausedBeforeEdit = false
     @State private var engineWasRunningBeforeEdit: Bool = false
     /// When the user clicks an input on the Live Visualizer, we stash the
     /// jump target here. The PresetEditorView sheet reads this on appear and
@@ -145,10 +213,9 @@ struct ContentView: View {
         } detail: {
             detailView
         }
-        // Kill the blue keyboard-focus ring that macOS draws around toolbar
-        // buttons (including the system sidebar toggle and our Home button)
-        // when they retain focus after a click.
-        .focusEffectDisabled()
+        // The focus ring stays on for the window: keyboard and Full Keyboard
+        // Access users need to see where they are. Only the toolbar buttons,
+        // which keep focus after a click, drop it.
         .toolbar {
             // Sits immediately to the right of the traffic-light buttons on
             // macOS, which is what the user wanted ("next to the window
@@ -160,6 +227,7 @@ struct ContentView: View {
                     Label("Home", systemImage: "house.fill")
                 }
                 .help("Return to the welcome screen")
+                .focusRingForKeyboardUsers()
                 .spotlightAnchor(SpotlightID.homeButton)
                 .accessibilityLabel("Home")
                 .accessibilityHint("Returns to the welcome screen")
@@ -176,6 +244,7 @@ struct ContentView: View {
                         .symbolRenderingMode(.hierarchical)
                 }
                 .help("Show statistics")
+                .focusRingForKeyboardUsers()
                 .spotlightAnchor(SpotlightID.statsButton)
                 .accessibilityLabel("Statistics")
                 .accessibilityHint("Opens the lifetime statistics dashboard")
@@ -205,14 +274,14 @@ struct ContentView: View {
         // environment value propagates into every sheet and popover too.
         .symbolRenderingMode(.hierarchical)
         .alert("Accessibility access needed", isPresented: $showAccessibilityAlert) {
-            Button("Open Accessibility Settings") { accessibility.openSystemSettings() }
+            Button("Open Accessibility Settings") { accessibility.requestAccess() }
             Button("Not Now", role: .cancel) { }
         } message: {
             Text("To send the keyboard and mouse actions in this preset, turn on InputConfig under System Settings → Privacy & Security → Accessibility. Your mappings will start working as soon as you do.")
         }
         .sheet(isPresented: $showingStats) {
             StatsView()
-                .glassBackground()
+                .glassBackground(windowTint: 0.38)
         }
         .modifier(ReviewPromptPresenter())
         .sheet(isPresented: $showingSmartMaker) {
@@ -248,7 +317,7 @@ struct ContentView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             }
-            .frame(minWidth: 620, minHeight: 480)
+            .frame(minWidth: SettingsView.preferredSize.width, minHeight: 480)
             .glassBackground()
         }
         .sheet(isPresented: $showingTouchpadCalibrationFromMenu) {
@@ -260,52 +329,6 @@ struct ContentView: View {
             MotionCalibrationView()
                 .environmentObject(controllerService)
                 .glassBackground()
-        }
-        .alert(
-            "Calibration recommended",
-            isPresented: Binding(
-                get: { pendingActivation != nil },
-                set: { newValue in
-                    if newValue == false { pendingActivation = nil }
-                }
-            ),
-            presenting: pendingActivation
-        ) { pending in
-            // Always offer to activate anyway as a way out.
-            if pending.reqs.needsMotion {
-                Button("Calibrate Motion…") {
-                    let toResume = pending.preset
-                    pendingActivation = nil
-                    showingMotionCalibrationFromMenu = true
-                    // Note: we don't auto-resume activation after the user
-                    // closes the calibration sheet - they probably want to
-                    // check the result first. They can re-activate when
-                    // they're ready.
-                    _ = toResume
-                }
-            }
-            if pending.reqs.needsTouchpad {
-                Button("Calibrate Touchpad…") {
-                    pendingActivation = nil
-                    showingTouchpadCalibrationFromMenu = true
-                }
-            }
-            Button("Activate Anyway") {
-                let toStart = pending.preset
-                pendingActivation = nil
-                startEngine(with: toStart)
-            }
-            Button("Cancel", role: .cancel) {
-                pendingActivation = nil
-            }
-        } message: { pending in
-            if pending.reqs.needsMotion && pending.reqs.needsTouchpad {
-                Text("This preset uses both motion and touchpad inputs. Calibrate them first so the cursor and aim feel right on your controller - InputConfig doesn't yet know your controller's resting drift or your touchpad's usable bounds.")
-            } else if pending.reqs.needsMotion {
-                Text("This preset binds gyroscope or accelerometer inputs and the connected motion-capable controller hasn't been calibrated yet. Calibrating sets the resting zero so a still controller doesn't move the cursor.")
-            } else if pending.reqs.needsTouchpad {
-                Text("This preset binds touchpad inputs and your touchpad bounds haven't been calibrated yet. Calibrating helps swipes feel uniform across the surface.")
-            }
         }
         .confirmationDialog(
             "Delete preset?",
@@ -323,19 +346,22 @@ struct ContentView: View {
                 presetPendingDelete = nil
             }
         } message: { preset in
-            Text("\"\(preset.name)\" will be moved to the Trash at the bottom of the sidebar. Restore it from there any time.")
+            Text("\"\(preset.name)\" will be moved to the Trash at the bottom of the sidebar. Restore it from there; the Trash keeps the last 60 presets.")
         }
-        .modifier(OpenAboutObserver(tab: $settingsSheetTab))
+        .modifier(OpenAboutObserver(tab: $settingsSheetTab,
+                                    canPresent: { editingPreset == nil && !anotherSheetIsUp }))
         .modifier(TutorialPlumbing(
             state: tutorialState,
             anchors: $tutorialAnchors,
             onTutorialEnded: handleTutorialEnded
         ))
+        // Each sheet only when none is up: a second sheet does not show,
+        // and its flag left set kept every later sheet from opening.
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigShowStats)) { _ in
-            showingStats = true
+            requestSheet(.statistics)
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigOpenSmartMaker)) { _ in
-            showingSmartMaker = true
+            requestSheet(.smartMaker)
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigToggleActivePreset)) { _ in
             // Toggle the sidebar-selected preset, if any.
@@ -345,13 +371,13 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigOpenTouchpadCalibration)) { _ in
-            showingTouchpadCalibrationFromMenu = true
+            requestCalibration(touchpad: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigOpenMotionCalibration)) { _ in
-            showingMotionCalibrationFromMenu = true
+            requestCalibration(touchpad: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigStartTutorial)) { _ in
-            startTutorial()
+            requestTutorial()
         }
         .onChange(of: tutorialState.isActive) { _, active in
             // When the tutorial ends (Finish, Skip, or natural end),
@@ -367,11 +393,21 @@ struct ContentView: View {
             // send MIDI while the user is configuring or calibrating. The
             // engine keeps reading inputs so the green row highlight on each
             // binding still lights up when the user presses the controller.
+            // On close, back to however it was before: a pause the user set
+            // from the menu bar survives opening and closing the editor.
             if newID != nil {
                 engineWasRunningBeforeEdit = mappingEngine.isRunning
+                outputsPausedBeforeEdit = mappingEngine.outputsPaused
+                // The pointer keeps working unless the user paused from the
+                // menu bar, so a controller-only user is not shut in.
+                mappingEngine.editorPointerPassthrough = !outputsPausedBeforeEdit
+                mappingEngine.editorOpen = true
+                mappingEngine.editorOverride = false
                 mappingEngine.outputsPaused = true
             } else {
-                mappingEngine.outputsPaused = false
+                mappingEngine.editorPointerPassthrough = false
+                mappingEngine.editorOpen = false
+                mappingEngine.outputsPaused = outputsPausedBeforeEdit
             }
         }
         .sheet(isPresented: $showingWhatsNew, onDismiss: {
@@ -380,11 +416,22 @@ struct ContentView: View {
             WhatsNewView(since: whatsNewSince)
                 .glassBackground()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .inputConfigNewPreset)) { _ in
+            // Selected and open in the editor, and dropped again on Cancel,
+            // instead of an empty "New Preset" left in the library. Not
+            // over an editor that is already open.
+            // The pending action is taken first, so one refused here does
+            // not linger and make a preset unasked the next time the
+            // window appears. Over another sheet the editor could not show,
+            // and the running preset's outputs would pause behind it.
+            let wanted = MenuBarController.takePendingMainAction(.newPreset)
+            guard wanted, editingPreset == nil, !anotherSheetIsUp else { return }
+            createNewPreset()
+        }
         .onReceive(NotificationCenter.default.publisher(
             for: MenuBarController.showWhatsNewNotification)) { _ in
             // Opened by hand from the menu bar: show this release's notes.
-            whatsNewSince = nil
-            showingWhatsNew = true
+            requestSheet(.whatsNew)
         }
         .onAppear {
             let current = Self.currentShortVersion
@@ -412,13 +459,10 @@ struct ContentView: View {
                              enginePausedNotice: engineWasRunningBeforeEdit,
                              pendingJump: pendingEditorJump) { updated in
                 newlyCreatedPresetId = nil // Saved successfully, don't delete
+                // Saving posts presetSavedNotification, which reloads the
+                // engine when this is the running preset. A second start
+                // here restarted it twice and counted two activations.
                 presetStore.savePreset(updated)
-                // If the edited preset is the one currently running, restart the
-                // engine with the new value so it rebuilds its binding caches;
-                // otherwise edits would not take effect until the next activation.
-                if mappingEngine.isRunning && presetStore.activePresetId == updated.id {
-                    mappingEngine.start(with: updated)
-                }
                 editingPreset = nil
             }
             .environmentObject(controllerService)
@@ -428,10 +472,21 @@ struct ContentView: View {
             // scroll, so nothing reports an ideal width), and MIDI rows need
             // about 70 pt more than key rows. At 1150 every row in a MIDI
             // preset ran past both edges of the sheet.
-            .frame(minWidth: 1240, idealWidth: 1340, minHeight: 700, idealHeight: 800)
+            // Wider at a larger Text Size, by what the scaled columns add.
+            // Never wider than the screen: at Huge on a 13-inch laptop the
+            // sheet ran off both edges and Save could not be reached.
+            .frame(minWidth: min(1240 + BindingRowView.extraEditorWidth(scale: editorTextScale), maxSheetWidth),
+                   idealWidth: min(1340 + BindingRowView.extraEditorWidth(scale: editorTextScale), maxSheetWidth),
+                   maxWidth: .infinity,
+                   minHeight: 700, idealHeight: 800, maxHeight: .infinity)
+            // Every size limit is given, so SwiftUI never measures the rows
+            // to size the sheet: it measured all of them, every row's text
+            // included, on each update to work out the window's limits.
             .glassBackground()
         }
         .onAppear {
+            // Hand the menu bar a way to reopen this window after it closes.
+            MenuBarController.shared.openMainScene = { [openWindow] in openWindow(id: "main") }
             presetStore.reseedExamplePresets()
             // Proactively explain + offer Accessibility on launch if it isn't
             // granted, since macOS doesn't always surface its own prompt and
@@ -440,7 +495,31 @@ struct ContentView: View {
             // First launch: the welcome first, then the permission ask
             // follows from its button. Later launches: the permission ask
             // alone, if it is still needed.
-            if !welcomeIntroSeen {
+            // The welcome is for new installs. Someone updating from a version
+            // before it existed got the welcome and What's New at once.
+            // An upgrade is told by the version last seen: an older one, or
+            // none at all on an install from before What's New existed. The
+            // folder's age alone skipped the welcome for a new user who quit
+            // before finishing it and came back ten minutes later, since a
+            // first run stores this version straight away.
+            // A menu bar Settings or New Preset that recreated this window.
+            if MenuBarController.takePendingMainAction(.settings) { settingsSheetTab = .general }
+            takePendingSheets()
+            var openedEditor = false
+            if MenuBarController.takePendingMainAction(.newPreset), editingPreset == nil, !anotherSheetIsUp {
+                createNewPreset()
+                openedEditor = true
+            }
+            let upgrading = lastSeenVersion.isEmpty
+                ? Self.looksLikeExistingInstall
+                : lastSeenVersion != Self.currentShortVersion
+            if !welcomeIntroSeen && upgrading {
+                welcomeIntroSeen = true
+            }
+            if openedEditor || settingsSheetTab != nil || OpenedPresetFiles.hasPending || !presetStore.importReviewQueue.isEmpty {
+                // The editor or an opened file's review is the sheet this
+                // time; the intros wait.
+            } else if !welcomeIntroSeen {
                 showingWelcomeIntro = true
             } else if !accessibility.isTrusted && !suppressAccessibilityIntro {
                 showingAccessibilityIntro = true
@@ -450,6 +529,8 @@ struct ContentView: View {
         // in the hook modifier. A modifier rather than one more closure on
         // this chain, which the type-checker could not finish.
         .modifier(DebugCloseWhatsNew(showing: $showingWhatsNew))
+        // An opened preset's review waits while another sheet is up.
+        .modifier(SheetStateRelay(up: anotherSheetIsUp))
         .modifier(FirstRunSheets(showingWelcome: $showingWelcomeIntro,
                                  showingAccessibility: $showingAccessibilityIntro,
                                  welcome: { AnyView(welcomeIntroSheet) },
@@ -472,14 +553,19 @@ struct ContentView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { settingsSheetTab = .general }
                 },
                 presetForConnectedController: {
+                    // The 2026 Steam Controller shares the brand but has its
+                    // own preset on the standard numbering.
                     let brand = controllerService.controllerDetails[0]?.brand ?? .unknown
-                    return ExamplePresets.exampleName(for: brand)
+                    return ExamplePresets.exampleName(for: brand, family: controllerService.namingFamily(forSlot: 0))
                 }
             )
             .glassBackground()
         }
         .onReceive(NotificationCenter.default.publisher(
-            for: GlobalHotKeyService.toggleNotification)) { _ in
+            for: GlobalHotKeyService.toggleNotification)) { note in
+            // Heard first here while the window exists; the menu bar's
+            // listener steps aside for a press already handled.
+            guard GlobalHotKeyService.claim(note) else { return }
             handleGlobalHotkeyToggle()
         }
         .modifier(DebugAutomationHooks(
@@ -509,7 +595,7 @@ struct ContentView: View {
         }
         let target = presetStore.lastActivatedPresetId
             .flatMap { id in presetStore.presets.first(where: { $0.id == id }) }
-            ?? presetStore.presets.first
+            ?? presetStore.presets.first(where: \.isRunnable)
         if let target { togglePreset(target) }
     }
 
@@ -545,62 +631,32 @@ struct ContentView: View {
     /// The most recently created group ID. Drives a brief green-flash
     /// animation in the sidebar so the user's eye lands on the new entry.
     @State private var flashingGroupID: UUID?
+    /// The folder header last clicked. Drawn inside the folder's own outline;
+    /// the system selection pill sat at a different inset and radius and cut
+    /// across the outline.
+    @State private var selectedFolderID: UUID?
 
     private var sidebarView: some View {
         VStack(spacing: 0) {
             controllerStatusBar
+                // Picking a preset moves the highlight off the folder.
+                .onChange(of: selectedPresetId) { _, _ in selectedFolderID = nil }
 
             ScrollViewReader { proxy in
             List(selection: $selectedPresetId) {
-                // The user's own presets first, above the shipped folders,
-                // with New Preset as the first row so making one is the most
-                // obvious thing in the sidebar. Always shown, even when empty.
-                Section {
-                    Button {
-                        createNewPreset()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title3)
-                                .foregroundStyle(Color.accentColor)
-                            Text("New Preset")
-                                .font(.body.weight(.medium))
-                            Spacer(minLength: 0)
+                // Favorites only: just the starred presets, switched from the
+                // star in the header. Off, or with nothing starred, the whole
+                // library as always.
+                if presetStore.showFavoritesOnly && !presetStore.favoritePresets.isEmpty {
+                    Section {
+                        ForEach(presetStore.favoritePresets) { preset in
+                            presetRow(for: preset, leadingInset: 8)
                         }
-                        // Sidebar rows sit at a minimum height and center
-                        // their content in it, so the row insets alone cannot
-                        // move the label; this pushes it down until the room
-                        // above matches the room below.
-                        .padding(.top, 6)
-                        .contentShape(Rectangle())
+                    } header: {
+                        sidebarHeader("Favorites")
                     }
-                    .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 2, trailing: 2))
-                    .selectionDisabled()
-                    .accessibilityHint("Creates a preset and opens it in the editor")
-
-                    ForEach(presetStore.presets(in: nil)) { preset in
-                        presetRow(for: preset, leadingInset: 8)
-                    }
-                    topLevelFolders(presetStore.userTopLevelGroups, builtIn: false)
-
-                    // The shipped library, under a heading of its own. It is
-                    // a plain row rather than a second section header so the
-                    // space above and below New Preset comes out the same;
-                    // the list pads a section header more than it pads a
-                    // row. Only a heading: these are ordinary presets in the
-                    // user's own folder, edits stick, a preset moved out
-                    // stays out, and updates never rewrite them.
-                    Text("Built-in Presets")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .listRowInsets(EdgeInsets(top: 0, leading: -12, bottom: 10, trailing: 2))
-                        .selectionDisabled()
-                        .accessibilityAddTraits(.isHeader)
-                    topLevelFolders(presetStore.builtInTopLevelGroups, builtIn: true)
-                } header: {
-                    Text("My Presets")
-                        .font(.caption)
+                } else {
+                    librarySection
                 }
 
                 // Trash - shown only when there's something in it. Each
@@ -618,7 +674,7 @@ struct ContentView: View {
                                     .selectionDisabled()
                             }
                             Button {
-                                presetStore.emptyTrash()
+                                confirmingEmptyTrash = true
                             } label: {
                                 Label("Empty Trash", systemImage: "trash.slash")
                                     .font(.caption)
@@ -627,6 +683,13 @@ struct ContentView: View {
                             .buttonStyle(.solidSecondaryCompact)
                             .padding(.top, 4)
                             .selectionDisabled()
+                            .confirmationDialog("Empty the Trash?", isPresented: $confirmingEmptyTrash,
+                                                titleVisibility: .visible) {
+                                Button("Empty Trash", role: .destructive) { presetStore.emptyTrash() }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("Every preset and folder in it is deleted permanently.")
+                            }
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "trash")
@@ -659,6 +722,12 @@ struct ContentView: View {
             // chevrons inside them.
             .padding(.leading, 12)
             .scrollContentBackground(.hidden)
+            // Favorites only swaps a flat list of starred presets for the
+            // whole library with its folders. Diffing the same rows across
+            // the two layouts left stale copies drawn over each other, so
+            // switching builds a fresh list instead. Folder open states live
+            // in the store and survive the rebuild.
+            .id(presetStore.showFavoritesOnly && !presetStore.favoritePresets.isEmpty)
             .onReceive(NotificationCenter.default.publisher(for: .inputConfigScrollToPreset)) { note in
                 guard let id = note.object as? UUID else { return }
                 withAnimation(.easeOut(duration: 0.35)) {
@@ -699,6 +768,84 @@ struct ContentView: View {
         }
     }
 
+    /// The whole library: New Preset, the user's own presets and folders,
+    /// then the shipped ones.
+    @ViewBuilder
+    private var librarySection: some View {
+        // The user's own presets first, above the shipped folders,
+        // with New Preset as the first row so making one is the most
+        // obvious thing in the sidebar. Always shown, even when empty.
+        Section {
+            Button {
+                createNewPreset()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(Color.accentColor)
+                    Text("New Preset")
+                        .font(.body.weight(.medium))
+                    Spacer(minLength: 0)
+                }
+                // Sidebar rows sit at a minimum height and center
+                // their content in it, so the row insets alone cannot
+                // move the label; this pushes it down until the room
+                // above matches the room below.
+                .padding(.top, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 2, trailing: 2))
+            .selectionDisabled()
+            .accessibilityHint("Creates a preset and opens it in the editor")
+
+            ForEach(presetStore.presets(in: nil)) { preset in
+                presetRow(for: preset, leadingInset: 8)
+            }
+            topLevelFolders(presetStore.userTopLevelGroups, builtIn: false)
+
+            // The shipped library, under a heading of its own. It is
+            // a plain row rather than a second section header so the
+            // space above and below New Preset comes out the same;
+            // the list pads a section header more than it pads a
+            // row. Only a heading: these are ordinary presets in the
+            // user's own folder, edits stick, a preset moved out
+            // stays out, and updates never rewrite them.
+            Text("Built-in Presets")
+                .font(.caption)
+                .foregroundStyle(.hint)
+                .listRowInsets(EdgeInsets(top: 0, leading: -12, bottom: 10, trailing: 2))
+                .selectionDisabled()
+                .accessibilityAddTraits(.isHeader)
+            topLevelFolders(presetStore.builtInTopLevelGroups, builtIn: true)
+        } header: {
+            sidebarHeader("My Presets")
+        }
+    }
+
+    /// A sidebar section heading, with the Favorites only star at its right
+    /// once anything is starred.
+    private func sidebarHeader(_ title: String) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.caption)
+            Spacer(minLength: 0)
+            if !presetStore.favoritePresets.isEmpty {
+                Button {
+                    presetStore.showFavoritesOnly.toggle()
+                } label: {
+                    Image(systemName: presetStore.showFavoritesOnly ? "star.fill" : "star")
+                        .font(.caption)
+                        .foregroundStyle(presetStore.showFavoritesOnly ? Color.yellow.opacity(0.7) : Color.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(presetStore.showFavoritesOnly ? "Show all presets" : "Show favorites only")
+                .accessibilityLabel(presetStore.showFavoritesOnly ? "Show all presets" : "Show favorites only")
+            }
+        }
+    }
+
     /// Render a folder and everything under it. Recursive: a folder's content
     /// is its child folders (each rendered by another `groupSection` call) and
     /// then its own presets, so folders can nest to any depth. Returns AnyView
@@ -722,7 +869,8 @@ struct ContentView: View {
                         (outline != nil && !sub.isExpanded) ? role(for: AnyHashable(sub.id))
                         : (outline != nil ? .middle : nil)
                     groupSection(sub, depth: depth + 1, outline: outline)
-                        .listRowBackground(outline.map { FolderOutlineSegment(role: subHeaderRole ?? .middle, color: $0.color) })
+                        .listRowBackground(outline.map { FolderOutlineSegment(role: subHeaderRole ?? .middle, color: $0.color,
+                                                                              selected: selectedFolderID == sub.id) })
                 }
                 ForEach(presetsInGroup) { preset in
                     presetRow(for: preset,
@@ -734,7 +882,7 @@ struct ContentView: View {
                     // presets is a middle row.
                     Text("Drop a preset here, or add a subfolder.")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .padding(.vertical, 4)
                         .listRowBackground(outline.map {
                             FolderOutlineSegment(role: role(for: AnyHashable("empty-\(group.id.uuidString)")) ?? .middle, color: $0.color)
@@ -770,6 +918,8 @@ struct ContentView: View {
                 // so no extra manual left-indent is added here.
                 .padding(.leading, 2)
                 .contentShape(Rectangle())
+                .selectionDisabled()
+                .simultaneousGesture(TapGesture().onEnded { selectedFolderID = group.id })
                 .contextMenu {
                     Button("Rename Folder…") {
                         renameGroupName = group.name
@@ -802,8 +952,8 @@ struct ContentView: View {
                         }
                     }
                     Divider()
-                    Button("Delete Folder", role: .destructive) {
-                        presetStore.deleteGroup(group.id)
+                    Button("Delete Folder\u{2026}", role: .destructive) {
+                        folderPendingDelete = group.id
                     }
                 }
                 .popover(isPresented: Binding(
@@ -811,6 +961,22 @@ struct ContentView: View {
                     set: { if !$0 { colorEditingGroup = nil } }
                 ), arrowEdge: .trailing) {
                     folderColorPopover(for: group)
+                }
+                // Asked first, like deleting a single preset.
+                .confirmationDialog("Delete the folder \u{201C}\(group.name)\u{201D}?",
+                                    isPresented: Binding(get: { folderPendingDelete == group.id },
+                                                         set: { if !$0 { folderPendingDelete = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Delete Folder", role: .destructive) {
+                        // The engine stops before the preset goes, the way a
+                        // single preset delete does; deactivateAll alone only
+                        // cleared the flags and left the outputs running.
+                        if presetStore.folderHoldsActivePreset(group.id) { mappingEngine.stop() }
+                        presetStore.deleteGroup(group.id)
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The folder, its subfolders and their presets move to the Trash at the bottom of the sidebar, where you can put them back. A preset in it that is running stops.")
                 }
             }
             // Allow dropping presets onto this folder header to add them.
@@ -951,7 +1117,7 @@ struct ContentView: View {
 
             // Any custom color via the native macOS color picker.
             HStack(spacing: 10) {
-                ColorPicker("", selection: $folderPickerColor, supportsOpacity: false)
+                ColorPicker("Custom folder color", selection: $folderPickerColor, supportsOpacity: false)
                     .labelsHidden()
                 Text("Custom color")
                     .font(.caption)
@@ -1000,14 +1166,14 @@ struct ContentView: View {
         return HStack(spacing: 6) {
             Image(systemName: "folder.fill")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name)
                     .font(.caption)
                     .lineLimit(1)
                 Text("\(count) preset\(count == 1 ? "" : "s") \u{00B7} \(trashDateString(entry.deletedAt))")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
             Spacer(minLength: 4)
             Button {
@@ -1023,7 +1189,7 @@ struct ContentView: View {
             .help("Put back the folder and everything in it")
             .accessibilityLabel("Put back folder")
             Button {
-                presetStore.permanentlyDeleteFolder(entry)
+                pendingFolderDelete = entry.id
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
@@ -1034,6 +1200,15 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Delete the folder and its presets permanently")
             .accessibilityLabel("Delete folder permanently")
+            .confirmationDialog("Delete the folder \u{201C}\(entry.name)\u{201D} and its presets permanently?",
+                                isPresented: Binding(get: { pendingFolderDelete == entry.id },
+                                                     set: { if !$0 { pendingFolderDelete = nil } }),
+                                titleVisibility: .visible) {
+                Button("Delete Permanently", role: .destructive) { presetStore.permanentlyDeleteFolder(entry) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("It cannot be put back.")
+            }
         }
         .padding(.vertical, 3)
     }
@@ -1042,14 +1217,14 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "doc.fill")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.preset.name)
                     .font(.caption)
                     .lineLimit(1)
                 Text(trashDateString(entry.deletedAt))
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
             Spacer(minLength: 4)
             Button {
@@ -1066,7 +1241,7 @@ struct ContentView: View {
             .help("Put back")
             .accessibilityLabel("Put back preset")
             Button {
-                presetStore.permanentlyDelete(entry)
+                pendingPresetDelete = entry.id
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
@@ -1077,6 +1252,15 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("Delete permanently")
             .accessibilityLabel("Delete preset permanently")
+            .confirmationDialog("Delete \u{201C}\(entry.preset.name)\u{201D} permanently?",
+                                isPresented: Binding(get: { pendingPresetDelete == entry.id },
+                                                     set: { if !$0 { pendingPresetDelete = nil } }),
+                                titleVisibility: .visible) {
+                Button("Delete Permanently", role: .destructive) { presetStore.permanentlyDelete(entry) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("It cannot be put back.")
+            }
         }
         .padding(.vertical, 3)
     }
@@ -1113,10 +1297,15 @@ struct ContentView: View {
                 creatingGroupForPreset = preset
                 newGroupName = "New Group"
                 pendingGroupPresetIDs = [preset.id]
-            }
+            },
+            isFavorite: presetStore.isFavorite(preset),
+            onToggleFavorite: { presetStore.toggleFavorite(preset) }
         )
         .tag(preset.id)
         .id(preset.id) // For ScrollViewReader.scrollTo
+        // A click on a preset moves the highlight off a folder header, even
+        // on the preset that was already selected.
+        .simultaneousGesture(TapGesture().onEnded { selectedFolderID = nil })
         // List(.sidebar) default row insets give the row a fat
         // leading gutter (~16pt) which pushes the active-indicator
         // dot well away from the left edge. The DisclosureGroup
@@ -1160,6 +1349,10 @@ struct ContentView: View {
             // gesture. This used to create a new folder from the two presets,
             // which meant there was no way to reorder at all; that action is
             // still on the row's context menu as "New Group…".
+            // Not in the Favorites list: it is sorted by name, so a drop there
+            // changed nothing in view and quietly moved the preset into the
+            // other one's folder.
+            if presetStore.showFavoritesOnly && !presetStore.favoritePresets.isEmpty { return false }
             var handled = false
             for item in items {
                 if let uuid = UUID(uuidString: item), uuid != preset.id {
@@ -1168,29 +1361,6 @@ struct ContentView: View {
                 }
             }
             return handled
-        }
-        .contextMenu {
-            Menu("Move to Group") {
-                ForEach(presetStore.groups) { group in
-                    Button(group.name) {
-                        presetStore.setPresetGroup(preset.id, groupID: group.id)
-                    }
-                }
-                if !presetStore.groups.isEmpty {
-                    Divider()
-                }
-                Button("New Group…") {
-                    creatingGroupForPreset = preset
-                    newGroupName = "New Group"
-                    pendingGroupPresetIDs = [preset.id]
-                }
-                if preset.groupID != nil {
-                    Divider()
-                    Button("Remove from Group") {
-                        presetStore.setPresetGroup(preset.id, groupID: nil)
-                    }
-                }
-            }
         }
     }
 
@@ -1289,7 +1459,14 @@ struct ContentView: View {
         // If at least one detected 8BitDo device is in a non-supported mode,
         // surface it. Apple mode controllers are also picked up by GCController,
         // so we only warn for the others.
-        return hidDevices.first { !$0.mode.supportedByMacOS }
+        // The first one InputConfig is not already reading directly: a
+        // pad read through raw HID needs no hint, and checking only the
+        // first unsupported pad hid the hint for a second one.
+        return hidDevices.first { device in
+            !device.mode.supportedByMacOS && !controllerService.rawHIDGamepadSlots.values.contains {
+                $0.vendorID == EightBitDoDetector.vendorID && $0.productID == device.productID
+            }
+        }
     }
 
     private var controllerStatusBar: some View {
@@ -1300,6 +1477,7 @@ struct ContentView: View {
 
             if controllerService.connectedControllers.isEmpty
                 && controllerService.rawHIDGamepadSlots.isEmpty
+                && controllerService.steamControllerSlot == nil
                 && !controllerService.debugMarketingFakeActive {
                 HStack(spacing: 6) {
                     ControllerGlyph(height: 13)
@@ -1347,9 +1525,12 @@ struct ContentView: View {
                         },
                         onOpenExample: {
                             let brand = controllerService.controllerDetails[index]?.brand ?? .unknown
-                            jumpToPreset(named: ExamplePresets.exampleName(for: brand))
+                            jumpToPreset(named: ExamplePresets.exampleName(for: brand,
+                                                                           family: controllerService.namingFamily(forSlot: index)))
                         },
-                        rgbSpeed: $controllerService.rgbCycleSpeed
+                        rgbSpeed: $controllerService.rgbCycleSpeed,
+                        onDisconnect: { RawHIDGamepadService.shared.disconnect(gameController: controller) },
+                        experimental: ControllerLayoutResolver.readsExperimentally(service: controllerService, slot: index)
                     )
                 }
 
@@ -1358,7 +1539,13 @@ struct ContentView: View {
                 // They don't fit the MFi GCController chip (no battery,
                 // no light bar), so render a simpler chip per slot.
                 ForEach(rawHIDSortedSlots, id: \.slot) { entry in
-                    rawHIDChip(slot: entry.slot, gamepad: entry.gamepad)
+                    RawHIDChipView(slot: entry.slot, gamepad: entry.gamepad,
+                                   color: Self.controllerColors[entry.slot % Self.controllerColors.count],
+                                   experimental: ControllerLayoutResolver.readsExperimentally(service: controllerService, slot: entry.slot))
+                }
+                // The Steam Controller, read by its own helper.
+                if let steamSlot = controllerService.steamControllerSlot {
+                    steamChip(slot: steamSlot)
                 }
             }
 
@@ -1381,41 +1568,21 @@ struct ContentView: View {
             .sorted { $0.slot < $1.slot }
     }
 
-    @ViewBuilder
-    private func rawHIDChip(slot: Int, gamepad: RawHIDGamepad) -> some View {
+    private func steamChip(slot: Int) -> some View {
         let color = Self.controllerColors[slot % Self.controllerColors.count]
-        HStack(spacing: 8) {
+        return HStack(spacing: 8) {
             ControllerGlyph(height: 11)
                 .foregroundStyle(color)
-
             VStack(alignment: .leading, spacing: 0) {
-                Text(gamepad.displayName)
+                Text("Steam Controller")
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text("Slot \(slot + 1)")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    Text("·")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    Text("Raw HID")
-                        .font(.system(size: 9))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.secondary.opacity(0.15))
-                        .foregroundStyle(.purple)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                }
+                Text("Slot \(slot)")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.hint)
             }
-
             Spacer()
-
-            Text(gamepad.transport)
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-                .padding(.trailing, 4)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -1466,13 +1633,15 @@ struct ContentView: View {
     /// instruction was misleading users into thinking the app was broken.
     private func eightBitDoGuidance(for device: EightBitDoDevice) -> String {
         let name = device.productName.lowercased()
+        // The same modes Help gives, from 8BitDo's own instructions for Apple
+        // devices.
         if name.contains("ultimate 2c") || name.contains("ultimate2c") {
-            return "The Ultimate 2C wired model has no Apple mode. Hold Y while plugging in USB to switch to Switch mode (macOS reads this natively), or update InputConfig - the latest build reads this controller directly in any mode."
+            return "The Ultimate 2C wired model has no Apple mode. Hold X while plugging it in for its Windows mode, which InputConfig reads directly."
         }
-        if name.contains("ultimate") {
-            return "Set the back switch to A for Apple mode. If your model has no slider, hold B while turning on for Apple mode. Switch mode (S) also works on macOS Ventura+."
+        if name.contains("sn30") || name.contains("n30 pro") {
+            return "Turn it off, then hold B and Start to turn it on in the mode for a Mac."
         }
-        return "Switch to Apple mode (A on the back of the controller) for full Mac support. If your model has no slider, hold B while turning on."
+        return "Slide the switch on the back to D, the mode 8BitDo lists for a Mac. A pad without a switch: hold B and Start to turn it on."
     }
 
     /// The top-level folders of one sidebar list, each a collapsible
@@ -1499,7 +1668,8 @@ struct ContentView: View {
                         .animation(.easeOut(duration: 0.9),
                                    value: flashingGroupID)
                 )
-                .listRowBackground(FolderOutlineSegment(role: headerRole, color: outline.color))
+                .listRowBackground(FolderOutlineSegment(role: headerRole, color: outline.color,
+                                                        selected: selectedFolderID == group.id))
                 // Pull the row's leading edge left so List's default sidebar
                 // indent doesn't leave a fat empty gap to the left of the
                 // disclosure chevron.
@@ -1649,6 +1819,10 @@ struct ContentView: View {
                             editingPreset = preset
                         }
                     )
+                    // The visualizer under the editor sheet stops its clock:
+                    // drawing a live pad nobody can see took frames from the
+                    // editor's scrolling.
+                    .environment(\.visualizerSuspended, editingPreset != nil)
                     .environmentObject(mappingEngine)
                     .environmentObject(controllerService)
                     .environmentObject(presetStore)
@@ -1692,17 +1866,17 @@ struct ContentView: View {
                 // Headline
                 VStack(spacing: 10) {
                     ControllerGlyph(height: 42)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("Welcome to InputConfig")
                             .font(.title2.weight(.semibold))
-                        // Small grey version on the same line, which doubles
+                        // Small gray version on the same line, which doubles
                         // as the release-notes button (same pattern as the
                         // sibling app's home header).
                         Button { showWelcomeChangelog = true } label: {
                             Text(Changelog.currentVersion)
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.hint)
                         }
                         .buttonStyle(.plain)
                         .help("What's new in this version")
@@ -1742,7 +1916,7 @@ struct ContentView: View {
                 // the two help / onboarding buttons underneath.
                 VStack(spacing: 10) {
                     // Row 1: create a preset, or build one with the wizard.
-                    // Each row is a centerd flow, so a narrow window wraps
+                    // Each row is a centered flow, so a narrow window wraps
                     // its buttons onto another line instead of squeezing.
                     CenteredFlow(spacing: 10) {
                         Button {
@@ -1768,6 +1942,18 @@ struct ContentView: View {
                         }
                         .buttonStyle(.solidSecondary)
                         .help("Answer a few quick questions and we'll build a tailored preset for your game, app, or workflow")
+
+                        // The ready-made first preset for everyone: opens its
+                        // page, where Activate starts it.
+                        if let easyBrowse = presetStore.presets.first(where: { $0.name == ExamplePresets.easyBrowseName }) {
+                            Button {
+                                selectedPresetId = easyBrowse.id
+                            } label: {
+                                Label("Start with Easy Browse", systemImage: "hand.wave")
+                            }
+                            .buttonStyle(.solidSecondary)
+                            .help("A ready-made layout for using the whole Mac from a controller: pointer, scrolling, clicks, dictation, reading aloud, Spotlight, and web pages. Opens it; press Activate to start.")
+                        }
                     }
 
                     // Row 2: onboarding + docs, underneath the creation buttons.
@@ -1799,7 +1985,7 @@ struct ContentView: View {
                 }
 
                 // A literal horizontal bracket over the grid with its title
-                // in the gap, grey like the caption text.
+                // in the gap, gray like the caption text.
                 BracketHeader(title: "Feature Showcases")
                     .padding(.top, 6)
                     .padding(.horizontal, 28)
@@ -1840,7 +2026,7 @@ struct ContentView: View {
                              tint: .teal)
                     demoCard(kind: .siriShortcuts,
                              icon: "sparkles.rectangle.stack.fill",
-                             detail: "Run any Siri Shortcut from any input: scenes, timers, Do Not Disturb, whole automations - one press, no focus stolen.",
+                             detail: "Run any Siri Shortcut from any input: scenes, timers, Do Not Disturb, whole automations: one press, no focus stolen.",
                              tint: .indigo)
                     demoCard(kind: .inputRemap,
                              icon: "keyboard.badge.ellipsis",
@@ -1872,7 +2058,7 @@ struct ContentView: View {
                              tint: .yellow)
                     demoCard(kind: .stackedOutputs,
                              icon: "square.stack.3d.up.fill",
-                             detail: "One press fires key + click + MIDI + speech in parallel. Different from a macro - all at once, not in sequence.",
+                             detail: "One press fires key + click + MIDI + speech in parallel. Different from a macro: all at once, not in sequence.",
                              tint: .blue)
                     demoCard(kind: .holdDoubleTap,
                              icon: "hand.tap.fill",
@@ -1880,7 +2066,7 @@ struct ContentView: View {
                              tint: .blue)
                     demoCard(kind: .appAutoSwitch,
                              icon: "app.connected.to.app.below.fill",
-                             detail: "Presets activate themselves when their app comes to the front - the game preset in the game, the DAW preset in the DAW.",
+                             detail: "Presets activate themselves when their app comes to the front: the game preset in the game, the DAW preset in the DAW.",
                              tint: .green)
                     demoCard(kind: .autoLaunch,
                              icon: "app.badge.fill",
@@ -1908,7 +2094,7 @@ struct ContentView: View {
                              tint: .purple)
                     demoCard(kind: .speech,
                              icon: "speaker.wave.2.fill",
-                             detail: "Speak a custom phrase on press through Mac speakers or the controller speaker.",
+                             detail: "Speak a custom phrase on press, through the Mac's sound output.",
                              tint: .indigo)
                     demoCard(kind: .midiCC,
                              icon: "dial.high.fill",
@@ -1930,7 +2116,7 @@ struct ContentView: View {
 
                 Text("Plug in a controller to get started. Open the Help menu for setup guides for every supported device.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
 
@@ -2024,7 +2210,7 @@ struct ContentView: View {
                     cardLabel(pulse: pulse)
                 }
                 .buttonStyle(.plain)
-                .focusEffectDisabled()
+                .focusRingForKeyboardUsers()
                 .onHover { hovering = $0 }
             }
         }
@@ -2055,13 +2241,13 @@ struct ContentView: View {
                 ? CGFloat(8.0 + 8.0 * pulse)
                 : 0
             let scale: CGFloat = {
-                if reduceMotion { return 1.0 }
+                if reduceMotion || appReduceMotion { return 1.0 }
                 if isHighlighted { return CGFloat(1.0 + 0.05 * pulse) }
                 if hovering { return 1.02 }
                 return 1.0
             }()
             // Tint only lights up on hover or while the tour highlights
-            // the card. At rest every tile's icon is neutral grey, so the
+            // the card. At rest every tile's icon is neutral gray, so the
             // grid reads as one calm surface instead of a wall of color.
             let active: Bool = hovering || isHighlighted
             let iconColor: Color = active ? tint : Color.secondary.opacity(0.55)
@@ -2145,6 +2331,23 @@ struct ContentView: View {
     /// Wired up through TutorialPlumbing so the heavy body chain doesn't
     /// hold yet another onChange.
     private func handleTutorialEnded() {
+        if let original = tutorialPresetSnapshot,
+           var current = presetStore.presets.first(where: { $0.id == original.id }) {
+            // Put back the slot types, and drop groups the tour added that
+            // are still empty; anything the user did meanwhile stays.
+            for g in current.joysticks.indices {
+                if g < original.joysticks.count {
+                    current.joysticks[g].inputKind = original.joysticks[g].inputKind
+                }
+            }
+            while current.joysticks.count > original.joysticks.count,
+                  current.joysticks.last?.bindings.isEmpty == true {
+                current.joysticks.removeLast()
+            }
+            current.modifiedAt = original.modifiedAt
+            presetStore.savePreset(current)
+        }
+        tutorialPresetSnapshot = nil
         tutorialFeatureSpotlight = nil
         editingPreset = nil
         showingMotionCalibrationFromMenu = false
@@ -2159,7 +2362,7 @@ struct ContentView: View {
     /// SwiftUI's type-checker time out. As a plain method the body
     /// resolves instantly.
     private func handleEditorDismiss() {
-        // If the user cancelled a newly created preset, delete it.
+        // If the user canceled a newly created preset, delete it.
         // The hardDelete path skips trash so a "create + cancel"
         // cycle doesn't litter the Recently Deleted buffer with
         // empty drafts. The lookup is forgiving - if for any reason
@@ -2180,8 +2383,10 @@ struct ContentView: View {
             }
             newlyCreatedPresetId = nil
         }
-        // Resume outputs when the editor closes.
-        mappingEngine.outputsPaused = false
+        // Outputs go back to how they were before the editor opened, and
+        // an override ends with the editor.
+        mappingEngine.editorOpen = false
+        mappingEngine.outputsPaused = outputsPausedBeforeEdit
         engineWasRunningBeforeEdit = false
         // Clear any pending jump so re-opening the editor doesn't reuse
         // a stale target.
@@ -2245,6 +2450,9 @@ struct ContentView: View {
                                          kind: SlotInputKind) {
         guard var updated = presetStore.presets.first(where: { $0.id == presetID })
             else { return }
+        // Remembered once, so the tour's change is undone when it ends: it
+        // used to rewrite the user's own preset for good.
+        if tutorialPresetSnapshot == nil { tutorialPresetSnapshot = updated }
         while updated.joysticks.count <= slot {
             updated.joysticks.append(JoystickMapping(tag: ""))
         }
@@ -2285,7 +2493,7 @@ struct ContentView: View {
                 title: "Your preset library",
                 body: "The sidebar lists every preset you've created, organized into groups. Each preset is one mapping configuration. Click the ellipsis icon next to a truncated description to read its full text.",
                 spotlight: SpotlightID.sidebar,
-                tip: "Drag a preset onto another to create a new group. Right-click for Activate / Edit / Duplicate / Delete.",
+                tip: "Drag a preset to reorder it, or onto a folder to move it there. Right-click for Activate / Edit / Duplicate / Delete, and New Group.",
                 action: { selectedPresetId = nil }
             ),
             TutorialStep(
@@ -2339,7 +2547,7 @@ struct ContentView: View {
                 title: "Edit the Preset",
                 body: "Watch the cursor click the Edit button. The editor opens. Each row is one binding: Scan an input, then pick what it outputs (key, mouse, MIDI, macro, speech, more).",
                 spotlight: SpotlightID.editButton,
-                tip: "The engine pauses while the editor is open so scanning a key never fires it.",
+                tip: "Keys and MIDI pause while the editor is open, so scanning a key never fires it; the pointer keeps working.",
                 action: {
                     if let p = tutorialDemoPreset() {
                         selectedPresetId = p.id
@@ -2379,9 +2587,9 @@ struct ContentView: View {
                 icon: "tray.and.arrow.down.fill",
                 tint: .blue,
                 title: "Save, then close",
-                body: "The Save and Cancel buttons sit at the bottom right of the editor sheet. Watch the cursor land on Save. The Modified timestamp updates the moment it fires. Then the cursor moves to Cancel.",
+                body: "The Save and Cancel buttons sit at the bottom right of the editor sheet. Watch the cursor point at Save, which writes your changes, and then at Cancel. The tour itself closes the editor without saving.",
                 spotlight: SpotlightID.editorSave,
-                tip: "Cancel on a freshly-created preset hard-deletes it, with no Recently Deleted entry.",
+                tip: "Cancel on a new preset with no rows removes it without putting it in the Trash.",
                 action: {
                     // Sequence: cursor to Save → 1.4s pause → cursor
                     // to Cancel → 0.6s pause → actually dismiss the
@@ -2406,9 +2614,9 @@ struct ContentView: View {
                 icon: "play.fill",
                 tint: .green,
                 title: "Activate the preset",
-                body: "Watch the cursor click the green Activate button. The engine starts. The light bar switches to this preset's color. Cursor utilities (confine, auto-recenter, hide) and the auto-launch app from Automation & Gaming Utilities all kick in. Click again to stop.",
+                body: "Watch the cursor point at the green Activate button; click it yourself when you are ready. The light bar switches to this preset's color. Cursor utilities (confine, auto-recenter, hide) and the auto-launch app from Automation & Gaming Utilities all kick in. Click again to stop.",
                 spotlight: SpotlightID.activateButton,
-                tip: "Click the green dot in the sidebar next to a preset to toggle activation without opening the detail page.",
+                tip: "Right-click a preset in the sidebar and choose Activate to start it without opening its page.",
                 action: {
                     editingPreset = nil
                     // Brief beat after the editor closes (previous step
@@ -2448,10 +2656,10 @@ struct ContentView: View {
             TutorialStep(
                 icon: "rectangle.3.group",
                 tint: .blue,
-                title: "Template picker, controller mode",
-                body: "The visualizer can swap between controller widgets, a full macOS keyboard map, or a mouse diagram. I'm temporarily forcing the controller template here so you can see all the gamepad-specific widgets even without one connected.",
+                title: "Controller menu",
+                body: "This menu picks what the panel shows: Automatic, a screen, keyboard, touchpad, mouse or MIDI map, or, under Connected or a maker's menu (Xbox, PlayStation, Nintendo and the rest), the controller the group is set up for, drawn here as built with its buttons named that way. I'm showing the controller here so you can see a pad even without one connected.",
                 spotlight: SpotlightID.templatePicker,
-                tip: "Set per-slot from the editor too; the picker is a quick-switch at the visualizer level.",
+                tip: "A connected controller is always drawn as itself; the menu choice is what shows when it is away.",
                 action: {
                     // Force controller layout on the demo preset's
                     // first slot so the next several steps have widgets
@@ -2465,40 +2673,31 @@ struct ContentView: View {
                 icon: "dot.circle.and.hand.point.up.left.fill",
                 tint: .blue,
                 title: "Analog sticks, click them in the visualizer",
-                body: "The two stick widgets in the controller layout you can see now report continuous -1 to +1 values per axis, perfect for cursor speed, scroll speed, or anything proportional. Click a stick widget in the visualizer for the bound bindings + a jump-to-editor button.",
+                body: "The sticks on the drawing move as you push the real ones, and each reports a continuous -1 to +1 per axis, perfect for cursor speed, scroll speed, or anything proportional. Click a stick on the drawing for its rows and a button that jumps to them in the editor.",
                 demo: .analogStick,
-                tip: "Pick from Linear, Smooth, or Aggressive curves in the editor's Advanced section."
+                tip: "Pick from Linear, Smooth, or Aggressive curves in a row's Options."
             ),
             TutorialStep(
                 icon: "arrow.up.and.down.text.horizontal",
                 tint: .orange,
                 title: "Triggers, pressure sensitive",
-                body: "Trigger widgets show analog magnitude with the orange tick marking the binding's deadzone threshold. Click a trigger widget for its bindings popover. Use Variable Sensitivity in the editor to scale output speed by how hard you press.",
+                body: "The triggers on the drawing fill as you pull them. Click one for its rows. Use Variable Sensitivity in the editor to scale output speed by how hard you press.",
                 demo: .pressureTrigger
             ),
             TutorialStep(
                 icon: "gyroscope",
                 tint: .purple,
                 title: "Gyroscope motion",
-                body: "Controllers with motion sensors (DualSense, DualShock 4, Switch Pro, Joy-Con) expose gyro + accelerometer data. The motion widget shows the controller orientation; clicking it offers Reset gyroscope to re-zero drift without leaving the visualizer.",
+                body: "Controllers with motion sensors (DualSense, DualShock 4, and the 2026 Steam Controller) expose gyro + accelerometer data. The motion widget shows the controller orientation; clicking it offers Reset gyroscope to re-zero drift without leaving the visualizer.",
                 demo: .gyro,
                 tip: "Run Calibrate Motion once per controller so drift is corrected from the start."
             ),
             TutorialStep(
-                icon: "pencil.and.outline",
+                icon: "gamecontroller",
                 tint: .blue,
-                title: "Edit Layout",
-                body: "Watch the cursor click Edit Layout. The visualizer flips into 'blueprint mode' with a faint grid and a dashed yellow outline around every widget. Drag any widget to rearrange it.",
-                spotlight: SpotlightID.customizeButton,
-                tip: "Click Reset (in edit mode) to put every widget back where it started.",
-                action: {
-                    TutorialState.shared.simulateClickThen(
-                        at: SpotlightID.customizeButton
-                    ) {
-                        // No-op - the user can toggle it themselves
-                        // when they want to actually drag widgets.
-                    }
-                }
+                title: "Every control where it sits",
+                body: "Each control is drawn where it sits on the real controller, with the bumpers and triggers above and any back buttons and paddles below, as you hold it. Each lights as you press it, and its caption shows what this preset makes it do.",
+                tip: "Edit Layout rearranges the keyboard, mouse and touchpad maps; a controller drawing keeps the real layout."
             ),
             TutorialStep(
                 icon: "light.beacon.max.fill",
@@ -2535,7 +2734,7 @@ struct ContentView: View {
                 icon: "rectangle.and.hand.point.up.left.fill",
                 tint: .mint,
                 title: "Calibrate Touchpad",
-                body: "Touchpad Setup opens with a device picker at the top: DualSense, DualShock 4, or Mac Trackpad. Pick one, then sweep the surface to calibrate, or jump to Regions to define tap zones bound to keys.",
+                body: "Touchpad Setup works for a DualSense or DualShock 4 touchpad. Sweep the surface to calibrate, or jump to Regions to define tap zones bound to keys.",
                 action: {
                     showingMotionCalibrationFromMenu = false
                     // Brief delay so the previous sheet visibly closes
@@ -2685,8 +2884,8 @@ struct ContentView: View {
                 icon: "dot.scope",
                 tint: .red,
                 title: "Scanning: record a binding from your controller",
-                body: "Click Scan on a row. It glows for 5 seconds. Press the button, move the stick, or tilt the gyro you want to bind. The row fills in. Same scan works with external keyboards and mice.",
-                tip: "Hold Shift or Cmd while scanning to add that modifier to the recorded input."
+                body: "Click Scan on a row, then press the button, move the stick, or tilt the gyro you want to bind. Scan waits 20 seconds (Settings, General, Scan changes that), and the row fills in. The same scan works with the Mac's keyboard and mouse.",
+                tip: "To need a second button held too, set it as the row's chord from the button next to Scan."
             ),
             TutorialStep(
                 icon: "bolt.fill",
@@ -2728,7 +2927,7 @@ struct ContentView: View {
                 icon: "tray.and.arrow.down.fill",
                 tint: .blue,
                 title: "Save the Minecraft preset",
-                body: "Cursor flies to Save (bottom right of the editor toolbar), then to Cancel, then the editor slides closed. Modified time updates, and the new bindings are on disk.",
+                body: "The cursor points at Save (bottom right of the editor toolbar), then at Cancel, and the editor closes. In the tour nothing is saved; on your own, Save is what writes the new bindings.",
                 spotlight: SpotlightID.editorSave,
                 action: {
                     TutorialState.shared.simulateClickThen(
@@ -2752,7 +2951,7 @@ struct ContentView: View {
                 title: "Activate Minecraft mode",
                 body: "Scrolling back up to the Activate button. Click it for real to start the engine, launch Minecraft, hide the cursor, and turn the lightbar green.",
                 spotlight: SpotlightID.activateButton,
-                tip: "Cmd-click the green dot in the sidebar to toggle activation without leaving the home screen.",
+                tip: "Right-click a preset in the sidebar and choose Activate to start it without leaving the home screen.",
                 action: {
                     NotificationCenter.default.post(
                         name: .inputConfigScrollToTop, object: nil)
@@ -2831,14 +3030,16 @@ struct ContentView: View {
         // alert it raised on every activation of a motion or touchpad preset
         // read as "the preset does not work". Calibration stays available in
         // each row's Options for the raw HID path and for people who want it.
-        _ = calibrationRequirements(for: preset)
         startEngine(with: preset)
     }
 
     private func startEngine(with preset: Preset) {
         // An empty preset cannot do anything; activating it would show the
         // green active state over an engine with nothing to run.
-        guard preset.joysticks.contains(where: { !$0.bindings.isEmpty }) else { return }
+        // Drive mode counts: a drive-only preset was refused here although
+        // the engine runs it.
+        guard preset.isRunnable else { return }
+        guard presetStore.confirmFirstStart(preset, background: false) else { return }
         mappingEngine.stop()
         presetStore.activatePreset(preset)
         mappingEngine.start(with: preset)
@@ -2851,22 +3052,11 @@ struct ContentView: View {
         }
     }
 
-    /// True if any binding in the preset outputs a keyboard or mouse action -
-    /// the outputs that require Accessibility. MIDI, haptics, and speech do not.
+    /// True when the preset needs Accessibility; see `Preset.needsAccessibility`.
+    /// This missed Type Text, system actions, macros, hold and double-tap
+    /// outputs, and Mac keyboard and mouse inputs.
     private func presetUsesKeyboardOrMouse(_ preset: Preset) -> Bool {
-        for joystick in preset.joysticks {
-            for binding in joystick.bindings {
-                for output in binding.outputs {
-                    switch output.type {
-                    case .key, .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep:
-                        return true
-                    default:
-                        continue
-                    }
-                }
-            }
-        }
-        return false
+        preset.needsAccessibility
     }
 
     /// The currently-active preset, if any.
@@ -2875,9 +3065,8 @@ struct ContentView: View {
     }
 
     /// Reassuring, proactive Accessibility explainer shown on launch when the
-    /// permission isn't granted. Spells out exactly why the app needs it, that
-    /// the use is Apple-approved for accessibility, and that nothing leaves the
-    /// Mac, so people feel safe granting it and their mappings actually work.
+    /// permission isn't granted. Spells out exactly what the app uses it for
+    /// and that nothing leaves the Mac, so people can decide with the facts.
     @ViewBuilder
     private var accessibilityIntroSheet: some View {
         VStack(spacing: 16) {
@@ -2896,7 +3085,7 @@ struct ContentView: View {
             Text(accessibility.isTrusted ? "Accessibility Is On" : "Turn On Accessibility")
                 .font(.title2.weight(.bold))
 
-            Text("InputConfig uses macOS Accessibility to deliver the keyboard and mouse actions your controller is mapped to. This access has been approved by Apple for accessibility purposes and will allow additional functionality in the app. Your inputs stay on your Mac and are never sent anywhere.")
+            Text("InputConfig uses macOS Accessibility to send the keyboard and mouse actions your controller is mapped to, and to read your Mac's keyboard and mouse while a preset, Scan, or the Live Visualizer uses them as inputs. Everything stays on your Mac; nothing is recorded or sent anywhere.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -2912,7 +3101,7 @@ struct ContentView: View {
             } else {
                 Text("System Settings, Privacy & Security, Accessibility, then switch on InputConfig.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2939,7 +3128,8 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.solid)
-                    .focusEffectDisabled()
+                    .keyboardShortcut(.defaultAction)
+                    .focusRingForKeyboardUsers()
 
                     // The two helpers for when the switch will not stick:
                     // reveal this copy of the app (wherever this build
@@ -2963,7 +3153,14 @@ struct ContentView: View {
                         .help("Re-read the permission after switching it on")
                     }
 
-                    Button("Maybe Later") { showingAccessibilityIntro = false }
+                    // Remembered: the sheet opened on every launch. The
+                    // banner and the alert on activating a preset that
+                    // needs the permission still ask when it matters.
+                    Button("Maybe Later") {
+                        suppressAccessibilityIntro = true
+                        showingAccessibilityIntro = false
+                    }
+                    .keyboardShortcut(.cancelAction)
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                 }
@@ -2973,7 +3170,7 @@ struct ContentView: View {
             if !accessibility.isTrusted {
                 Text("If the switch does not stick, press Show in Finder and drag InputConfig from the Finder window into the Accessibility list in System Settings, then switch it on there.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
@@ -3016,7 +3213,7 @@ struct ContentView: View {
                 }
                 .font(.callout)
                 .buttonStyle(.plain)
-                .focusEffectDisabled()
+                .focusRingForKeyboardUsers()
                 .foregroundStyle(Color.accentColor)
             }
             .font(.callout)
@@ -3048,6 +3245,9 @@ struct ContentView: View {
     /// Accessibility hasn't been granted, so the user sees why their mappings
     /// aren't landing and can fix it in one click. Collapses to nothing
     /// otherwise (zero-height safe-area inset).
+    /// A deep orange that white small text reads on (about 6 to 1).
+    private static let bannerOrange = Color(red: 0.62, green: 0.30, blue: 0.0)
+
     @ViewBuilder
     private var accessibilityBanner: some View {
         if !accessibility.isTrusted,
@@ -3062,10 +3262,10 @@ struct ContentView: View {
                         .foregroundStyle(.white.opacity(0.92))
                 }
                 Spacer(minLength: 8)
-                Button("Open Settings") { accessibility.openSystemSettings() }
+                Button("Open Settings") { accessibility.requestAccess() }
                     .buttonStyle(.plain)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Self.bannerOrange)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(.white))
@@ -3073,53 +3273,8 @@ struct ContentView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(Color.orange)
+            .background(Self.bannerOrange)
         }
-    }
-
-    private struct CalibrationRequirements {
-        var needsMotion: Bool
-        var needsTouchpad: Bool
-        var connectedMotionControllerUncalibrated: Bool
-        var touchpadUncalibrated: Bool
-    }
-
-    /// Inspect the preset's bindings + the currently connected hardware and
-    /// decide what calibration prompts (if any) are needed before activation.
-    private func calibrationRequirements(for preset: Preset) -> CalibrationRequirements {
-        let allBindings = preset.joysticks.flatMap(\.bindings)
-        let usesMotion = allBindings.contains { $0.input.type == .motion }
-        let usesTouchpad = allBindings.contains {
-            $0.input.type == .touchpad || $0.input.type == .touchpadRegion
-        }
-
-        // Motion: needs calibration if any motion-capable connected
-        // controller hasn't been calibrated yet.
-        var motionUncalibrated = false
-        if usesMotion {
-            for controller in controllerService.connectedControllers {
-                if controller.motion != nil {
-                    let key = MotionCalibrationService.identityKey(for: controller)
-                    if !MotionCalibrationService.shared.isCalibrated(forKey: key) {
-                        motionUncalibrated = true
-                        break
-                    }
-                }
-            }
-        }
-
-        // Touchpad: needs calibration only for the raw HID feed; the
-        // GameController feed reports the whole pad already.
-        let touchpadUncalibrated = usesTouchpad
-            && !TouchpadService.shared.currentCalibration().isUserCalibrated
-            && !TouchpadService.shared.isFedByGameController
-
-        return CalibrationRequirements(
-            needsMotion: usesMotion && motionUncalibrated,
-            needsTouchpad: touchpadUncalibrated,
-            connectedMotionControllerUncalibrated: motionUncalibrated,
-            touchpadUncalibrated: touchpadUncalibrated
-        )
     }
 
     private func exportPreset(_ preset: Preset) {
@@ -3139,9 +3294,24 @@ struct ContentView: View {
     }
 
     private func sharePreset(_ preset: Preset) {
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        let presetsDir = appSupport.appendingPathComponent("InputConfig/presets")
-        let fileURL = presetsDir.appendingPathComponent(preset.filename)
+        // A copy made for sharing, named after the preset: the library file
+        // is named by its UUID and carries this Mac's state (running flag,
+        // folder, order, auto-launch paths, apps that switch to it).
+        var copy = preset.sanitizedForImport(removingOpeners: false)
+        copy.groupID = nil
+        let safeName = preset.name.components(separatedBy: CharacterSet(charactersIn: "/:\\")).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("Share", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fileURL = dir.appendingPathComponent((safeName.isEmpty ? "Preset" : safeName) + ".json")
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(copy).write(to: fileURL, options: .atomic)
+        } catch {
+            ActivityLog.shared.error("Presets", "Could not prepare \(preset.name) for sharing: \(error.localizedDescription)")
+            return
+        }
 
         let picker = NSSharingServicePicker(items: [fileURL])
         if let window = NSApp.keyWindow, let contentView = window.contentView {
@@ -3153,6 +3323,139 @@ struct ContentView: View {
 }
 
 // MARK: - Controller Chip View
+
+/// A controller read straight from its HID reports: name, slot, how it is
+/// connected, and a popover with Disconnect.
+/// "Experimental" beside a device read by a path not yet tested on
+/// hardware: the app reads it, but its drawing and naming are generic.
+struct ExperimentalBadge: View {
+    var body: some View {
+        Text("Experimental")
+            .font(.system(size: 9))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.15))
+            .foregroundStyle(.orange)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .help("Read by InputConfig but not yet tested on hardware")
+    }
+}
+
+struct RawHIDChipView: View {
+    let slot: Int
+    let gamepad: RawHIDGamepad
+    let color: Color
+    /// Read by a path not yet tested on hardware: marked Experimental.
+    var experimental: Bool = false
+
+    @State private var showPopover = false
+    @State private var isHovering = false
+    @State private var disconnectNote: String?
+
+    var body: some View {
+        Button { showPopover.toggle() } label: { chipContent }
+            .buttonStyle(.plain)
+            .focusRingForKeyboardUsers()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(gamepad.displayName)
+            .accessibilityHint("Opens the controller's details and Disconnect")
+            .popover(isPresented: $showPopover, arrowEdge: .trailing) { popover }
+            .contextMenu {
+                Button("Disconnect") { disconnect(); if disconnectNote != nil { showPopover = true } }
+            }
+    }
+
+    private var chipContent: some View {
+        HStack(spacing: 8) {
+            ControllerGlyph(height: 11)
+                .foregroundStyle(color)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(gamepad.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("Slot \(slot)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.hint)
+                    Text("·")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.hint)
+                    Text("Raw HID")
+                        .font(.system(size: 9))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15))
+                        .foregroundStyle(.purple)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    if experimental { ExperimentalBadge() }
+                }
+            }
+
+            Spacer()
+
+            Text(gamepad.transport)
+                .font(.system(size: 9))
+                .foregroundStyle(.hint)
+                .padding(.trailing, 4)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8))
+                .foregroundStyle(.hint)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .hoverFill(isHovering)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+    }
+
+    private var popover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ControllerGlyph(height: 16)
+                    .foregroundStyle(color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(gamepad.displayName)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Slot \(slot) · \(gamepad.transport) · read from its HID reports")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            Divider()
+            Button { disconnect() } label: {
+                Label("Disconnect", systemImage: "xmark.circle")
+                    .font(.caption)
+            }
+            .buttonStyle(.solidSecondaryCompact)
+            .help(gamepad.transport.localizedCaseInsensitiveContains("bluetooth")
+                  ? "Disconnects this controller from the Mac"
+                  : "Stops reading this controller until it is plugged in again or connected from InputConfig > Devices")
+            if let disconnectNote {
+                Text(disconnectNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+        .onAppear { disconnectNote = nil }
+    }
+
+    private func disconnect() {
+        switch RawHIDGamepadService.shared.disconnect(gamepad: gamepad) {
+        case .disconnected:
+            disconnectNote = nil
+            showPopover = false
+        case .cannot(let why):
+            disconnectNote = why
+        }
+    }
+}
 
 struct ControllerChipView: View {
     /// Optional so the marketing capture pipeline can render a chip for a
@@ -3172,8 +3475,14 @@ struct ControllerChipView: View {
     let onOpenExample: () -> Void
     /// Live binding to the shared RGB cycle speed (the slider in the menu).
     @Binding var rgbSpeed: Double
+    /// Disconnects this controller (nil hides Disconnect).
+    var onDisconnect: (() -> RawHIDGamepadService.DisconnectOutcome)? = nil
+    /// Read by a path not yet tested on hardware: marked Experimental.
+    var experimental: Bool = false
 
     @State private var showPopover = false
+    /// Why the last Disconnect could not disconnect, shown in the popover.
+    @State private var disconnectNote: String?
 
     // Accurate light bar colors tuned to match actual DualSense LED output
     private static let lightPresets: [(name: String, r: Float, g: Float, b: Float)] = [
@@ -3197,6 +3506,27 @@ struct ControllerChipView: View {
     @State private var isHovering = false
 
     var body: some View {
+        // A button, so Tab and Full Keyboard Access reach it; it was a tap
+        // gesture that only the pointer and VoiceOver could press.
+        Button { showPopover.toggle() } label: { chipContent }
+            .buttonStyle(.plain)
+            .focusRingForKeyboardUsers()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(controller?.vendorName ?? info?.name ?? "Controller \(index)")
+        .accessibilityValue(chipAccessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens controller light and settings")
+        .popover(isPresented: $showPopover, arrowEdge: .trailing) {
+            controllerPopover
+        }
+        .contextMenu {
+            if onDisconnect != nil {
+                Button("Disconnect") { runDisconnect(); if disconnectNote != nil { showPopover = true } }
+            }
+        }
+    }
+
+    private var chipContent: some View {
         HStack(spacing: 8) {
             // Controller icon
             ControllerGlyph(height: 11)
@@ -3209,10 +3539,13 @@ struct ControllerChipView: View {
                     .lineLimit(1)
 
                 if let info = info {
-                    Text(shortDescription(info))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(shortDescription(info))
+                            .font(.system(size: 9))
+                            .foregroundStyle(.hint)
+                            .lineLimit(1)
+                        if experimental { ExperimentalBadge() }
+                    }
                 }
             }
 
@@ -3232,7 +3565,7 @@ struct ControllerChipView: View {
 
             Image(systemName: "chevron.right")
                 .font(.system(size: 8))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -3240,17 +3573,6 @@ struct ControllerChipView: View {
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
-        }
-        .onTapGesture {
-            showPopover.toggle()
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(controller?.vendorName ?? info?.name ?? "Controller \(index)")
-        .accessibilityValue(chipAccessibilityValue)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityHint("Opens controller light and settings")
-        .popover(isPresented: $showPopover, arrowEdge: .trailing) {
-            controllerPopover
         }
     }
 
@@ -3278,7 +3600,7 @@ struct ControllerChipView: View {
             parts.append(info.productCategory)
         }
         parts.append("\(info.buttonCount) btns")
-        parts.append("\(info.axisCount) axes")
+        parts.append("\(info.shownAxisCount) axes")
         return parts.joined(separator: " · ")
     }
 
@@ -3298,7 +3620,7 @@ struct ControllerChipView: View {
                 .foregroundStyle(pct <= 20 ? .red : .secondary)
             Text("\(pct)%")
                 .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
         }
     }
 
@@ -3321,10 +3643,10 @@ struct ControllerChipView: View {
                         if !uptimeText.isEmpty {
                             Text("·")
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.hint)
                             Text(uptimeText)
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.hint)
                         }
                     }
                 }
@@ -3364,7 +3686,7 @@ struct ControllerChipView: View {
                 DisclosureGroup {
                     Text(info.physicalButtonNames.joined(separator: ", "))
                         .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } label: {
@@ -3373,25 +3695,50 @@ struct ControllerChipView: View {
                         .foregroundStyle(.secondary)
                 }
                 .tint(.secondary)
-                .focusable(false)
-                .focusEffectDisabled()
             }
 
             Divider()
 
-            Button {
-                onRefresh()
-                showPopover = false
-            } label: {
-                Label("Refresh Controllers", systemImage: "arrow.clockwise")
-                    .font(.caption)
+            HStack(spacing: 8) {
+                Button {
+                    onRefresh()
+                    showPopover = false
+                } label: {
+                    Label("Refresh Controllers", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.solidSecondaryCompact)
+                if onDisconnect != nil {
+                    Button { runDisconnect() } label: {
+                        Label("Disconnect", systemImage: "xmark.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.solidSecondaryCompact)
+                    .help("Disconnects this controller from the Mac")
+                }
             }
-            .buttonStyle(.solidSecondaryCompact)
+            if let disconnectNote {
+                Text(disconnectNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
         .frame(width: 340)
-        .onAppear { startUptimeTimer() }
+        .onAppear { disconnectNote = nil; startUptimeTimer() }
         .onDisappear { uptimeTimer?.invalidate(); uptimeTimer = nil }
+    }
+
+    private func runDisconnect() {
+        guard let onDisconnect else { return }
+        switch onDisconnect() {
+        case .disconnected:
+            disconnectNote = nil
+            showPopover = false
+        case .cannot(let why):
+            disconnectNote = why
+        }
     }
 
     private func startUptimeTimer() {
@@ -3421,7 +3768,7 @@ struct ControllerChipView: View {
             detailRow("Type", info.productCategory)
             detailRow("Gamepad", info.hasExtendedGamepad ? "Extended" : "Basic")
             detailRow("Buttons", "\(info.buttonCount)")
-            detailRow("Axes", "\(info.axisCount)")
+            detailRow("Axes", "\(info.shownAxisCount)")
             if info.supportsMotion {
                 detailRow("Motion", "Gyro + Accelerometer")
             }
@@ -3452,9 +3799,9 @@ struct ControllerChipView: View {
                 .foregroundStyle(.secondary)
 
             // One grid of everything the light can be: the fixed colors,
-            // a custom colour (the picker itself is the swatch, and applies
-            // as soon as a colour is chosen), and Rainbow, which is the RGB
-            // cycle. Picking any colour stops the cycle.
+            // a custom color (the picker itself is the swatch, and applies
+            // as soon as a color is chosen), and Rainbow, which is the RGB
+            // cycle. Picking any color stops the cycle.
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 8) {
                 ForEach(Self.lightPresets, id: \.name) { preset in
                     let swatchColor = preset.name == "Off" ? Color.gray.opacity(0.3) :
@@ -3485,7 +3832,7 @@ struct ControllerChipView: View {
                         }
                     Text("Custom")
                         .font(.system(size: 8))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
                 // Rainbow: the RGB cycle, as a swatch that stays lit while
                 // it runs.
@@ -3524,13 +3871,13 @@ struct ControllerChipView: View {
                         .foregroundStyle(.secondary)
                     Image(systemName: "tortoise")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                     Slider(value: $rgbSpeed, in: 0.25...6.0)
                         .accessibilityLabel("RGB cycle speed")
                         .accessibilityValue(String(format: "%.2f times normal", rgbSpeed))
                     Image(systemName: "hare")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
             }
 
@@ -3543,7 +3890,7 @@ struct ControllerChipView: View {
                     .foregroundStyle(.secondary)
                 Image(systemName: "light.min")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 Picker("", selection: $brightness) {
                     Text("Off").tag(0.0)
                     Text("Dim").tag(1.0)
@@ -3556,7 +3903,7 @@ struct ControllerChipView: View {
                 .accessibilityLabel("Light bar brightness")
                 Image(systemName: "light.max")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
         }
         .animation(.easeOut(duration: 0.18), value: isRGBActive)
@@ -3592,8 +3939,6 @@ private struct LightSwatchButton: View {
             }
         }
         .buttonStyle(.plain)
-        .focusable(false)
-        .focusEffectDisabled()
         .onHover { hovering in
             isHovering = hovering
         }
@@ -3618,6 +3963,9 @@ struct PresetRowView: View {
     var currentGroupID: UUID? = nil
     var onMoveToGroup: (UUID?) -> Void = { _ in }
     var onNewGroup: () -> Void = { }
+    /// Starred: a small star before the name, and the menus offer to remove it.
+    var isFavorite: Bool = false
+    var onToggleFavorite: () -> Void = { }
 
     /// Toggled when the user clicks the trailing ellipsis next to a
     /// truncated description. Collapses back when toggled off, the row is
@@ -3648,6 +3996,87 @@ struct PresetRowView: View {
         mainRow
     }
 
+    /// Everything a preset row offers, shared by the trailing ellipsis
+    /// menu and the right-click menu so the two never drift apart.
+    @ViewBuilder
+    private var optionsMenuItems: some View {
+        Button(preset.isActive ? "Deactivate" : "Activate") {
+            onActivate()
+        }
+
+        Button("Edit") {
+            onEdit()
+        }
+
+        Button("Duplicate") {
+            onDuplicate()
+        }
+
+        Button(isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+            onToggleFavorite()
+        }
+
+        Divider()
+
+        Menu("Move to Group") {
+            ForEach(groupChoices, id: \.id) { choice in
+                Button {
+                    onMoveToGroup(choice.id)
+                } label: {
+                    if choice.id == currentGroupID {
+                        Label(choice.path, systemImage: "checkmark")
+                    } else {
+                        Text(choice.path)
+                    }
+                }
+                .disabled(choice.id == currentGroupID)
+            }
+            if !groupChoices.isEmpty { Divider() }
+            Button("New Group…") { onNewGroup() }
+            if currentGroupID != nil {
+                Button("Remove from Group") { onMoveToGroup(nil) }
+            }
+        }
+
+        Divider()
+
+        Menu("Convert To…") {
+            ForEach(ControllerType.allCases.filter { !$0.conversionTargets.isEmpty }) { sourceType in
+                Menu("From \(sourceType.rawValue)") {
+                    ForEach(sourceType.conversionTargets) { destType in
+                        Button("To \(destType.rawValue)") {
+                            onConvert(sourceType, destType)
+                        }
+                    }
+                }
+            }
+        }
+
+        Button("Export…") {
+            onExport()
+        }
+
+        Button("Import Preset File…") {
+            onImport()
+        }
+
+        Divider()
+
+        Button("Show in Finder") {
+            onShowInFinder()
+        }
+
+        Button("Share…") {
+            onShare()
+        }
+
+        Divider()
+
+        Button("Delete", role: .destructive) {
+            onDelete()
+        }
+    }
+
     /// Top half of the row: name, single-line description with the trailing
     /// ellipsis-toggle, then the trailing options Menu. Always the same
     /// height regardless of expansion.
@@ -3661,9 +4090,17 @@ struct PresetRowView: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(preset.name)
-                    .font(.body)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    if isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow.opacity(0.7))
+                            .accessibilityLabel("Favorite")
+                    }
+                    Text(preset.name)
+                        .font(.body)
+                        .lineLimit(1)
+                }
 
                 // Single-line tag preview. When it truncates, clicking it
                 // (the ellipsis is the cue) floats the full description
@@ -3693,77 +4130,7 @@ struct PresetRowView: View {
 
             // Options menu
             Menu {
-                Button(preset.isActive ? "Deactivate" : "Activate") {
-                    onActivate()
-                }
-
-                Button("Edit") {
-                    onEdit()
-                }
-
-                Button("Duplicate") {
-                    onDuplicate()
-                }
-
-                Divider()
-
-                Menu("Move to Group") {
-                    ForEach(groupChoices, id: \.id) { choice in
-                        Button {
-                            onMoveToGroup(choice.id)
-                        } label: {
-                            if choice.id == currentGroupID {
-                                Label(choice.path, systemImage: "checkmark")
-                            } else {
-                                Text(choice.path)
-                            }
-                        }
-                        .disabled(choice.id == currentGroupID)
-                    }
-                    if !groupChoices.isEmpty { Divider() }
-                    Button("New Group…") { onNewGroup() }
-                    if currentGroupID != nil {
-                        Button("Remove from Group") { onMoveToGroup(nil) }
-                    }
-                }
-
-                Divider()
-
-                Menu("Convert To…") {
-                    ForEach(ControllerType.allCases) { sourceType in
-                        Menu("From \(sourceType.rawValue)") {
-                            ForEach(ControllerType.allCases.filter { $0 != sourceType }) { destType in
-                                Button("To \(destType.rawValue)") {
-                                    onConvert(sourceType, destType)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Button("Export…") {
-                    onExport()
-                }
-
-                Button("Import Preset File…") {
-                    onImport()
-                }
-
-                Divider()
-
-                Button("Show in Finder") {
-                    onShowInFinder()
-                }
-
-                Button("Share…") {
-                    onShare()
-                }
-
-                Divider()
-
-                Button("Delete", role: .destructive) {
-                    onDelete()
-                }
+                optionsMenuItems
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 12))
@@ -3778,44 +4145,11 @@ struct PresetRowView: View {
             .accessibilityHint("Activate, edit, duplicate, convert, share, or delete this preset")
         }
         .padding(.vertical, 4)
+        // The whole row, the empty stretch of its green highlight included,
+        // answers a right-click with the ellipsis menu.
+        .contentShape(Rectangle())
         .contextMenu {
-            Button(preset.isActive ? "Deactivate" : "Activate") {
-                onActivate()
-            }
-
-            Button("Edit") {
-                onEdit()
-            }
-
-            Button("Duplicate") {
-                onDuplicate()
-            }
-
-            Divider()
-
-            Menu("Convert To…") {
-                ForEach(ControllerType.allCases) { sourceType in
-                    Menu("From \(sourceType.rawValue)") {
-                        ForEach(ControllerType.allCases.filter { $0 != sourceType }) { destType in
-                            Button("To \(destType.rawValue)") {
-                                onConvert(sourceType, destType)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Button("Export…") { onExport() }
-            Button("Import Preset File…") { onImport() }
-
-            Divider()
-
-            Button("Show in Finder") { onShowInFinder() }
-            Button("Share…") { onShare() }
-
-            Divider()
-
-            Button("Delete", role: .destructive) { onDelete() }
+            optionsMenuItems
         }
     }
 
@@ -3843,7 +4177,7 @@ struct PresetRowView: View {
                 Divider()
                 Text("Notes")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 ScrollView(.vertical) {
                     Text(preset.notes)
                         .font(.caption2)
@@ -3874,6 +4208,73 @@ struct PresetDetailView: View {
     /// the user taps a row inside any widget popover.
     var onJumpToBinding: (EditorJumpTarget) -> Void = { _ in }
 
+    /// The visualizer's Connected pick: the group reads that controller,
+    /// as when it is picked from the editor's device menu.
+    private func setGroupDevice(_ name: String?, slot: Int) {
+        while preset.joysticks.count <= slot { preset.joysticks.append(JoystickMapping(tag: "")) }
+        preset.joysticks[slot].customName = name
+        preset.joysticks[slot].inputKind = name == nil ? .auto : .controller
+    }
+
+    /// The visualizer's Controller menu: the group's model, and the button
+    /// names to match when this preset is for that one controller.
+    private func setControllerModel(_ model: ControllerModelID?, slot: Int) {
+        // One change, saved once. A panel for a connected pad past the
+        // preset's groups gets its group, as the template picker does.
+        var updated = preset
+        while updated.joysticks.count <= slot { updated.joysticks.append(JoystickMapping(tag: "")) }
+        let previous = updated.joysticks[slot].controllerModel
+        // Already Automatic: nothing to undo (a family the Smart Preset
+        // Maker or a conversion set stays).
+        if model == nil, previous == nil { return }
+        updated.joysticks[slot].controllerModel = model?.rawValue
+        func family(of raw: String?) -> FaceLetters? {
+            raw.flatMap { ControllerLayoutCatalog.layout(ControllerModelID(rawValue: $0)) }?.family
+        }
+        let controllerGroups = updated.joysticks.filter { $0.inputKind == .auto || $0.inputKind == .controller }.count
+        let others = updated.joysticks.indices.filter { $0 != slot }.compactMap { family(of: updated.joysticks[$0].controllerModel) }
+        // The first model chosen in the preset: remember the family it
+        // replaces (a Smart Preset's, a conversion's, or none).
+        if model != nil, previous == nil, others.isEmpty, updated.familyBeforeModel == nil {
+            updated.familyBeforeModel = updated.buttonFamily?.rawValue ?? ""
+        }
+        if let model, let layout = ControllerLayoutCatalog.layout(model) {
+            // Names follow the choice unless another group's names were set
+            // some other way: a family set by this group's earlier choice
+            // may change.
+            if updated.buttonFamily == nil || updated.buttonFamily == .automatic || controllerGroups <= 1
+                || updated.buttonFamily == family(of: previous) {
+                updated.buttonFamily = layout.family
+            }
+        } else if updated.buttonFamily == family(of: previous) {
+            // Automatic undoes what the earlier choice set, and only that
+            // (a family the Smart Preset Maker set stays): another group's
+            // model, else the shipped family for a built-in, else none
+            // (names by the connected pad).
+            if let other = others.first {
+                updated.buttonFamily = other
+            } else {
+                // The family from before the first choice, else the shipped
+                // one for a built-in, else none.
+                let before = updated.familyBeforeModel
+                updated.buttonFamily = before.map { $0.isEmpty ? nil : FaceLetters(rawValue: $0) }
+                    ?? ExamplePresets.buttonFamilies[updated.name]
+                if updated.buttonFamily == .automatic { updated.buttonFamily = nil }
+            }
+        }
+        if model == nil, others.isEmpty { updated.familyBeforeModel = nil }
+        // A group this menu added past the preset's own, still empty, goes
+        // again, so the built-in is not changed by looking.
+        if model == nil, slot > 0, slot == updated.joysticks.count - 1 {
+            // Every empty group it added on the way, not only the last.
+            while updated.joysticks.count > 1, let g = updated.joysticks.last, g.bindings.isEmpty,
+                  g.customName == nil, g.inputKind == .auto, g.controllerModel == nil, g.tag.isEmpty {
+                updated.joysticks.removeLast()
+            }
+        }
+        preset = updated
+    }
+
     // PresetDetailView does not read the mapping engine directly (the
     // visualizer it embeds gets the engine from a higher injection), so it
     // must NOT subscribe to it here: doing so rebuilt this whole detail body
@@ -3894,6 +4295,13 @@ struct PresetDetailView: View {
                         .padding(.horizontal)
                         .padding(.top, 8)
 
+                    // Pointer and scroll speed for the whole preset, so no
+                    // row has to be opened to make everything faster or slower.
+                    if presetUses(.mouseMotion) || presetUses(.mouseWheel) || presetBindsDpadActions {
+                        speedRow
+                            .padding(.horizontal)
+                    }
+
                     // 2. Live Visualizer card.
                     // Tagged so the tour can scrollTo("visualizer-section")
                     // without having to fish through nested SwiftUI views.
@@ -3904,7 +4312,9 @@ struct PresetDetailView: View {
 
                     // 3. Joystick Slots card (mapping count + comment per
                     //    joystick group in the preset).
-                    if !preset.joysticks.isEmpty {
+                    // A new preset has one empty group, so "no groups" never
+                        // happened and the empty state never showed.
+                    if preset.isRunnable {
                         joystickSlotsCard
                             .padding(.horizontal)
                     } else {
@@ -3954,6 +4364,14 @@ struct PresetDetailView: View {
         .sheet(isPresented: $showingMotionCalFromDetail) {
             MotionCalibrationView()
                 .environmentObject(controllerService)
+                .glassBackground()
+        }
+        .sheet(isPresented: $showingScreenRegionsFromDetail, onDismiss: saveRegionSheetEdits) {
+            CursorRegionsView()
+                .glassBackground()
+        }
+        .sheet(isPresented: $showingStickZonesFromDetail, onDismiss: saveRegionSheetEdits) {
+            StickRegionsView()
                 .glassBackground()
         }
     }
@@ -4013,38 +4431,306 @@ struct PresetDetailView: View {
                     .lineLimit(1)
             }
             Spacer()
-            HStack(spacing: 8) {
-                Button(action: onToggle) {
-                    Label {
-                        Text(preset.isActive ? "Deactivate" : "Activate")
-                    } icon: {
-                        // A filled triangle carries far more ink than the
-                        // pencil beside it at the same point size, so it read
-                        // as a bigger, heavier icon. Drawn a step smaller so
-                        // the two buttons match.
-                        Image(systemName: preset.isActive ? "stop.fill" : "play.fill")
-                            .imageScale(.small)
+            // Activate and Edit, with the Emergency Stop under them at the
+            // width of the pair.
+            FirstWidthStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Button(action: onToggle) {
+                        Label {
+                            Text(preset.isActive ? "Deactivate" : "Activate")
+                        } icon: {
+                            // A filled triangle carries far more ink than the
+                            // pencil beside it at the same point size, so it read
+                            // as a bigger, heavier icon. Drawn a step smaller so
+                            // the two buttons match.
+                            Image(systemName: preset.isActive ? "stop.fill" : "play.fill")
+                                .imageScale(.small)
+                        }
                     }
-                }
-                .buttonStyle(SolidButton(tint: preset.isActive ? .red : .green))
-                .spotlightAnchor(SpotlightID.activateButton)
-                .accessibilityLabel(preset.isActive
-                                    ? "Deactivate \(preset.name)"
-                                    : "Activate \(preset.name)")
-                .accessibilityHint(preset.isActive
-                                   ? "Stops the mapping engine for this preset"
-                                   : "Starts the mapping engine and applies this preset")
+                    .buttonStyle(SolidButton(tint: preset.isActive ? .red : .green))
+                    // Nothing to run yet: say so rather than doing nothing on click.
+                    .disabled(!preset.isActive && !preset.isRunnable)
+                    .help(!preset.isActive && !preset.isRunnable ? "Add a row in the editor first" : "")
+                    .spotlightAnchor(SpotlightID.activateButton)
+                    .accessibilityLabel(preset.isActive
+                                        ? "Deactivate \(preset.name)"
+                                        : "Activate \(preset.name)")
+                    .accessibilityHint(preset.isActive
+                                       ? "Stops the mapping engine for this preset"
+                                       : "Starts the mapping engine and applies this preset")
 
-                Button(action: onEdit) {
-                    Label("Edit", systemImage: "pencil")
+                    Button(action: onEdit) {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .buttonStyle(.solidSecondary)
+                    .spotlightAnchor(SpotlightID.editButton)
+                    .accessibilityLabel("Edit bindings and mappings")
+                    .accessibilityHint("Opens the binding editor for this preset")
                 }
-                .buttonStyle(.solidSecondary)
-                .spotlightAnchor(SpotlightID.editButton)
-                .accessibilityLabel("Edit bindings and mappings")
-                .accessibilityHint("Opens the binding editor for this preset")
+                EmergencyStopHeaderButton()
             }
         }
         .spotlightAnchor(SpotlightID.detailHeader)
+    }
+
+    /// Stacks its views top to bottom, each as wide as the first one at its
+    /// natural width, so the Emergency Stop spans Activate and Edit exactly
+    /// and a long label of its own truncates rather than widening the pair.
+    private struct FirstWidthStack: Layout {
+        var spacing: CGFloat = 6
+
+        private func width(for proposal: ProposedViewSize, subviews: Subviews) -> CGFloat {
+            guard let first = subviews.first else { return 0 }
+            let natural = first.sizeThatFits(.unspecified).width
+            return min(natural, proposal.width ?? natural)
+        }
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            let w = width(for: proposal, subviews: subviews)
+            let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: nil)).height }
+            return CGSize(width: w, height: heights.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1)))
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            let column = ProposedViewSize(width: bounds.width, height: nil)
+            var y = bounds.minY
+            for subview in subviews {
+                subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading, proposal: column)
+                y += subview.sizeThatFits(column).height + spacing
+            }
+        }
+    }
+
+    /// The Emergency Stop under Activate and Edit: every way to stop right
+    /// now, and a click opens the same controls as Settings, General,
+    /// Emergency stop in a popover.
+    private struct EmergencyStopHeaderButton: View {
+        @EnvironmentObject var presetStore: PresetStore
+
+        // The service is not observable, so the label watches the stored
+        // settings it reads; a change here, in Settings, or from a restored
+        // backup redraws it.
+        @AppStorage(EmergencyStopService.enabledKey) private var keyboardOn = true
+        @AppStorage(EmergencyStopService.keyCodeKey) private var keyCode = Int(EmergencyStopService.defaultSpec.keyCode)
+        @AppStorage(EmergencyStopService.modifiersKey) private var modifiers = Int(EmergencyStopService.defaultSpec.modifiers)
+        @AppStorage(EmergencyStopService.controllerKey) private var holdOn = true
+        @AppStorage(EmergencyStopService.controllerBtnKey) private var holdButton =
+            EmergencyStopService.defaultControllerButton
+        @AppStorage(EmergencyStopService.holdSecondsKey) private var holdSeconds =
+            EmergencyStopService.defaultHoldSeconds
+        @AppStorage(EmergencyStopService.withStartKey) private var withStart = true
+
+        @State private var showingPopover = false
+        /// The popover's share of what Settings keeps for the section.
+        @State private var specRevision = 0
+        @State private var chordRefusal: String?
+
+        /// The chord as the service has it, which names the period key by
+        /// this keyboard's layout. The stored code and modifiers are read so
+        /// a new chord redraws the label.
+        private var chord: HotKeySpec {
+            _ = (keyCode, modifiers)
+            return EmergencyStopService.shared.spec
+        }
+
+        /// A button's everyday name: "Back" from "Back / Share / Select".
+        private func shortName(_ index: Int) -> String {
+            let full = BindingRowView.standardButtonLabels.first { $0.index == index }?.label ?? "Button \(index)"
+            let first = full.components(separatedBy: " / ").first ?? full
+            return first.components(separatedBy: " (").first ?? first
+        }
+
+        private var holdNames: [String] {
+            let needsStart = withStart && holdButton == EmergencyStopService.defaultControllerButton
+            return needsStart ? [shortName(holdButton), shortName(EmergencyStopService.startButton)] : [shortName(holdButton)]
+        }
+
+        private var seconds: Double { holdSeconds > 0 ? holdSeconds : EmergencyStopService.defaultHoldSeconds }
+        private var secondsText: String {
+            seconds == seconds.rounded() ? String(Int(seconds)) : String(seconds)
+        }
+
+        /// "Control Option Command period", for VoiceOver: the modifier
+        /// glyphs the chord is shown with, read as words.
+        private var spokenChord: String {
+            let modifierWords: [Character: String] = ["\u{2303}": "Control", "\u{2325}": "Option",
+                                                      "\u{21E7}": "Shift", "\u{2318}": "Command"]
+            let shown = chord.displayString
+            let mods = shown.prefix { modifierWords[$0] != nil }
+            let key = String(shown.dropFirst(mods.count))
+            let spokenKeys = [".": "period", ",": "comma", "/": "slash", ";": "semicolon", "esc": "escape"]
+            return (mods.compactMap { modifierWords[$0] } + [spokenKeys[key] ?? key]).joined(separator: " ")
+        }
+
+        private var spokenLabel: String {
+            let hold = "hold \(holdNames.joined(separator: " and ")) for \(secondsText) \(seconds == 1 ? "second" : "seconds")"
+            switch (keyboardOn, holdOn) {
+            case (true, true): return "Emergency stop: \(spokenChord), or \(hold)"
+            case (true, false): return "Emergency stop: \(spokenChord)"
+            case (false, true): return "Emergency stop: keyboard shortcut off, \(hold)"
+            case (false, false): return "Emergency stop: keyboard shortcut and controller hold off"
+            }
+        }
+
+        /// One line of the label: the name, then the chord (or that it is
+        /// off) and the hold when it is on, in the secondary color. One Text,
+        /// so it can scale down a little and truncate as a whole.
+        private func line(hold: String?) -> Text {
+            var label = AttributedString("Emergency Stop")
+            var detail = AttributedString("  " + (keyboardOn ? chord.displayString : "Keyboard off")
+                                          + (hold.map { "  \u{00B7}  \($0)" } ?? ""))
+            detail.foregroundColor = .secondary
+            label.append(detail)
+            return Text(label)
+        }
+
+        var body: some View {
+            Button {
+                showingPopover = true
+            } label: {
+                // The fullest line that fits the width of Activate and Edit.
+                // At the default text size that is the name and the chord;
+                // narrower, it shrinks a little, then gives up its middle so
+                // the chord stays in view.
+                ViewThatFits(in: .horizontal) {
+                    if holdOn {
+                        line(hold: "\(holdNames.joined(separator: " + ")) \(secondsText) s").fixedSize()
+                        line(hold: holdNames.joined(separator: " + ")).fixedSize()
+                    }
+                    line(hold: nil)
+                        .minimumScaleFactor(0.85)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.solidSecondaryCompact)
+            .help("\(spokenLabel). Click to change it.")
+            .accessibilityLabel(spokenLabel)
+            .accessibilityHint("Opens the emergency stop settings")
+            .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Emergency stop")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    EmergencyStopSettingsContent(specRevision: $specRevision,
+                                                 chordRefusal: $chordRefusal)
+                        .environmentObject(presetStore)
+                }
+                .padding(16)
+                .frame(width: 520, alignment: .leading)
+            }
+            // A refusal belongs to the visit it came from, as when the
+            // Settings sheet closes.
+            .onChange(of: showingPopover) { _, open in
+                if !open { chordRefusal = nil }
+            }
+        }
+    }
+
+    // MARK: - Speed row
+
+    /// Values shown while a speed slider moves. They are saved to the preset
+    /// (which restarts it when it is running) once the slider has been still
+    /// for a moment or is let go, not on every step of a drag.
+    @State private var pointerSpeedDraft: Double?
+    @State private var scrollSpeedDraft: Double?
+    @State private var pointerSpeedCommit: Task<Void, Never>?
+    @State private var scrollSpeedCommit: Task<Void, Never>?
+
+    private func presetUses(_ type: OutputType) -> Bool {
+        preset.joysticks.contains { group in
+            group.bindings.contains { binding in binding.outputs.contains { $0.type == type } }
+        }
+    }
+
+    /// The D-pad carries something other than pointer motion (keys, a
+    /// shortcut, a system function), which is where one direction at a time
+    /// matters.
+    private var presetBindsDpadActions: Bool {
+        preset.joysticks.contains { group in
+            group.bindings.contains { b in
+                b.input.type == .hat && b.outputs.contains { $0.type != .mouseMotion && $0.type != .mouseWheel }
+            }
+        }
+    }
+
+    private var speedRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if presetUses(.mouseMotion) || presetUses(.mouseWheel) {
+                HStack(spacing: 24) {
+                    if presetUses(.mouseMotion) {
+                        speedSlider("Pointer speed", value: preset.automation.sensitivityMultiplier,
+                                    draft: $pointerSpeedDraft, commitTask: $pointerSpeedCommit,
+                                    help: "Makes every pointer movement in this preset faster or slower. \u{00D7}1.00 is as each row is set.") { value in
+                            preset.automation.sensitivityMultiplier = value
+                        }
+                    }
+                    if presetUses(.mouseWheel) {
+                        speedSlider("Scroll speed", value: preset.automation.scrollMultiplier,
+                                    draft: $scrollSpeedDraft, commitTask: $scrollSpeedCommit,
+                                    help: "Makes every scroll in this preset faster or slower. \u{00D7}1.00 is as each row is set.") { value in
+                            preset.automation.scrollMultiplier = value
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            // On a line of its own, so the two sliders keep their width.
+            if presetBindsDpadActions {
+                Toggle(isOn: SwiftUI.Binding(
+                    get: { preset.automation.dpadOneDirection == true },
+                    set: { preset.automation.dpadOneDirection = $0 ? true : nil }
+                )) {
+                    Text("D-pad one direction at a time")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .toggleStyle(.checkbox)
+                .help("The direction pressed first keeps the D-pad until you let go, so a quick press that brushes the next direction does not fire that row too.")
+                .accessibilityHint("The direction pressed first keeps the D-pad until you let go")
+            }
+        }
+    }
+
+    private func speedSlider(_ title: String, value: Double,
+                             draft: SwiftUI.Binding<Double?>,
+                             commitTask: SwiftUI.Binding<Task<Void, Never>?>,
+                             help: String,
+                             commit: @escaping (Double) -> Void) -> some View {
+        let shown = draft.wrappedValue ?? value
+        func save(_ v: Double) {
+            commitTask.wrappedValue?.cancel()
+            commitTask.wrappedValue = nil
+            commit(v)
+            draft.wrappedValue = nil
+        }
+        return HStack(spacing: 8) {
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Slider(value: SwiftUI.Binding(
+                get: { shown },
+                set: { newValue in
+                    draft.wrappedValue = newValue
+                    commitTask.wrappedValue?.cancel()
+                    commitTask.wrappedValue = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        guard !Task.isCancelled else { return }
+                        save(newValue)
+                    }
+                }
+            ), in: 0.1...5.0, step: 0.05) { editing in
+                if !editing, let v = draft.wrappedValue { save(v) }
+            }
+            .frame(width: 140)
+            .accessibilityLabel(title)
+            .accessibilityValue(String(format: "times %.2f", shown))
+            Text(String(format: "\u{00D7}%.2f", shown))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+        }
+        .help(help)
     }
 
     // MARK: - Section: Live Visualizer card
@@ -4109,6 +4795,13 @@ struct PresetDetailView: View {
         return group.bindings.allSatisfy { $0.input.type == .cursorRegion }
     }
 
+    /// The Mac input a slot's group reads, when it is not a controller.
+    private func macInput(forSlot slot: Int) -> (name: String, symbol: String)? {
+        if slotShowsScreen(slot) { return ("Screen", "display") }
+        guard slot < preset.joysticks.count, let name = preset.joysticks[slot].macInputName else { return nil }
+        return (name, preset.joysticks[slot].macInputSymbol)
+    }
+
     /// "Input Device n", the controller's name, and its connection dot.
     private func visualizerDeviceChip(_ viz: VisualizerSlot) -> some View {
         HStack(spacing: 6) {
@@ -4118,23 +4811,58 @@ struct PresetDetailView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Capsule().fill(Color.secondary.opacity(0.12)))
-            if slotShowsScreen(viz.slot) {
-                // The slot's input is a display, not a controller: naming
-                // the controller here, with a connection dot, said the
-                // screen regions belonged to it.
-                Label("Screen", systemImage: "display")
+            if let mac = macInput(forSlot: viz.slot) {
+                // The slot's input is the Mac (keyboard, mouse, a display,
+                // MIDI), not a controller: naming the pad that happens to be
+                // plugged in, with a connection dot, said the rows belonged
+                // to it.
+                Label(mac.name, systemImage: mac.symbol)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                let connected = controllerService.controllerDetails[viz.slot] != nil
-                Text(connected ? controllerService.controllerName(at: viz.slot) : "No controller")
-                    .font(.caption)
-                    .foregroundStyle(connected ? .secondary : .tertiary)
-                    .lineLimit(1)
-                Circle()
-                    .fill(connected ? Color.green : Color.red.opacity(0.7))
-                    .frame(width: 7, height: 7)
-                    .accessibilityLabel(connected ? "Connected" : "Disconnected")
+                // The device the panel draws: the group's own when it reads
+                // another slot.
+                let drawn = viz.slot < preset.joysticks.count
+                    ? (controllerService.effectiveSlots(for: preset.joysticks)[viz.slot] ?? viz.slot) : viz.slot
+                let connected = controllerService.controllerDetails[drawn] != nil
+                if let waiting = controllerService.waitingDeviceName(forGroup: viz.slot, in: preset.joysticks) {
+                    // Pinned to a pad that is away while another is here:
+                    // the preset reads nothing from this group until then.
+                    Text("Waiting for \(waiting)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                    Button("Use the connected controller") { setGroupDevice(nil, slot: viz.slot) }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                        .help("Sets this input device to Auto-detect, so it reads the controller connected now")
+                } else {
+                    Text(connected ? controllerService.controllerName(at: drawn) : "No controller")
+                        .font(.caption)
+                        .foregroundStyle(connected ? .secondary : .tertiary)
+                        .lineLimit(1)
+                    Circle()
+                        .fill(connected ? Color.green : Color.red.opacity(0.7))
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel(connected ? "Connected" : "Disconnected")
+                    if connected {
+                        // The device's input on or off, kept for that device.
+                        let ignored = controllerService.isIgnored(slot: drawn)
+                        Toggle("Read this controller", isOn: Binding(
+                            get: { !controllerService.isIgnored(slot: drawn) },
+                            set: { controllerService.setIgnored(!$0, slot: drawn) }))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .labelsHidden()
+                            .help(ignored ? "Off: this controller reads as idle everywhere. Switch on to read it again"
+                                          : "Switch off to ignore this controller everywhere (for a controller counted twice, or one to leave out)")
+                        if ignored {
+                            Text("Ignored")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
             }
         }
     }
@@ -4151,13 +4879,18 @@ struct PresetDetailView: View {
     /// Which visualizers the page shows: one per connected controller or
     /// per joystick group, whichever is more.
     private var visualizerSlots: [VisualizerSlot] {
-        let connectedSlots = Array(controllerService.controllerDetails.keys).sorted()
-        let presetJoystickCount = preset.joysticks.count
-        let totalVisualizers = max(presetJoystickCount, connectedSlots.count)
-        return (0..<totalVisualizers).map { idx in
-            let connected = idx < connectedSlots.count
-            let slot = connected ? connectedSlots[idx] : idx
-            return VisualizerSlot(id: connected ? "slot-\(slot)" : "empty-\(idx)", idx: idx, slot: slot)
+        // Every slot either a controller or a preset group is in, once each.
+        // Pairing the n-th connected slot with the n-th visualizer showed
+        // slot 1 twice and hid group 0 when only slot 1 had a controller.
+        let connected = Set(controllerService.controllerDetails.keys)
+        // A connected slot a group already draws (pinned to it, or sent to
+        // it for motion) gets no second panel of its own.
+        let effective = controllerService.effectiveSlots(for: preset.joysticks)
+        let drawnByGroups = Set(preset.joysticks.indices.map { effective[$0] ?? $0 })
+        let slots = connected.filter { $0 < preset.joysticks.count || !drawnByGroups.contains($0) }
+            .union(0..<preset.joysticks.count).sorted()
+        return slots.enumerated().map { idx, slot in
+            VisualizerSlot(id: connected.contains(slot) ? "slot-\(slot)" : "empty-\(slot)", idx: idx, slot: slot)
         }
     }
 
@@ -4185,7 +4918,7 @@ struct PresetDetailView: View {
         if connectedSlots.isEmpty && presetJoystickCount == 0 && !presetUsesMIDI {
             Text("Connect a controller to see its live state here.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 14) {
@@ -4214,15 +4947,27 @@ struct PresetDetailView: View {
                             PresetLightBarPopover(
                                 color: $preset.lightBarColor,
                                 brightness: $preset.lightBarBrightness,
+                                rainbow: $preset.lightBarRainbow,
+                                rainbowSpeed: $preset.lightBarRainbowSpeed,
                                 onChanged: pushPresetLightBarLive)
                         },
                         lightBarTint: presetLightBarSwiftUIColor,
+                        lightBarRainbow: preset.lightBarRainbow == true,
+                        lightBarOff: presetLightBarIsOff,
                         onChangeInputKind: { changedSlot, newKind in
                             updateSlotInputKind(
                                 presetID: preset.id,
                                 slot: changedSlot,
                                 kind: newKind)
                         },
+                        onChangeButtonFamily: { preset.buttonFamily = $0 },
+                        onChangeControllerModel: { slot, model in
+                            setControllerModel(model, slot: slot)
+                        },
+                        onChangeDevice: { slot, name in
+                            setGroupDevice(name, slot: slot)
+                        },
+                        onOpenRegionEditor: { openRegionEditor($0) },
                         control: visualizerControl(for: slot)
                     )
                     .environmentObject(controllerService)
@@ -4249,7 +4994,15 @@ struct PresetDetailView: View {
                 if hasTouchpadCapableController || hasMotionCapableController {
                     Menu {
                         if hasTouchpadCapableController {
-                            Button("Calibrate Touchpad…") { showingTouchpadCalFromDetail = true }
+                            Button("Calibrate Touchpad…") {
+                                // The sheet edits this preset's regions, unless
+                                // another preset is running: then it shows (and
+                                // names) the running one, whose regions are live.
+                                if !presetStore.presets.contains(where: { $0.isActive && $0.id != preset.id }) {
+                                    preset.applyRegionsToServices()
+                                }
+                                showingTouchpadCalFromDetail = true
+                            }
                         }
                         if hasMotionCapableController {
                             Button("Calibrate Motion…") { showingMotionCalFromDetail = true }
@@ -4265,7 +5018,7 @@ struct PresetDetailView: View {
                 }
                 Text("\(preset.joysticks.count) \(preset.joysticks.count == 1 ? "slot" : "slots")")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
 
             VStack(spacing: 6) {
@@ -4285,15 +5038,15 @@ struct PresetDetailView: View {
             HStack {
                 Text(resolvedJoystickName(joystick: joystick, slot: index))
                     .font(.subheadline)
-                if joystick.customName == nil {
+                if joystick.customName == nil, joystick.macInputName == nil {
                     Text("#\(index)")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
                 Spacer()
                 Text("\(bindingCount) \(bindingCount == 1 ? "binding" : "bindings")")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
             if hasComment {
                 Text(joystick.tag)
@@ -4350,6 +5103,7 @@ struct PresetDetailView: View {
             || (!joystick.bindings.isEmpty && joystick.bindings.allSatisfy { $0.input.type == .cursorRegion }) {
             return "Screen"
         }
+        if let mac = joystick.macInputName { return mac }
         if let info = controllerService.controllerDetails[slot] {
             let trimmed = info.name.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { return trimmed }
@@ -4395,6 +5149,7 @@ struct PresetDetailView: View {
             VStack(alignment: .leading, spacing: 14) {
                 if controllerService.connectedControllers.isEmpty
                     && controllerService.rawHIDGamepadSlots.isEmpty
+                    && controllerService.steamControllerSlot == nil
                     && !controllerService.debugMarketingFakeActive {
                     detailsRow(title: "Controllers", icon: "antenna.radiowaves.left.and.right.slash",
                                items: ["No controllers currently connected."])
@@ -4421,7 +5176,7 @@ struct PresetDetailView: View {
                 Text("Storage")
                     .font(.caption.weight(.semibold))
                 HStack(spacing: 6) {
-                    Text("•").foregroundStyle(.tertiary)
+                    Text("•").foregroundStyle(.hint)
                     Text(preset.filename)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
@@ -4436,7 +5191,7 @@ struct PresetDetailView: View {
                     .buttonStyle(.plain)
                 }
                 HStack(spacing: 6) {
-                    Text("•").foregroundStyle(.tertiary)
+                    Text("•").foregroundStyle(.hint)
                     Text("Modified \(modifiedRelative)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -4459,6 +5214,42 @@ struct PresetDetailView: View {
     /// Calibration sheets launched from the Joystick Slots card header.
     @State private var showingTouchpadCalFromDetail = false
     @State private var showingMotionCalFromDetail = false
+    /// The screen region and stick zone editors, opened from a region's
+    /// popover on the Live Visualizer.
+    @State private var showingScreenRegionsFromDetail = false
+    @State private var showingStickZonesFromDetail = false
+
+    /// Opens a region editor from the Live Visualizer. The sheet edits this
+    /// preset's regions, unless another preset is running: then it shows the
+    /// running one's, whose regions are live (as Calibrate Touchpad does).
+    private func openRegionEditor(_ editor: VisualizerRegionEditor) {
+        if !presetStore.presets.contains(where: { $0.isActive && $0.id != preset.id }) {
+            preset.applyRegionsToServices()
+        }
+        switch editor {
+        case .touchpadSetup: showingTouchpadCalFromDetail = true
+        case .screenRegions: showingScreenRegionsFromDetail = true
+        case .stickZones: showingStickZonesFromDetail = true
+        }
+    }
+
+    /// The screen region and stick zone sheets edit the shared working set
+    /// with no editor to save it, so what was drawn there is saved into the
+    /// preset that owns the working set when the sheet closes, the way
+    /// Touchpad Setup saves its own.
+    private func saveRegionSheetEdits() {
+        guard OpenEditor.current == nil,
+              let id = Preset.regionWorkingSetOwner,
+              let idx = presetStore.presets.firstIndex(where: { $0.id == id }) else { return }
+        var owner = presetStore.presets[idx]
+        let before = owner
+        owner.captureRegionsFromServices()
+        guard owner.cursorRegions != before.cursorRegions
+                || owner.stickRegions != before.stickRegions
+                || owner.touchpadRegions != before.touchpadRegions else { return }
+        presetStore.presets[idx] = owner
+        presetStore.savePreset(owner)
+    }
 
     /// True when any connected controller has a touchpad / motion sensors.
     /// Drives the Calibrate shortcut menu's visibility and contents.
@@ -4480,10 +5271,10 @@ struct PresetDetailView: View {
         Group {
             if cachedVersions.isEmpty {
                 HStack(spacing: 6) {
-                    Text("•").foregroundStyle(.tertiary)
+                    Text("•").foregroundStyle(.hint)
                     Text("No previous versions yet")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
             } else {
                 DisclosureGroup(isExpanded: $showVersions) {
@@ -4492,7 +5283,7 @@ struct PresetDetailView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "clock.arrow.circlepath")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(.hint)
                                 Text(versionLabel(version))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -4509,7 +5300,7 @@ struct PresetDetailView: View {
                     .padding(.top, 4)
                 } label: {
                     HStack(spacing: 6) {
-                        Text("•").foregroundStyle(.tertiary)
+                        Text("•").foregroundStyle(.hint)
                         Text("Previous versions (\(cachedVersions.count))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -4520,6 +5311,12 @@ struct PresetDetailView: View {
         }
         .onAppear { reloadVersions() }
         .onChange(of: preset.id) { _, _ in reloadVersions() }
+        // A new version kept for this preset (a save, a change on this
+        // page): listed at once. Before, it showed only after switching to
+        // another preset and back, so a change just made had no Revert.
+        .onReceive(NotificationCenter.default.publisher(for: PresetStore.versionsChangedNotification)) { note in
+            if (note.object as? UUID) == preset.id { reloadVersions() }
+        }
         // Intentionally NOT keyed on preset.modifiedAt: that fired a synchronous
         // versions(for:) disk read on EVERY keystroke while editing the name,
         // tag, or notes. The list reloads on preset switch and on appear, which
@@ -4544,7 +5341,7 @@ struct PresetDetailView: View {
                 if !preset.notes.isEmpty {
                     Text("\(preset.notes.count) chars")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
             }
 
@@ -4570,7 +5367,7 @@ struct PresetDetailView: View {
                     if preset.notes.isEmpty && !notesFocused {
                         Text("Start typing…")
                             .font(.callout)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.hint)
                             .padding(.horizontal, 13)
                             .padding(.vertical, 8)
                             .allowsHitTesting(false)
@@ -4592,6 +5389,15 @@ struct PresetDetailView: View {
                      blue: Double(rgb.floatB))
     }
 
+    /// The preset turns the light off: black, or brightness Off with a
+    /// color or the rainbow chosen.
+    private var presetLightBarIsOff: Bool {
+        let chosen = preset.lightBarColor != nil || preset.lightBarRainbow == true
+        let black = preset.lightBarRainbow != true
+            && preset.lightBarColor.map { $0.r == 0 && $0.g == 0 && $0.b == 0 } == true
+        return chosen && (black || preset.lightBarBrightness == 0)
+    }
+
     /// While this preset is the active one, the controller shows the
     /// override right away, mirroring what the engine does at start. With
     /// the override cleared, the controller goes back to its general color.
@@ -4600,9 +5406,18 @@ struct PresetDetailView: View {
         let slots = controllerService.controllerDetails.keys.filter {
             controllerService.controllerDetails[$0]?.hasLight == true
         }
-        if let rgb = preset.lightBarColor {
+        let bri = preset.lightBarBrightness.map { UInt8(max(0, min(2, $0))) }
+        if preset.lightBarRainbow == true {
+            // The rainbow, as the engine starts it; again only retunes it.
+            controllerService.applyPresetRainbow(speed: preset.lightBarRainbowSpeed ?? 1, brightness: bri)
+        } else if let rgb = preset.lightBarColor {
+            // A color ends the preset's rainbow first, so the next rainbow
+            // frame does not paint over it.
+            if controllerService.presetRainbow != nil {
+                controllerService.applyPresetLight(red: rgb.floatR, green: rgb.floatG, blue: rgb.floatB, brightness: bri)
+                return
+            }
             controllerService.stopAllRGBCycles()
-            let bri = preset.lightBarBrightness.map { UInt8(max(0, min(2, $0))) }
             for slot in slots {
                 controllerService.applyTemporaryLight(
                     at: slot, red: rgb.floatR, green: rgb.floatG, blue: rgb.floatB, brightness: bri)
@@ -4642,7 +5457,7 @@ struct PresetDetailView: View {
                     .foregroundStyle(.primary)
                 ForEach(items, id: \.self) { item in
                     HStack(alignment: .top, spacing: 6) {
-                        Text("•").foregroundStyle(.tertiary)
+                        Text("•").foregroundStyle(.hint)
                         Text(item)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -4684,6 +5499,16 @@ struct PresetDetailView: View {
         if let n = counts[.touchpadRegion], n > 0 {
             bullets.append("Touchpad zones: \(n) tap binding\(n == 1 ? "" : "s")")
         }
+        // The other kinds of input, so a MIDI, keyboard, or tap preset does
+        // not read "No inputs bound".
+        let others: [(InputType, String)] = [
+            (.touchpadGesture, "Touchpad gestures"), (.motion, "Motion"), (.stickRegion, "Stick zones"),
+            (.cursorRegion, "Screen regions"), (.extKey, "Mac keyboard keys"), (.extMouse, "Mouse and trackpad"),
+            (.midi, "MIDI"), (.chassisTap, "Tap the Mac"),
+        ]
+        for (type, label) in others {
+            if let n = counts[type], n > 0 { bullets.append("\(label): \(n) binding\(n == 1 ? "" : "s")") }
+        }
         if bullets.isEmpty { bullets.append("No inputs bound yet.") }
         return bullets
     }
@@ -4711,6 +5536,9 @@ struct PresetDetailView: View {
             || types.contains(.midiTransport) {
             bullets.append("MIDI (CoreMIDI virtual source)")
         }
+        if types.contains(.typeText) { bullets.append("Typed text") }
+        if types.contains(.systemAction) { bullets.append("System actions") }
+        if types.contains(.appAction) { bullets.append("App actions") }
         if haptic > 0 { bullets.append("Haptic feedback on \(haptic) binding\(haptic == 1 ? "" : "s")") }
         if speech > 0 { bullets.append("Spoken feedback on \(speech) binding\(speech == 1 ? "" : "s")") }
         if macro > 0 { bullets.append("Macros: \(macro)") }
@@ -4735,10 +5563,9 @@ struct PresetDetailView: View {
             bullets.append(line)
             var caps: [String] = []
             caps.append("\(info.buttonCount) buttons")
-            caps.append("\(info.axisCount) axes")
+            caps.append("\(info.shownAxisCount) axes")
             if info.hasTouchpad { caps.append("touchpad") }
             if info.hasLight { caps.append("light bar") }
-            if info.hasAdaptiveTriggers { caps.append("adaptive triggers") }
             if info.supportsMotion { caps.append("motion sensors") }
             bullets.append("Capabilities: \(caps.joined(separator: ", "))")
             bullets.append("Profile: \(info.productCategory)" +
@@ -4759,12 +5586,14 @@ struct PresetDetailView: View {
 
 /// The light bar picker for one preset, opened from the strip on the Live
 /// Visualizer's controller drawing. The same grid as the controller popover:
-/// fixed colors, a Custom well that applies as soon as a colour is chosen,
-/// then brightness. "Controller's colour" clears the override so the preset
-/// leaves the light alone.
+/// fixed colors, a Custom well that applies as soon as a color is chosen,
+/// Rainbow (the RGB cycle, with its speed), then brightness. "Controller's
+/// color" clears the override so the preset leaves the light alone.
 struct PresetLightBarPopover: View {
     @SwiftUI.Binding var color: RGBLightColor?
     @SwiftUI.Binding var brightness: Int?
+    @SwiftUI.Binding var rainbow: Bool?
+    @SwiftUI.Binding var rainbowSpeed: Double?
     var onChanged: () -> Void = {}
 
     @State private var customColor = Color.blue
@@ -4782,6 +5611,8 @@ struct PresetLightBarPopover: View {
         ("Off",    0, 0, 0),
     ]
 
+    private var isRainbow: Bool { rainbow == true }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
@@ -4790,15 +5621,17 @@ struct PresetLightBarPopover: View {
                 Text("Light bar for this preset")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                if color != nil {
+                if color != nil || isRainbow {
                     Button("Controller's color") {
                         color = nil
                         brightness = nil
+                        rainbow = nil
+                        rainbowSpeed = nil
                         onChanged()
                     }
                     .buttonStyle(.solidSecondaryCompact)
                     .controlSize(.small)
-                    .help("Forget this preset's color and leave the light bar on the controller's general colour")
+                    .help("Forget this preset's color and leave the light bar on the controller's general color")
                 }
             }
 
@@ -4821,13 +5654,64 @@ struct PresetLightBarPopover: View {
                         .accessibilityLabel("Custom light bar color")
                         .onChange(of: customColor) { _, value in
                             let ns = NSColor(value).usingColorSpace(.sRGB) ?? NSColor(value)
-                            set(RGBLightColor(floatR: Float(ns.redComponent),
-                                              floatG: Float(ns.greenComponent),
-                                              floatB: Float(ns.blueComponent)))
+                            let rgb = RGBLightColor(floatR: Float(ns.redComponent),
+                                                    floatG: Float(ns.greenComponent),
+                                                    floatB: Float(ns.blueComponent))
+                            // The well taking the preset's own color on open
+                            // is not a pick, and must not end a rainbow.
+                            guard rgb != color else { return }
+                            set(rgb)
                         }
                     Text("Custom")
                         .font(.system(size: 8))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
+                }
+                // Rainbow: the RGB cycle while the preset runs, as the
+                // controller menu's swatch. Ringed while it is the choice.
+                Button {
+                    rainbow = isRainbow ? nil : true
+                    onChanged()
+                } label: {
+                    VStack(spacing: 2) {
+                        Circle()
+                            .fill(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center))
+                            .overlay(
+                                Circle().strokeBorder(isRainbow ? Color.white.opacity(0.9) : Color.primary.opacity(0.12),
+                                                      lineWidth: isRainbow ? 2 : 0.5)
+                            )
+                            .frame(width: 24, height: 24)
+                            .shadow(color: .white.opacity(isRainbow ? 0.5 : 0.2), radius: isRainbow ? 4 : 2)
+                        Text("Rainbow")
+                            .font(.system(size: 8))
+                            .foregroundStyle(isRainbow ? .secondary : .tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rainbow, RGB cycle")
+                .accessibilityValue(isRainbow ? "on" : "off")
+                .help(isRainbow ? "Turn the rainbow off for this preset" : "Cycle the light bar through every color while this preset runs")
+            }
+
+            // Cycle speed, only while Rainbow is the choice. The same scale
+            // as the controller menu's slider.
+            if isRainbow {
+                HStack(spacing: 8) {
+                    Text("Speed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "tortoise")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.hint)
+                    ThrottledSlider("Rainbow speed",
+                                    value: SwiftUI.Binding(
+                                        get: { rainbowSpeed ?? 1 },
+                                        set: { rainbowSpeed = $0; onChanged() }),
+                                    in: Preset.lightBarRainbowSpeedRange,
+                                    step: 0.05)
+                        .accessibilityValue(String(format: "%.2f times normal", rainbowSpeed ?? 1))
+                    Image(systemName: "hare")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.hint)
                 }
             }
 
@@ -4835,7 +5719,7 @@ struct PresetLightBarPopover: View {
                 Text("Brightness")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("", selection: SwiftUI.Binding(
+                Picker("Light bar brightness", selection: SwiftUI.Binding(
                     get: { brightness ?? 2 },
                     set: { brightness = $0; onChanged() })) {
                     Text("Off").tag(0)
@@ -4847,8 +5731,10 @@ struct PresetLightBarPopover: View {
                 .frame(maxWidth: .infinity)
             }
 
-            Text(color == nil
-                 ? "No color set: the controller keeps its general colour while this preset runs."
+            Text(isRainbow
+                 ? "The light bar cycles through every color while the preset runs and goes back when it stops."
+                 : color == nil
+                 ? "No color set: the controller keeps its general color while this preset runs."
                  : "The controller switches to this color while the preset runs and goes back when it stops.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -4856,6 +5742,7 @@ struct PresetLightBarPopover: View {
         }
         .padding(10)
         .frame(width: 260)
+        .animation(.easeOut(duration: 0.18), value: isRainbow)
         .onAppear {
             if let rgb = color {
                 customColor = Color(red: Double(rgb.floatR), green: Double(rgb.floatG), blue: Double(rgb.floatB))
@@ -4863,8 +5750,10 @@ struct PresetLightBarPopover: View {
         }
     }
 
+    /// A color replaces the rainbow.
     private func set(_ rgb: RGBLightColor) {
         color = rgb
+        rainbow = nil
         onChanged()
     }
 }
@@ -4995,6 +5884,8 @@ struct SmartPresetMakerView: View {
     @State private var addTouchpad = true
     @State private var addGyro = true
     @State private var rumble = false
+    @State private var paddles = false
+    @State private var pointerRamp = false
     @State private var lightColor: Color = .green
 
     @State private var name = ""
@@ -5025,7 +5916,7 @@ struct SmartPresetMakerView: View {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .focusEffectDisabled()
+            .focusRingForKeyboardUsers()
             .accessibilityLabel("Close")
         }
         .padding(16)
@@ -5075,7 +5966,7 @@ struct SmartPresetMakerView: View {
                             Text(catDesc(cat)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").foregroundStyle(.hint)
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity)
@@ -5108,7 +5999,7 @@ struct SmartPresetMakerView: View {
                             Text(p.subtitle).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").foregroundStyle(.hint)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity)
@@ -5144,7 +6035,7 @@ struct SmartPresetMakerView: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        Image(systemName: "chevron.right").foregroundStyle(.hint)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity)
@@ -5161,7 +6052,7 @@ struct SmartPresetMakerView: View {
             Toggle("Open the app automatically when this preset activates", isOn: $autoLaunch)
             if autoLaunch {
                 HStack {
-                    Text(appPath.isEmpty ? "No app chosen" : appPath)
+                    Text(appPath.isEmpty ? ((profile?.launchURL.isEmpty == false) ? "Opens through Steam" : "No app chosen") : appPath)
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
@@ -5177,7 +6068,7 @@ struct SmartPresetMakerView: View {
                 HStack {
                     Text("Light bar color")
                     Spacer()
-                    ColorPicker("", selection: $lightColor, supportsOpacity: false).labelsHidden()
+                    ColorPicker("Light bar color", selection: $lightColor, supportsOpacity: false).labelsHidden()
                 }
             }
             Divider()
@@ -5192,6 +6083,14 @@ struct SmartPresetMakerView: View {
                     Toggle("Gyro fine aim (tilting the pad nudges the aim on top of the stick)", isOn: $addGyro)
                 }
                 Toggle("Rumble when a trigger clicks", isOn: $rumble)
+                if brand.supports("paddles") {
+                    Toggle(brand == .dualSense ? "Back buttons repeat the bottom and right face buttons (DualSense Edge)"
+                           : brand == .steamController ? "Back buttons L4, R4, L5, and R5 repeat the four face buttons"
+                           : "Back paddles repeat the four face buttons (Xbox Elite)", isOn: $paddles)
+                }
+                if let p = profile, SmartPresetGenerator.usesMouseLook(p) {
+                    Toggle("Pointer ramp-up (a short push moves slowly, a held push speeds up)", isOn: $pointerRamp)
+                }
             }
             if let p = profile, !p.tips.isEmpty {
                 Divider()
@@ -5229,19 +6128,19 @@ struct SmartPresetMakerView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Mapping preview").font(.caption.weight(.semibold))
                     ForEach(Array(p.bindings.prefix(6).enumerated()), id: \.offset) { _, b in
-                        Text("\(SmartPresetGenerator.label(for: b.input, brand: brand))  →  \(b.note)")
+                        Text("\(SmartPresetGenerator.label(for: b.input, brand: brand))  →  \(SmartPresetGenerator.action(of: b.note))")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     if p.bindings.count > 6 {
                         Text("+ \(p.bindings.count - 6) more bindings")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(.caption2).foregroundStyle(.hint)
                     }
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.04)))
             }
-            Text("After it's created you can edit any binding. If a control doesn't respond, open the binding editor and tap Scan - controllers vary, so the preset notes list what each control should do.")
+            Text("After it's created you can edit any binding. If a control doesn't respond, open the binding editor and tap Scan. Controllers vary, so the preset notes list what each control should do.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -5258,13 +6157,14 @@ struct SmartPresetMakerView: View {
         confine = p.confineCursor
         recenter = p.autoRecenter
         hideCursor = p.hideCursor
-        autoLaunch = !p.appPath.isEmpty
+        // A Steam game opens through its steam:// link even with no app path.
+        autoLaunch = !p.appPath.isEmpty || !p.launchURL.isEmpty
         appPath = p.appPath
         lightColor = Color(.sRGB,
                            red: Double(p.light.r) / 255.0,
                            green: Double(p.light.g) / 255.0,
                            blue: Double(p.light.b) / 255.0)
-        if let connected = connectedBrands.first { brand = connected }
+        if let connected = controllerChoices.first(where: { connectedBrands.contains($0) }) { brand = connected }
         name = "\(p.displayName) (\(brand.displayName))"
         step = .controller
     }
@@ -5296,7 +6196,9 @@ struct SmartPresetMakerView: View {
             lightColor: lc,
             touchpadAsTrackpad: addTouchpad,
             gyroFineAim: addGyro,
-            rumbleOnTriggers: rumble)
+            rumbleOnTriggers: rumble,
+            backPaddles: paddles,
+            pointerRamp: pointerRamp)
         let preset = SmartPresetGenerator.makePreset(from: p, brand: brand, options: opts)
         presetStore.savePreset(preset)
         onCreated(preset)
@@ -5307,8 +6209,13 @@ struct SmartPresetMakerView: View {
         Set(controllerService.controllerDetails.values.map { $0.brand }.filter { $0 != .unknown })
     }
 
+    /// The pads a smart preset can be made for. The Steam Controller only
+    /// when a 2026 model is connected: the rows use the standard numbering,
+    /// which the 2015 model does not read.
     private var controllerChoices: [ControllerBrand] {
-        [.dualSense, .dualShock4, .xbox, .switchPro, .eightBitDo, .stadia, .mfiGeneric]
+        let steam2026 = controllerService.rawHIDGamepadSlots.values.contains { $0.profile?.layout == .steamController2026 }
+        return [.dualSense, .dualShock4, .xbox, .switchPro, .eightBitDo, .stadia, .mfiGeneric]
+            + (steam2026 ? [.steamController] : [])
     }
 
     private var stepSubtitle: String {
@@ -5364,7 +6271,7 @@ private struct QuickTipsPill: View {
         "Everything runs and stays on your Mac. No telemetry, no account, nothing uploaded.",
         "Import presets with the tray icon in the bottom bar; export any preset from its right-click menu.",
         "Hide the Dock icon in Settings to run InputConfig as a quiet menu bar app.",
-        "The editor has unlimited undo: \u{2318}Z and \u{2318}\u{21E7}Z work through every change.",
+        "The editor keeps your last 100 changes: \u{2318}Z and \u{2318}\u{21E7}Z step through them.",
         "Click any control on the Live Visualizer to jump straight to its binding in the editor.",
     ]
 
@@ -5539,13 +6446,8 @@ struct DebugAutomationHooks: ViewModifier {
                     }
                 }
             }
-            .onReceive(dnc("inputconfig.debug.review")) { note in
-                // "prompt" shows the card; "thanks" plays the thank-you.
-                if (note.object as? String) == "thanks" {
-                    ReviewPromptService.shared.accepted()
-                } else {
-                    ReviewPromptService.shared.present()
-                }
+            .onReceive(dnc("inputconfig.debug.review")) { _ in
+                ReviewPromptService.shared.present()
             }
             .onReceive(dnc("inputconfig.debug.whatsnew")) { _ in
                 // Exercises the real menu bar path: open the window, post
@@ -5605,7 +6507,7 @@ struct DebugAutomationHooks: ViewModifier {
             }
             .onReceive(dnc("inputconfig.debug.tapstats")) { _ in
                 let d = ChassisTapService.shared.drainDiagnostics()
-                let line = "reports=\(d.reports) strikes=\(d.strikes) peak=\(String(format: "%.4f", d.peak))g noise=\(String(format: "%.4f", d.noise))g ready=\(d.ready) running=\(ChassisTapService.shared.isRunning) error=\(ChassisTapService.shared.lastError ?? "none") reasons=\(ChassisTapService.shared.activeReasons)"
+                let line = "denied=\(ChassisTapService.shared.wakeDenied) reports=\(d.reports) strikes=\(d.strikes) peak=\(String(format: "%.4f", d.peak))g noise=\(String(format: "%.4f", d.noise))g ready=\(d.ready) running=\(ChassisTapService.shared.isRunning) error=\(ChassisTapService.shared.lastError ?? "none") reasons=\(ChassisTapService.shared.activeReasons)"
                 try? line.write(to: URL(fileURLWithPath: NSTemporaryDirectory())
                     .appendingPathComponent("tapstats.txt"), atomically: true, encoding: .utf8)
             }
@@ -5834,8 +6736,8 @@ struct DebugAutomationHooks: ViewModifier {
                 try? text.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("audit.txt"), atomically: true, encoding: .utf8)
             }
             // `post inputconfig.debug.rumblerig` plays ten variants in a row,
-            // each announced by a light-bar colour, each a 100% buzz then a
-            // 20% buzz, and writes the colour key to tmp/rig.txt. For
+            // each announced by a light-bar color, each a 100% buzz then a
+            // 20% buzz, and writes the color key to tmp/rig.txt. For
             // finding which part of the path is flattening the strength.
             .onReceive(dnc("inputconfig.debug.rumblerig")) { _ in
                 let writer = InProcessLightWriter.shared
@@ -5874,7 +6776,7 @@ struct DebugAutomationHooks: ViewModifier {
                     Variant(name: "10 teal: shipped path again (control)", color: (0, 180, 160),
                             setup: { InProcessLightWriter.debugVibrationMode = 0; InProcessLightWriter.debugMotorMask = 0 }, buzz: plain),
                 ]
-                var key = "Each variant: colour, then 100% for the buzz, then 20%. Variants 3.6 s apart.\n"
+                var key = "Each variant: color, then 100% for the buzz, then 20%. Variants 3.6 s apart.\n"
                 for (n, v) in variants.enumerated() {
                     let t0 = Double(n) * (v.name.hasPrefix("8") ? 4.6 : 3.6)
                     key += v.name + "\n"
@@ -5922,7 +6824,7 @@ struct DebugAutomationHooks: ViewModifier {
             // monitor's state to tmp/extstate.txt: permission, who holds
             // which monitor, and the live input set.
             .onReceive(dnc("inputconfig.debug.extstate")) { _ in
-                let text = ExternalInputDeviceService.shared.debugState + "\n"
+                let text = ExternalInputDeviceService.shared.debugState + "\n" + LiveRowLights.shared.debugState + "\n"
                 try? text.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("extstate.txt"), atomically: true, encoding: .utf8)
             }
             .onReceive(dnc("inputconfig.debug.sheetsize")) { _ in
@@ -5988,8 +6890,12 @@ struct DebugAutomationHooks: ViewModifier {
                 // layout checks; "<name>-full" renders the whole scrolled
                 // document. Needs no screen-recording grant.
                 let name = (note.object as? String) ?? "icapture"
+                // Last fallback: the main window even when another app is in
+                // front (or Stage Manager has it parked), so a capture never
+                // needs the app focused.
                 let win = NSApp.windows.first { $0.isVisible && $0.attachedSheet != nil }?.attachedSheet
                     ?? NSApp.keyWindow ?? NSApp.mainWindow
+                    ?? NSApp.windows.first { $0.canBecomeMain && $0.contentView != nil && $0.frame.width > 400 }
                 var target = win?.contentView
                 if name.hasSuffix("-full"), let root = target {
                     func scrolls(_ v: NSView) -> [NSScrollView] {
@@ -6030,7 +6936,6 @@ struct DebugAutomationHooks: ViewModifier {
     }
     private func closeSheets() {
         editingPreset = nil
-        ReviewPromptService.shared.showPrompt = false
         showingSmartMaker = false
         showingStats = false
         settingsSheetTab = nil
@@ -6056,13 +6961,27 @@ final class DebugMarketing: ObservableObject {
     @Published var editLayout = false
     @Published var oneStick = false
     @Published var fakeController = false
+    /// Each post of inputconfig.debug.fakeswap swaps the synthetic pads' slots.
+    @Published var fakeSwaps = 0
     @Published var fakePress = false
     @Published var noFree = false
     @Published var vizScale: Double?
+    /// `post inputconfig.debug.cursorregions <fraction>`: the screen map
+    /// draws each corner region grown to that fraction of the screen, from
+    /// its own corner, so a marketing capture shows them large. Drawing only:
+    /// the preset and the live regions are unchanged. 0 turns it off.
+    @Published var cursorRegionSize: Double?
     private init() {
         let dnc = DistributedNotificationCenter.default()
+        dnc.addObserver(forName: .init("inputconfig.debug.cursorregions"), object: nil, queue: .main) { [weak self] note in
+            let v = (note.object as? String).flatMap(Double.init) ?? 0
+            self?.cursorRegionSize = v > 0 ? min(0.45, v) : nil
+        }
         dnc.addObserver(forName: .init("inputconfig.debug.fakecontroller"), object: nil, queue: .main) { [weak self] _ in
             self?.fakeController.toggle()
+        }
+        dnc.addObserver(forName: .init("inputconfig.debug.fakeswap"), object: nil, queue: .main) { [weak self] _ in
+            self?.fakeSwaps += 1
         }
         dnc.addObserver(forName: .init("inputconfig.debug.zoom"), object: nil, queue: .main) { [weak self] note in
             if let v = (note.object as? String).flatMap(Double.init) { self?.vizScale = v }
@@ -6089,8 +7008,25 @@ final class DebugMarketing: ObservableObject {
         dnc.addObserver(forName: .init("inputconfig.debug.fakepress"), object: nil, queue: .main) { [weak self] _ in
             self?.fakePress.toggle()
         }
+        dnc.addObserver(forName: .init("inputconfig.debug.fakeaxes"), object: nil, queue: .main) { note in
+            // "0:0.2 1:-0.4" fixes those axes; "off" returns to the sweep.
+            let spec = (note.object as? String) ?? "off"
+            if spec == "off" { GameControllerService.debugFixedAxes = nil; return }
+            var fixed: [Int: Float] = [:]
+            for part in spec.split(separator: " ") {
+                let kv = part.split(separator: ":")
+                if kv.count == 2, let k = Int(kv[0]), let v = Float(kv[1]) { fixed[k] = v }
+            }
+            GameControllerService.debugFixedAxes = fixed
+        }
         dnc.addObserver(forName: .init("inputconfig.debug.nofree"), object: nil, queue: .main) { [weak self] _ in
             self?.noFree.toggle()
+        }
+        dnc.addObserver(forName: .init("inputconfig.debug.accent"), object: nil, queue: .main) { note in
+            // "<automatic|blue|cyan|...>": the Settings accent, set in-process.
+            let raw = (note.object as? String) ?? AppAccent.automatic.rawValue
+            UserDefaults.standard.set(AppAccent(rawValue: raw)?.rawValue ?? AppAccent.automatic.rawValue,
+                                      forKey: AppAccent.storageKey)
         }
         dnc.addObserver(forName: .init("inputconfig.debug.faketap"), object: nil, queue: .main) { _ in
             ChassisTapService.shared.debugInjectDoubleTap()
@@ -6144,6 +7080,7 @@ extension View {
     @ViewBuilder func debugFakeController(_ service: GameControllerService) -> some View {
         #if DEBUG
         onReceive(DebugMarketing.shared.$fakeController) { service.setMarketingFakeControllers($0) }
+            .onReceive(DebugMarketing.shared.$fakeSwaps.dropFirst()) { _ in service.swapMarketingFakeControllers() }
         .onReceive(DebugMarketing.shared.$fakePress) { service.marketingFakePress = $0 }
         #else
         self
@@ -6245,7 +7182,7 @@ enum FolderOutlineRole { case single, top, middle, bottom }
 
 /// Passed down a top-level folder's rows: the folder's color and which row
 /// closes the box.
-/// A wrapping row of views, each line centerd. Lines break where the next
+/// A wrapping row of views, each line centered. Lines break where the next
 /// view would not fit, so buttons move down instead of squeezing.
 struct CenteredFlow: Layout {
     var spacing: CGFloat = 10
@@ -6295,7 +7232,7 @@ struct CenteredFlow: Layout {
 
 /// A horizontal bracket that spans its width with a title sitting in the
 /// middle of the bar: a hairline out to each end, a short tick turned down
-/// at both ends toward whatever it groups. Grey, matching the caption text.
+/// at both ends toward whatever it groups. Gray, matching the caption text.
 struct BracketHeader: View {
     let title: String
     var font: Font = .caption.weight(.semibold)
@@ -6322,7 +7259,7 @@ struct BracketHeader: View {
     private func arm(leading: Bool) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
-            // The bar runs through the title's centre line; the ticks
+            // The bar runs through the title's center line; the ticks
             // hang below it.
             let y = (geo.size.height / 2).rounded() + 0.5
             // The corner where the bar turns down is a quarter arc.
@@ -6359,6 +7296,9 @@ struct FolderOutlineContext {
 struct FolderOutlineSegment: View {
     let role: FolderOutlineRole
     let color: Color
+    /// A selected folder header: filled inside this same outline, so the
+    /// highlight follows its corners and edges exactly.
+    var selected: Bool = false
     private let radius: CGFloat = 8
     /// 8 pt inside the cell on both sides. The list itself is padded 12 pt
     /// on the left (see `sidebarView`), so the line lands 20 pt from the
@@ -6379,10 +7319,29 @@ struct FolderOutlineSegment: View {
             let top: CGFloat = (role == .top || role == .single) ? gapTop : 0
             let bottom: CGFloat = (role == .bottom || role == .single) ? gapBottom : 0
             let h = geo.size.height - top - bottom
-            edges(w: w, h: h)
-                .stroke(color.opacity(0.18), lineWidth: 1)
-                .frame(width: w, height: h)
-                .offset(x: insetLeading, y: top)
+            ZStack(alignment: .topLeading) {
+                if selected {
+                    fillShape(h: h)
+                        .fill(color.opacity(0.22))
+                        .padding(1)
+                }
+                edges(w: w, h: h)
+                    .stroke(color.opacity(selected ? 0.45 : 0.18), lineWidth: 1)
+            }
+            .frame(width: w, height: h)
+            .offset(x: insetLeading, y: top)
+        }
+    }
+
+    /// The area inside the outline for this role, for the selected fill.
+    private func fillShape(h: CGFloat) -> UnevenRoundedRectangle {
+        let r = max(0, min(radius, h / 2) - 1)
+        switch role {
+        case .single: return UnevenRoundedRectangle(topLeadingRadius: r, bottomLeadingRadius: r,
+                                                    bottomTrailingRadius: r, topTrailingRadius: r)
+        case .top:    return UnevenRoundedRectangle(topLeadingRadius: r, topTrailingRadius: r)
+        case .bottom: return UnevenRoundedRectangle(bottomLeadingRadius: r, bottomTrailingRadius: r)
+        case .middle: return UnevenRoundedRectangle()
         }
     }
 
@@ -6558,5 +7517,17 @@ private struct DebugCloseWhatsNew: ViewModifier {
         #else
         content
         #endif
+    }
+}
+
+/// Tells OpenedPresetFiles whether another sheet is up, so an opened
+/// preset's review waits for it. A modifier, not one more closure on the
+/// main window's chain, which the type-checker could not finish.
+private struct SheetStateRelay: ViewModifier {
+    let up: Bool
+    func body(content: Content) -> some View {
+        content.onChange(of: up, initial: true) { _, value in
+            OpenedPresetFiles.otherSheetIsUp = value
+        }
     }
 }

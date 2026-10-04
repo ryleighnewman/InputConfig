@@ -111,7 +111,7 @@ struct DebugLogView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "magnifyingglass")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.hint)
                         TextField("Filter…", text: $filterText)
                             .textFieldStyle(.plain)
                             .font(.caption)
@@ -121,7 +121,7 @@ struct DebugLogView: View {
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(.hint)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Clear filter")
@@ -268,9 +268,14 @@ struct DebugLogView: View {
             } else {
                 chip(icon: "pause.fill", text: "No preset", tint: .secondary)
             }
-            let count = controllerService.connectedControllers.count
+            // Every slot with a device, raw HID and Steam pads included,
+            // and the name of the one there is, whichever slot it sits in.
+            let slots = controllerService.controllerDetails.keys.sorted()
+            let count = slots.count
             chip(icon: "gamecontroller.fill",
-                 text: count == 0 ? "No controller" : (count == 1 ? (controllerService.controllerNames[0] ?? "1 controller") : "\(count) controllers"),
+                 text: count == 0 ? "No controller"
+                    : (count == 1 ? (slots.first.flatMap { controllerService.controllerNames[$0] } ?? "1 controller")
+                                  : "\(count) controllers"),
                  tint: count == 0 ? .secondary : .blue)
             if !accessibility.isTrusted {
                 chip(icon: "exclamationmark.triangle.fill", text: "No Accessibility access", tint: .red)
@@ -410,7 +415,7 @@ struct DebugLogView: View {
             }
             Text(Self.timeFormatter.string(from: entry.time))
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .padding(.top, 1)
             Text(entry.source)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -457,13 +462,13 @@ struct DebugLogView: View {
             if showEventsOnly || showProblemsOnly || !filterText.isEmpty {
                 Text("(\(log.entries.count) total)")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
             Spacer()
             if mappingEngine.isRunning {
                 Text("\(mappingEngine.currentPollHz) Hz polling")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
         }
         .padding(.horizontal, 12)
@@ -493,8 +498,15 @@ struct DebugLogView: View {
         let text = reportText()
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-            savedFlashUntil = Date().addingTimeInterval(2)
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                savedFlashUntil = Date().addingTimeInterval(2)
+                // Cleared on schedule: the badge only went away on a redraw,
+                // so it could stay up long after its two seconds.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.1) { savedFlashUntil = nil }
+            } catch {
+                ActivityLog.shared.error("Log", "The report could not be saved: \(error.localizedDescription)")
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreMIDI
 import GameController
 
@@ -44,9 +45,11 @@ final class TestBenchService: ObservableObject {
 
         runOutputActionTests()
         runInputEventTests()
+        runExtraButtonsAndKeysTests()
         runSensitivityCurveTests()
         runMIDIByteLayoutTests()
         runControllerBrandTests()
+        runFaceNameTests()
         runEightBitDoModeTests()
         runDualSenseHIDReportTests()
         runPresetCodableTests()
@@ -139,6 +142,103 @@ final class TestBenchService: ObservableObject {
         }
     }
 
+    // MARK: - Face button names
+
+    /// The Face button names choice, including PlayStation names on a pad
+    /// that is not a PlayStation pad.
+    private func runFaceNameTests() {
+        let cat = "Face Button Names"
+        let ps = (0...3).compactMap { FaceLetters.genericName($0, choice: .playstation) }
+        record(cat, "PlayStation names the face buttons on any controller",
+               pass: ps == ["Cross", "Circle", "Square", "Triangle"]
+                   && FaceLetters.playStation(for: .xbox, choice: .playstation)
+                   && !FaceLetters.nintendo(for: .switchPro, choice: .playstation),
+               detail: ps.joined(separator: ", "))
+        record(cat, "A PlayStation pad keeps its names under every lettered choice",
+               pass: [FaceLetters.automatic, .xbox, .nintendo, .playstation]
+                   .allSatisfy { FaceLetters.playStation(for: .dualSense, choice: $0) },
+               detail: "Automatic, Xbox, Nintendo, PlayStation")
+    }
+
+    // MARK: - Extra mouse buttons and unusual keys
+
+    /// Gaming mice, gaming keyboards, and ISO or Japanese keyboards nobody
+    /// here owns: builds the same events macOS hands the app for them and
+    /// runs them through the app's own decoding.
+    private func runExtraButtonsAndKeysTests() {
+        let cat = "Extra Buttons & Keys"
+
+        // Every button number macOS can report past left and right.
+        var wrongButtons: [Int] = []
+        for n in 2...31 {
+            guard let ev = CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown,
+                                   mouseCursorPosition: .zero, mouseButton: .center) else {
+                wrongButtons.append(n); continue
+            }
+            ev.setIntegerValueField(.mouseEventButtonNumber, value: Int64(n))
+            if ExternalInputDeviceService.mouseButton(of: ev, type: .otherMouseDown) != n {
+                wrongButtons.append(n)
+            }
+        }
+        record(cat, "Mouse buttons 3 to 32 each arrive as their own button", pass: wrongButtons.isEmpty,
+               detail: wrongButtons.isEmpty ? "30 buttons" : "Wrong: \(wrongButtons)")
+
+        if let tilt = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2,
+                              wheel1: 0, wheel2: 3, wheel3: 0) {
+            let d = ExternalInputDeviceService.scrollDeltas(of: tilt)
+            record(cat, "A tilt wheel scrolls sideways", pass: d.dx == 3 && d.dy == 0,
+                   detail: "dx \(d.dx), dy \(d.dy)")
+        } else {
+            record(cat, "A tilt wheel scrolls sideways", pass: false, detail: "Could not build the event")
+        }
+
+        // Keys gaming and international keyboards send, by macOS key code.
+        let keys: [(vk: Int, code: Int, what: String)] = [
+            (105, 104, "F13"), (107, 105, "F14"), (113, 106, "F15"), (106, 107, "F16"),
+            (64, 108, "F17"), (79, 109, "F18"), (80, 110, "F19"), (90, 111, "F20"),
+            (110, 101, "Menu"), (10, 100, "ISO section"), (93, 137, "JIS yen"),
+            (94, 135, "JIS underscore"), (95, 133, "JIS keypad comma"),
+            (102, 145, "Eisu"), (104, 144, "Kana"),
+            (72, 311, "volume up key"), (73, 312, "volume down key"), (74, 310, "mute key"),
+        ]
+        var wrongKeys: [String] = []
+        for k in keys {
+            guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(k.vk), keyDown: true),
+                  let ns = NSEvent(cgEvent: cg) else { wrongKeys.append(k.what); continue }
+            if ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(ns.keyCode)) != k.code {
+                wrongKeys.append(k.what)
+            }
+        }
+        record(cat, "F13 to F20, Menu, ISO, Japanese, and volume keys are recognized",
+               pass: wrongKeys.isEmpty,
+               detail: wrongKeys.isEmpty ? "\(keys.count) keys" : "Wrong: \(wrongKeys.joined(separator: ", "))")
+
+        // A key the app has no name for still becomes an input, and survives
+        // being saved in a preset.
+        let unnamed = ExternalInputDeviceService.inputCode(forVirtualKeyCode: 66)
+        let saved = InputEvent(type: .extKey, index: unnamed).serialized
+        record(cat, "A key with no name is still bindable",
+               pass: unnamed == KeyCodeMap.unknownKeyBase + 66
+                   && KeyCodeMap.name(for: unnamed) == "Key code 66"
+                   && InputEvent.parse(saved)?.index == unnamed,
+               detail: "\(KeyCodeMap.name(for: unnamed)), saved as \"\(saved)\"")
+
+        // Media-style keys arrive as system-defined events, not key codes.
+        func mediaCode(_ keyType: Int) -> Int? {
+            guard let ev = NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: [],
+                                              timestamp: 0, windowNumber: 0, context: nil, subtype: 8,
+                                              data1: (keyType << 16) | (0x0A << 8), data2: -1) else { return nil }
+            return ExternalInputDeviceService.mediaKey(from: ev)?.hid
+        }
+        let play = mediaCode(0x10)
+        record(cat, "Play / Pause arrives as a media key", pass: play == 308,
+               detail: play.map { KeyCodeMap.name(for: $0) } ?? "Nothing arrived")
+        let odd = mediaCode(0x17)
+        record(cat, "A media key with no name is still bindable",
+               pass: odd == KeyCodeMap.unknownSystemKeyBase + 0x17,
+               detail: odd.map { KeyCodeMap.name(for: $0) } ?? "Nothing arrived")
+    }
+
     // MARK: - 3. Sensitivity Curve Tests
 
     private func runSensitivityCurveTests() {
@@ -226,22 +326,18 @@ final class TestBenchService: ObservableObject {
                detail: "Got \(hex(clamped)); status nibble must stay 0x9 and channel nibble must be 0-15")
     }
 
+    // The production byte builders, so these tests check what ships.
     private func midiNoteOnBytes(note: Int, velocity: Int, channel: Int) -> [UInt8] {
-        let ch = max(0, min(15, channel - 1))
-        return [0x90 | UInt8(ch), UInt8(max(0, min(127, note))), UInt8(max(0, min(127, velocity)))]
+        MIDIService.noteOnBytes(note: note, velocity: velocity, channel: channel)
     }
     private func midiNoteOffBytes(note: Int, channel: Int) -> [UInt8] {
-        let ch = max(0, min(15, channel - 1))
-        return [0x80 | UInt8(ch), UInt8(max(0, min(127, note))), 0]
+        MIDIService.noteOffBytes(note: note, channel: channel)
     }
     private func midiCCBytes(controller: Int, value: Int, channel: Int) -> [UInt8] {
-        let ch = max(0, min(15, channel - 1))
-        return [0xB0 | UInt8(ch), UInt8(max(0, min(127, controller))), UInt8(max(0, min(127, value)))]
+        MIDIService.ccBytes(controller: controller, value: value, channel: channel)
     }
     private func midiPitchBendBytes(value: Int, channel: Int) -> [UInt8] {
-        let ch = max(0, min(15, channel - 1))
-        let v = max(0, min(16383, value))
-        return [0xE0 | UInt8(ch), UInt8(v & 0x7F), UInt8((v >> 7) & 0x7F)]
+        MIDIService.pitchBendBytes(value: value, channel: channel)
     }
 
     private func hex(_ bytes: [UInt8]) -> String {
@@ -287,26 +383,9 @@ final class TestBenchService: ObservableObject {
         }
     }
 
-    /// Pure-string version of brand detection that mirrors the production
-    /// logic but does not require a GCController instance.
+    /// Brand detection from a name, through the production matcher.
     private func brandFromString(_ name: String) -> ControllerBrand {
-        let combined = name.lowercased()
-
-        if combined.contains("joy-con") || combined.contains("joycon") {
-            if combined.contains("(l)") || combined.contains("left") { return .joyConLeft }
-            if combined.contains("(r)") || combined.contains("right") { return .joyConRight }
-            if combined.contains("pair") || combined.contains("combined") { return .joyConPair }
-            return .joyConPair
-        }
-        if combined.contains("switch pro") || combined.contains("pro controller") || combined.contains("nintendo") {
-            return .switchPro
-        }
-        if combined.contains("dualsense") || combined.contains("dual sense") { return .dualSense }
-        if combined.contains("dualshock") || combined.contains("ds4") { return .dualShock4 }
-        if combined.contains("xbox") || combined.contains("xinput") { return .xbox }
-        if combined.contains("8bitdo") || combined.contains("8-bit") { return .eightBitDo }
-        if combined.contains("stadia") { return .stadia }
-        return .unknown
+        ControllerTypeDetector.brand(fromName: name) ?? .unknown
     }
 
     // MARK: - 6. 8BitDo Mode Detection Tests
@@ -771,8 +850,10 @@ final class TestBenchService: ObservableObject {
         MIDIService.shared.sendNoteOn(note: 60, velocity: 100, channel: 1)
         try? await Task.sleep(nanoseconds: 200_000_000)
 
-        let received = listener.collectedPackets
+        // Stop first, so the CoreMIDI thread no longer appends while the
+        // list is read.
         listener.stop()
+        let received = listener.received()
 
         // We expect at least one 3-byte packet with status 0x90 (Note On Ch 1).
         let found = received.contains { bytes in
@@ -782,9 +863,9 @@ final class TestBenchService: ObservableObject {
                detail: found ? "Received Note On 60 vel 100 on Ch 1"
                              : "Did not receive expected Note On; got \(received.count) packets")
 
-        // Followed by note-off and a CC sweep.
+        // Followed by the note-off, so no note is left sounding. No CC is
+        // sent: CC 7 is volume, and any DAW listening would have changed.
         MIDIService.shared.sendNoteOff(note: 60, channel: 1)
-        MIDIService.shared.sendCC(controller: 7, value: 100, channel: 1)
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         info("MIDI Loopback", "Manual verification ready",
@@ -819,7 +900,7 @@ final class TestBenchService: ObservableObject {
         record("Steam Controller Helper",
                "Helper binary present in app bundle",
                pass: d.helperBundled,
-               detail: d.helperPath ?? "Not found. The Copy Helpers build phase didn't ship SteamControllerHelper inside Contents/MacOS/. The shipped App Store binary may have this stripped - re-build with the helper Copy Files phase enabled.")
+               detail: d.helperPath ?? "Not found. The Copy Helpers build phase didn't ship SteamControllerHelper inside Contents/MacOS/. The shipped App Store binary may have this stripped. Rebuild with the helper Copy Files phase enabled.")
 
         if d.helperBundled {
             record("Steam Controller Helper",
@@ -843,17 +924,17 @@ final class TestBenchService: ObservableObject {
             } else {
                 info("Steam Controller Helper",
                      "Helper is running but silent",
-                     detail: "This is expected when no Steam Controller is plugged in - the helper stays quiet until it can open the HID device. If you have one plugged in and Steam.app is closed, then this indicates a real problem (check Console.app for crashes).")
+                     detail: "This is expected when no Steam Controller is plugged in: the helper stays quiet until it can open the HID device. If you have one plugged in and Steam.app is closed, then this indicates a real problem (check Console.app for crashes).")
             }
 
             // The "R ready" line is the helper's handshake - it means HID
-            // was successfully opened (lizard mode disabled).
+            // was opened (lizard mode goes off only while a preset runs).
             if gotAnyOutput {
                 record("Steam Controller Helper",
                        "Ready handshake received",
                        pass: d.readyHandshakeReceived,
                        detail: d.readyHandshakeReceived
-                            ? "Helper opened the Steam Controller HID interface and is streaming."
+                            ? "Helper opened a Steam Controller interface. A dongle reports this even with no controller on, and lizard mode stays on until a preset runs."
                             : "Helper started but never sent 'R ready'. The Steam Controller is either not plugged in OR Steam.app is holding the device. Quit Steam, then retry.")
             }
 
@@ -867,6 +948,10 @@ final class TestBenchService: ObservableObject {
                             : "Handshake completed but no input frames. Move a stick or press a button on the controller while running this test.")
             }
         }
+
+        // The diagnostics retain above started the helper; let it go so
+        // Run All does not leave the Steam helper running.
+        svc.release()
 
         // --- Pass 2: synthetic simulation (proves downstream bridge) ---
         svc.endSimulation()
@@ -904,7 +989,7 @@ final class TestBenchService: ObservableObject {
         record("Steam Controller Simulation",
                "Bridge to ControllerState (A pressed)",
                pass: aButtonValue > 0.5,
-               detail: "A=\(aButtonValue), Steam=\(steamButtonValue), B=\(bButtonValue) - only A and Steam should read >0.5")
+               detail: "A=\(aButtonValue), Steam=\(steamButtonValue), B=\(bButtonValue); only A and Steam should read >0.5")
         record("Steam Controller Simulation",
                "Bridge to ControllerState (B not pressed)",
                pass: bButtonValue < 0.5,
@@ -966,8 +1051,6 @@ final class TestBenchService: ObservableObject {
     /// by activating a preset and watching a target app receive the
     /// keystrokes.
     private func runKeyboardOutputLoopbackTest() async {
-        let probeHidCode = 111 // F20 - virtually no app reacts to this.
-
         let testSource = CGEventSource(stateID: .hidSystemState)
         record("Keyboard Output",
                "CGEventSource available",
@@ -976,22 +1059,13 @@ final class TestBenchService: ObservableObject {
                     ? "CGEventSource(stateID: .hidSystemState) returned non-nil. CoreGraphics is reachable from this sandboxed binary."
                     : "CGEventSource returned nil. This is rare; usually indicates a deep sandbox lockdown.")
 
-        // Post via the exact code path the mapping engine uses. The
-        // API is void so the only thing we can verify in-process is
-        // that the call returned without crashing.
-        InputSimulator.shared.keyDown(probeHidCode)
-        try? await Task.sleep(nanoseconds: 30_000_000)
-        InputSimulator.shared.keyUp(probeHidCode)
-        try? await Task.sleep(nanoseconds: 30_000_000)
-
-        record("Keyboard Output",
-               "Post returns cleanly",
-               pass: true,
-               detail: "InputSimulator.keyDown(\(probeHidCode)) / keyUp(\(probeHidCode)) returned without throwing. Posting to .cghidEventTap is fire-and-forget; the void CGEvent.post API can only tell us whether the call itself crashed, not whether the kernel accepted the event.")
+        // No key is posted: a real F20 reached whatever app was in front
+        // (and any preset row bound to F20), and the void post call could
+        // not report anything a test could check anyway.
 
         info("Keyboard Output",
              "How to verify end-to-end delivery",
-             detail: "In-process verification is unreliable: macOS doesn't deliver self-posted HID events back through a same-process session tap (so a CGEventTap listener won't see them), and CGEventSource.counterForEventType deadlocks on the SkyLight subsystem when called from a sandboxed app. To prove cross-app keystrokes work, the only valid test is: open TextEdit with text, activate the Desktop Navigation preset, plug in a controller, press D-pad Up - the text cursor should move.")
+             detail: "In-process verification is unreliable: macOS doesn't deliver self-posted HID events back through a same-process session tap (so a CGEventTap listener won't see them), and CGEventSource.counterForEventType deadlocks on the SkyLight subsystem when called from a sandboxed app. To prove cross-app keystrokes work, the only valid test is: open TextEdit with text, activate the Desktop Navigation preset, plug in a controller, press D-pad Up, and the text cursor should move.")
     }
 
     // MARK: - Hardware Snapshot
@@ -1041,7 +1115,7 @@ final class TestBenchService: ObservableObject {
         } else {
             info("Hardware Snapshot",
                  "Steam Controller (via SteamControllerHelper)",
-                 detail: "Helper binary NOT bundled in this app - Steam Controller cannot work in this build. (Shipped App Store versions before 1.2 had this bug.)")
+                 detail: "Helper binary NOT bundled in this app: Steam Controller cannot work in this build. (Shipped App Store versions before 1.2 had this bug.)")
         }
 
         // --- External keyboards / mice (IOHIDManager path) ---
@@ -1049,19 +1123,19 @@ final class TestBenchService: ObservableObject {
         if extDevices.isEmpty {
             info("Hardware Snapshot",
                  "External keyboards / mice",
-                 detail: "No HID keyboards or mice detected. External USB and Bluetooth devices appear here once macOS grants Input Monitoring (System Settings → Privacy & Security). Built-in MacBook keyboard / trackpad are hidden from sandboxed apps at the IOHID layer - they would need a separate CGEventTap path.")
+                 detail: "The Mac's keyboard and mouse are listened to only while a preset, Scan, or the Live Visualizer uses them, and appear here then as one combined keyboard and one combined mouse. They need no permission beyond Accessibility (System Settings, Privacy & Security, Accessibility).")
         } else {
             for d in extDevices {
                 info("Hardware Snapshot",
-                     "External \(d.kind.rawValue): \(d.productName)",
-                     detail: "Bus: \(d.bus.rawValue.uppercased()), VID 0x\(String(d.vendorID, radix: 16)) PID 0x\(String(d.productID, radix: 16)), id=\(d.id). Bind this as an external-key or external-mouse input.")
+                     "Mac \(d.kind.rawValue): \(d.productName)",
+                     detail: "Every keyboard (or every mouse and trackpad) on the Mac, combined. Bind it as a Keyboard Key or Mouse input.")
             }
             let received = ExternalInputDeviceService.shared.receivedAnyKeyboardEvent
             info("Hardware Snapshot",
-                 "External keyboard events arriving?",
+                 "Mac keyboard events arriving?",
                  detail: received
-                    ? "Yes - press log is populating in Settings → Devices."
-                    : "Device(s) detected but no key events have arrived yet. If you've pressed keys on an external keyboard and nothing logged, Input Monitoring is most likely not granted. Open System Settings → Privacy & Security → Input Monitoring and turn on InputConfig.")
+                    ? "Yes. The Live Visualizer's Keyboard template lights each key as it arrives."
+                    : "No key has been seen yet. Keys are read only while a preset or Scan uses a keyboard row; press a bound key with one running. If nothing arrives, check that InputConfig is on in System Settings, Privacy & Security, Accessibility.")
         }
 
         // --- Built-in keyboard / trackpad (CGEventTap path) ---
@@ -1070,16 +1144,16 @@ final class TestBenchService: ObservableObject {
             if svc.cgEventTapReceivedAnyEvent {
                 info("Hardware Snapshot",
                      "Built-in Mac keyboard and trackpad",
-                     detail: "Active via CGEventTap. Any key on the Mac's built-in keyboard or click on the trackpad will register during scan and can be bound as 'Built-in Keyboard' / 'Built-in Mouse / Trackpad' inputs.")
+                     detail: "The mouse tap is active: clicks, scrolling, and (when a row reads it) pointer movement reach InputConfig. Keys are read separately and show in the Live Visualizer's Keyboard template.")
             } else {
                 info("Hardware Snapshot",
                      "Built-in Mac keyboard and trackpad",
-                     detail: "CGEventTap installed but no events seen yet. Press any key on the Mac keyboard to confirm it's flowing.")
+                     detail: "The mouse tap is installed but has seen nothing yet. Click or scroll to confirm it is working; pointer movement is read only when a row uses it.")
             }
         } else {
             info("Hardware Snapshot",
                  "Built-in Mac keyboard and trackpad",
-                 detail: "CGEventTap not installed - Input Monitoring permission required. Open System Settings → Privacy & Security → Input Monitoring and turn on InputConfig, then relaunch the app.")
+                 detail: "The mouse event tap is not running. It starts while a mouse or trackpad row is in use and needs the Accessibility permission: System Settings, Privacy & Security, Accessibility.")
         }
     }
 }
@@ -1095,6 +1169,12 @@ private final class MIDILoopbackListener {
     private(set) var collectedPackets: [[UInt8]] = []
     private let lock = NSLock()
 
+    /// The messages heard so far, read under the lock.
+    func received() -> [[UInt8]] {
+        lock.lock(); defer { lock.unlock() }
+        return collectedPackets
+    }
+
     func start() -> Bool {
         let clientName = "InputConfig.TestBench" as CFString
         guard MIDIClientCreateWithBlock(clientName, &client, nil) == noErr else { return false }
@@ -1102,52 +1182,42 @@ private final class MIDILoopbackListener {
         let portName = "Loopback" as CFString
         let status = MIDIInputPortCreateWithProtocol(client, portName, ._1_0, &port) { [weak self] eventList, _ in
             guard let self = self else { return }
-            // Walk the new MIDIEventList format.
-            var event = eventList.pointee.packet
-            for _ in 0..<eventList.pointee.numPackets {
-                let wordCount = Int(event.wordCount)
-                // Each word is a UInt32 containing up to 4 bytes of MIDI 1.0
-                // wrapped in MIDI 2.0 framing. The first byte tells us the
-                // message type; type 2 (MIDI 1.0 channel voice) has 3 bytes
-                // of payload in bits 16-23, 8-15, 0-7 of word[0].
-                if wordCount >= 1 {
-                    let words = withUnsafePointer(to: &event.words) {
-                        $0.withMemoryRebound(to: UInt32.self, capacity: wordCount) { ptr in
-                            Array(UnsafeBufferPointer(start: ptr, count: wordCount))
-                        }
-                    }
-                    let w = words[0]
-                    let type = (w >> 28) & 0xF
+            // Walk the list in place, as MIDIInputService does: stepping a
+            // copied packet with MIDIEventPacketNext read past the copy into
+            // stack memory when a list held more than one packet.
+            for packetPtr in eventList.unsafeSequence() {
+                // Read in place and message by message, as MIDIInputService
+                // does: copying the whole packet read past a short one, and
+                // reading only its first word missed a note queued behind
+                // another message.
+                let words = Array(packetPtr.words())
+                var w = 0
+                while w < words.count {
+                    let type = UInt8((words[w] >> 28) & 0xF)
+                    let size = MIDIInputService.umpWordCount(messageType: type)
+                    guard w + size <= words.count else { break }
                     if type == 0x2 {
                         // MIDI 1.0 voice message in a Universal MIDI Packet.
-                        let status = UInt8((w >> 16) & 0xFF)
-                        let data1 = UInt8((w >> 8) & 0xFF)
-                        let data2 = UInt8(w & 0xFF)
+                        let word = words[w]
+                        let status = UInt8((word >> 16) & 0xFF)
+                        let data1 = UInt8((word >> 8) & 0xFF)
+                        let data2 = UInt8(word & 0xFF)
                         self.lock.lock()
                         self.collectedPackets.append([status, data1, data2])
                         self.lock.unlock()
                     }
+                    w += size
                 }
-                event = MIDIEventPacketNext(&event).pointee
             }
         }
 
         guard status == noErr else { return false }
 
-        // Subscribe to all sources that match our virtual port name. CoreMIDI
-        // does not provide a way to look up a source by name directly, so we
-        // walk every source endpoint.
-        let sourceCount = MIDIGetNumberOfSources()
-        for i in 0..<sourceCount {
-            let source = MIDIGetSource(i)
-            var nameRef: Unmanaged<CFString>?
-            MIDIObjectGetStringProperty(source, kMIDIPropertyDisplayName, &nameRef)
-            let name = nameRef?.takeRetainedValue() as String? ?? ""
-            if name.contains(MIDIService.portName) {
-                MIDIPortConnectSource(port, source, nil)
-            }
-        }
-
+        // Our own virtual source only, by endpoint: by name, any device
+        // whose name contained "InputConfig" was listened to as well.
+        let own = MIDIService.ownSourceEndpoint
+        guard own != 0 else { return false }
+        MIDIPortConnectSource(port, own, nil)
         return true
     }
 

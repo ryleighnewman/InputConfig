@@ -51,7 +51,16 @@ struct TouchpadCalibrationView: View {
     /// Which physical surface the sheet is operating on. Persisted in
     /// TouchpadService.currentActiveDevice so the picker reopens to the
     /// user's last pick.
-    @State private var activeDevice: TouchpadDevice = TouchpadService.shared.currentActiveDevice()
+    /// The Mac's own trackpad is not offered here any more (its areas are
+    /// screen regions with their own editor), so a pick saved by an older
+    /// version opens on the controller pad instead of a hidden choice.
+    @State private var activeDevice: TouchpadDevice = {
+        let saved = TouchpadService.shared.currentActiveDevice()
+        return saved.usesCursorRegions ? .dualSense : saved
+    }()
+    /// Regions a finger is in, refreshed by the poll only when the set
+    /// changes, so the highlights redraw on a press and not by chance.
+    @State private var pressedRegionIDs: Set<UUID> = []
     @State private var showScreenRegions = false
 
     // MARK: - Shared state
@@ -88,11 +97,6 @@ struct TouchpadCalibrationView: View {
     @State private var showUnsavedCloseDialog: Bool = false
     @State private var savedCalibrationOnOpen: TouchpadCalibration = .uncalibrated
 
-    /// Toast shown briefly after a Quick Zero hit.
-    @State private var showQuickZeroToast: Bool = false
-    /// Toast shown if the user pressed Quick Zero without a finger on the
-    /// touchpad. We can't recenter without a current position to anchor to.
-    @State private var showQuickZeroNeedsFinger: Bool = false
 
     // MARK: - Regions tab state
 
@@ -160,6 +164,7 @@ struct TouchpadCalibrationView: View {
         .padding(22)
         .frame(width: 760, height: 640)
         .onAppear {
+            MappingEngine.touchpadSetupOpen = true
             TouchpadService.shared.retain()
             startPolling()
             reloadRegionsForActiveDevice()
@@ -183,8 +188,10 @@ struct TouchpadCalibrationView: View {
             #endif
         }
         .onDisappear {
+            MappingEngine.touchpadSetupOpen = false
             stopPolling()
             TouchpadService.shared.release()
+            saveRegionsOutsideEditor()
         }
         .onChange(of: activeDevice) { _, newDevice in
             TouchpadService.shared.setActiveDevice(newDevice)
@@ -283,7 +290,7 @@ struct TouchpadCalibrationView: View {
 
             Text(activeDeviceShortHint)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .lineLimit(1)
             Spacer(minLength: 0)
             Button("Screen regions\u{2026}") { showScreenRegions = true }
@@ -425,9 +432,9 @@ struct TouchpadCalibrationView: View {
             .shadow(color: .mint.opacity(0.6), radius: 6)
     }
 
-    /// Bottom row of the finger-calibration tab: coverage stats + Quick
-    /// Zero + Reset + Save buttons. Quick Zero is enabled for DualSense /
-    /// DS4 only.
+    /// Bottom row of the finger-calibration tab: coverage stats, Reset,
+    /// and Save. (Quick Zero was removed: regions are matched against the
+    /// absolute finger position, so it could only show "Centered".)
     @ViewBuilder
     private var calibrationFooter: some View {
         HStack(spacing: 20) {
@@ -441,35 +448,12 @@ struct TouchpadCalibrationView: View {
                       tint: .secondary)
             Spacer()
 
-            if showQuickZeroToast {
-                Label("Centered", systemImage: "scope")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .transition(.opacity)
-            } else if showQuickZeroNeedsFinger {
-                Label("Touch the pad first", systemImage: "hand.point.up.left")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .transition(.opacity)
-            } else if showSavedConfirmation {
+            if showSavedConfirmation {
                 Label("Calibration saved", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
                     .transition(.opacity)
             }
-
-            Button {
-                doQuickZero()
-            } label: {
-                Label("Quick Zero", systemImage: "scope")
-            }
-            .buttonStyle(.solidSecondaryCompact)
-            .disabled(!activeDevice.canQuickZero)
-            .help(activeDevice.canQuickZero
-                  ? "Mark the current finger position as the new origin"
-                  : "Mac Trackpad uses absolute screen coordinates, no zero to set")
-            .accessibilityLabel("Quick zero the touchpad")
-            .accessibilityHint("Marks the current finger position as the new origin")
 
             Button("Reset", role: .destructive) { resetCalibration() }
                 .accessibilityLabel("Reset calibration")
@@ -505,7 +489,7 @@ struct TouchpadCalibrationView: View {
                 if let when = savedCalibrationOnOpen.savedAt {
                     Text("Last saved \(when, format: .relative(presentation: .named))")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
             }
             Spacer()
@@ -620,7 +604,10 @@ struct TouchpadCalibrationView: View {
                 Label("Add Region", systemImage: "plus.rectangle")
             }
             .buttonStyle(.solidSecondaryCompact)
-            .disabled(drawingNewRegion || regions.count >= 16)
+            // Regions belong to a preset; with none open or running there
+            // is nowhere to keep them, and they were dropped on close.
+            .disabled(drawingNewRegion || regions.count >= 16 || !hasTargetPreset)
+            .help(hasTargetPreset ? "Draw a region on the pad" : "Open or run a preset to add regions")
             if drawingNewRegion {
                 Button("Cancel") {
                     drawingNewRegion = false
@@ -628,6 +615,14 @@ struct TouchpadCalibrationView: View {
                     dragCurrent = nil
                 }
                 .buttonStyle(.solidSecondaryCompact)
+                Button("Place in Center") {
+                    drawingNewRegion = false
+                    dragStart = nil
+                    dragCurrent = nil
+                    addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
+                }
+                .buttonStyle(.solidSecondaryCompact)
+                .help("Add the region in the middle without drawing it")
             }
             Button {
                 applyDefault1to16()
@@ -635,8 +630,8 @@ struct TouchpadCalibrationView: View {
                 Label("Apply default 1 to 16", systemImage: "square.grid.4x3.fill")
             }
             .buttonStyle(.solidSecondaryCompact)
-            .help("Replace regions with a 4 by 4 grid and bind each to keys 1 to 9, 0, F1 to F6 in the active preset")
-            .disabled(presetStore.activePresetId == nil)
+            .help("Replace regions with a 4 by 4 grid and bind each to keys 1 to 9, 0, F1 to F6 in the preset being edited")
+            .disabled(!hasTargetPreset)
             if showAppliedDefaultsToast {
                 Label("Default grid applied", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold))
@@ -646,7 +641,7 @@ struct TouchpadCalibrationView: View {
             Spacer()
             Text("\(regions.count) / 16 regions")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
         }
     }
 
@@ -687,7 +682,7 @@ struct TouchpadCalibrationView: View {
 
     @ViewBuilder
     private func regionShape(region: TouchpadRegion, in size: CGSize) -> some View {
-        let isPressed = isRegionPressed(region.id)
+        let isPressed = pressedRegionIDs.contains(region.id)
         let isSelected = region.id == selectedRegionID
         let rect = CGRect(
             x: region.minX * size.width,
@@ -720,15 +715,39 @@ struct TouchpadCalibrationView: View {
             }
     }
 
+    /// The list, then typed bounds for the selected region: placing and
+    /// sizing one took a pointer drag before, so keyboard, switch and
+    /// VoiceOver users could only make a fixed box in the middle.
     private var regionsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            regionsListBody
+            if let id = selectedRegionID, let region = regions.first(where: { $0.id == id }) {
+                // Written back by id, looked up when the field commits: the
+                // field can commit as it goes away, after the region was
+                // deleted or the list switched to another device, and an
+                // index taken when this was drawn then hit the wrong region
+                // or ran past the end.
+                RegionBoundsFields(region: region) { updated in
+                    guard let index = regions.firstIndex(where: { $0.id == updated.id }) else { return }
+                    regions[index] = updated
+                    persistRegions()
+                }
+                .id(region.id)
+            }
+        }
+    }
+
+    private var regionsListBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("This preset's regions")
+            Text(regionsOwnerName.map { "Regions of \u{201C}\($0)\u{201D}" } ?? "This preset's regions")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             if regions.isEmpty {
-                Text("None yet. Regions belong to the preset you are editing; drag on the pad to draw one.")
+                Text(hasTargetPreset
+                     ? "None yet. Regions belong to the preset you are editing; drag on the pad to draw one."
+                     : "Regions belong to a preset. Open a preset in the editor, or run one, to add regions.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 Spacer()
             } else {
                 ScrollView {
@@ -767,7 +786,7 @@ struct TouchpadCalibrationView: View {
                     } else {
                         Text("Not bound")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.hint)
                     }
                 }
                 Spacer(minLength: 4)
@@ -785,8 +804,8 @@ struct TouchpadCalibrationView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Bind this region")
-            .disabled(presetStore.activePresetId == nil)
-            .help(presetStore.activePresetId == nil
+            .disabled(!hasTargetPreset)
+            .help(!hasTargetPreset
                   ? "Open or create a preset to bind this region"
                   : "Bind this region to a key")
             .popover(isPresented: Binding(
@@ -973,7 +992,7 @@ struct TouchpadCalibrationView: View {
 
     private func statBlock(label: String, value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.tertiary)
+            Text(label).font(.caption2).foregroundStyle(.hint)
             Text(value).font(.body.monospacedDigit()).foregroundStyle(tint)
         }
     }
@@ -1037,10 +1056,7 @@ struct TouchpadCalibrationView: View {
     /// preset and produce a short label like "1" or "F2". nil if no
     /// matching binding exists yet.
     private func boundOutputLabel(for regionID: UUID) -> String? {
-        guard let activeID = presetStore.activePresetId,
-              let preset = presetStore.presets.first(where: { $0.id == activeID }) else {
-            return nil
-        }
+        guard let preset = targetPreset() else { return nil }
         let inputType: InputType = activeDevice.usesCursorRegions ? .cursorRegion : .touchpadRegion
         for joystick in preset.joysticks {
             for binding in joystick.bindings {
@@ -1048,58 +1064,105 @@ struct TouchpadCalibrationView: View {
                 let bindingRegionID: UUID? = activeDevice.usesCursorRegions
                     ? binding.input.cursorRegionID
                     : binding.input.touchpadRegionID
-                if bindingRegionID == regionID, let first = binding.outputs.first {
-                    return outputLabel(for: first)
+                if bindingRegionID == regionID, !binding.outputs.isEmpty {
+                    return outputLabel(for: binding)
                 }
             }
         }
         return nil
     }
 
-    private func outputLabel(for output: OutputAction) -> String? {
-        if output.type == .key, let code = output.keyCode,
-           let entry = KeyCodeMap.allKeys.first(where: { $0.code == code }) {
-            return "Bound: \(entry.name)"
+    /// The row's note when it has one ("Undo"), else every output by name
+    /// ("Command (Left) + Z"). Only the first output was shown, by raw
+    /// name, so every built-in zone read "Bound: Command (Left)".
+    private func outputLabel(for binding: BindingModel) -> String? {
+        if let note = binding.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            return "Bound: \(note)"
         }
-        return "Bound: \(output.type)"
+        return "Bound: " + binding.outputs.map(\.displayName).joined(separator: " + ")
     }
 
     // MARK: - Binding writes
 
     /// Add a `.touchpadRegion` (or `.cursorRegion`) binding for the given
-    /// region to the active preset's first joystick. Replaces any
+    /// region to the target preset's first joystick. Replaces any
     /// existing binding pointing at the same region so the user always
     /// ends up with exactly one wire per region.
     private func bindRegion(_ regionID: UUID, toKeyCode keyCode: Int, label: String) {
-        guard let activeID = presetStore.activePresetId,
-              let idx = presetStore.presets.firstIndex(where: { $0.id == activeID }) else {
+        withTargetPreset { preset in
+            guard !preset.joysticks.isEmpty else { return }
+
+            let usesCursor = activeDevice.usesCursorRegions
+            let inputType: InputType = usesCursor ? .cursorRegion : .touchpadRegion
+            let newInput: InputEvent = usesCursor
+                ? .cursorRegion(regionID)
+                : .touchpadRegion(regionID)
+            let newOutput = OutputAction(type: .key, keyCode: keyCode)
+            let newBinding = BindingModel(input: newInput, outputs: [newOutput])
+
+            // Remove any prior binding pointing at this region so we don't
+            // stack duplicate wires.
+            for j in 0..<preset.joysticks.count {
+                preset.joysticks[j].bindings.removeAll { b in
+                    guard b.input.type == inputType else { return false }
+                    let bID = usesCursor ? b.input.cursorRegionID : b.input.touchpadRegionID
+                    return bID == regionID
+                }
+            }
+            preset.joysticks[0].bindings.append(newBinding)
+        }
+    }
+
+    /// Opened from the main window, the sheet edits the running
+    /// preset's working set with no editor to save it, so the regions
+    /// drawn here vanished at the next reload. Save them into the preset
+    /// that owns the working set when anything changed.
+    private func saveRegionsOutsideEditor() {
+        guard OpenEditor.current == nil,
+              let id = Preset.regionWorkingSetOwner,
+              let idx = presetStore.presets.firstIndex(where: { $0.id == id }) else { return }
+        var preset = presetStore.presets[idx]
+        let before = preset
+        preset.captureRegionsFromServices()
+        guard preset.touchpadRegions != before.touchpadRegions
+                || preset.cursorRegions != before.cursorRegions
+                || preset.stickRegions != before.stickRegions else { return }
+        presetStore.presets[idx] = preset
+        presetStore.savePreset(preset)
+    }
+
+    /// The preset whose regions the sheet shows and saves into, by name,
+    /// so it is never a guess which preset an edit lands in.
+    private var regionsOwnerName: String? {
+        targetPreset()?.name
+    }
+
+    /// The preset this sheet binds regions into: the open editor's draft
+    /// when there is one, else the preset whose regions the sheet is
+    /// showing, else the active preset. Binding always into the active
+    /// preset wired regions into a preset other than the one being edited.
+    private func targetPreset() -> Preset? {
+        if let editor = OpenEditor.current { return editor.draft() }
+        guard let id = Preset.regionWorkingSetOwner ?? presetStore.activePresetId else { return nil }
+        return presetStore.presets.first { $0.id == id }
+    }
+
+    private var hasTargetPreset: Bool { targetPreset() != nil }
+
+    /// Change the target preset. In the editor the change goes into the
+    /// draft and is saved with it. Otherwise it is saved now, together
+    /// with the regions its bindings point at: the services only hold the
+    /// working set, and saving a binding without its region left a wire
+    /// to a zone that did not exist after the next reload.
+    private func withTargetPreset(_ change: (inout Preset) -> Void) {
+        if let editor = OpenEditor.current {
+            editor.edit(change)
             return
         }
+        guard let id = Preset.regionWorkingSetOwner ?? presetStore.activePresetId,
+              let idx = presetStore.presets.firstIndex(where: { $0.id == id }) else { return }
         var preset = presetStore.presets[idx]
-        guard !preset.joysticks.isEmpty else { return }
-
-        let usesCursor = activeDevice.usesCursorRegions
-        let inputType: InputType = usesCursor ? .cursorRegion : .touchpadRegion
-        let newInput: InputEvent = usesCursor
-            ? .cursorRegion(regionID)
-            : .touchpadRegion(regionID)
-        let newOutput = OutputAction(type: .key, keyCode: keyCode)
-        let newBinding = BindingModel(input: newInput, outputs: [newOutput])
-
-        // Remove any prior binding pointing at this region so we don't
-        // stack duplicate wires.
-        for j in 0..<preset.joysticks.count {
-            preset.joysticks[j].bindings.removeAll { b in
-                guard b.input.type == inputType else { return false }
-                let bID = usesCursor ? b.input.cursorRegionID : b.input.touchpadRegionID
-                return bID == regionID
-            }
-        }
-        preset.joysticks[0].bindings.append(newBinding)
-        // The region this binding points at must travel with it. The
-        // services only hold the working set; the preset file is what
-        // survives, and saving the binding without its region left a wire
-        // to a zone that did not exist after the next reload.
+        change(&preset)
         preset.captureRegionsFromServices()
         presetStore.presets[idx] = preset
         presetStore.savePreset(preset)
@@ -1110,21 +1173,11 @@ struct TouchpadCalibrationView: View {
     /// Replace the region list with a 4 by 4 grid and bind each cell to a
     /// number / function key in the active preset.
     private func applyDefault1to16() {
-        guard let activeID = presetStore.activePresetId,
-              let idx = presetStore.presets.firstIndex(where: { $0.id == activeID }) else {
-            return
-        }
-        var preset = presetStore.presets[idx]
-        guard !preset.joysticks.isEmpty else { return }
+        guard let target = targetPreset(), !target.joysticks.isEmpty else { return }
 
         let usesCursor = activeDevice.usesCursorRegions
         let inputType: InputType = usesCursor ? .cursorRegion : .touchpadRegion
 
-        // Wipe prior region bindings of the right type so we replace
-        // cleanly rather than stacking.
-        for j in 0..<preset.joysticks.count {
-            preset.joysticks[j].bindings.removeAll { $0.input.type == inputType }
-        }
 
         // Generate a 4 by 4 grid (16 cells). Cell (col, row) maps to
         // normalized rectangle (col/4, row/4) to ((col+1)/4, (row+1)/4).
@@ -1134,6 +1187,7 @@ struct TouchpadCalibrationView: View {
         let keyLabels = (1...9).map { "\($0)" } + ["0"] + (1...6).map { "F\($0)" }
 
         var newRegions: [TouchpadRegion] = []
+        var newBindings: [BindingModel] = []
         for cell in 0..<16 {
             let col = cell % 4
             let row = cell / 4
@@ -1150,7 +1204,7 @@ struct TouchpadCalibrationView: View {
                 input: usesCursor ? .cursorRegion(region.id) : .touchpadRegion(region.id),
                 outputs: [OutputAction(type: .key, keyCode: keyCodes[cell])]
             )
-            preset.joysticks[0].bindings.append(binding)
+            newBindings.append(binding)
         }
 
         regions = newRegions
@@ -1158,11 +1212,17 @@ struct TouchpadCalibrationView: View {
         // Sixteen bindings and their sixteen regions go to disk together.
         // Saving the bindings alone restarted the engine, which reloaded
         // the preset's old, empty region list over the grid just drawn.
-        preset.captureRegionsFromServices()
-        presetStore.presets[idx] = preset
-        presetStore.savePreset(preset)
+        withTargetPreset { preset in
+            // Wipe prior region bindings of the right type so we replace
+            // cleanly rather than stacking.
+            for j in 0..<preset.joysticks.count {
+                preset.joysticks[j].bindings.removeAll { $0.input.type == inputType }
+            }
+            preset.joysticks[0].bindings.append(contentsOf: newBindings)
+        }
 
         withAnimation(.easeIn(duration: 0.2)) { showAppliedDefaultsToast = true }
+        AccessibilityNotification.Announcement("Default grid applied").post()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             withAnimation(.easeOut(duration: 0.3)) { showAppliedDefaultsToast = false }
         }
@@ -1180,6 +1240,8 @@ struct TouchpadCalibrationView: View {
         guard activeDevice.canFingerCalibrate else { return false }
         return minX < maxX && minY < maxY
             && minX != .max && maxX != .min && minY != .max && maxY != .min
+            && maxX - minX >= TouchpadService.minimumSpanX
+            && maxY - minY >= TouchpadService.minimumSpanY
     }
 
     private func resetCalibration() {
@@ -1212,24 +1274,10 @@ struct TouchpadCalibrationView: View {
         withAnimation(.easeIn(duration: 0.15)) {
             showSavedConfirmation = true
         }
+        AccessibilityNotification.Announcement("Calibration saved").post()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
             withAnimation(.easeOut(duration: 0.3)) {
                 showSavedConfirmation = false
-            }
-        }
-    }
-
-    private func doQuickZero() {
-        let ok = TouchpadService.shared.quickZero()
-        if ok {
-            withAnimation(.easeIn(duration: 0.15)) { showQuickZeroToast = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                withAnimation(.easeOut(duration: 0.3)) { showQuickZeroToast = false }
-            }
-        } else {
-            withAnimation(.easeIn(duration: 0.15)) { showQuickZeroNeedsFinger = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                withAnimation(.easeOut(duration: 0.3)) { showQuickZeroNeedsFinger = false }
             }
         }
     }
@@ -1269,6 +1317,10 @@ struct TouchpadCalibrationView: View {
         }
         if let p = svc.currentPosition(finger: 1) {
             ingest(x: p.x, y: p.y)
+        }
+        if selectedTab == .regions {
+            let pressed = Set(regions.map(\.id).filter { isRegionPressed($0) })
+            if pressed != pressedRegionIDs { pressedRegionIDs = pressed }
         }
     }
 

@@ -1,5 +1,92 @@
 # Changelog
 
+## 1.6
+
+- Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles
+- Added infrastructure for far more controllers: generic USB pads and arcade sticks take their button names from the community SDL GameControllerDB, and wheels, flight sticks, and pedals are read on every axis at full resolution and every hat switch
+- Generic USB pads and a single Joy-Con number their controls like other controllers; InputConfig offers to update older rows on USB pads
+- Added infrastructure for two-player adapters and dual arcade encoders, so each player gets a controller of their own
+- Added infrastructure for Valve's 2026 Steam Controller on a USB cable, over Bluetooth, or through its Puck: every button, the four back buttons, both trackpads, the gyro, rumble, and battery, and a built-in preset
+- Added trackpad handling for both Steam Controllers: slide, tap, double tap, and press on either pad
+- Added infrastructure for the Logitech G29 and G923 wheels: a wheel in compatibility mode is switched to its own mode, the pedals read 0 to 1, and the Live Visualizer shows how far the wheel is turned in degrees
+- Added infrastructure for the Stream Deck, the Neo's touch points and the Stream Deck modules included, connected from the Devices menu or the menu bar
+- A controller that also acts as a keyboard, such as some arcade sticks, works once Input Monitoring is allowed for InputConfig in System Settings
+- With two PlayStation controllers connected, each gets its own light color, rumble, and Edge paddles, and two identical controllers can go to two players
+- A group set to one controller reads another of the same family when its own is away, such as an Edge for a DualSense, and otherwise says it is waiting, with one click to use the controller that is connected
+- InputConfig explains controllers macOS cannot read: Xbox 360 pads in the Devices menu, and 8BitDo pads in the wrong mode in the main window
+- Disconnect a controller from its entry at the top of the sidebar, or switch it off from its Live Visualizer panel so it reads as idle everywhere, remembered for that controller
+- The Live Visualizer draws 19 controllers as themselves, with every control where it really is and what each one is bound to
+- One menu on each Live Visualizer panel: Automatic, Screen, Keyboard, Touchpad, Mouse and MIDI, then Connected, where you pick which connected controller a group reads, and a menu for each maker for the model it is drawn as, even with nothing connected
+- The Live Visualizer lists what each control does in a key down both sides of the drawing, each caption joined to its control by a line that never crosses another, so no label sits on a control or another label
+- Drag the Live Visualizer map to move it around inside its panel; where you leave it and its zoom are kept for each preset, and Reset View puts it back
+- The Live Visualizer marks every deadzone a group's rows set, on sticks, triggers, pedals, wheels and the gyro, the way the deadzone calibration does, and triggers are taller so the percent reads clearly
+- Click a control, or any part of the Mouse, Keyboard, Touchpad, Screen or stick zone map, in the Live Visualizer to see what it does and jump to its rows, and draw a screen region or open Touchpad Setup from there
+- Light bar color as an output: any input can turn a DualSense or DualShock 4 light a color while held, set a color that stays, or switch the rainbow on and off, and a preset's rainbow runs at its own speed
+- Share, Create, and Capture keep their macOS screenshot and recording shortcut unless the running preset uses them
+- The controller emergency stop is a hold of Back and Start together, with a buzz a second in, and the same hold starts the preset again; on an Access Controller it is socket 7, and an Emergency Stop button under Activate and Edit shows the shortcut
+- The binding editor opens faster and scrolls smoothly
+- While the editor is open, the controller still moves the pointer and clicks, and Escape, Return, Tab, the arrows and Space still work from it, so Save and Cancel are always in reach
+- Override on the editor's paused banner lets the running preset work fully while you edit; Scan still holds outputs back while it listens
+- A row's hold and double tap each get a full second action at the bottom of Options: keys and shortcuts, clicks, typed text, MIDI, system functions, several outputs at once, and on a hold, pointer movement and scrolling
+- Macro steps can send keyboard shortcuts, a row can repeat a held key like a real keyboard, and a repeating macro waits between passes
+- Choose how long Scan waits, up to until canceled, and hear when it times out
+- Type a screen region's, stick zone's or touchpad zone's place and size, and a fixed click point's X and Y, instead of only dragging
+- Undo in the editor still steps back after Save and opening the editor again, and Previous versions lists a change the moment it is saved
+- Every stick row shows its deadzone, and Adjust live sets it while you watch the stick
+- Pointer speed and Scroll speed sliders on the preset page, Ramp-up on pointer rows, a D-pad that can take one direction at a time, and the pointer stops the moment you let go of the stick
+- Re-zeroing the gyro centers the pointer on the display it is on, and tilt aiming is steadier: turning the controller no longer reads as tilt, and a resting hand no longer twitches the pointer
+- Shortcuts in presets follow your keyboard layout, so Command A selects all on AZERTY, QWERTZ and Dvorak keyboards; Settings, Keyboard output can make typed keys follow it too, off by default since games read keys by position
+- Bind keys from gaming, ISO, and Japanese keyboards, mouse buttons up to 32, controller buttons up to 128, and a tilt wheel
+- MIDI Start, Continue, and Stop can be bound as inputs, and stick-driven MIDI CC reaches the full 0 to 127 range past the deadzone
+- Name every button the Xbox, PlayStation, Nintendo, Stadia, GameCube, or Steam Controller way for each preset, or North, South, East, and West in Settings
+- Pick the app's accent color in Settings, or any custom color
+- Higher contrast text in Settings brightens hints and status lines, and turns on with the Mac's Increase Contrast
+- A mouse side button can be kept from also going Back in a browser
+- Star your favorite presets and show only favorites in the sidebar and the menu bar
+- New built-in presets: Easy Browse for using the whole Mac from a controller, Easy Edit for a controller in one hand and a mouse in the other, and Auto Clicker, which clicks 5 to 20 times a second, on and off, while held, or a set number of times
+- Restore Built-in Presets in Settings puts back any built-in you deleted
+- Check Older Presets Again in Settings offers the update for presets made before 1.6 once more
+- Import a preset by opening it or dropping it on the Dock icon: the review shows every action, macro and pointer setting in full, actions that open apps or websites can be removed first, and the preset asks before its first start
+- Convert To makes a new preset beside the original
+- The Smart Preset Maker fills back paddles, gives 13 apps their Mac shortcuts instead of Windows ones, and opens Steam games through Steam
+- The built-in presets list rows on one stick or the D-pad in the same order on every install
+- The Access Controller preset follows Sony's base profile: the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight
+- Desktop Navigation: A clicks, and Select All moved to the right stick press
+- Built-in presets you never changed are updated: Minecraft's right stick click swaps hands, the PS5 FPS touchpad opens the map, MIDI: Knob Deck scrolls from a centered knob, MIDI: Transport Control no longer drops the volume to 0, and Motion Cursor scrolls the same way as the other pointer presets
+- In Trackpad & Mouse and Keyboard & Mouse Input, the side buttons send Command [ and ] and no longer also go Back on their own
+- The Xbox and 8BitDo FPS presets, Minecraft, and Racing Game use Menu for Escape and View for Tab
+- Keyboard Deck is retired: a copy you never changed moves to the Trash, and a copy you changed stays
+- Confine, recenter, and hide cursor pause while InputConfig, the Finder, System Settings, the Dock or a permission prompt is in front; when a preset lists apps they work only there, and a preset that launches an app keeps them in the game it starts, such as Minecraft from its launcher
+- New touchpad rows move the pointer as far up and down as they do side to side; rows made before 1.6 keep the speed they had
+- One-Stick Driving with Throttle axis is a trigger uses the whole travel of a gas pedal that reads -1 to 1
+- While the Mac sleeps or is locked no key is sent: at the lock screen only the pointer, clicks, and scrolling work
+- After a crash, InputConfig asks before starting your preset again, and starts it by itself after 20 seconds with no answer
+- Cancel in the editor asks before throwing away changes, and Empty Trash and deleting a folder ask first
+- VoiceOver names every field in the binding editor and the visualizers, and the keyboard focus ring is back
+- Text Size and Reduce Transparency reach every part of the app
+- The menu bar icon turns orange when a running preset needs Accessibility, and rows start working the moment it is granted
+- Statistics has a new look, and counts each controller's own time
+- Uses less CPU and energy while nothing is moving
+- Fixed the Switch Pro Controller and Joy-Con face buttons, where pressing A fired the rows meant for B; when one first connects, InputConfig offers to update rows recorded on it before
+- Fixed 8BitDo back buttons, which were read as a DualSense Edge's Fn buttons, and the Pro 2's back buttons and wired model over USB; rows recorded on them before are offered the same update
+- Fixed a gamepad that macOS GameController reads under a different name also being read directly, which doubled every press on a second slot
+- Fixed a plain row and a chord row on the same button both lighting in the editor: a row lights only when it would fire, its held controls included
+- Fixed keys and mouse buttons left held after a crash, a forced quit, or when two buttons share a key
+- Fixed quick presses on two buttons mixing their shortcuts, and double clicks not opening files
+- Fixed One-Stick Driving accelerating when the stick was pulled back; Invert throttle, the old workaround, is turned off
+- Fixed recording a shortcut that InputConfig already uses, and Settings now says which shortcut or app holds a chord
+- Fixed lifting or tilting a MacBook counting as a tap
+- Fixed the Steam Controller's buttons, stick click, and wireless connection
+- Fixed two identical controllers switching on and off together and sharing a motion zero, and controllers lost after a Bluetooth reconnect or a sleep
+- Fixed the pointer vanishing past a screen edge, and recenter and confine fighting the stick
+- Fixed chords firing the plain row on release, and gyro aim losing part of every turn
+- Fixed Launchpad, brightness, keyboard light, Eject, Lock Screen, and Mouse Wheel Step outputs
+- Fixed a damaged preset file freezing the app, and presets dropping rows made by a newer version
+- Restoring a backup on a new Mac no longer duplicates the built-in presets, and says what it restored
+- Fixed touchpad regions saving to the wrong preset, and Clear in Motion Calibration not sticking
+- Fixed several built-in presets and Smart Presets whose rows did not match their notes
+- Help is corrected throughout, and now covers gaming keypads, macro pads, pen tablets, switch interfaces, and Xbox Elite paddles
+
 ## 1.5
 
 - Tap the Mac is now enhanced with additional compatibility on more MacBooks
@@ -95,12 +182,12 @@
 - The volume fader only takes over once you actually move the control, so activating a preset never jumps the volume
 - New built-in preset MIDI: Knob Deck and a new welcome-screen demo showing MIDI devices driving the Mac
 - System Function outputs: volume, mute, media keys, brightness, Mission Control, Launchpad, Spotlight, lock screen, screenshot, Siri Shortcuts, and opening any app or URL
-- New built-in preset MIDI: Media Deck - pads and knobs running media keys, volume steps, and brightness
+- New built-in preset MIDI: Media Deck, with pads and knobs running media keys, volume steps, and brightness
 - A What's New popup after each update, so new features are never silently installed
 - The YapToText shoutout now lives at the bottom of the welcome screen with a one-click App Store link
 - An About button on the welcome screen opens the redesigned About page: the story behind the app, the changelog, source code, and support
 - An Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion
-- MIDI is now a full Live Visualizer template: a seven-octave velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log - switchable like any layout and automatic for MIDI presets
+- MIDI is now a full Live Visualizer template: a seven-octave velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log, switchable like any layout and automatic for MIDI presets
 - Five new welcome-screen cards: Siri Shortcuts, Keyboard & Mouse as Input, Hold & Double-Tap, Per-App Auto-Switch, and Cursor Regions, ordered by importance
 - The version number now shows in the menu bar popover
 

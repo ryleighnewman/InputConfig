@@ -43,6 +43,12 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
 
     private static let enabledPrefKey = "InputConfig.freezeWatchdog.enabled"
 
+    /// Match the stored setting after Reset or Restore changed it underneath.
+    func reloadFromDefaults() {
+        let stored = (UserDefaults.standard.object(forKey: Self.enabledPrefKey) as? Bool) ?? true
+        if stored != enabled { enabled = stored }
+    }
+
     /// Background queue runs the timer that does the actual heartbeat
     /// checks. Kept at utility QoS so it never competes with input
     /// processing or UI work. Also doubles as a serial-lock for the
@@ -53,8 +59,16 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
 
     /// Last time the main thread checked in. Read and written only from
     /// `queue`, so no explicit lock needed.
-    private var lastHeartbeat: TimeInterval = Date().timeIntervalSince1970
+    private var lastHeartbeat: TimeInterval = FreezeWatchdogService.uptime()
     private var lastReportedFreeze: TimeInterval = 0
+    private var lastTick: TimeInterval = 0
+
+    /// Seconds on a clock that stops while the Mac sleeps, so a nap is not
+    /// read as a frozen main thread. Wall time jumped by the whole sleep, and
+    /// a 15 to 90 s nap was reported as a freeze.
+    static func uptime() -> TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
 
     /// How often the watchdog pings.
     private let pingInterval: TimeInterval = 1.0
@@ -82,11 +96,12 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self else { return }
             guard self.timer == nil else { return }
-            self.lastHeartbeat = Date().timeIntervalSince1970
+            self.lastHeartbeat = Self.uptime()
 
             let t = DispatchSource.makeTimerSource(queue: self.queue)
+            // Leeway lets the system batch this wake with others.
             t.schedule(deadline: .now() + self.pingInterval,
-                       repeating: self.pingInterval)
+                       repeating: self.pingInterval, leeway: .milliseconds(250))
             t.setEventHandler { [weak self] in
                 self?.tick()
             }
@@ -110,8 +125,15 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
     private func tick() {
         // Already on `queue` because the DispatchSource was created with
         // queue=queue, so direct access is safe here.
-        let now = Date().timeIntervalSince1970
+        let now = Self.uptime()
         let stallSeconds = now - lastHeartbeat
+        // This tick itself came late (App Nap, a busy system): the gap says
+        // nothing about the main thread. Start the measure again.
+        defer { lastTick = now }
+        if lastTick > 0, now - lastTick > pingInterval * 3 {
+            lastHeartbeat = now
+            return
+        }
 
         // A stall far longer than any UI freeze worth reporting is almost
         // certainly the machine having been asleep (or the process suspended),
@@ -145,7 +167,7 @@ final class FreezeWatchdogService: ObservableObject, @unchecked Sendable {
         // actually frozen this block will queue up but never run until
         // the freeze ends - exactly the signal we want.
         DispatchQueue.main.async { [weak self] in
-            let stamp = Date().timeIntervalSince1970
+            let stamp = Self.uptime()
             self?.queue.async {
                 self?.lastHeartbeat = stamp
             }

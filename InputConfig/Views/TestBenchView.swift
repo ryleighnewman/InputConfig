@@ -17,12 +17,13 @@ struct TestBenchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $selectedTab) {
+            Picker("Test Bench section", selection: $selectedTab) {
                 ForEach(Tab.allCases, id: \.self) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
@@ -108,13 +109,13 @@ struct TestBenchView: View {
                     Text(result.category)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text("·").foregroundStyle(.tertiary)
+                    Text("·").foregroundStyle(.hint)
                     Text(result.name)
                         .font(.caption)
                 }
                 Text(result.detail)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -251,7 +252,7 @@ struct TestBenchView: View {
                 Text("Channel")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("", selection: $midiChannel) {
+                Picker("MIDI channel", selection: $midiChannel) {
                     ForEach(1...16, id: \.self) { c in Text("\(c)").tag(c) }
                 }
                 .labelsHidden()
@@ -260,7 +261,7 @@ struct TestBenchView: View {
                 Text("Note")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker("", selection: $midiNote) {
+                Picker("Note", selection: $midiNote) {
                     ForEach(0...127, id: \.self) { n in
                         Text("\(MIDIService.noteName(n)) (\(n))").tag(n)
                     }
@@ -289,6 +290,7 @@ struct TestBenchView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Slider(value: $midiCC, in: 0...127)
+                    .accessibilityLabel("CC 1 value")
                     .frame(maxWidth: 220)
                     .onChange(of: midiCC) { _, v in
                         MIDIService.shared.sendCC(controller: 1, value: Int(v), channel: midiChannel)
@@ -338,7 +340,7 @@ struct TestBenchView: View {
             }
             Text("Vibration requires a controller with Core Haptics support (DualSense, DualSense Edge, etc.) connected.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
         }
     }
 
@@ -353,16 +355,17 @@ struct TestBenchView: View {
                 lightButton("White", color: .white, r: 255, g: 255, b: 255)
                 lightButton("Off", color: .gray, r: 0, g: 0, b: 0)
             }
-            Text("Requires a DualSense or DualShock 4 controller on this Mac. InputConfig will briefly stop the system game controller agent to send the report.")
+            Text("Requires a DualSense or DualShock 4 connected to this Mac. The color is sent straight to the controller; macOS may repaint it a moment later unless a preset holds it.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
         }
     }
 
     @ViewBuilder
     private func lightButton(_ name: String, color: Color, r: UInt8, g: UInt8, b: UInt8) -> some View {
         Button {
-            HIDLightController.shared.setLightColor(red: r, green: g, blue: b)
+            // The same in-process writer presets use for the light bar.
+            InProcessLightWriter.shared.write(red: r, green: g, blue: b)
         } label: {
             HStack(spacing: 4) {
                 Circle().fill(color).frame(width: 10, height: 10)
@@ -389,8 +392,9 @@ final class TestBenchWindowController {
             return
         }
         let hosting = NSHostingController(rootView: TestBenchView()
-            .background(VisualEffectBackground().ignoresSafeArea())
-            .reduceMotionFriendly())
+            .windowBackdrop()
+            .reduceMotionFriendly()
+            .appAccessibility())
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "InputConfig Test Bench"
         newWindow.setContentSize(NSSize(width: 820, height: 600))

@@ -1,6 +1,7 @@
 import SwiftUI
 import simd
 import SceneKit
+import Metal
 import AppKit
 
 /// Shared 3D-tilt + attitude-horizon gyro visualization. Used by:
@@ -37,6 +38,11 @@ struct GyroVisualizationView: View {
     /// controller tilting is the whole point and everything else is noise.
     enum Mode { case compact, regular, large, model }
     var mode: Mode = .regular
+    /// Draws the 3D controller model as a picture rendered offscreen rather
+    /// than as a live SceneKit view. The Live Visualizer zooms its map as one
+    /// drawn picture to keep it sharp, and an AppKit view inside that is
+    /// shown as a "cannot draw" sign.
+    var modelAsImage: Bool = false
 
     /// Base size of the attitude ring. Other sub-views scale relative to
     /// this so changes here affect everything proportionally.
@@ -115,13 +121,20 @@ struct GyroVisualizationView: View {
             // mirrors how the physical controller is being held. Far more
             // convincing than a flat SF Symbol with a rotation effect on
             // top.
-            Controller3DSceneView(
-                pitchAngle: pitchAngle,
-                yawAngle: yawAngle,
-                rollAngle: rollAngle,
-                // Gyro rate magnitude above a small noise deadband = tilting.
-                isMoving: abs(gyroX) + abs(gyroY) + abs(gyroZ) > 0.03
-            )
+            Group {
+                if modelAsImage {
+                    Controller3DImage(pitchAngle: pitchAngle, yawAngle: yawAngle, rollAngle: rollAngle,
+                                      size: CGSize(width: silhouetteSize * 1.6, height: silhouetteSize * 1.2))
+                } else {
+                    Controller3DSceneView(
+                        pitchAngle: pitchAngle,
+                        yawAngle: yawAngle,
+                        rollAngle: rollAngle,
+                        // Gyro rate magnitude above a small noise deadband = tilting.
+                        isMoving: abs(gyroX) + abs(gyroY) + abs(gyroZ) > 0.03
+                    )
+                }
+            }
             .frame(width: silhouetteSize * 1.6, height: silhouetteSize * 1.2)
             .shadow(color: .teal.opacity(0.4), radius: 4)
 
@@ -136,7 +149,9 @@ struct GyroVisualizationView: View {
 
     /// Horizon shading: cyan sky on top, brown ground on bottom, with a
     /// thin horizon line. The whole composition rotates with roll and
-    /// shifts up/down with pitch.
+    /// shifts up/down with pitch. Sky and ground are a little translucent,
+    /// so the ball sits in the glass around it instead of reading as a
+    /// solid disc.
     private var attitudeHorizon: some View {
         // Pitch offset: pi/2 (90 deg) nose-up moves the horizon to the
         // bottom of the ring, pi/2 nose-down to the top. Clamp for safety.
@@ -146,8 +161,8 @@ struct GyroVisualizationView: View {
             // Sky.
             Rectangle()
                 .fill(LinearGradient(
-                    colors: [Color(red: 0.30, green: 0.55, blue: 0.85),
-                             Color(red: 0.20, green: 0.45, blue: 0.75)],
+                    colors: [Color(red: 0.30, green: 0.55, blue: 0.85).opacity(0.72),
+                             Color(red: 0.20, green: 0.45, blue: 0.75).opacity(0.72)],
                     startPoint: .top, endPoint: .bottom))
                 .frame(height: ringSize)
                 .offset(y: -ringSize / 2)
@@ -155,8 +170,8 @@ struct GyroVisualizationView: View {
             // Ground.
             Rectangle()
                 .fill(LinearGradient(
-                    colors: [Color(red: 0.55, green: 0.40, blue: 0.25),
-                             Color(red: 0.40, green: 0.28, blue: 0.18)],
+                    colors: [Color(red: 0.55, green: 0.40, blue: 0.25).opacity(0.72),
+                             Color(red: 0.40, green: 0.28, blue: 0.18).opacity(0.72)],
                     startPoint: .top, endPoint: .bottom))
                 .frame(height: ringSize)
                 .offset(y: ringSize / 2)
@@ -262,7 +277,7 @@ struct Controller3DSceneView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView()
-        view.scene = buildScene()
+        view.scene = Self.buildScene(fieldOfView: fieldOfView)
         view.backgroundColor = .clear
         view.allowsCameraControl = false
         view.autoenablesDefaultLighting = false
@@ -307,7 +322,7 @@ struct Controller3DSceneView: NSViewRepresentable {
     /// with a dark face plate, two sticks, the touchpad with its light bar,
     /// face buttons, D-pad, menu buttons, and the shoulders and triggers on
     /// the back edge. Low-poly enough to stay cheap at 30 fps.
-    private func buildScene() -> SCNScene {
+    static func buildScene(fieldOfView: CGFloat) -> SCNScene {
         let scene = SCNScene()
 
         let controller = SCNNode()
@@ -315,7 +330,7 @@ struct Controller3DSceneView: NSViewRepresentable {
 
         // The model is the app's own controller glyph, the artwork in the
         // menu bar and the sidebar, extruded into one smooth satin shape.
-        // Nothing is modelled on top of it: no sticks, no buttons. A
+        // Nothing is modeled on top of it: no sticks, no buttons. A
         // silhouette everyone in the app already knows, tilting in three
         // dimensions, says "this is the controller" more cleanly than a
         // built-up toy ever did.
@@ -426,15 +441,15 @@ M6285 14559 c-156 -8 -262 -18 -395 -39 -36 -5 -94 -14 -130 -19 -85 -13 -164 -28 
     static func bezier() -> NSBezierPath {
         let path = NSBezierPath()
         // SVG transforms in the file: scale(0.5), then translate(0, 2048)
-        // scale(0.1, -0.1). Then the view box (85 222 855 573) is centred
+        // scale(0.1, -0.1). Then the view box (85 222 855 573) is centered
         // and sized so the glyph is about two units wide, with Y flipped so
         // the path's +Y is the far edge once the shape is laid flat.
-        let centre = NSPoint(x: 85 + 855 / 2, y: 222 + 573 / 2)
+        let center = NSPoint(x: 85 + 855 / 2, y: 222 + 573 / 2)
         let k: CGFloat = 855 / 2.1
         func map(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
             let tx = 0.5 * (0.1 * x)
             let ty = 0.5 * (2048 - 0.1 * y)
-            return NSPoint(x: (tx - centre.x) / k, y: -(ty - centre.y) / k)
+            return NSPoint(x: (tx - center.x) / k, y: -(ty - center.y) / k)
         }
         let number = try! NSRegularExpression(pattern: "[MmCcZz]|-?\\d*\\.?\\d+")
         for d in data {
@@ -721,5 +736,58 @@ enum GlyphSolid {
             j = i
         }
         return inside
+    }
+}
+
+
+/// The 3D controller model as a picture: the same scene, rendered offscreen
+/// by SceneKit at three times its size so it stays sharp when the Live
+/// Visualizer zooms in. Rendered again only when the angles move.
+struct Controller3DImage: View {
+    let pitchAngle: Float
+    let yawAngle: Float
+    let rollAngle: Float
+    let size: CGSize
+
+    var body: some View {
+        if let image = Controller3DSnapshot.shared.image(pitch: pitchAngle, yaw: yawAngle, roll: rollAngle, size: size) {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size.width, height: size.height)
+        } else {
+            Color.clear.frame(width: size.width, height: size.height)
+        }
+    }
+}
+
+@MainActor
+final class Controller3DSnapshot {
+    static let shared = Controller3DSnapshot()
+    private let renderer: SCNRenderer
+    private let node: SCNNode?
+    private var last: (key: [Int], image: NSImage)?
+
+    private init() {
+        let scene = Controller3DSceneView.buildScene(fieldOfView: 27)
+        scene.background.contents = NSColor.clear
+        renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
+        renderer.scene = scene
+        renderer.autoenablesDefaultLighting = false
+        renderer.pointOfView = scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).first
+        node = scene.rootNode.childNode(withName: "controller", recursively: true)
+    }
+
+    func image(pitch: Float, yaw: Float, roll: Float, size: CGSize) -> NSImage? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        // A hundredth of a radian is below what the eye sees at this size.
+        let key = [Int(pitch * 100), Int(yaw * 100), Int(roll * 100), Int(size.width), Int(size.height)]
+        if let last, last.key == key { return last.image }
+        node?.eulerAngles = SCNVector3(CGFloat(pitch), CGFloat(-yaw), CGFloat(roll))
+        let pixels = CGSize(width: size.width * 3, height: size.height * 3)
+        let image = renderer.snapshot(atTime: 0, with: pixels, antialiasingMode: .multisampling4X)
+        image.size = size
+        last = (key, image)
+        return image
     }
 }

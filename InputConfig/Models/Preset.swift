@@ -17,9 +17,12 @@ struct RGBLightColor: Codable, Hashable {
     }
 
     init(floatR: Float, floatG: Float, floatB: Float) {
-        self.r = UInt8(max(0, min(255, Int(floatR * 255))))
-        self.g = UInt8(max(0, min(255, Int(floatG * 255))))
-        self.b = UInt8(max(0, min(255, Int(floatB * 255))))
+        // Rounded, not truncated: 0.4 * 255 = 101.99... truncated to 101,
+        // so every read-back-and-store cycle darkened the color one step.
+        func byte(_ v: Float) -> UInt8 { v.isFinite ? UInt8(max(0, min(255, (v * 255).rounded()))) : 0 }
+        self.r = byte(floatR)
+        self.g = byte(floatG)
+        self.b = byte(floatB)
     }
 }
 
@@ -76,14 +79,25 @@ struct MacroStep: Identifiable, Codable, Hashable {
     var delayMs: Int              // Delay BEFORE this step in milliseconds
     var holdMs: Int               // How long to hold (for press actions)
     var eventKind: MacroStepKind? // nil decodes as .tap, so old presets are unchanged
+    /// Modifier keys (HID codes: Control, Option, Shift, Command) held with a
+    /// key step, so one step can be a shortcut such as Command V. nil for a
+    /// plain key, and for every step saved before this existed.
+    var modifiers: [Int]?
 
     init(action: OutputAction, delayMs: Int = 50, holdMs: Int = 50,
-         eventKind: MacroStepKind? = nil) {
+         eventKind: MacroStepKind? = nil, modifiers: [Int]? = nil) {
         self.id = UUID()
         self.action = action
         self.delayMs = delayMs
         self.holdMs = holdMs
         self.eventKind = eventKind
+        self.modifiers = modifiers
+    }
+
+    /// What the step presses: its modifiers first, then its action.
+    var pressedActions: [OutputAction] {
+        guard action.type == .key, let modifiers, !modifiers.isEmpty else { return [action] }
+        return modifiers.map { OutputAction(type: .key, keyCode: $0) } + [action]
     }
 }
 
@@ -102,7 +116,8 @@ enum SpeechDestination: String, Codable, CaseIterable, Identifiable {
 
 /// A single input-to-output binding
 struct BindingModel: Identifiable, Codable, Hashable {
-    let id: UUID
+    /// A var only so `duplicated()` can copy every field and change this one.
+    fileprivate(set) var id: UUID
     var input: InputEvent
     var outputs: [OutputAction]
 
@@ -131,6 +146,12 @@ struct BindingModel: Identifiable, Codable, Hashable {
     // Variable sensitivity: scale output magnitude by axis depth (0 to 1).
     // When false, the configured speed/value is used at full magnitude after the deadzone.
     var variableSensitivity: Bool?
+
+    /// Ramp-up, in milliseconds: a stick row that moves the pointer starts at
+    /// a fraction of its speed and eases up to full speed over this long of
+    /// holding, so a short push makes a small, controllable move and only a
+    /// held push travels fast. nil or 0 is off (every preset before 1.6).
+    var rampMs: Int?
 
     // Feedback options
     var hapticEnabled: Bool?     // Vibrate the controller when this binding fires
@@ -182,6 +203,14 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// suppressed while the chord is satisfied, so the two do not both
     /// fire. nil (every existing preset) keeps the plain behavior.
     var modifierInput: InputEvent?
+    /// Mouse middle and side buttons only: while the preset runs, apps stop
+    /// seeing the button, so it does only what this row says (a side
+    /// button no longer also goes Back). nil = off.
+    var blockOriginal: Bool?
+    /// Key outputs held by this row repeat like a held key (see
+    /// InputSimulator). nil = off, as for every preset before 1.6; true
+    /// turns it on for this row.
+    var keyRepeat: Bool?
     /// Chords with more than one held control. A row can require up to three
     /// controls held together; `modifierInput` stays as the first of them so
     /// presets written before this field still load and still save readably.
@@ -218,6 +247,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
          sensitivityCurve: SensitivityCurve? = nil,
          repeatCount: Int? = nil, repeatDelayMs: Int? = nil,
          variableSensitivity: Bool? = nil,
+         rampMs: Int? = nil,
          hapticEnabled: Bool? = nil, hapticIntensity: Float? = nil,
          hapticDurationMs: Int? = nil,
          speechEnabled: Bool? = nil, speechText: String? = nil,
@@ -248,6 +278,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.repeatCount = repeatCount
         self.repeatDelayMs = repeatDelayMs
         self.variableSensitivity = variableSensitivity
+        self.rampMs = rampMs
         self.hapticEnabled = hapticEnabled
         self.hapticIntensity = hapticIntensity
         self.hapticDurationMs = hapticDurationMs
@@ -266,37 +297,14 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.section = section
     }
 
-    /// Full-fidelity copy with a fresh identity. The plain
-    /// `BindingModel(input:outputs:)` initializer zeroes every advanced
-    /// field (deadzone, curve, toggle, turbo, repeat, haptics, speech,
-    /// macro steps, note), which silently downgraded duplicated rows.
-    ///
-    /// `modifierInput` was itself missing from the initializer this calls, so
-    /// duplicating a chord row dropped its second button and the copy fired on
-    /// the plain button alone. Keep this list in sync with the stored
-    /// properties: anything absent here is silently lost on duplicate.
+    /// Full-fidelity copy with a fresh identity: the whole row, so a field
+    /// added later cannot be missed. The field-by-field version dropped
+    /// whatever its list lacked (the chord's second button once, then
+    /// Block original and key repeat in 1.6).
     func duplicated() -> BindingModel {
-        BindingModel(id: UUID(), input: input, outputs: outputs,
-                     deadzone: deadzone, outerDeadzone: outerDeadzone, invertAxis: invertAxis,
-                     toggleMode: toggleMode, turboEnabled: turboEnabled, turboRate: turboRate,
-                     turboIntervalMs: turboIntervalMs, turboJitterMs: turboJitterMs, turboMaxCount: turboMaxCount,
-                     sensitivityCurve: sensitivityCurve,
-                     repeatCount: repeatCount, repeatDelayMs: repeatDelayMs,
-                     variableSensitivity: variableSensitivity,
-                     hapticEnabled: hapticEnabled, hapticIntensity: hapticIntensity,
-                     hapticDurationMs: hapticDurationMs,
-                     speechEnabled: speechEnabled, speechText: speechText,
-                     speechDestination: speechDestination,
-                     macroSteps: macroSteps,
-                     macroInterruptOnRelease: macroInterruptOnRelease,
-                     holdOutputs: holdOutputs,
-                     holdThresholdMs: holdThresholdMs,
-                     doubleTapOutputs: doubleTapOutputs,
-                     doubleTapWindowMs: doubleTapWindowMs,
-                     modifierInput: modifierInput,
-                     extraModifierInputs: extraModifierInputs,
-                     note: note,
-                     section: section)
+        var copy = self
+        copy.id = UUID()
+        return copy
     }
 }
 
@@ -312,6 +320,52 @@ enum SlotInputKind: String, Codable, Hashable, CaseIterable {
     case mouse      // bound mouse buttons / axes
     case midi       // MIDI instrument: keys, knobs, wheels, event log
     case screen     // a display: screen regions the pointer enters
+}
+
+extension JoystickMapping {
+    /// What a group reads when that is not a game controller: the kind it
+    /// is set to, or on Automatic the Mac input every row comes from.
+    /// nil for a controller group. Headers and chips name this instead of
+    /// whichever pad happens to be plugged in.
+    var macInputName: String? {
+        switch inputKind {
+        case .keyboard: return "Keyboard"
+        case .mouse: return "Mouse"
+        case .screen: return "Screen"
+        case .midi: return "MIDI"
+        case .controller, .touchpad: return nil
+        case .auto: break
+        }
+        guard !bindings.isEmpty else { return nil }
+        var kinds: [String] = []
+        for b in bindings {
+            let kind: String
+            switch b.input.type {
+            case .extKey: kind = "Keyboard"
+            case .extMouse: kind = "Mouse"
+            case .cursorRegion: kind = "Screen"
+            case .midi: kind = "MIDI"
+            default: return nil
+            }
+            if !kinds.contains(kind) { kinds.append(kind) }
+        }
+        let ordered = ["Keyboard", "Mouse", "Screen", "MIDI"].filter(kinds.contains)
+        guard let first = ordered.first else { return nil }
+        if ordered.count == 1 { return first }
+        let rest = ordered.dropFirst().map { $0 == "MIDI" ? $0 : $0.lowercased() }
+        return rest.count == 1 ? "\(first) and \(rest[0])"
+            : "\(first), " + rest.dropLast().joined(separator: ", ") + " and \(rest.last!)"
+    }
+
+    /// The symbol for `macInputName`.
+    var macInputSymbol: String {
+        switch macInputName {
+        case "Mouse"?: return "computermouse"
+        case "Screen"?: return "display"
+        case "MIDI"?: return "pianokeys"
+        default: return "keyboard"
+        }
+    }
 }
 
 /// A joystick mapping group (one physical controller's bindings)
@@ -333,6 +387,25 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
     /// Live Visualizer can swap to the matching layout. Defaults to
     /// `.auto` so existing preset files decode unchanged.
     var inputKind: SlotInputKind = .auto
+    /// The device these rows were scanned from: vendor and product plus a
+    /// salted hash of its serial (see `GameControllerService.deviceFingerprint`).
+    /// Meaningful only on this Mac, so exports and shares leave it out.
+    /// Recorded when a row is scanned from this slot's controller; nil in
+    /// presets made before 1.6 and for slots never scanned. Informational
+    /// for now: rows still follow the slot number.
+    var deviceFingerprint: String?
+    /// The controller model this group is set up for (ControllerModelID raw
+    /// value), chosen in the Live Visualizer's Controller picker. The
+    /// visualizer draws it when no controller is connected. nil in presets
+    /// made before 1.6; an id a later build wrote is kept as it is.
+    var controllerModel: String?
+    /// Group fields this build has no key for (written by a newer version),
+    /// kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
+    /// Rows this build could not read (written by a newer version), kept
+    /// exactly as they were and written back after `bindings`, so saving
+    /// the preset here does not delete them.
+    var unreadableRows: [JSONValue] = []
 
     init(tag: String = "", bindings: [BindingModel] = [], isExpanded: Bool = true,
          customName: String? = nil, inputKind: SlotInputKind = .auto) {
@@ -344,55 +417,158 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         self.inputKind = inputKind
     }
 
-    enum CodingKeys: String, CodingKey {
-        case id, tag, bindings, isExpanded, customName, inputKind
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, tag, bindings, isExpanded, customName, inputKind, deviceFingerprint, controllerModel
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try c.decode(UUID.self, forKey: .id)
+        // A hand-written file may leave out the group id; give it a new one.
+        self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
         self.tag = try c.decodeIfPresent(String.self, forKey: .tag) ?? ""
         // Rows are decoded one at a time. A row this build cannot read,
         // typically an input or output type added by a newer version, is
         // dropped and counted rather than taking the whole preset with it.
         // Before, one unknown enum value anywhere in the file threw out of
         // the array decode and the preset silently vanished from the sidebar.
+        //
+        // An unreadable row is kept as raw JSON and written back, so a newer
+        // build's rows survive a save here. A value even that cannot hold
+        // (a number outside Double's range) stops the walk: a failed decode
+        // does not advance the container, so looping on it never ended and
+        // the file hung the app on every launch.
         var rows: [BindingModel] = []
+        var kept: [JSONValue] = []
         var dropped = 0
         if var list = try? c.nestedUnkeyedContainer(forKey: .bindings) {
             while !list.isAtEnd {
                 if let row = try? list.decode(BindingModel.self) {
                     rows.append(row)
+                } else if let raw = try? list.decode(JSONValue.self) {
+                    // A hand-written row may leave out its ids (Help invites
+                    // editing the files); given new ones it reads fine.
+                    if let minted = Self.mintingMissingIDs(raw),
+                       let data = try? JSONEncoder().encode(minted),
+                       let row = try? JSONDecoder().decode(BindingModel.self, from: data) {
+                        rows.append(row)
+                    } else {
+                        kept.append(raw)
+                    }
                 } else {
-                    _ = try? list.decode(AnyDecodable.self)   // skip the element
-                    dropped += 1
+                    dropped += max(1, (list.count ?? list.currentIndex + 1) - list.currentIndex)
+                    break
                 }
             }
         }
+        // A row pasted twice keeps one id; the engine keys every row's state
+        // by it, so the copy gets its own.
+        var seenIDs = Set<UUID>()
+        for i in rows.indices where !seenIDs.insert(rows[i].id).inserted {
+            rows[i].id = UUID()
+        }
         self.bindings = rows
+        self.unreadableRows = kept
+        if !kept.isEmpty { Self.keptRowsDuringDecode += kept.count }
         if dropped > 0 { Self.droppedRowsDuringDecode += dropped }
-        self.isExpanded = try c.decodeIfPresent(Bool.self, forKey: .isExpanded) ?? true
-        self.customName = try c.decodeIfPresent(String.self, forKey: .customName)
-        self.inputKind = try c.decodeIfPresent(SlotInputKind.self, forKey: .inputKind) ?? .auto
+        self.isExpanded = (try? c.decodeIfPresent(Bool.self, forKey: .isExpanded)) ?? true
+        self.customName = try? c.decodeIfPresent(String.self, forKey: .customName)
+        // try?: a slot kind added by a newer build must not make the preset unreadable.
+        self.inputKind = (try? c.decodeIfPresent(SlotInputKind.self, forKey: .inputKind)) ?? .auto
+        self.deviceFingerprint = try? c.decodeIfPresent(String.self, forKey: .deviceFingerprint)
+        self.controllerModel = try? c.decodeIfPresent(String.self, forKey: .controllerModel)
+        let known = Set(CodingKeys.allCases.map(\.stringValue))
+        if let all = try? decoder.container(keyedBy: AnyCodingKey.self) {
+            for key in all.allKeys where !known.contains(key.stringValue) {
+                if let value = try? all.decode(JSONValue.self, forKey: key) { extraFields[key.stringValue] = value }
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(tag, forKey: .tag)
+        var list = c.nestedUnkeyedContainer(forKey: .bindings)
+        for row in bindings { try list.encode(row) }
+        for raw in unreadableRows { try list.encode(raw) }
+        try c.encode(isExpanded, forKey: .isExpanded)
+        try c.encodeIfPresent(customName, forKey: .customName)
+        try c.encode(inputKind, forKey: .inputKind)
+        try c.encodeIfPresent(deviceFingerprint, forKey: .deviceFingerprint)
+        try c.encodeIfPresent(controllerModel, forKey: .controllerModel)
+        if !extraFields.isEmpty {
+            var extra = encoder.container(keyedBy: AnyCodingKey.self)
+            for (key, value) in extraFields { try extra.encode(value, forKey: AnyCodingKey(key)) }
+        }
     }
 
     /// Rows skipped by the last decode passes, for the store to report.
     /// Reset by whoever reads it.
     nonisolated(unsafe) static var droppedRowsDuringDecode = 0
+    /// Unreadable rows kept as raw JSON by the last decode passes.
+    nonisolated(unsafe) static var keptRowsDuringDecode = 0
 }
 
-/// Consumes any JSON value so an unreadable array element can be stepped
-/// over without knowing its shape.
-struct AnyDecodable: Decodable {
+/// Any JSON value, kept as it was read, so parts of a file this build
+/// cannot interpret are written back unchanged instead of deleted.
+extension JoystickMapping {
+    /// The row with an id added wherever the row, an output or a macro step
+    /// has none, or nil when nothing was missing.
+    static func mintingMissingIDs(_ row: JSONValue) -> JSONValue? {
+        guard case .object(var dict) = row else { return nil }
+        var changed = false
+        func withID(_ value: JSONValue) -> JSONValue {
+            guard case .object(var o) = value else { return value }
+            if o["id"] == nil { o["id"] = .string(UUID().uuidString); changed = true }
+            if let action = o["action"], case .object = action { o["action"] = withID(action) }
+            return .object(o)
+        }
+        if dict["id"] == nil { dict["id"] = .string(UUID().uuidString); changed = true }
+        for key in ["outputs", "holdOutputs", "doubleTapOutputs", "macroSteps"] {
+            if case .array(let list)? = dict[key] { dict[key] = .array(list.map(withID)) }
+        }
+        return changed ? .object(dict) : nil
+    }
+}
+
+enum JSONValue: Codable, Hashable, Sendable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if c.decodeNil() { return }
-        if (try? c.decode(Bool.self)) != nil { return }
-        if (try? c.decode(Double.self)) != nil { return }
-        if (try? c.decode(String.self)) != nil { return }
-        if (try? c.decode([AnyDecodable].self)) != nil { return }
-        _ = try c.decode([String: AnyDecodable].self)
+        if c.decodeNil() { self = .null }
+        else if let v = try? c.decode(Bool.self) { self = .bool(v) }
+        else if let v = try? c.decode(Double.self) { self = .number(v) }
+        else if let v = try? c.decode(String.self) { self = .string(v) }
+        else if let v = try? c.decode([JSONValue].self) { self = .array(v) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
     }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let v): try c.encode(v)
+        case .number(let v): try c.encode(v)
+        case .string(let v): try c.encode(v)
+        case .array(let v): try c.encode(v)
+        case .object(let v): try c.encode(v)
+        }
+    }
+}
+
+/// A coding key for field names not known at compile time.
+struct AnyCodingKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init(_ string: String) { stringValue = string }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
 }
 
 /// Per-preset automation: side effects that fire on preset activation
@@ -410,12 +586,12 @@ struct PresetAutomation: Codable, Hashable {
     var launchURL: String = ""
 
     /// Confine the cursor away from screen edges while this preset
-    /// runs. Same behaviour as the global CursorGuard toggle, just
+    /// runs. Same behavior as the global CursorGuard toggle, just
     /// preset-scoped.
     var confineCursor: Bool = false
     var confineBufferPx: Double = 24
 
-    /// Periodically warp the cursor back to the centre of its screen.
+    /// Periodically warp the cursor back to the center of its screen.
     var autoRecenterCursor: Bool = false
     var autoRecenterIntervalMs: Double = 500
 
@@ -426,11 +602,24 @@ struct PresetAutomation: Codable, Hashable {
     /// preset fires (independent of macOS pointer-speed slider).
     var sensitivityMultiplier: Double = 1.0
 
+    /// The same for scrolling: multiplies every stick, dial and touchpad
+    /// scroll the preset makes. Set from the preset's own page, next to the
+    /// pointer speed, so no row has to be opened to change either.
+    var scrollMultiplier: Double = 1.0
+
     /// Bundle identifiers of apps that automatically activate this preset
     /// when one of them comes to the front (gated by the global toggle in
     /// Settings). Optional, not defaulted, so preset files saved before
     /// this field existed decode unchanged.
     var autoActivateBundleIDs: [String]?
+
+    /// The D-pad counts one direction at a time: the direction pressed first
+    /// keeps the pad until it is let go, and a diagonal that is pressed
+    /// straight away waits until it settles on one side. A quick press on
+    /// many pads grazes the neighboring direction, which fired two rows at
+    /// once (Copy and Cut, a page and a tab). Optional so older files and
+    /// presets that never set it are unchanged; nil is off.
+    var dpadOneDirection: Bool?
 }
 
 extension PresetAutomation {
@@ -438,6 +627,8 @@ extension PresetAutomation {
         case launchAppPath, launchURL, confineCursor, confineBufferPx
         case autoRecenterCursor, autoRecenterIntervalMs, hideCursorWhileActive
         case sensitivityMultiplier, autoActivateBundleIDs
+        case scrollMultiplier
+        case dpadOneDirection
     }
 
     /// Lenient decode: each field falls back to its default when missing.
@@ -457,7 +648,9 @@ extension PresetAutomation {
         a.autoRecenterIntervalMs = try c.decodeIfPresent(Double.self, forKey: .autoRecenterIntervalMs) ?? a.autoRecenterIntervalMs
         a.hideCursorWhileActive = try c.decodeIfPresent(Bool.self, forKey: .hideCursorWhileActive) ?? a.hideCursorWhileActive
         a.sensitivityMultiplier = try c.decodeIfPresent(Double.self, forKey: .sensitivityMultiplier) ?? a.sensitivityMultiplier
+        a.scrollMultiplier = try c.decodeIfPresent(Double.self, forKey: .scrollMultiplier) ?? a.scrollMultiplier
         a.autoActivateBundleIDs = try c.decodeIfPresent([String].self, forKey: .autoActivateBundleIDs) ?? a.autoActivateBundleIDs
+        a.dpadOneDirection = try c.decodeIfPresent(Bool.self, forKey: .dpadOneDirection)
         self = a
     }
 }
@@ -561,7 +754,8 @@ extension DriveConfig {
         d.invertSteer = try c.decodeIfPresent(Bool.self, forKey: .invertSteer) ?? d.invertSteer
         d.invertThrottle = try c.decodeIfPresent(Bool.self, forKey: .invertThrottle) ?? d.invertThrottle
         d.deadzone = try c.decodeIfPresent(Double.self, forKey: .deadzone) ?? d.deadzone
-        d.steerMode = try c.decodeIfPresent(SteerMode.self, forKey: .steerMode) ?? d.steerMode
+        // try?: a steering mode added by a newer build falls back to the default.
+        d.steerMode = ((try? c.decodeIfPresent(SteerMode.self, forKey: .steerMode)) ?? nil) ?? d.steerMode
         d.steerMouseSpeed = try c.decodeIfPresent(Double.self, forKey: .steerMouseSpeed) ?? d.steerMouseSpeed
         d.steerLeftKey = try c.decodeIfPresent(Int.self, forKey: .steerLeftKey) ?? d.steerLeftKey
         d.steerRightKey = try c.decodeIfPresent(Int.self, forKey: .steerRightKey) ?? d.steerRightKey
@@ -610,6 +804,9 @@ struct Preset: Identifiable, Codable, Hashable {
     var stickRegions: [String: [TouchpadRegion]] = [:]
     /// Written with every save; see `currentFormatVersion`.
     var formatVersion: Int = Preset.currentFormatVersion
+    /// The version the file it was read from said, for telling a file
+    /// written before 1.6 on import. Not saved.
+    var writtenByFormatVersion: Int = Preset.currentFormatVersion
     /// Explicit position among its siblings (same folder, or ungrouped).
     ///
     /// `nil` means "this file predates manual ordering". Those presets fall
@@ -629,6 +826,16 @@ struct Preset: Identifiable, Codable, Hashable {
     /// Brightness override applied alongside `lightBarColor` (0 = off,
     /// 1 = dim, 2 = bright). nil = inherit the slot's current brightness.
     var lightBarBrightness: Int?
+    /// Rainbow (the RGB cycle) on the light bar while the preset runs, in
+    /// place of `lightBarColor`. nil or false: no rainbow. Optional so
+    /// older files decode unchanged.
+    var lightBarRainbow: Bool?
+    /// How fast that rainbow cycles: 1 is one full loop every 3 seconds,
+    /// the same scale as the controller menu's speed slider
+    /// (`lightBarRainbowSpeedRange`). nil is 1.
+    var lightBarRainbowSpeed: Double?
+    /// The speed slider's range, which a file's value is held to.
+    static let lightBarRainbowSpeedRange: ClosedRange<Double> = 0.25...6.0
 
     /// Per-preset automation: cursor confine + recenter, hide cursor,
     /// auto-open an application on activate. Lives on the preset (not
@@ -638,10 +845,27 @@ struct Preset: Identifiable, Codable, Hashable {
     /// decode cleanly with defaults.
     var automation: PresetAutomation = PresetAutomation()
 
+    /// The controller family this preset is made for (Xbox, PlayStation,
+    /// Nintendo). Its face and menu buttons are named and drawn that way in
+    /// the Live Visualizer and the editor, whatever pad is connected. nil
+    /// (or Automatic) follows the connected controller and Settings.
+    /// Optional, so older preset files decode unchanged.
+    var buttonFamily: FaceLetters?
+    /// The family in place before the Live Visualizer's Controller menu
+    /// first set one, so Automatic can put it back: nil when nothing is
+    /// held, "" for none, else the family's raw value.
+    var familyBeforeModel: String?
+
     /// One-stick driving scheme for this preset. nil / disabled for the
     /// vast majority of presets; opt-in per game. Optional so older preset
     /// files decode cleanly.
     var driveConfig: DriveConfig?
+
+    /// Top-level fields and joystick groups this build could not read
+    /// (written by a newer version), kept as they were and written back on
+    /// save so a round trip through this build does not delete them.
+    var extraFields: [String: JSONValue] = [:]
+    var unreadableJoysticks: [JSONValue] = []
 
     init(name: String = "New Preset", tag: String = "No tag", joysticks: [JoystickMapping] = [],
          filename: String = "", isActive: Bool = false, groupID: UUID? = nil) {
@@ -656,7 +880,7 @@ struct Preset: Identifiable, Codable, Hashable {
         self.groupID = groupID
     }
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, tag, joysticks, filename, isActive, createdAt, modifiedAt
         case groupID, notes, lightBarColor, lightBarBrightness, automation, driveConfig
         case sortOrder
@@ -667,12 +891,18 @@ struct Preset: Identifiable, Codable, Hashable {
         // nothing, because it never reached disk.
         case activateHotKey
         case formatVersion
+        case buttonFamily
+        case familyBeforeModel
+        case lightBarRainbow, lightBarRainbowSpeed
     }
 
     /// The on-disk format this file was written in. Absent means 1. Read
     /// so a later change of meaning has somewhere to branch, and so a much
-    /// newer file can be recognised instead of misread.
-    static let currentFormatVersion = 1
+    /// newer file can be recognized instead of misread.
+    /// 2 from 1.6: a file with less was written before 1.6, so an import
+    /// gets the 1.6 upgrades and the Switch and 8BitDo row check. 1.5
+    /// reads a newer version as far as it understands it.
+    static let currentFormatVersion = 2
 
     /// Custom Codable init so older preset files without `notes`,
     /// `lightBarColor`, or `lightBarBrightness` keys still decode cleanly
@@ -684,29 +914,130 @@ struct Preset: Identifiable, Codable, Hashable {
         // Only the id and the name are genuinely required. Everything else
         // has a sensible default, so a hand-edited file or one written by a
         // build that stopped emitting a field still loads.
-        self.tag = try c.decodeIfPresent(String.self, forKey: .tag) ?? ""
-        self.joysticks = try c.decodeIfPresent([JoystickMapping].self, forKey: .joysticks) ?? []
+        self.tag = (try? c.decodeIfPresent(String.self, forKey: .tag)) ?? ""
+        // One group at a time: a group this build cannot read is kept raw
+        // instead of making the whole preset unreadable.
+        var groups: [JoystickMapping] = []
+        var rawGroups: [JSONValue] = []
+        if var list = try? c.nestedUnkeyedContainer(forKey: .joysticks) {
+            while !list.isAtEnd {
+                if let group = try? list.decode(JoystickMapping.self) {
+                    groups.append(group)
+                } else if let raw = try? list.decode(JSONValue.self) {
+                    rawGroups.append(raw)
+                } else {
+                    break
+                }
+            }
+        }
+        // Row ids are unique across the whole preset too: the engine keys
+        // per-row state by id alone, so a slot copied by hand shared its
+        // toggles and held keys with the slot it came from.
+        var seenRowIDs = Set<UUID>()
+        for g in groups.indices {
+            for r in groups[g].bindings.indices where !seenRowIDs.insert(groups[g].bindings[r].id).inserted {
+                groups[g].bindings[r].id = UUID()
+            }
+        }
+        self.joysticks = groups
+        self.unreadableJoysticks = rawGroups
         self.filename = try c.decodeIfPresent(String.self, forKey: .filename) ?? "\(id.uuidString).json"
         self.isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
-        self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
-        self.modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
-        let version = try c.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
-        self.formatVersion = Self.currentFormatVersion
+        // Dates are metadata and never block a load: a file written by
+        // another tool (or edited by hand) may carry ISO 8601 strings, which
+        // failed the whole import as "doesn't match the preset schema".
+        func date(_ key: CodingKeys) -> Date? {
+            if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+            guard let text = try? c.decodeIfPresent(String.self, forKey: key) else { return nil }
+            let iso = ISO8601DateFormatter()
+            if let d = iso.date(from: text) { return d }
+            iso.formatOptions.insert(.withFractionalSeconds)
+            return iso.date(from: text)
+        }
+        self.createdAt = date(.createdAt) ?? Date()
+        self.modifiedAt = date(.modifiedAt) ?? createdAt
+        let version = (try? c.decodeIfPresent(Int.self, forKey: .formatVersion)) ?? 1
+        // A newer file keeps its version: what this build does not
+        // understand is written back unchanged (see extraFields), so the
+        // newer build still recognizes its own file.
+        self.formatVersion = max(version, Self.currentFormatVersion)
+        self.writtenByFormatVersion = version
         if version > Self.currentFormatVersion {
             NSLog("Preset \(name): written by a newer format (\(version)); reading what this build understands")
         }
         self.groupID = try c.decodeIfPresent(UUID.self, forKey: .groupID)
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
-        self.lightBarColor = try c.decodeIfPresent(RGBLightColor.self, forKey: .lightBarColor)
-        self.lightBarBrightness = try c.decodeIfPresent(Int.self, forKey: .lightBarBrightness)
-        self.automation = try c.decodeIfPresent(PresetAutomation.self, forKey: .automation)
+        // Optional parts decode leniently: one field a newer build shaped
+        // differently must not make the whole preset unreadable.
+        self.lightBarColor = (try? c.decodeIfPresent(RGBLightColor.self, forKey: .lightBarColor)) ?? nil
+        self.lightBarBrightness = (try? c.decodeIfPresent(Int.self, forKey: .lightBarBrightness)) ?? nil
+        self.lightBarRainbow = (try? c.decodeIfPresent(Bool.self, forKey: .lightBarRainbow)) ?? nil
+        self.lightBarRainbowSpeed = (try? c.decodeIfPresent(Double.self, forKey: .lightBarRainbowSpeed)) ?? nil
+        self.automation = ((try? c.decodeIfPresent(PresetAutomation.self, forKey: .automation)) ?? nil)
             ?? PresetAutomation()
-        self.driveConfig = try c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)
-        self.activateHotKey = try c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)
-        self.sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        self.driveConfig = (try? c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)) ?? nil
+        self.activateHotKey = (try? c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)) ?? nil
+        self.sortOrder = (try? c.decodeIfPresent(Int.self, forKey: .sortOrder)) ?? nil
         self.touchpadRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .touchpadRegions) ?? []
         self.cursorRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .cursorRegions) ?? []
         self.stickRegions = try c.decodeIfPresent([String: [TouchpadRegion]].self, forKey: .stickRegions) ?? [:]
+        // try?: a family written by a newer build must not stop the preset loading.
+        self.buttonFamily = (try? c.decodeIfPresent(FaceLetters.self, forKey: .buttonFamily)) ?? nil
+        // Kept as written, so saving here does not drop it; a family picked
+        // in this build replaces it (see encode).
+        if buttonFamily == nil, let raw = try? c.decodeIfPresent(JSONValue.self, forKey: .buttonFamily) {
+            extraFields[CodingKeys.buttonFamily.stringValue] = raw
+        }
+        self.familyBeforeModel = (try? c.decodeIfPresent(String.self, forKey: .familyBeforeModel)) ?? nil
+
+        // Keep any field this build has no key for.
+        let known = Set(CodingKeys.allCases.map(\.stringValue))
+        if let all = try? decoder.container(keyedBy: AnyCodingKey.self) {
+            for key in all.allKeys where !known.contains(key.stringValue) {
+                if let value = try? all.decode(JSONValue.self, forKey: key) {
+                    extraFields[key.stringValue] = value
+                }
+            }
+        }        // A hostile or damaged file cannot carry a value that traps later
+        // (a negative controller slot, an infinite deadzone, a huge number).
+        clampInPlace()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(tag, forKey: .tag)
+        var list = c.nestedUnkeyedContainer(forKey: .joysticks)
+        for group in joysticks { try list.encode(group) }
+        for raw in unreadableJoysticks { try list.encode(raw) }
+        try c.encode(filename, forKey: .filename)
+        try c.encode(isActive, forKey: .isActive)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(modifiedAt, forKey: .modifiedAt)
+        try c.encodeIfPresent(groupID, forKey: .groupID)
+        try c.encode(notes, forKey: .notes)
+        try c.encodeIfPresent(lightBarColor, forKey: .lightBarColor)
+        try c.encodeIfPresent(lightBarBrightness, forKey: .lightBarBrightness)
+        try c.encodeIfPresent(lightBarRainbow, forKey: .lightBarRainbow)
+        try c.encodeIfPresent(lightBarRainbowSpeed, forKey: .lightBarRainbowSpeed)
+        try c.encode(automation, forKey: .automation)
+        try c.encodeIfPresent(driveConfig, forKey: .driveConfig)
+        try c.encodeIfPresent(sortOrder, forKey: .sortOrder)
+        try c.encode(touchpadRegions, forKey: .touchpadRegions)
+        try c.encode(cursorRegions, forKey: .cursorRegions)
+        try c.encode(stickRegions, forKey: .stickRegions)
+        try c.encodeIfPresent(activateHotKey, forKey: .activateHotKey)
+        try c.encode(formatVersion, forKey: .formatVersion)
+        try c.encodeIfPresent(buttonFamily, forKey: .buttonFamily)
+        try c.encodeIfPresent(familyBeforeModel, forKey: .familyBeforeModel)
+        if !extraFields.isEmpty {
+            var extra = encoder.container(keyedBy: AnyCodingKey.self)
+            for (key, value) in extraFields
+            where !(key == CodingKeys.buttonFamily.stringValue && buttonFamily != nil) {
+                try extra.encode(value, forKey: AnyCodingKey(key))
+            }
+        }
     }
 
     // MARK: - Regions and the services
@@ -783,12 +1114,43 @@ struct Preset: Identifiable, Codable, Hashable {
 
     mutating func sortBindings() {
         for i in joysticks.indices {
+            // Within each section, sections kept in their order.
+            var sectionRank: [String: Int] = [:]
+            for row in joysticks[i].bindings where sectionRank[row.section ?? ""] == nil {
+                sectionRank[row.section ?? ""] = sectionRank.count
+            }
             joysticks[i].bindings.sort { a, b in
+                let sa = sectionRank[a.section ?? ""] ?? 0, sb = sectionRank[b.section ?? ""] ?? 0
+                if sa != sb { return sa < sb }
                 let aType = Self.sortOrder(for: a.input.type)
                 let bType = Self.sortOrder(for: b.input.type)
                 if aType != bType { return aType < bType }
-                return a.input.index < b.input.index
+                if a.input.index != b.input.index { return a.input.index < b.input.index }
+                return Self.directionRank(a.input) < Self.directionRank(b.input)
             }
+        }
+    }
+
+    /// The order of rows on one input that differ only by direction: an
+    /// axis minus before plus, the D-pad up, down, left, right, touch by
+    /// finger then axis. Without it they kept whatever order they came in,
+    /// which for the built-ins was a dictionary's, different on every launch.
+    static func directionRank(_ e: InputEvent) -> Int {
+        let dir = e.axisDirection == .negative ? 0 : (e.axisDirection == .positive ? 1 : 2)
+        switch e.type {
+        case .hat:
+            switch e.hatDirection {
+            case .up?: return 0
+            case .down?: return 1
+            case .left?: return 2
+            case .right?: return 3
+            case nil: return 4
+            }
+        case .touchpad:
+            // Clamped: a hostile file's huge finger number must not overflow.
+            return min(max(e.touchpadFinger ?? 0, 0), 9) * 6 + (e.touchpadAxis == .y ? 3 : 0) + dir
+        default:
+            return dir
         }
     }
 
@@ -813,12 +1175,275 @@ struct Preset: Identifiable, Codable, Hashable {
     }
 }
 
+extension Preset {
+    /// The same preset under a fresh id and file name, every field kept.
+    /// `id` is immutable, so the id is swapped through a Codable round trip.
+    func withNewIdentity() -> Preset {
+        var copy = self
+        copy.filename = Preset.generateFilename()
+        copy.isActive = false
+        if let data = try? JSONEncoder().encode(copy),
+           var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            dict["id"] = UUID().uuidString
+            if let patched = try? JSONSerialization.data(withJSONObject: dict),
+               let fresh = try? JSONDecoder().decode(Preset.self, from: patched) {
+                return fresh
+            }
+        }
+        return Preset(name: copy.name, tag: copy.tag, joysticks: copy.joysticks,
+                      filename: copy.filename, isActive: false, groupID: copy.groupID)
+    }
+}
+
+// MARK: - Import safety
+
+extension OutputAction {
+    /// Opens an app, a URL, or a Shortcut, or types text: things a shared
+    /// preset should not do on a first press without the user having seen
+    /// them. Spotlight and Launchpad count too, since a macro of Spotlight
+    /// and a few keys opens any app.
+    var opensSomething: Bool {
+        if type == .typeText { return true }
+        // A light bar color (and everything else outside System Functions)
+        // opens nothing.
+        guard type == .systemAction, let kind = systemActionKind else { return false }
+        return kind == .runShortcut || kind == .openApp || kind == .openURL
+            || kind == .spotlight || kind == .launchpad
+    }
+
+    /// Worth listing when a preset is imported: anything that opens
+    /// something, and Type Text.
+    var isAutomationAction: Bool { opensSomething || type == .typeText }
+
+    /// Lock Screen and switching presets: listed on import, not removed.
+    var isNotableOnImport: Bool {
+        (type == .systemAction && systemActionKind == .lockScreen) || type == .appAction
+    }
+
+    /// One line for the import review, every character of it: a newline
+    /// shows as a return mark, and a website shows its host first, since
+    /// "https://good.example...@evil.invalid" names its real host last.
+    var importReviewLine: String {
+        let detail = (text ?? "").replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: " \u{21B5} ")
+            .trimmingCharacters(in: .whitespaces)
+        switch type {
+        case .typeText:
+            return detail.isEmpty ? "Types text" : "Types text: \(detail)"
+        case .systemAction where systemActionKind == .openURL:
+            let host = URL(string: (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))?.host ?? "no host"
+            return "Opens website on \(host): \(detail)"
+        default:
+            let what = type == .systemAction ? (systemActionKind?.displayName ?? "Action") : displayName
+            return detail.isEmpty ? what : "\(what): \(detail)"
+        }
+    }
+}
+
+/// Command and Space, the Spotlight chord, in a row's outputs or a macro:
+/// Spotlight and a few typed keys open any app, so it counts as an opener.
+enum SpotlightChord {
+    static let command: Set<Int> = [227, 231]
+    static let space = 44
+    static func inOutputs(_ outputs: [OutputAction]) -> Bool {
+        let keys = Set(outputs.filter { $0.type == .key }.compactMap(\.keyCode))
+        return keys.contains(space) && !keys.isDisjoint(with: command)
+    }
+    static func inMacro(_ steps: [MacroStep]) -> Bool {
+        let commandStep = steps.contains { $0.action.type == .key && command.contains($0.action.keyCode ?? -1) }
+        return steps.contains { step in
+            step.action.type == .key && step.action.keyCode == space
+                && (commandStep || !Set(step.modifiers ?? []).isDisjoint(with: command))
+        }
+    }
+}
+
+extension Preset {
+    /// Every output in the preset: row outputs, hold and double-tap
+    /// outputs, and macro steps.
+    var allOutputs: [OutputAction] {
+        var out: [OutputAction] = []
+        for group in joysticks {
+            for row in group.bindings {
+                out += row.outputs
+                out += row.holdOutputs ?? []
+                out += row.doubleTapOutputs ?? []
+                for step in row.macroSteps ?? [] { out.append(step.action) }
+            }
+        }
+        return out
+    }
+
+    /// Whether running this preset needs the Accessibility permission: any
+    /// output that posts a key, click, pointer move, scroll, or typed text
+    /// (row, hold, double-tap, and macro outputs alike, and the system
+    /// actions that work by posting a key), any Mac keyboard or mouse
+    /// input, which is read through the same permission, and drive mode.
+    var needsAccessibility: Bool {
+        let quiet: Set<SystemActionKind> = [.openApp, .openURL, .runShortcut, .volumeUp, .volumeDown,
+                                            .missionControl, .launchpad]
+        let postsEvents = allOutputs.contains { output in
+            switch output.type {
+            case .key, .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep, .typeText:
+                return true
+            case .systemAction:
+                return !(output.systemActionKind.map(quiet.contains) ?? true)
+            case .lightBar:
+                // Writes to the controller, posts no event.
+                return false
+            default:
+                return false
+            }
+        }
+        if postsEvents || driveConfig?.enabled == true { return true }
+        return joysticks.contains { group in
+            group.bindings.contains { row in
+                ([row.input] + row.modifiers).contains { $0.type == .extKey || $0.type == .extMouse }
+            }
+        }
+    }
+
+    /// Outputs an import review should show the user.
+    var automationOutputs: [OutputAction] { allOutputs.filter(\.isAutomationAction) }
+
+    /// Longest Type Text an import keeps.
+    static let importTextLimit = 10_000
+
+    /// Whether any row sends the Spotlight chord (row outputs or a macro).
+    var hasSpotlightChord: Bool {
+        joysticks.contains { g in
+            g.bindings.contains { r in
+                SpotlightChord.inOutputs(r.outputs) || SpotlightChord.inOutputs(r.holdOutputs ?? [])
+                    || SpotlightChord.inOutputs(r.doubleTapOutputs ?? []) || SpotlightChord.inMacro(r.macroSteps ?? [])
+            }
+        }
+    }
+
+    /// Every macro, for the import review: its input and each step.
+    var importMacroLines: [String] {
+        joysticks.flatMap { g in
+            g.bindings.compactMap { r -> String? in
+                guard let steps = r.macroSteps, !steps.isEmpty else { return nil }
+                let list = steps.map { step -> String in
+                    let mods = (step.modifiers ?? []).map { KeyCodeMap.name(for: $0) }
+                    let name = step.action.type == .typeText || step.action.type == .systemAction
+                        ? step.action.importReviewLine : step.action.displayName
+                    return (mods + [name]).joined(separator: " ")
+                }
+                return "Macro on \(r.input.displayName), \(steps.count) steps: " + list.joined(separator: ", ")
+            }
+        }
+    }
+
+    /// What the preset does to the pointer and drive mode, for the review.
+    var importPointerLine: String? {
+        var parts: [String] = []
+        if automation.hideCursorWhileActive { parts.append("hides the pointer") }
+        if automation.confineCursor { parts.append("keeps the pointer away from the screen edges") }
+        if automation.autoRecenterCursor {
+            parts.append("moves the pointer to the middle of the screen every \(Int(automation.autoRecenterIntervalMs)) ms")
+        }
+        if automation.sensitivityMultiplier != 1 { parts.append(String(format: "sets pointer speed to %.2fx", automation.sensitivityMultiplier)) }
+        if automation.scrollMultiplier != 1 { parts.append(String(format: "sets scroll speed to %.2fx", automation.scrollMultiplier)) }
+        if driveConfig?.enabled == true { parts.append("turns on drive mode, which holds keys from a stick") }
+        guard !parts.isEmpty else { return nil }
+        return "While running it " + parts.joined(separator: ", ") + "."
+    }
+
+    /// A preset from a file, made safe to add to the library: never marked
+    /// running, no auto-launch app or URL, no automatic switching when an
+    /// app comes to the front, no place in the sidebar order yet, and,
+    /// when asked, without outputs that open apps, URLs, or Shortcuts.
+    /// The preset's own hotkey is checked against the library by the store.
+    func sanitizedForImport(removingOpeners: Bool, removingPointerSettings: Bool = false) -> Preset {
+        var p = self
+        // Typed text has no use past a few pages, and posting a huge one
+        // held the main thread.
+        for g in p.joysticks.indices {
+            for r in p.joysticks[g].bindings.indices {
+                func capped(_ o: OutputAction) -> OutputAction {
+                    guard o.type == .typeText, let t = o.text, t.count > Self.importTextLimit else { return o }
+                    var c = o
+                    c.text = String(t.prefix(Self.importTextLimit))
+                    return c
+                }
+                var row = p.joysticks[g].bindings[r]
+                row.outputs = row.outputs.map(capped)
+                row.holdOutputs = row.holdOutputs?.map(capped)
+                row.doubleTapOutputs = row.doubleTapOutputs?.map(capped)
+                row.macroSteps = row.macroSteps?.map { var s = $0; s.action = capped(s.action); return s }
+                p.joysticks[g].bindings[r] = row
+            }
+        }
+        if removingPointerSettings {
+            // Hide, confine and recenter the pointer, its speed, and drive
+            // mode act on the whole Mac as soon as the preset starts.
+            p.automation.confineCursor = false
+            p.automation.autoRecenterCursor = false
+            p.automation.hideCursorWhileActive = false
+            p.automation.sensitivityMultiplier = 1
+            p.automation.scrollMultiplier = 1
+            p.driveConfig?.enabled = false
+        }
+        p.isActive = false
+        p.sortOrder = nil
+        // The light bar's rainbow is the preset's look, like its color, and
+        // comes along; its speed is held to the slider's range.
+        p.lightBarRainbowSpeed = Self.clampedRainbowSpeed(p.lightBarRainbowSpeed)
+        p.automation.launchAppPath = ""
+        p.automation.launchURL = ""
+        p.automation.autoActivateBundleIDs = nil
+        // Nor the sharer's own system-wide shortcut: registered here unseen,
+        // it took that chord from every app (a Command V one stopped paste).
+        p.activateHotKey = nil
+        // Device fingerprints only mean something on the Mac that made them.
+        for g in p.joysticks.indices { p.joysticks[g].deviceFingerprint = nil }
+        // Rows, groups and fields this build cannot read are not carried
+        // in: they could hold an app or website opener that the review
+        // below cannot show or remove, and a later build would run it.
+        for g in p.joysticks.indices {
+            p.joysticks[g].unreadableRows = []
+            p.joysticks[g].extraFields = [:]
+        }
+        p.unreadableJoysticks = []
+        p.extraFields = [:]
+        if removingOpeners {
+            for g in p.joysticks.indices {
+                for r in p.joysticks[g].bindings.indices {
+                    var row = p.joysticks[g].bindings[r]
+                    // The Spotlight chord goes with them: its Space key.
+                    func noSpotlight(_ list: [OutputAction]) -> [OutputAction] {
+                        SpotlightChord.inOutputs(list) ? list.filter { !($0.type == .key && $0.keyCode == SpotlightChord.space) } : list
+                    }
+                    row.outputs = noSpotlight(row.outputs.filter { !$0.opensSomething })
+                    row.holdOutputs = row.holdOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
+                    row.doubleTapOutputs = row.doubleTapOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
+                    row.macroSteps?.removeAll(where: { $0.action.opensSomething })
+                    // A macro that opens Spotlight and types goes whole.
+                    if let steps = row.macroSteps, SpotlightChord.inMacro(steps) { row.macroSteps = nil }
+                    // No steps left is no macro: an empty list pressed the
+                    // row's output and never let it go.
+                    if row.macroSteps?.isEmpty == true { row.macroSteps = nil }
+                    p.joysticks[g].bindings[r] = row
+                }
+            }
+        }
+        return p
+    }
+}
+
 // MARK: - Legacy Format Support (Joystick Mapper JSON)
 
 extension Preset {
     /// Parse from legacy Joystick Mapper JSON format
     static func fromLegacyJSON(_ data: Data, filename: String = "") -> Preset? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        // Only the legacy shape: a "joysticks" list whose entries carry
+        // "binds". Any other JSON object (a backup, a preset from a newer
+        // build, an unrelated file) used to become an empty preset that
+        // looked ready to import.
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = json["joysticks"] as? [[String: Any]],
+              list.contains(where: { $0["binds"] is [String: [String]] }) else {
             return nil
         }
 
@@ -848,46 +1473,19 @@ extension Preset {
                     let aOrder = Self.sortOrder(for: a.input.type)
                     let bOrder = Self.sortOrder(for: b.input.type)
                     if aOrder != bOrder { return aOrder < bOrder }
-                    return a.input.index < b.input.index
+                    if a.input.index != b.input.index { return a.input.index < b.input.index }
+                    let ra = Self.directionRank(a.input), rb = Self.directionRank(b.input)
+                    if ra != rb { return ra < rb }
+                    return a.input.serialized < b.input.serialized
                 }
 
                 joystickMappings.append(JoystickMapping(tag: joyTag, bindings: bindings))
             }
         }
 
+        // Nothing this build could read is not a preset.
+        guard joystickMappings.contains(where: { !$0.bindings.isEmpty }) else { return nil }
         return Preset(name: name, tag: tag, joysticks: joystickMappings, filename: filename)
-    }
-
-    /// Export to legacy Joystick Mapper JSON format
-    func toLegacyJSON() -> Data? {
-        var root: [String: Any] = [
-            "name": name,
-            "tag": tag,
-        ]
-
-        var joystickArray: [[String: Any]] = []
-        for joystick in joysticks {
-            var bindsDict: [String: [String]] = [:]
-
-            for binding in joystick.bindings {
-                let key = binding.input.serialized
-                let values = binding.outputs.map { $0.serialized }
-                if bindsDict[key] != nil {
-                    bindsDict[key]?.append(contentsOf: values)
-                } else {
-                    bindsDict[key] = values
-                }
-            }
-
-            joystickArray.append([
-                "tag": joystick.tag,
-                "binds": bindsDict,
-            ])
-        }
-
-        root["joysticks"] = joystickArray
-
-        return try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
     }
 }
 
@@ -905,6 +1503,16 @@ enum ControllerType: String, CaseIterable, Identifiable {
     case generic = "Generic"
 
     var id: String { rawValue }
+
+    /// The family a preset converted to this type names its buttons in.
+    var buttonFamily: FaceLetters? {
+        switch self {
+        case .xbox360, .xboxOne, .xboxSeries: return .xbox
+        case .ps3, .ps4, .ps5: return .playstation
+        case .switchPro: return .nintendo
+        case .generic: return nil
+        }
+    }
 
     /// Standard button/axis mapping for this controller type.
     /// Uses GCController extended gamepad indices.
@@ -970,6 +1578,16 @@ enum ControllerType: String, CaseIterable, Identifiable {
         return mapping
     }
 
+    /// Types a preset made for this one can be converted to with a real
+    /// change. Every layout but Switch Pro shares one button map, so
+    /// Xbox to PS5, say, changed nothing and only rewrote the tag.
+    var conversionTargets: [ControllerType] { Self.targets[self] ?? [] }
+
+    /// Worked out once: every sidebar row's Convert To menu asked for it on
+    /// each redraw, building and comparing all the mapping tables each time.
+    private static let targets: [ControllerType: [ControllerType]] = Dictionary(uniqueKeysWithValues:
+        allCases.map { type in (type, allCases.filter { $0 != type && $0.standardMapping != type.standardMapping }) })
+
     /// Convert a preset from this controller type to another
     static func convert(preset: Preset, from source: ControllerType, to destination: ControllerType) -> Preset {
         let sourceMap = source.standardMapping
@@ -981,9 +1599,8 @@ enum ControllerType: String, CaseIterable, Identifiable {
             reverseSource[value] = key
         }
 
+        // The user's own name and tag stay as they are.
         var converted = preset
-        converted.name = preset.name
-        converted.tag = "\(destination.rawValue) (converted from \(source.rawValue))"
 
         for i in converted.joysticks.indices {
             var newBindings: [BindingModel] = []
@@ -999,6 +1616,14 @@ enum ControllerType: String, CaseIterable, Identifiable {
                     // a preset between controller types silently gutted it.
                     var moved = binding.duplicated()
                     moved.input = newInput
+                    // The chord's held controls move the same way, or a chord
+                    // on a face button kept the old position (Switch B for
+                    // the Xbox A it meant).
+                    moved.setModifiers(binding.modifiers.map { modifier in
+                        reverseSource[modifier.serialized]
+                            .flatMap { destMap[$0] }
+                            .flatMap(InputEvent.parse) ?? modifier
+                    })
                     newBindings.append(moved)
                 } else {
                     // Keep unmapped bindings as-is
@@ -1076,4 +1701,148 @@ struct PresetGroup: Identifiable, Codable, Hashable {
         "blue", "purple", "pink", "red", "orange",
         "yellow", "green", "teal", "indigo", "brown"
     ]
+}
+
+// MARK: - Safe ranges
+
+private extension Comparable {
+    func clamped(_ range: ClosedRange<Self>) -> Self { min(max(self, range.lowerBound), range.upperBound) }
+}
+
+private func finite(_ v: Double, _ range: ClosedRange<Double>, _ fallback: Double) -> Double {
+    v.isFinite ? v.clamped(range) : fallback
+}
+
+extension OutputAction {
+    /// Every number in range, so a damaged value cannot trap when used.
+    func clampedValues() -> OutputAction {
+        var o = self
+        o.keyCode = o.keyCode?.clamped(0...0xFFFF)
+        o.mouseButtonIndex = o.mouseButtonIndex?.clamped(0...31)
+        o.clickX = o.clickX.map { finite($0, -100_000...100_000, 0) }
+        o.clickY = o.clickY.map { finite($0, -100_000...100_000, 0) }
+        o.speed = o.speed?.clamped(0...1000)
+        o.midiNote = o.midiNote?.clamped(0...127)
+        o.midiVelocity = o.midiVelocity?.clamped(0...127)
+        o.midiCCNumber = o.midiCCNumber?.clamped(0...127)
+        o.midiCCValue = o.midiCCValue?.clamped(0...127)
+        o.midiChannel = o.midiChannel?.clamped(1...16)
+        o.midiProgramNumber = o.midiProgramNumber?.clamped(0...127)
+        // lightColor is three UInt8s (a file with 300 fails its decode and
+        // the row is kept as written), so it has no range to clamp.
+        return o
+    }
+}
+
+extension InputEvent {
+    /// Every number in a range nothing downstream can trap on.
+    func clampedValues() -> InputEvent {
+        var e = self
+        e.index = e.index.clamped(0...0xFF_FFFF)
+        e.touchpadFinger = e.touchpadFinger?.clamped(0...9)
+        e.touchpadSurface = e.touchpadSurface?.clamped(0...1)
+        e.midiChannel = e.midiChannel?.clamped(1...16)
+        e.midiTurnStep = e.midiTurnStep?.clamped(1...32)
+        return e
+    }
+}
+
+extension TouchpadRegion {
+    func clampedValues() -> TouchpadRegion {
+        var r = self
+        r.minX = finite(r.minX, 0...1, 0); r.maxX = finite(r.maxX, 0...1, 1)
+        r.minY = finite(r.minY, 0...1, 0); r.maxY = finite(r.maxY, 0...1, 1)
+        if r.minX > r.maxX { swap(&r.minX, &r.maxX) }
+        if r.minY > r.maxY { swap(&r.minY, &r.maxY) }
+        r.colorIndex = r.colorIndex.clamped(0...1000)
+        return r
+    }
+}
+
+extension Preset {
+    /// The preset with every number in a safe range. Applied on decode, so
+    /// a preset loaded from disk, imported, or restored from a backup
+    /// cannot crash the app with a negative slot, a NaN, or a huge value.
+    func clampedValues() -> Preset {
+        var p = self
+        p.clampInPlace()
+        return p
+    }
+
+    /// A rainbow speed held to the slider's range; a NaN or infinite one is
+    /// dropped (nil, the normal speed).
+    static func clampedRainbowSpeed(_ speed: Double?) -> Double? {
+        guard let speed, speed.isFinite else { return nil }
+        return speed.clamped(lightBarRainbowSpeedRange)
+    }
+
+    mutating func clampInPlace() {
+        func row(_ b: BindingModel) -> BindingModel {
+            var b = b
+            func f(_ v: Float?, _ r: ClosedRange<Float>) -> Float? {
+                guard let v else { return nil }
+                return v.isFinite ? v.clamped(r) : nil
+            }
+            // An empty macro is no macro (see sanitizedForImport).
+            if b.macroSteps?.isEmpty == true { b.macroSteps = nil }
+            // Input numbers from a file: a negative or huge index, finger,
+            // surface or channel trapped in the 1.5 row check, the editor's
+            // row label and the input names.
+            b.input = b.input.clampedValues()
+            b.modifierInput = b.modifierInput?.clampedValues()
+            b.extraModifierInputs = b.extraModifierInputs?.map { $0.clampedValues() }
+            b.deadzone = f(b.deadzone, 0...0.95)
+            b.outerDeadzone = f(b.outerDeadzone, 0.05...1)
+            b.hapticIntensity = f(b.hapticIntensity, 0...1)
+            b.turboRate = b.turboRate?.clamped(1...100)
+            b.turboIntervalMs = b.turboIntervalMs?.clamped(1...60_000)
+            b.turboJitterMs = b.turboJitterMs?.clamped(0...10_000)
+            b.turboMaxCount = b.turboMaxCount?.clamped(0...100_000)
+            b.repeatCount = b.repeatCount?.clamped(0...1000)
+            b.repeatDelayMs = b.repeatDelayMs?.clamped(0...60_000)
+            b.rampMs = b.rampMs?.clamped(0...10_000)
+            b.hapticDurationMs = b.hapticDurationMs?.clamped(0...10_000)
+            b.holdThresholdMs = b.holdThresholdMs?.clamped(50...5000)
+            b.doubleTapWindowMs = b.doubleTapWindowMs?.clamped(100...2000)
+            b.outputs = b.outputs.map { $0.clampedValues() }
+            b.holdOutputs = b.holdOutputs?.map { $0.clampedValues() }
+            b.doubleTapOutputs = b.doubleTapOutputs?.map { $0.clampedValues() }
+            b.macroSteps = b.macroSteps?.map { step in
+                var s = step
+                s.action = s.action.clampedValues()
+                s.delayMs = s.delayMs.clamped(0...30_000)
+                s.holdMs = s.holdMs.clamped(0...30_000)
+                return s
+            }
+            return b
+        }
+        for g in joysticks.indices { joysticks[g].bindings = joysticks[g].bindings.map(row) }
+        touchpadRegions = touchpadRegions.map { $0.clampedValues() }
+        cursorRegions = cursorRegions.map { $0.clampedValues() }
+        stickRegions = stickRegions.mapValues { $0.map { $0.clampedValues() } }
+        automation.confineBufferPx = finite(automation.confineBufferPx, 1...200, 24)
+        automation.autoRecenterIntervalMs = finite(automation.autoRecenterIntervalMs, 16...60_000, 500)
+        automation.sensitivityMultiplier = finite(automation.sensitivityMultiplier, 0.05...20, 1)
+        automation.scrollMultiplier = finite(automation.scrollMultiplier, 0.05...20, 1)
+        lightBarBrightness = lightBarBrightness?.clamped(0...255)
+        lightBarRainbowSpeed = Self.clampedRainbowSpeed(lightBarRainbowSpeed)
+        if var d = driveConfig {
+            d.slot = d.slot.clamped(0...31)
+            d.steerAxis = d.steerAxis.clamped(0...31)
+            d.throttleAxis = d.throttleAxis.clamped(0...31)
+            d.deadzone = finite(d.deadzone, 0...0.95, 0.12)
+            d.steerMouseSpeed = finite(d.steerMouseSpeed, 0...1000, 18)
+            for k in [\DriveConfig.steerLeftKey, \.steerRightKey, \.accelKey, \.brakeKey, \.reverseKey] {
+                d[keyPath: k] = d[keyPath: k].clamped(0...0xFFFF)
+            }
+            d.throttleCurve = finite(d.throttleCurve, 0.1...10, 1)
+            d.steerCurve = finite(d.steerCurve, 0.1...10, 1)
+            d.coastBrakeStrength = finite(d.coastBrakeStrength, 0...1, 0.5)
+            d.pwmPeriodTicks = d.pwmPeriodTicks.clamped(1...100)
+            d.reverseTapCount = d.reverseTapCount.clamped(1...10)
+            d.reverseWindowMs = d.reverseWindowMs.clamped(100...5000)
+            d.gestureThreshold = finite(d.gestureThreshold, 0...1, 0.85)
+            driveConfig = d
+        }
+    }
 }

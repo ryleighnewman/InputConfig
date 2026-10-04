@@ -28,6 +28,14 @@ struct KeyCodeMap {
     static let dictationKeyCode = 315
     static let focusKeyCode = 316
 
+    /// A key the tables have no entry for still reaches a binding: its macOS
+    /// virtual key code is stored above this base and shows as "Key code N".
+    /// Well clear of the HID keyboard page and the private codes above it.
+    static let unknownKeyBase = 2000
+    /// The same for a media-style (system-defined) key with an unfamiliar
+    /// key type: stored above this base, shown as "Special key N".
+    static let unknownSystemKeyBase = 3000
+
     struct KeyEntry: Identifiable {
         let id: Int
         let code: Int
@@ -64,7 +72,7 @@ struct KeyCodeMap {
             KeyEntry(code: 47, name: "[", group: "Other Characters"),
             KeyEntry(code: 48, name: "]", group: "Other Characters"),
             KeyEntry(code: 49, name: "\\", group: "Other Characters"),
-            KeyEntry(code: 50, name: "#", group: "Other Characters"),
+            KeyEntry(code: 50, name: "# ~ (ISO, next to Return)", group: "Other Characters"),
             KeyEntry(code: 51, name: ";", group: "Other Characters"),
             KeyEntry(code: 52, name: "'", group: "Other Characters"),
             KeyEntry(code: 53, name: "`", group: "Other Characters"),
@@ -108,7 +116,7 @@ struct KeyCodeMap {
             KeyEntry(code: 77, name: "End", group: "Other Keys"),
             KeyEntry(code: 78, name: "PageDown", group: "Other Keys"),
             KeyEntry(code: 57, name: "Caps Lock", group: "Other Keys"),
-            KeyEntry(code: 70, name: "PrintScreen", group: "Other Keys"),
+            KeyEntry(code: 70, name: "PrintScreen (F13)", group: "Other Keys"),
             KeyEntry(code: 101, name: "Application", group: "Other Keys"),
         ])
 
@@ -116,7 +124,9 @@ struct KeyCodeMap {
         for i in 1...12 {
             keys.append(KeyEntry(code: 57 + i, name: "F\(i)", group: "Function Keys"))
         }
-        for i in 13...24 {
+        // F21 to F24 have no macOS key code, so they are left out of the
+        // pickers; see `unavailableKeys` for presets that stored them.
+        for i in 13...20 {
             keys.append(KeyEntry(code: 91 + i, name: "F\(i)", group: "Function Keys"))
         }
 
@@ -141,6 +151,16 @@ struct KeyCodeMap {
             KeyEntry(code: 99, name: "Keypad .", group: "Keypad Keys"),
             KeyEntry(code: 103, name: "Keypad =", group: "Keypad Keys"),
             KeyEntry(code: 133, name: "Keypad ,", group: "Keypad Keys"),
+        ])
+
+        // ISO and Japanese keyboard keys. Without these they scanned as
+        // nothing at all.
+        keys.append(contentsOf: [
+            KeyEntry(code: 100, name: "\u{00A7} (ISO)", group: "International Keys"),
+            KeyEntry(code: 137, name: "Yen (JIS)", group: "International Keys"),
+            KeyEntry(code: 135, name: "Underscore (JIS)", group: "International Keys"),
+            KeyEntry(code: 145, name: "Eisu (JIS)", group: "International Keys"),
+            KeyEntry(code: 144, name: "Kana (JIS)", group: "International Keys"),
         ])
 
         // Special / Media Keys
@@ -185,12 +205,22 @@ struct KeyCodeMap {
         Dictionary(grouping: allKeys, by: { $0.group })
     }()
 
+    /// Keys an older version offered that macOS cannot send (F21 to F24).
+    /// Kept out of every picker, but still named so a preset that stored
+    /// one shows what it is instead of a bare number.
+    static let unavailableKeys: [KeyEntry] = (21...24).map {
+        KeyEntry(code: 91 + $0, name: "F\($0) (not available on Mac)", group: "Function Keys")
+    }
+
     private static let codeToName: [Int: String] = {
-        Dictionary(uniqueKeysWithValues: allKeys.map { ($0.code, $0.name) })
+        Dictionary(uniqueKeysWithValues: (allKeys + unavailableKeys).map { ($0.code, $0.name) })
     }()
 
     static func name(for code: Int) -> String {
-        codeToName[code] ?? "Key \(code)"
+        if let name = codeToName[code] { return name }
+        if code >= unknownSystemKeyBase { return "Special key \(code - unknownSystemKeyBase)" }
+        if code >= unknownKeyBase { return "Key code \(code - unknownKeyBase)" }
+        return "Key \(code)"
     }
 
     static func code(for name: String) -> Int? {
@@ -200,6 +230,9 @@ struct KeyCodeMap {
     /// HID usage code to macOS virtual key code mapping (for CGEvent)
     /// This maps the HID codes used in presets to the macOS virtual key codes needed for CGEvent
     static let hidToVirtualKeyCode: [Int: Int] = [
+        // Launchpad and Mission Control keys: virtual codes of their own
+        // (the same ones the MacBook top row sends), not media key types.
+        303: 131, 304: 160,
         spotlightKeyCode: 177, dictationKeyCode: 176, focusKeyCode: 178,
         4: 0x00,   // A
         5: 0x0B,   // B
@@ -247,6 +280,7 @@ struct KeyCodeMap {
         47: 0x21,  // [
         48: 0x1E,  // ]
         49: 0x2A,  // backslash
+        50: 0x2A,  // the ISO key next to Return (# ~), which macOS reads as backslash's key
         51: 0x29,  // ;
         52: 0x27,  // '
         53: 0x32,  // `
@@ -267,6 +301,7 @@ struct KeyCodeMap {
         68: 0x67,  // F11
         69: 0x6F,  // F12
         104: 0x69, // F13
+        70: 0x69,  // PrintScreen: a PC keyboard's Print Screen is F13 on a Mac
         105: 0x6B, // F14
         106: 0x71, // F15
         107: 0x6A, // F16
@@ -302,6 +337,13 @@ struct KeyCodeMap {
         98: 0x52,  // Keypad 0
         99: 0x41,  // Keypad .
         103: 0x51, // Keypad =
+        133: 0x5F, // Keypad , (JIS)
+        101: 0x6E, // Application / Menu (PC keyboards)
+        100: 0x0A, // Section (ISO)
+        137: 0x5D, // Yen (JIS)
+        135: 0x5E, // Underscore (JIS)
+        145: 0x66, // Eisu (JIS)
+        144: 0x68, // Kana (JIS)
         KeyCodeMap.globeKeyCode: KeyCodeMap.globeVirtualKey, // Globe tapped alone
         224: 0x3B, // Ctrl Left
         225: 0x38, // Shift Left

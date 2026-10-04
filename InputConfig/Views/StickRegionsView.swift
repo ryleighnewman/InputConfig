@@ -98,19 +98,27 @@ struct StickRegionsView: View {
                             dragCurrent = nil
                         }
                         .buttonStyle(.solidSecondaryCompact)
+                        Button("Place in Center") {
+                            drawingNewRegion = false
+                            dragStart = nil
+                            dragCurrent = nil
+                            addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
+                        }
+                        .buttonStyle(.solidSecondaryCompact)
+                        .help("Add the region in the middle without drawing it")
                     }
 
                     Spacer()
 
                     Text(stickReadout)
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .accessibilityLabel("Live stick position")
                         .accessibilityValue(stickAccessibilityValue)
 
                     Text("\(svc.regions(forStick: selectedStick).count) / \(Self.maxRegions) regions")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .accessibilityLabel("Region count")
                         .accessibilityValue("\(svc.regions(forStick: selectedStick).count) of \(Self.maxRegions) regions defined")
                 }
@@ -229,7 +237,25 @@ struct StickRegionsView: View {
 
     // MARK: - Region list
 
+    /// The list, then typed bounds for the selected region: placing and
+    /// sizing one took a pointer drag before, so keyboard, switch and
+    /// VoiceOver users could only make a fixed box in the middle.
     private var regionsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            regionsListBody
+            if let id = selectedRegionID, let found = svc.region(with: id) {
+                // Only while the region is still there: committing after it
+                // was deleted would add it back.
+                RegionBoundsFields(region: found.region) { updated in
+                    guard let current = svc.region(with: updated.id) else { return }
+                    svc.upsert(updated, stickIndex: current.stickIndex)
+                }
+                .id(found.region.id)
+            }
+        }
+    }
+
+    private var regionsListBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Defined Regions")
                 .font(.caption.weight(.semibold))
@@ -238,7 +264,7 @@ struct StickRegionsView: View {
             if svc.regions(forStick: selectedStick).isEmpty {
                 Text("None yet.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 Spacer()
             } else {
                 ScrollView {
@@ -495,7 +521,7 @@ struct StickRegionsView: View {
 
     private func paletteColor(at index: Int) -> Color {
         let palette = TouchpadRegion.colorPalette
-        let name = palette[index % palette.count]
+        let name = palette[((index % palette.count) + palette.count) % palette.count]
         switch name {
         case "mint": return .mint
         case "cyan": return .cyan

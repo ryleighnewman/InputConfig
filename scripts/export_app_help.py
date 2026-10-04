@@ -94,13 +94,20 @@ for f in sorted(glob.glob(os.path.join(SITE, "content", "guides-*.json"))):
         guide_pages.append(p)
 
 missing = [s for s, _, _ in PAGES if s not in help_pages]
-extra = [s for s in help_pages if s not in {p[0] for p in PAGES}]
+# Site pages the app does not carry: its own What's New sheet and About panel cover these.
+SITE_ONLY = {"help/whats-new", "about"}
+extra = [s for s in help_pages if s not in {p[0] for p in PAGES} and s not in SITE_ONLY]
 if missing or extra:
     sys.exit("page list out of date: missing %s, unlisted %s" % (missing, extra))
 
 short_title = {s: t for s, t, _ in PAGES}
 titles = dict(short_title)
 titles.update({p["slug"]: p["h1"] for p in guide_pages})
+# Question pages are linked from Related too; without their titles the
+# chips showed the raw slug ("questions/best-controller-mapper-for-mac").
+titles.update({p["slug"]: htmlmod.unescape(p["h1"]) for p in load("questions-*.json")})
+# Site-only help pages (What's New) are linked from Related too.
+titles.update({s: htmlmod.unescape(help_pages[s]["h1"]) for s in SITE_ONLY if s in help_pages})
 tool_desc = {}
 for f in glob.glob(os.path.join(SITE, "tools", "*.html")):
     slug = "tools/" + os.path.basename(f)[:-5]
@@ -117,8 +124,21 @@ def title_for(slug):
     if slug in titles:
         return titles[slug]
     if slug.startswith("presets/"):
-        name = slug.rsplit("/", 1)[-1].replace("-", " ").title()
-        return name.replace("Midi", "MIDI").replace("Daw", "DAW").replace("Fps", "FPS").replace("Ps5", "PS5") + " preset"
+        rest = slug[len("presets/"):].strip("/")
+        if not rest:
+            return "Preset Library"
+        # A built-in preset page is titled with the preset's real name
+        # ("MIDI: CC Dials preset", "Hold & Double-Tap preset"); title-casing
+        # the slug gave "Midi Cc Dials" and "Tap The Mac".
+        page = os.path.join(SITE, "presets", rest + ".html")
+        if os.path.exists(page):
+            m = re.search(r"<h1[^>]*>([^<]*)</h1>", open(page).read())
+            if m and m.group(1).strip().endswith(" preset"):
+                return htmlmod.unescape(m.group(1).strip())
+        name = rest.rsplit("/", 1)[-1].replace("-", " ").title()
+        for wrong, right in (("Midi", "MIDI"), ("Daw", "DAW"), ("Fps", "FPS"), ("Ps5", "PS5"), ("Macos", "macOS")):
+            name = name.replace(wrong, right)
+        return name + " preset"
     return slug
 
 
@@ -270,10 +290,15 @@ for slug, title, category in PAGES:
         bl = blocks(s["html"])
         if not bl:
             sys.exit("EMPTY SECTION %s / %s: %s" % (slug, s["heading"], s["html"][:120]))
-        sections.append((s["heading"], bl))
+        # Headings arrive HTML-escaped ("Desktop &amp; Productivity").
+        sections.append((htmlmod.unescape(s["heading"]), bl))
     if p.get("faq"):
         sections.append(("Questions", [("qa", [(inline(q["q"]), inline(q["a"])) for q in p["faq"]])]))
     related = [(title_for(r), BASE + "/" + r) for r in p.get("related", []) if r != slug]
+    # Sanity check: a Related chip must read as a title, not a slug.
+    for t, _ in related:
+        if "/" in t or "&amp;" in t:
+            sys.exit("RELATED TITLE LOOKS LIKE A SLUG in %s: %s" % (slug, t))
 
     out.append("\n    static let %s = HelpGuide(\n" % var)
     out.append("        id: %s,\n" % swift_str(gid))
@@ -303,13 +328,13 @@ work = sorted([p for p in guide_pages if p["group"] == "work"], key=lambda p: p[
 out.append("\n    /// Longer walkthroughs on the site, one per situation. Not mirrored here.\n")
 out.append("    static let accessibilityGuides: [HelpWebLink] = " + links(access))
 out.append("    static let workAndPlayGuides: [HelpWebLink] = " + links(work))
-question_pages = sorted(load("questions-*.json"), key=lambda p: p["order"])
-out.append("\n    /// Short answers on the site, one question each. Not mirrored here.\n")
-out.append("    static let questions: [HelpWebLink] = " + links(question_pages))
+# The site's question pages are not listed in the app (nothing showed the
+# list); they are reached from Related links, titled from the table above.
+question_pages = load("questions-*.json")
 tools = sorted((k, v) for k, v in tool_desc.items() if k not in DROP_TOOLS)
 out.append("\n    /// Interactive references on the site.\n    static let tools: [HelpWebLink] = [\n" + "".join(
     "        HelpWebLink(title: %s, detail: %s, url: %s),\n" % (swift_str(titles.get(s, s)), swift_str(d), swift_str(BASE + "/" + s)) for s, d in tools) + "    ]\n")
 out.append("}\n")
 
 open(OUT, "w").write("".join(out))
-print("wrote", os.path.relpath(OUT), "-", len(PAGES), "guides,", len(access) + len(work), "web guides,", len(question_pages), "questions,", len(tools), "tools")
+print("wrote", os.path.relpath(OUT), "-", len(PAGES), "guides,", len(access) + len(work), "web guides,", len(question_pages), "question titles,", len(tools), "tools")

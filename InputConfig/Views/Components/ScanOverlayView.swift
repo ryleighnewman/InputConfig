@@ -20,6 +20,9 @@ struct ScanOverlayView: View {
     @State private var detectedInput: InputEvent?
     @State private var timer: Timer?
     @State private var didCompleteScan = false
+    /// A left click held back briefly: a Force Click begins as one, and
+    /// scans as Deep Press if its second stage follows.
+    @State private var pendingLeftClick: DispatchWorkItem?
     /// Local AppKit event monitor that lets the scan also pick up the Mac
     /// keyboard, trackpad, and mouse (not just the game controller). Local
     /// monitors deliver events that target this app while it is frontmost, so
@@ -28,7 +31,7 @@ struct ScanOverlayView: View {
     @State private var inputMonitor: Any?
     /// The Cancel button's frame in window-content coordinates. Mouse-downs
     /// inside it are NOT consumed as scan input; they reach the button, so
-    /// the scan can be cancelled without a keyboard. Everything else about
+    /// the scan can be canceled without a keyboard. Everything else about
     /// the monitor's capture behavior is unchanged.
     @State private var cancelButtonFrame: CGRect = .zero
 
@@ -42,7 +45,7 @@ struct ScanOverlayView: View {
             // Content card
             VStack(spacing: 20) {
                 // Timer
-                Text("\(timeRemaining)")
+                Text(ScanTiming.seconds > 0 ? "\(timeRemaining)" : "Waiting")
                     .font(.system(size: 48, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
 
@@ -68,7 +71,7 @@ struct ScanOverlayView: View {
 
                 // A real Cancel button: the input monitor exempts clicks
                 // inside its frame (tracked below in window coordinates), so
-                // cancelling never needs a keyboard. Esc still works too.
+                // canceling never needs a keyboard. Esc still works too.
                 HStack(spacing: 14) {
                     Button {
                         cleanup()
@@ -110,9 +113,13 @@ struct ScanOverlayView: View {
             // drop shadow (shadows are allowed on floating HUDs).
             .liquidGlass(in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
             .shadow(radius: 20)
-            .accessibilityElement(children: .ignore)
+            // Contain, not ignore: ignore removed the Cancel button from
+            // VoiceOver, Voice Control and Switch Control, leaving no way
+            // out without a keyboard.
+            .accessibilityElement(children: .contain)
             .accessibilityLabel("Scan for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it.")
-            .accessibilityHint("Use the Cancel button or press Escape to cancel.")
+            .accessibilityHint("Use the Cancel scan button or press Escape to cancel.")
+            .accessibilityAction(.escape) { cleanup(); onCancel() }
         }
         .onAppear {
             startTimer()
@@ -174,10 +181,16 @@ struct ScanOverlayView: View {
             case 56, 60: pressed = f.contains(.shift)
             case 58, 61: pressed = f.contains(.option)
             case 59, 62: pressed = f.contains(.control)
-            case 57:     pressed = f.contains(.capsLock)
+            // One flagsChanged per physical press; with Caps Lock on, the
+            // press turns it off, which read as a release.
+            case 57:     pressed = true
             case 63:     pressed = f.contains(.function)
             default:     return false
             }
+            // With VoiceOver on, Control and Option are its own keys: moving
+            // to Cancel scan bound Control to the row.
+            // Caps Lock too, which VoiceOver can use as its modifier.
+        if NSWorkspace.shared.isVoiceOverEnabled, [57, 58, 61, 59, 62].contains(vk) { return false }
             guard pressed,
                   let hid = ExternalInputDeviceService.hidUsage(forVirtualKeyCode: vk)
             else { return false }
@@ -202,9 +215,9 @@ struct ScanOverlayView: View {
                 return true
             }
             if event.isARepeat { return true }
-            guard let hid = ExternalInputDeviceService.hidUsage(forVirtualKeyCode: Int(event.keyCode)) else {
-                return true
-            }
+            // A key with no name scans too, as "Key code N", so an unusual
+            // keyboard's extra keys can be bound.
+            let hid = ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(event.keyCode))
             completeScan(with: InputEvent(
                 type: .extKey, index: hid,
                 extDeviceID: ExternalInputDeviceService.builtInKeyboardID))
@@ -223,23 +236,50 @@ struct ScanOverlayView: View {
             }
             let button = event.type == .leftMouseDown ? 0
                 : (event.type == .rightMouseDown ? 1 : event.buttonNumber)
+            if event.type == .leftMouseDown {
+                // Held for a moment so a Force Click can become Deep Press;
+                // the click's own down event used to win every time.
+                pendingLeftClick?.cancel()
+                let work = DispatchWorkItem {
+                    guard !didCompleteScan else { return }
+                    completeScan(with: InputEvent(
+                        type: .extMouse, index: 0,
+                        extDeviceID: ExternalInputDeviceService.builtInMouseID,
+                        extMouseKind: .button))
+                }
+                pendingLeftClick = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+                return true
+            }
             completeScan(with: InputEvent(
                 type: .extMouse, index: button,
                 extDeviceID: ExternalInputDeviceService.builtInMouseID,
                 extMouseKind: .button))
             return true
         case .scrollWheel:
-            let dir: AxisDirection = event.scrollingDeltaY >= 0 ? .positive : .negative
+            // A tilt wheel or thumb wheel scrolls sideways; record that as
+            // Scroll X so it does not collide with the vertical wheel.
+            // A trackpad gesture starts with a touch-down event that has no
+            // movement, and ends with momentum; wait for the first real
+            // movement so the direction is right.
+            if (event.scrollingDeltaX == 0 && event.scrollingDeltaY == 0) || !event.momentumPhase.isEmpty {
+                return true
+            }
+            let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            let delta = horizontal ? event.scrollingDeltaX : event.scrollingDeltaY
+            let dir: AxisDirection = delta >= 0 ? .positive : .negative
             completeScan(with: InputEvent(
                 type: .extMouse, index: 0, axisDirection: dir,
                 extDeviceID: ExternalInputDeviceService.builtInMouseID,
-                extMouseKind: .scrollY))
+                extMouseKind: horizontal ? .scrollX : .scrollY))
             return true
         case .pressure:
             // A deliberate Force Click (stage 2) scans as a Deep Press
             // input; the continuous pressure stream is ignored here so an
             // ordinary click does not get captured as pressure.
             if event.stage >= 2 {
+                pendingLeftClick?.cancel()
+                pendingLeftClick = nil
                 completeScan(with: InputEvent(
                     type: .extMouse, index: 0,
                     extDeviceID: ExternalInputDeviceService.builtInMouseID,
@@ -253,12 +293,30 @@ struct ScanOverlayView: View {
     #endif
 
     /// Single completion path for controller scan results.
-    private static func isTouchpadFamily(_ e: InputEvent) -> Bool {
-        (e.type == .button && e.index == 13) || e.type == .touchpadGesture
+    /// A touchpad gesture, or button 13 from a controller that has a
+    /// touchpad. On a Steam Controller button 13 is the Steam button, and
+    /// on a wheel or flight stick it is just the fourteenth button.
+    private func isTouchpadFamily(_ e: InputEvent) -> Bool {
+        // A Steam pad's tap is taken as scanned: the choice offers a
+        // PlayStation touchpad's press and a two-finger tap it cannot make.
+        if e.type == .touchpadGesture {
+            if e.touchpadSurface == 1 { return false }
+            if let slot = controllerService.lastScanSlot, controllerService.isSteamSlot(slot) { return false }
+            if CACurrentMediaTime() - controllerService.steamGestureAt < 1 { return false }
+            return true
+        }
+        guard e.type == .button, e.index == 13 else { return false }
+        guard let slot = controllerService.lastScanSlot else { return false }
+        // On the 2026 Steam Controller button 13 is Quick Access; its
+        // trackpad clicks are their own buttons.
+        if controllerService.rawHIDGamepadSlots[slot]?.profile?.layout == .steamController2026 { return false }
+        // On the 2015 model it is the Steam button.
+        if slot == controllerService.steamControllerSlot { return false }
+        return controllerService.controllerDetails[slot]?.hasTouchpad == true
     }
 
     private func completeScan(with event: InputEvent) {
-        if let choose = onTouchpadChoice, Self.isTouchpadFamily(event) {
+        if let choose = onTouchpadChoice, isTouchpadFamily(event) {
             // Collect for half a second: a click reports the press at once
             // and the finger lift a little later, so both can be shown.
             if didCompleteScan {
@@ -292,11 +350,17 @@ struct ScanOverlayView: View {
     }
 
     private func startTimer() {
-        timeRemaining = 20
+        // How long Scan waits is a setting (Settings, General, Scan): a
+        // fixed 20 seconds was too short for some hands. Zero waits until
+        // the scan is canceled.
+        let seconds = ScanTiming.seconds
+        timeRemaining = seconds
+        guard seconds > 0 else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             if timeRemaining > 0 {
                 timeRemaining -= 1
             } else {
+                announce("Scan timed out. Nothing was set.")
                 cleanup()
                 onCancel()
             }
@@ -327,5 +391,22 @@ struct ScanOverlayView: View {
         #if canImport(AppKit)
         if let m = inputMonitor { NSEvent.removeMonitor(m); inputMonitor = nil }
         #endif
+    }
+}
+
+/// How long a Scan waits for an input, from Settings (20 seconds unless
+/// changed; 0 waits until it is canceled). The Mac key and mouse button
+/// scan keeps its short 5 seconds unless the setting was changed, since
+/// keys and clicks in that window go to the scan.
+enum ScanTiming {
+    static let key = "InputConfig.scanSeconds"
+    static var seconds: Int {
+        let stored = UserDefaults.standard.object(forKey: key) as? Int ?? 20
+        return max(0, min(600, stored))
+    }
+    /// Never unlimited: Escape is a key this scan can bind, so it cannot
+    /// cancel it; "until canceled" waits a minute here.
+    static var macInputSeconds: Int {
+        UserDefaults.standard.object(forKey: key) == nil ? 5 : (seconds == 0 ? 60 : seconds)
     }
 }

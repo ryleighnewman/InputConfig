@@ -55,9 +55,10 @@ struct TipJarView: View {
         .padding(20)
         // macOS hands keyboard focus to the first focusable control when the
         // window opens, drawing a blue focus ring around the top tip row as if
-        // it were pre-selected. Suppress the ring window-wide; clicks and
-        // keyboard shortcuts are unaffected.
-        .focusEffectDisabled()
+        // it were pre-selected. Suppress the ring window-wide unless
+        // Keyboard navigation is on; clicks and keyboard shortcuts are
+        // unaffected.
+        .focusRingForKeyboardUsers()
         .task { await service.loadProducts() }
         .alert("Thank you!", isPresented: $showingThanks) {
             Button("You're welcome", role: .cancel) {}
@@ -74,6 +75,14 @@ struct TipJarView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(service.lastError ?? "")
+        }
+        .alert("Tip Jar", isPresented: Binding(
+            get: { service.notice != nil && service.lastError == nil },
+            set: { if !$0 { service.notice = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(service.notice ?? "")
         }
     }
 
@@ -122,7 +131,7 @@ struct TipJarView: View {
                 Text("Make this recurring monthly")
                     .font(.body)
                 Text(recurring
-                     ? "Tips charge automatically each month until cancelled."
+                     ? "Tips charge automatically each month until canceled."
                      : "Switch on to support monthly instead of one time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -132,12 +141,12 @@ struct TipJarView: View {
             // ...and the switch is pinned to the trailing edge, so the changing
             // subtitle length no longer shifts it (it used to jump because the
             // Toggle sized to its label). labelsHidden keeps the a11y label;
-            // focusEffectDisabled stops it grabbing the focus ring on open so it
-            // doesn't look pre-selected.
+            // the focus ring stays off on open so it doesn't look pre-selected,
+            // except for people using Keyboard navigation.
             Toggle("Make this recurring monthly", isOn: $recurring)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .focusEffectDisabled()
+                .focusRingForKeyboardUsers()
         }
     }
 
@@ -268,7 +277,7 @@ struct TipJarView: View {
                 HStack {
                     Text("Payments are processed by Apple.")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                     Spacer()
                 }
             }
@@ -316,17 +325,31 @@ struct TipJarView: View {
             Image(systemName: "heart.circle")
                 .font(.title)
                 .foregroundStyle(.secondary)
-            Text("Tips are temporarily unavailable")
-                .font(.subheadline)
-            Text("Please try again in a moment.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button("Retry") {
-                Task { await service.loadProducts() }
+            // Only a copy that is certainly not from the App Store (Developer
+            // ID) is told so; a store copy not recognized yet (a fresh
+            // install, TestFlight, App Review) gets Retry.
+            if service.isAppStoreCopy || !AppStoreCopy.isDeveloperIDCopy {
+                Text("Tips are temporarily unavailable")
+                    .font(.subheadline)
+                Text("Please try again in a moment.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Retry") {
+                    Task { await service.loadProducts() }
+                }
+                .buttonStyle(.solidSecondaryCompact)
+                .controlSize(.small)
+                .padding(.top, 4)
+            } else {
+                // StoreKit only sells in-app purchases to the App Store copy.
+                Text("Tips are in the Mac App Store version")
+                    .font(.subheadline)
+                Text("This copy was not installed from the Mac App Store, so it cannot take tips. Thank you for using it all the same.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.solidSecondaryCompact)
-            .controlSize(.small)
-            .padding(.top, 4)
         }
         .padding(.vertical, 30)
     }
@@ -370,8 +393,9 @@ final class TipJarWindowController {
             return
         }
         let hosting = NSHostingController(rootView: TipJarView()
-            .background(VisualEffectBackground().ignoresSafeArea())
-            .reduceMotionFriendly())
+            .windowBackdrop()
+            .reduceMotionFriendly()
+            .appAccessibility())
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "Donate to InputConfig"
         newWindow.setContentSize(NSSize(width: 520, height: 640))

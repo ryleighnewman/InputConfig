@@ -46,6 +46,11 @@ struct ImportReviewSheet: View {
         }
         .frame(width: 580, height: 460)
         .onAppear { rows = presetStore.importReviewQueue }
+        // Files dropped while the sheet is open join the list.
+        .onChange(of: presetStore.importReviewQueue.map(\.id)) { _, ids in
+            let known = Set(rows.map(\.id))
+            rows += presetStore.importReviewQueue.filter { !known.contains($0.id) && ids.contains($0.id) }
+        }
     }
 
     private var header: some View {
@@ -97,6 +102,7 @@ struct ImportReviewSheet: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .labelsHidden()
+                    .accessibilityLabel("Skip \(row.filename)")
                     .help("Skip this file in the import batch")
                 }
             }
@@ -124,11 +130,70 @@ struct ImportReviewSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
                     .disabled(isSkipped)
+                    .accessibilityLabel("Name for \(row.filename)")
+                }
+                if let warning = row.warning {
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let dropped = row.droppedLine {
+                    Text(dropped)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                let automation = row.automationLines
+                if !automation.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("What this preset does (\(automation.count)):")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        // Every line in full, scrolling past a handful: a
+                        // seventh action or the end of a long text was
+                        // hidden behind "and 4 more" and one line each.
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(automation.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.caption)
+                                        .textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: automation.count > 6 ? 180 : nil)
+                        if row.hasOpeners {
+                            Toggle("Remove the actions that open apps, websites, Shortcuts, Spotlight, or Launchpad, or type text", isOn: Binding(
+                                get: { rows[idx].removeOpeners },
+                                set: { rows[idx].removeOpeners = $0 }
+                            ))
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                            .disabled(isSkipped)
+                        }
+                    }
+                }
+                if let pointer = row.pointerLine {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pointer)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle("Turn these off", isOn: Binding(
+                            get: { rows[idx].removePointerSettings },
+                            set: { rows[idx].removePointerSettings = $0 }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                        .disabled(isSkipped)
+                    }
                 }
                 if let tag = row.preset?.tag, !tag.isEmpty {
                     Text(tag)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .lineLimit(2)
                 }
             }
@@ -191,10 +256,12 @@ struct ImportReviewSheet: View {
 
     private func confirm() {
         let toCommit = rows.filter { $0.isImportable && !skipped.contains($0.id) }
-        // Capture the first imported preset's ID before commit clears
-        // it so we can fire the scroll-and-flash hint after dismiss.
-        let firstID = toCommit.first?.preset?.id
-        _ = presetStore.commitImportPreviews(toCommit)
+        // The ids the presets were saved under: import gives each a fresh
+        // one, so the id inside the file would select nothing.
+        let firstID = presetStore.commitImportPreviews(toCommit).first
+        // Everything this sheet showed is done, skipped and broken rows too.
+        let shown = Set(rows.map(\.id))
+        presetStore.importReviewQueue.removeAll { shown.contains($0.id) }
         AccessibilityNotification.Announcement("Imported \(toCommit.count) preset\(toCommit.count == 1 ? "" : "s")").post()
         dismiss()
         // After the sheet dismisses, ask the sidebar to scroll the

@@ -40,7 +40,7 @@ final class FeedbackService {
     /// `durationMs`. Silently no-ops on controllers without haptics.
     #if DEBUG
     /// Five ways to make a controller buzz, each announced by the light bar
-    /// so the result can be reported by colour instead of by counting:
+    /// so the result can be reported by color instead of by counting:
     ///   red     Apple's haptics, this app still writing the light bar
     ///   green   Apple's haptics, this app's writes paused
     ///   blue    this app's own output report carrying the motor bytes
@@ -56,11 +56,11 @@ final class FeedbackService {
                 NSLog("[BUZZ] %@", name)
                 writer.startHold(red: r, green: g, blue: b)
             }
-            // The colour goes up first and stays; the buzz follows half a
+            // The color goes up first and stays; the buzz follows half a
             // second later so there is no doubt which one it belongs to.
             DispatchQueue.main.asyncAfter(deadline: .now() + t + 0.5, execute: body)
         }
-        NSLog("[BUZZ] five attempts, each with its own light bar colour")
+        NSLog("[BUZZ] five attempts, each with its own light bar color")
         announce("1 red: haptics, our writes running", 255, 0, 0, at: 0.2) {
             self.vibrateViaHaptics(controller: controller, intensity: 1.0, durationMs: ms)
         }
@@ -69,7 +69,8 @@ final class FeedbackService {
             self.vibrateViaHaptics(controller: controller, intensity: 1.0, durationMs: ms)
         }
         announce("3 blue: our own output report", 0, 0, 255, at: 4.2) {
-            writer.vibrate(intensity: 1.0, durationMs: ms)
+            writer.vibrate(intensity: 1.0, durationMs: ms,
+                           target: SonyPadIdentity.of(controller: controller))
         }
         announce("4 yellow: haptics then engine stop", 255, 200, 0, at: 6.2) {
             self.vibrateViaHaptics(controller: controller, intensity: 1.0, durationMs: ms)
@@ -101,20 +102,23 @@ final class FeedbackService {
         // light bar. Asking the system to play the haptic hands it the
         // controller's report stream and it repaints the light bar for as
         // long as it holds it, which nothing this app writes can outrun: the
-        // preset's colour was replaced on every press that buzzed. Carrying
-        // the motor values ourselves means one writer and one colour.
+        // preset's color was replaced on every press that buzzed. Carrying
+        // the motor values ourselves means one writer and one color.
         let name = ((controller.vendorName ?? "") + " " + controller.productCategory).lowercased()
         let sony = name.contains("dualsense") || name.contains("dualshock")
-        let owned = InProcessLightWriter.shared.ownsAnyDualSense
-        if sony, owned {
+        if sony, InProcessLightWriter.shared.ownsAnyDualSense {
             // A duration of 0 means "a tap", but a motor needs time to spin
             // up, so a tap gets a short pulse rather than nothing felt.
             let ms = durationMs > 0 ? max(durationMs, Self.rumblePulseMs) : Self.rumblePulseMs
             Self.debugLastPath = "report intensity=\(intensity) ms=\(ms) name=\(name)"
-            InProcessLightWriter.shared.vibrate(intensity: intensity, durationMs: ms)
+            // Aim the buzz at this controller's own pad. With two Sony pads
+            // connected the old call shook both; the writer falls back to
+            // every pad only when it cannot tell which one this is.
+            InProcessLightWriter.shared.vibrate(intensity: intensity, durationMs: ms,
+                                                target: SonyPadIdentity.of(controller: controller))
             return
         }
-        Self.debugLastPath = "apple intensity=\(intensity) ms=\(durationMs) sony=\(sony) owned=\(owned) name=\(name)"
+        Self.debugLastPath = "apple intensity=\(intensity) ms=\(durationMs) sony=\(sony) name=\(name)"
         vibrateUsingEngine(controller: controller, intensity: intensity, sharpness: sharpness, durationMs: durationMs)
     }
 

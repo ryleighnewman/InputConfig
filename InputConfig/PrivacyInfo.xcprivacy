@@ -6,9 +6,9 @@
         Privacy manifest declaring zero third-party data collection and zero
         tracking. InputConfig stores everything (presets, stats, region
         definitions, calibration) on-device in the sandbox container. No
-        network beacons, no analytics SDKs, no advertising attribution.
-        The only outbound network call is an OPT-IN App Store version check
-        the user can disable in Settings > General > Updates.
+        network beacons, no analytics SDKs, no advertising attribution, and
+        no network calls in normal use (the App Store handles updates; the
+        in-app version check was removed).
     -->
     <key>NSPrivacyTracking</key>
     <false/>
@@ -44,11 +44,12 @@
         </dict>
 
         <!--
-            File timestamp APIs are touched indirectly by JSONEncoder /
-            FileManager when reading + writing preset, backup, and stats
-            files inside the sandbox container. Reason C617.1: "Display
-            file timestamps to the person using the device." (Stats panel
-            shows last-active times.)
+            File timestamps are read only for files inside the app's own
+            container: the creation date of Application Support/InputConfig
+            tells an upgrade from a first run (ContentView), and FileManager
+            reads metadata while writing preset, backup, and stats files.
+            Reason C617.1: access the timestamps, size, or other metadata of
+            files inside the app container. Never shown or sent anywhere.
         -->
         <dict>
             <key>NSPrivacyAccessedAPIType</key>
@@ -60,9 +61,9 @@
         </dict>
 
         <!--
-            System boot time is read via CACurrentMediaTime() / mach_absolute_time()
-            in the engine + stats subsystem for monotonic clocks (engine
-            tick deltas, session uptime, gesture hold windows). Reason
+            System boot time is read via ProcessInfo.systemUptime in the
+            engine, the cursor guard, and the input services for monotonic
+            clocks (tick deltas, double-click timing, hold windows). Reason
             35F9.1: "Measure time elapsed between events that occur inside
             the app." Never transmitted off-device.
         -->
@@ -72,20 +73,6 @@
             <key>NSPrivacyAccessedAPITypeReasons</key>
             <array>
                 <string>35F9.1</string>
-            </array>
-        </dict>
-
-        <!--
-            Disk-space queries happen when computing the backup file size
-            preview in Settings > General. Reason E174.1: "Display the
-            information about disk space to the user."
-        -->
-        <dict>
-            <key>NSPrivacyAccessedAPIType</key>
-            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
-            <key>NSPrivacyAccessedAPITypeReasons</key>
-            <array>
-                <string>E174.1</string>
             </array>
         </dict>
     </array>

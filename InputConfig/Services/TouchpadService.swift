@@ -40,9 +40,6 @@ enum TouchpadDevice: String, Codable, CaseIterable, Identifiable {
     /// in absolute screen space.
     var canFingerCalibrate: Bool { self != .macTrackpad }
 
-    /// True when Quick Zero is meaningful. Mac trackpad has no origin to
-    /// recenter, so the button is greyed out for it.
-    var canQuickZero: Bool { self != .macTrackpad }
 
     /// True when this device's regions live in `CursorRegionService` (and
     /// produce `.cursorRegion` bindings) instead of `TouchpadService`.
@@ -103,17 +100,26 @@ struct DisplayKey: Codable, Hashable {
     var model: UInt32
     var serial: UInt32
     var name: String
+    /// macOS's ID for the display, which tells apart two monitors of the
+    /// same model that both report serial 0 (common through docks and
+    /// DisplayLink). nil in regions saved before it was kept.
+    var uuid: String? = nil
 
     private var hasHardwareIdentity: Bool { vendor != 0 || model != 0 || serial != 0 }
 
     static func == (a: DisplayKey, b: DisplayKey) -> Bool {
         if a.hasHardwareIdentity && b.hasHardwareIdentity {
-            return a.vendor == b.vendor && a.model == b.model && a.serial == b.serial
+            guard a.vendor == b.vendor && a.model == b.model && a.serial == b.serial else { return false }
+            if a.serial == 0, let ua = a.uuid, let ub = b.uuid { return ua == ub }
+            return true
         }
         return a.name == b.name
     }
-    // Hashed by name only, so two keys that compare equal always hash equal.
-    func hash(into h: inout Hasher) { h.combine(name) }
+    // Equality is by hardware when both keys have it and by name otherwise,
+    // so two equal keys can differ in either; only a constant hash keeps
+    // equal keys hashing equal. (Hashing by name broke that for one display
+    // under two names.) Sets and maps of displays hold a handful at most.
+    func hash(into h: inout Hasher) { h.combine(0) }
 }
 
 struct TouchpadRegion: Codable, Hashable, Identifiable {
@@ -159,12 +165,9 @@ struct TouchpadRegion: Codable, Hashable, Identifiable {
     }
 }
 
-/// Bridges `TouchpadHelper` (a separate process that reads raw HID input
-/// reports from DualSense / DualShock 4 controllers) into the rest of the
-/// app. The main app cannot read those bytes directly without breaking
-/// `gamecontrolleragentd`'s grip on the device, so we spawn the helper which
-/// opens the HID device WITHOUT seizing, parses the touchpad bytes, and
-/// emits them line-by-line on stdout.
+/// Holds the DualSense / DualShock 4 touchpad state the GameController
+/// framework feeds in (`ingestGameControllerTouchpad`): finger positions,
+/// per-finger motion, regions, and tap gestures.
 ///
 /// `MappingEngine` pulls the latest per-finger delta out of `consumeDelta(...)`
 /// each frame. The "consume" naming is deliberate: the call resets the
@@ -190,18 +193,13 @@ final class TouchpadService: @unchecked Sendable {
     private var lastF0Pos: (id: UInt8, x: Int, y: Int)?
     private var lastF1Pos: (id: UInt8, x: Int, y: Int)?
 
-    private var process: Process?
-    private var pipeOut: Pipe?
-    private var pipeIn: Pipe?
-    private var pipeErr: Pipe?
-    private var helperRunning = false
-
-    /// Reference count: the helper subprocess stays alive while at least one
-    /// caller has retained it. MappingEngine retains while a touchpad-using
-    /// preset is active; the calibration UI retains while open.
+    /// Reference count of the touchpad's users. MappingEngine retains while
+    /// a touchpad-using preset is active; the calibration UI and the
+    /// visualizer retain while open. When the last one lets go, the touch
+    /// state is reset so nothing carries into the next preset.
     private var retainCount = 0
 
-    /// Touchpad surface dimensions in helper-emitted native units. We use the
+    /// Touchpad surface dimensions in native units. We use the
     /// larger DualSense bounds; DS4 reports slightly smaller Y, which still
     /// normalizes correctly since deltas are unit-divided.
     private let surfaceWidth: Float = 1920
@@ -226,169 +224,63 @@ final class TouchpadService: @unchecked Sendable {
     private var currentF0: (x: Int, y: Int)?
     private var currentF1: (x: Int, y: Int)?
 
-    /// Origin offset applied after the user hits Quick Zero. Subtracted
-    /// from raw finger coordinates before any delta math or region
-    /// matching. (0, 0) means no offset, which is the default.
-    private var quickZeroOriginX: Int = 0
-    private var quickZeroOriginY: Int = 0
-    /// When the user last quick-zeroed; nil if never. Surfaced in the
-    /// calibration sheet so the user can see whether a recenter is active.
-    private var quickZeroAt: Date?
 
     /// Last device the calibration sheet was opened against. Stored in
     /// UserDefaults so the picker remembers the user's preference between
     /// sessions. Not used by the runtime pipeline; this is a UI hint only.
     private static let activeDeviceKey = "InputConfig.touchpadActiveDevice.v2"
 
-    private init() {
+    /// Which surface this instance tracks: 0 the main one (`shared`), 1 a
+    /// Steam Controller's left trackpad (`second`). Each surface has its
+    /// own fingers, deltas, taps and gestures; zones and calibration belong
+    /// to the main surface.
+    let surface: Int
+
+    /// The left trackpad of a Steam Controller, the second surface.
+    static let second = TouchpadService(surface: 1)
+    /// A Steam Controller's right trackpad: its rows are main-surface rows,
+    /// but it has its own instance, so it never competes with a PlayStation
+    /// touchpad in the same preset and never takes that pad's calibration.
+    /// It shares the preset's zones (see `load`).
+    static let steamRight = TouchpadService(surface: 2)
+
+    /// The instance for a touchpad input's surface; `steam` for a row on a
+    /// Steam Controller.
+    static func forSurface(_ surface: Int?, steam: Bool = false) -> TouchpadService {
+        surface == 1 ? second : (steam ? steamRight : shared)
+    }
+
+    private init(surface: Int = 0) {
+        self.surface = surface
+        guard surface == 0 else { return }
         loadCalibration()
         loadRegions()
     }
 
     // MARK: - Lifecycle
 
-    /// Increment the helper's retain count. Spawns the subprocess on the
-    /// first retain. Pair every call with `release()`. Serialized under
-    /// the same lock that guards the rest of the service state so two
-    /// concurrent retainers can't both observe 0 and double-spawn.
+    /// Count a user of the touchpad. Pair every call with `release()`.
+    /// The GameController framework feeds the touch data (the separate
+    /// TouchpadHelper process it once came from could not run on macOS 14
+    /// and later, the minimum, and was removed).
     func retain() {
         lock.lock()
         retainCount += 1
-        let shouldStart = (retainCount == 1)
-        let count = retainCount
         lock.unlock()
-        NSLog("[TouchpadService] retain (count=%d, willStart=%@)", count, shouldStart ? "yes" : "no")
-        if shouldStart { start() }
     }
 
-    /// Decrement the helper's retain count. Stops the subprocess when it
-    /// drops to zero.
+    /// Let go of the touchpad. When the last user lets go, the per-preset
+    /// touch state is reset, so gestures and pressed regions cannot carry
+    /// over into the next preset.
     func release() {
         lock.lock()
         retainCount = max(0, retainCount - 1)
-        let shouldStop = (retainCount == 0)
+        let last = (retainCount == 0)
         lock.unlock()
-        if shouldStop { stop() }
+        if last { resetTouchState() }
     }
 
-    /// Start the helper if not already running. Safe to call multiple times.
-    ///
-    /// On macOS 14+ the GameController framework already exposes
-    /// DualSense / DualShock 4 touchpad coordinates via
-    /// `touchpadPrimary` / `touchpadSecondary` on the typed gamepad
-    /// subclass, and gamecontrollerd holds the HID device open
-    /// exclusively. Spawning the helper in that scenario produces no
-    /// data (its IOHIDDeviceOpen returns no input reports) and wastes
-    /// a subprocess. We skip launch on those systems and rely on the
-    /// framework feed installed by `GameControllerService.installTouchpadHandlers`.
-    func start() {
-        guard !helperRunning else { return }
-        if #available(macOS 14.0, *) {
-            // Skip the helper entirely; the GameController bridge is the
-            // authoritative touch source on these systems, and the PS /
-            // mute / DualSense Edge extras byte comes from the app's own
-            // in-process HID reader (DualSenseSupplementService), which
-            // receives both USB and Bluetooth input reports fine under
-            // the sandbox - verified live with an Edge on BT.
-            return
-        }
-        guard let helperURL = helperPath() else {
-            NSLog("[TouchpadService] TouchpadHelper NOT FOUND in bundle. Touchpad input will not work.")
-            ActivityLog.shared.error("Touchpad", "TouchpadHelper is missing from the app bundle; touchpad input will not work")
-            return
-        }
-
-        NSLog("[TouchpadService] Launching helper from %@", helperURL.path)
-
-        let p = Process()
-        p.executableURL = helperURL
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        let inPipe = Pipe()
-        p.standardOutput = outPipe
-        // Route stderr through a readability handler so the parent can
-        // surface any launch / runtime error from the helper instead of
-        // silently dropping it to /dev/null. Otherwise a sandbox kill,
-        // HID-open failure, or matching-rule miss produces no observable
-        // signal and the touchpad appears mysteriously broken.
-        p.standardError = errPipe
-        p.standardInput = inPipe
-
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            // EOF: the helper closed its stdout. Detach so this handler doesn't
-            // spin at 100% CPU re-firing on the closed descriptor (the same
-            // pattern SteamControllerService guards against).
-            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
-            self?.consumeStdout(data)
-        }
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            if let str = String(data: data, encoding: .utf8) {
-                let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    NSLog("[TouchpadHelper STDERR] %@", trimmed)
-                }
-            }
-        }
-
-        // If the helper exits unexpectedly, log the termination reason so
-        // we can tell a deliberate stdin-close shutdown from a crash.
-        p.terminationHandler = { [weak self] proc in
-            let status = proc.terminationStatus
-            let reason: String = (proc.terminationReason == .uncaughtSignal) ? "uncaughtSignal" : "exit"
-            NSLog("[TouchpadService] Helper terminated (reason=%@ status=%d)", reason, status)
-            ActivityLog.shared.post(status == 0 ? .info : .warning, "Touchpad", "Helper exited (\(reason), status \(status))")
-            // Only clear state if this is still the current helper, so a fast
-            // restart can't have the old helper's late termination handler
-            // clobber a newer live one.
-            guard let self = self, self.process === proc else { return }
-            self.helperRunning = false
-            self.process = nil
-        }
-
-        do {
-            try p.run()
-            process = p
-            pipeOut = outPipe
-            pipeErr = errPipe
-            pipeIn = inPipe
-            helperRunning = true
-            NSLog("[TouchpadService] Helper PID %d started", p.processIdentifier)
-            ActivityLog.shared.info("Touchpad", "Helper started (pid \(p.processIdentifier))")
-        } catch {
-            NSLog("[TouchpadService] Helper launch FAILED: %@", error.localizedDescription)
-            ActivityLog.shared.error("Touchpad", "Helper failed to launch: \(error.localizedDescription)")
-        }
-    }
-
-    /// Stop the helper. Closes the stdin pipe; the helper exits when it
-    /// observes that closure. Falls back to SIGTERM after a short grace.
-    func stop() {
-        guard helperRunning else { return }
-        helperRunning = false
-
-        pipeOut?.fileHandleForReading.readabilityHandler = nil
-        // Clear the stderr handler too. Previously this was left
-        // attached, which kept a strong reference to the closure (and
-        // its capture of NSLog through self) until the file handle
-        // was eventually GC'd. Detaching here makes shutdown clean.
-        pipeErr?.fileHandleForReading.readabilityHandler = nil
-        try? pipeIn?.fileHandleForWriting.close()
-
-        if let p = process, p.isRunning {
-            // Give it ~100ms to exit cleanly via stdin EOF, then terminate.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
-                if p.isRunning { p.terminate() }
-            }
-        }
-        process = nil
-        pipeOut = nil
-        pipeErr = nil
-        pipeIn = nil
-
+    private func resetTouchState() {
         lock.lock()
         finger0Delta = FingerDelta()
         finger1Delta = FingerDelta()
@@ -403,8 +295,29 @@ final class TouchpadService: @unchecked Sendable {
         gestureFiredAt = nil
         twoFingerStartedAt = nil
         twoFingerMotionMagnitude = 0
+        // The tap detector too, or the first tap after a reconnect counted
+        // as the end of the old contact (too long to be a tap), and a click
+        // held at the drop kept every tap suppressed.
+        oneFingerStartedAt = nil
+        oneFingerMotionMagnitude = 0
+        oneFingerSawPress = false
+        oneFingerSawSecond = false
+        twoFingerLiftDeadline = nil
+        lastOneFingerTapAt = 0
+        touchpadButtonDown = false
         pressedRegions.removeAll()
+        // A region under a resting finger has no deadline, so it has to be
+        // cleared here too or it stays pressed into the next preset.
+        regionPressExpiry.removeAll()
         lock.unlock()
+    }
+
+    /// The pad giving touch data went away (Bluetooth drop, sleep, battery).
+    /// No further touch event will arrive to lift a finger that was resting
+    /// on a region, and that region has no deadline, so its key would stay
+    /// held. Clear every finger and region; the next touch starts fresh.
+    func touchSourceDisconnected() {
+        resetTouchState()
     }
 
     // MARK: - Consumer API (MappingEngine)
@@ -424,11 +337,24 @@ final class TouchpadService: @unchecked Sendable {
             value = d.dx / Float(calibration.spanX)
             d.dx = 0
         case .y:
-            value = d.dy / Float(calibration.spanY)
+            // Both axes over one length: the pad's native units are about
+            // square per millimeter, while the pad is twice as wide as it is
+            // tall, so dividing each axis by its own span made a vertical
+            // slide move the pointer twice as far as the same horizontal one.
+            value = d.dy / Float(calibration.spanX)
             d.dy = 0
         }
         if key == 0 { finger0Delta = d } else { finger1Delta = d }
         return value
+    }
+
+    /// How much farther 1.5 moved a vertical slide than a horizontal one:
+    /// it divided each axis by its own span. Rows recorded before 1.6 keep
+    /// that feel (see LegacyRowCheck.isOlderRow).
+    var legacyVerticalScale: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return Float(calibration.spanX) / Float(calibration.spanY)
     }
 
     /// Same value `consumeDelta` would return, but WITHOUT zeroing the
@@ -444,7 +370,7 @@ final class TouchpadService: @unchecked Sendable {
         let d = finger == 1 ? finger1Delta : finger0Delta
         switch axis {
         case .x: return d.dx / Float(calibration.spanX)
-        case .y: return d.dy / Float(calibration.spanY)
+        case .y: return d.dy / Float(calibration.spanX)
         }
     }
 
@@ -518,9 +444,16 @@ final class TouchpadService: @unchecked Sendable {
     /// readout: proves the feed is alive independent of what is on the pad.
     private(set) var gameControllerSampleCount = 0
 
+    /// Horizontal motion per unit of x on the surface feeding now: below 1
+    /// for a square pad on this wide surface, so a slide moves the pointer
+    /// the same distance either way while positions still span the whole
+    /// surface (zones need the full width). Under `lock`.
+    private var motionScaleX: Float = 1
+
     func ingestGameControllerTouchpad(
         f0Active: Bool, f0NormalizedX: Float, f0NormalizedY: Float,
-        f1Active: Bool, f1NormalizedX: Float, f1NormalizedY: Float
+        f1Active: Bool, f1NormalizedX: Float, f1NormalizedY: Float,
+        xMotionScale: Float = 1
     ) {
         if !isFedByGameController && (f0Active || f1Active) { isFedByGameController = true }
         gameControllerSampleCount &+= 1
@@ -544,6 +477,7 @@ final class TouchpadService: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+        motionScaleX = xMotionScale
 
         // Use synthetic contact IDs so applyFinger's "same finger" delta
         // accumulation works the same way it does for helper-sourced
@@ -589,6 +523,9 @@ final class TouchpadService: @unchecked Sendable {
              && new.maxY == TouchpadCalibration.uncalibrated.maxY) {
             stamped.savedAt = Date()
         }
+        // A restored backup comes through here too, so a tiny or inverted
+        // range never reaches the divisor.
+        guard Self.isValidCalibration(stamped) else { return }
         lock.lock()
         calibration = stamped
         lock.unlock()
@@ -604,8 +541,12 @@ final class TouchpadService: @unchecked Sendable {
     /// persisted inverted or degenerate range (maxX <= minX, from a corrupt
     /// file or a half-finished sweep) would otherwise collapse the divisor and
     /// make the axis wildly oversensitive.
-    private static func isValidCalibration(_ c: TouchpadCalibration) -> Bool {
-        return c.maxX > c.minX && c.maxY > c.minY
+    /// It must also cover at least a third of the pad each way: a sweep of
+    /// a few units (a resting finger) made the pointer jump 100 times as far.
+    static let minimumSpanX = 1920 / 3
+    static let minimumSpanY = 1080 / 3
+    static func isValidCalibration(_ c: TouchpadCalibration) -> Bool {
+        return c.maxX - c.minX >= minimumSpanX && c.maxY - c.minY >= minimumSpanY
     }
 
     private func loadCalibration() {
@@ -644,51 +585,6 @@ final class TouchpadService: @unchecked Sendable {
     /// Remember the user's device pick for the next time the sheet opens.
     func setActiveDevice(_ device: TouchpadDevice) {
         UserDefaults.standard.set(device.rawValue, forKey: Self.activeDeviceKey)
-    }
-
-    // MARK: - Quick Zero
-
-    /// Re-zero the per-finger motion baseline at the current finger position:
-    /// the next delta is measured from here, so a relative touchpad-as-pointer
-    /// preset continues smoothly without a jump when the user re-centers.
-    ///
-    /// NOTE: this intentionally does NOT shift region matching. Regions are
-    /// matched against the absolute, normalized touchpad position (see
-    /// recomputePressedRegions), so offsetting coordinates by a quick-zero
-    /// origin would misalign every saved region. The origin is recorded only
-    /// for diagnostics (quickZeroInfo); it is deliberately not applied to live
-    /// coordinates. Returns true if a finger was actually in contact (so the UI
-    /// can show a "needs finger on touchpad" hint when it wasn't).
-    @discardableResult
-    func quickZero() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard let p = currentF0 ?? currentF1 else { return false }
-        quickZeroOriginX = p.x
-        quickZeroOriginY = p.y
-        quickZeroAt = Date()
-        // Clear accumulated deltas so an immediate read-after-zero returns
-        // 0 instead of the motion that built up before the user pressed it.
-        finger0Delta = FingerDelta()
-        finger1Delta = FingerDelta()
-        lastF0Pos = nil
-        lastF1Pos = nil
-        return true
-    }
-
-    /// Reset Quick Zero so coordinates are read raw again.
-    func clearQuickZero() {
-        lock.lock(); defer { lock.unlock() }
-        quickZeroOriginX = 0
-        quickZeroOriginY = 0
-        quickZeroAt = nil
-    }
-
-    /// Snapshot of the current Quick Zero offset (relative to raw helper
-    /// coordinates) and when it was set. `at == nil` means no zero is
-    /// active.
-    func quickZeroInfo() -> (x: Int, y: Int, at: Date?) {
-        lock.lock(); defer { lock.unlock() }
-        return (quickZeroOriginX, quickZeroOriginY, quickZeroAt)
     }
 
     /// On-disk calibration location. Lives in the same Application Support
@@ -771,6 +667,7 @@ final class TouchpadService: @unchecked Sendable {
     private let doubleTapWindow: CFTimeInterval = 0.35
     private func fireGesture(_ kind: TouchpadGestureKind) {
         pendingGesture = kind
+        pendingGestureAt = CACurrentMediaTime()
         gestureFiredAt = nil
         if let cb = scanGestureCallback { DispatchQueue.main.async { cb(kind) } }
     }
@@ -798,7 +695,8 @@ final class TouchpadService: @unchecked Sendable {
     /// note-off) was left stuck.
     func consumeGesture(_ kind: TouchpadGestureKind) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard pendingGesture == kind else { return false }
+        expireStaleGestureLocked()
+        guard Self.gesture(pendingGesture, counts: kind) else { return false }
         let now = CACurrentMediaTime()
         if gestureFiredAt == nil {
             gestureFiredAt = now
@@ -822,7 +720,28 @@ final class TouchpadService: @unchecked Sendable {
     /// view-side indicators.
     func peekGesture(_ kind: TouchpadGestureKind) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return pendingGesture == kind
+        expireStaleGestureLocked()
+        return Self.gesture(pendingGesture, counts: kind)
+    }
+
+    /// The second tap of a double tap is a tap too, as on a Mac trackpad:
+    /// a tap-to-click row clicks on both, so tap-tap opens a file, and a
+    /// double-tap row fires as well. Only the tap kind was set before, so
+    /// every second quick tap was dropped by tap-to-click.
+    private static func gesture(_ pending: TouchpadGestureKind?, counts kind: TouchpadGestureKind) -> Bool {
+        pending == kind || (kind == .oneFingerTap && pending == .doubleTap)
+    }
+
+    /// When the pending gesture was recognized.
+    private var pendingGestureAt: CFTimeInterval = 0
+
+    /// A gesture no row read within half a second is dropped: with nothing
+    /// consuming it (no preset bound to it) the flag stayed set for good
+    /// and kept its row highlighted in the editor.
+    private func expireStaleGestureLocked() {
+        guard pendingGesture != nil, gestureFiredAt == nil,
+              CACurrentMediaTime() - pendingGestureAt > 0.5 else { return }
+        pendingGesture = nil
     }
 
     /// Run the gesture state machine against the latest finger state.
@@ -866,7 +785,9 @@ final class TouchpadService: @unchecked Sendable {
         // A qualified two-finger tap waiting for the last finger to lift.
         if let deadline = twoFingerLiftDeadline {
             if !f0Active && !f1Active {
-                fireGesture(.twoFingerTap)
+                // Only inside the window: a finger resting still sends no
+                // events, so its lift could arrive seconds later.
+                if nowMono <= deadline { fireGesture(.twoFingerTap) }
                 twoFingerLiftDeadline = nil
             } else if nowMono > deadline {
                 twoFingerLiftDeadline = nil
@@ -914,6 +835,8 @@ final class TouchpadService: @unchecked Sendable {
         // Drop pressed-state entries for regions that no longer exist.
         pressedRegions = pressedRegions.filter { id in newRegions.contains(where: { $0.id == id }) }
         lock.unlock()
+        // The Steam right pad reads the same zones.
+        if self === TouchpadService.shared { TouchpadService.steamRight.load(newRegions) }
     }
 
     /// Regions the app kept app-wide before 1.5, read once so the
@@ -946,85 +869,29 @@ final class TouchpadService: @unchecked Sendable {
             regionPressExpiry.removeAll()
             return
         }
-        var pressed = Set<UUID>()
+        var held = Set<UUID>()
         let w = Double(surfaceWidth), h = Double(surfaceHeight)
         let now = ProcessInfo.processInfo.systemUptime
         for region in regions {
-            if f0Active && region.contains(normalizedX: Double(f0X) / w, y: Double(f0Y) / h) {
-                pressed.insert(region.id)
-                regionPressExpiry[region.id] = now + regionPressLatch
-            } else if f1Active && region.contains(normalizedX: Double(f1X) / w, y: Double(f1Y) / h) {
-                pressed.insert(region.id)
-                regionPressExpiry[region.id] = now + regionPressLatch
+            if (f0Active && region.contains(normalizedX: Double(f0X) / w, y: Double(f0Y) / h))
+                || (f1Active && region.contains(normalizedX: Double(f1X) / w, y: Double(f1Y) / h)) {
+                held.insert(region.id)
             }
         }
-        // Keep recently tapped regions pressed until their latch expires so
-        // every tap stays observable for at least one poll frame, then prune
-        // expired entries so the dictionary cannot grow.
+        // A region under a finger stays pressed with no deadline: a finger
+        // held still sends no new events, and a 40 ms expiry let go of the
+        // region while it was still held. The short latch starts when the
+        // finger leaves, so a quick tap still lasts a poll frame.
+        for (id, expiry) in regionPressExpiry where expiry == .infinity && !held.contains(id) {
+            regionPressExpiry[id] = now + regionPressLatch
+        }
+        for id in held { regionPressExpiry[id] = .infinity }
+        var pressed = held
         for (id, expiry) in regionPressExpiry where expiry > now {
             pressed.insert(id)
         }
         regionPressExpiry = regionPressExpiry.filter { $0.value > now }
         pressedRegions = pressed
-    }
-
-    // MARK: - Stdout parsing
-
-    private var stdoutBuffer = Data()
-
-    private func consumeStdout(_ chunk: Data) {
-        stdoutBuffer.append(chunk)
-        while let nl = stdoutBuffer.firstIndex(of: 0x0A) {
-            let lineData = stdoutBuffer.subdata(in: stdoutBuffer.startIndex..<nl)
-            stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...nl)
-            if let line = String(data: lineData, encoding: .utf8) {
-                handleLine(line)
-            }
-        }
-        // Guard against a malformed helper flooding a newline-less stream: cap
-        // the unparsed buffer so it can't grow without bound.
-        if stdoutBuffer.count > 65_536 {
-            stdoutBuffer.removeAll(keepingCapacity: false)
-        }
-    }
-
-    /// Format: "T <seq> <btn> <f0Active> <f0Id> <f0X> <f0Y> <f1Active> <f1Id> <f1X> <f1Y> <kind>"
-    /// Also:   "B <buttons2> <kind>" - the raw PS/mute/Edge-extras byte,
-    /// emitted by the helper only when it changes.
-    private func handleLine(_ line: String) {
-        let parts = line.split(separator: " ").map(String.init)
-        // Surface non-T messages from the helper so we can see startup
-        // handshakes ("R ready"), device-attach events ("A dualsense"),
-        // and errors. T lines are the input stream and would flood the
-        // log if we printed them, so they're filtered out. B lines fire
-        // once per press/release edge, so logging them doubles as the
-        // press diagnostic for the Edge extras.
-        if parts.first != "T" {
-            NSLog("[TouchpadHelper STDOUT] %@", line)
-        }
-        if parts.first == "B", parts.count >= 2, let b2 = UInt8(parts[1]) {
-            DualSenseSupplementService.shared.ingestHelperButtons2(b2)
-            return
-        }
-        guard parts.first == "T", parts.count >= 11,
-              let f0Active = UInt8(parts[3]),
-              let f0Id = UInt8(parts[4]),
-              let f0X = Int(parts[5]),
-              let f0Y = Int(parts[6]),
-              let f1Active = UInt8(parts[7]),
-              let f1Id = UInt8(parts[8]),
-              let f1X = Int(parts[9]),
-              let f1Y = Int(parts[10]) else { return }
-
-        lock.lock()
-        defer { lock.unlock() }
-
-        applyFinger(active: f0Active != 0, id: f0Id, x: f0X, y: f0Y,
-                    last: &lastF0Pos, delta: &finger0Delta)
-        applyFinger(active: f1Active != 0, id: f1Id, x: f1X, y: f1Y,
-                    last: &lastF1Pos, delta: &finger1Delta)
-        updateCurrentPositions(f0Active: f0Active != 0, f0X: f0X, f0Y: f0Y,
-                               f1Active: f1Active != 0, f1X: f1X, f1Y: f1Y)
     }
 
     private func applyFinger(active: Bool, id: UInt8, x: Int, y: Int,
@@ -1038,7 +905,7 @@ final class TouchpadService: @unchecked Sendable {
         // Same finger as before? Accumulate delta. Otherwise reset baseline
         // so a finger-lift-and-replace doesn't produce a jump.
         if let prev = last, prev.id == id {
-            delta.dx += Float(x - prev.x)
+            delta.dx += Float(x - prev.x) * motionScaleX
             delta.dy += Float(y - prev.y)
         }
         last = (id, x, y)
@@ -1071,25 +938,4 @@ final class TouchpadService: @unchecked Sendable {
                               f1Active: f1Active, f1DX: f1dx, f1DY: f1dy)
     }
 
-    // MARK: - Helper discovery
-
-    private func helperPath() -> URL? {
-        if let bundlePath = Bundle.main.executableURL?.deletingLastPathComponent()
-            .appendingPathComponent("TouchpadHelper"),
-           FileManager.default.isExecutableFile(atPath: bundlePath.path) {
-            return bundlePath
-        }
-        if let resourcePath = Bundle.main.url(forResource: "TouchpadHelper", withExtension: nil) {
-            return resourcePath
-        }
-        let devPath = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("TouchpadHelper/TouchpadHelper")
-        if FileManager.default.isExecutableFile(atPath: devPath.path) {
-            return devPath
-        }
-        return nil
-    }
 }

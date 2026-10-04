@@ -11,7 +11,7 @@ struct GamingUtilitiesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Defaults for presets that do not set their own; a preset's Automation & Gaming Utilities panel overrides them.")
+            Text("Used by presets that don't set their own.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -53,9 +53,9 @@ struct GamingUtilitiesPanel: View {
             sliderRow("Speed", value: $guardSvc.sensitivityMultiplier, range: 0.1...5.0, step: 0.05,
                       text: String(format: "×%.2f", guardSvc.sensitivityMultiplier))
 
-            Text("Games that read mouse movement stop turning when the pointer reaches an edge; keeping it off the edges and recentering it keep the camera moving. The speed multiplies every Mouse Motion row and leaves the Mac's own pointer speed alone.")
+            Text("Keeping the pointer off screen edges keeps game cameras turning. Speed multiplies every Mouse Motion row, not the Mac's pointer speed.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .fixedSize(horizontal: false, vertical: true)
 
             if guardSvc.engineActive {
@@ -80,6 +80,8 @@ struct GamingUtilitiesPanel: View {
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 52, alignment: .leading)
             Slider(value: value, in: range, step: step) { EmptyView() }
+                .accessibilityLabel(label)
+                .accessibilityValue(text)
             Text(text)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)

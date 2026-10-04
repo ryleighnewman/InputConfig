@@ -120,17 +120,25 @@ struct CursorRegionsView: View {
                             dragCurrent = nil
                         }
                         .buttonStyle(.solidSecondaryCompact)
+                        Button("Place in Center") {
+                            drawingNewRegion = false
+                            dragStart = nil
+                            dragCurrent = nil
+                            addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
+                        }
+                        .buttonStyle(.solidSecondaryCompact)
+                        .help("Add the region in the middle without drawing it")
                     }
 
                     Spacer()
 
                     Text(cursorReadout)
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
 
                     Text("\(regions.count) / \(Self.maxRegions) regions")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -178,7 +186,7 @@ struct CursorRegionsView: View {
             .help("New regions belong to this display. Every display means the same area of whichever screen the pointer is on.")
             Text(displayHint)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.hint)
                 .lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -244,7 +252,7 @@ struct CursorRegionsView: View {
                         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
                 }
 
-                // Live pointer dot, in the same normalised space the regions
+                // Live pointer dot, in the same normalized space the regions
                 // hit-test against, only when the pointer is on this display.
                 if pointerIsOnShownDisplay {
                     Circle()
@@ -323,7 +331,25 @@ struct CursorRegionsView: View {
 
     // MARK: - Region list
 
+    /// The list, then typed bounds for the selected region: placing and
+    /// sizing one took a pointer drag before, so keyboard, switch and
+    /// VoiceOver users could only make a fixed box in the middle.
     private var regionsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            regionsListBody
+            if let id = selectedRegionID, let region = svc.region(with: id) {
+                // Only while the region is still there: committing after it
+                // was deleted would add it back.
+                RegionBoundsFields(region: region) { updated in
+                    guard svc.region(with: updated.id) != nil else { return }
+                    svc.upsert(updated)
+                }
+                .id(region.id)
+            }
+        }
+    }
+
+    private var regionsListBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Regions")
                 .font(.caption.weight(.semibold))
@@ -332,7 +358,7 @@ struct CursorRegionsView: View {
             if regions.isEmpty {
                 Text("None yet.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 Spacer()
             } else {
                 ScrollView {
@@ -369,7 +395,7 @@ struct CursorRegionsView: View {
                         .lineLimit(1)
                     Text(displayTag(for: region))
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.hint)
                         .lineLimit(1)
                 }
                 Spacer()
@@ -524,5 +550,53 @@ struct CursorRegionsView: View {
 
     private func paletteColor(at index: Int) -> Color {
         regionPaletteColor(at: index)
+    }
+}
+
+
+/// A region's place and size as typed numbers, in percent of the area it is
+/// drawn on: left and top edge, width and height. Kept inside the area and
+/// at least 4 percent each way, as a drawn region is.
+struct RegionBoundsFields: View {
+    let region: TouchpadRegion
+    let save: (TouchpadRegion) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Place and size, in percent")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 6) {
+                field("Left", value: region.minX) { set(minX: $0) }
+                field("Top", value: region.minY) { set(minY: $0) }
+                field("Width", value: region.maxX - region.minX) { set(width: $0) }
+                field("Height", value: region.maxY - region.minY) { set(height: $0) }
+            }
+        }
+    }
+
+    private func field(_ label: String, value: Double, apply: @escaping (Double) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            TextField(label, value: SwiftUI.Binding(
+                get: { Int((value * 100).rounded()) },
+                set: { apply(Double($0) / 100) }), format: .number)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .frame(width: 52)
+                .accessibilityLabel("\(label) of \(region.name), percent")
+        }
+    }
+
+    private func set(minX: Double? = nil, minY: Double? = nil, width: Double? = nil, height: Double? = nil) {
+        var r = region
+        let w = max(0.04, min(1, width ?? (r.maxX - r.minX)))
+        let h = max(0.04, min(1, height ?? (r.maxY - r.minY)))
+        let x = max(0, min(1 - w, minX ?? r.minX))
+        let y = max(0, min(1 - h, minY ?? r.minY))
+        r.minX = x; r.maxX = x + w
+        r.minY = y; r.maxY = y + h
+        save(r)
     }
 }

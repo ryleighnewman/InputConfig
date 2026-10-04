@@ -45,6 +45,15 @@ final class TipJarService: ObservableObject {
     @Published private(set) var totalTipsCount: Int = 0
     @Published private(set) var activeSubscription: Product?
     @Published var purchaseInProgress: String? // product ID being purchased
+    /// A neutral message for the tip jar to show: a restore that finished,
+    /// or a purchase waiting for approval. Cleared when dismissed.
+    @Published var notice: String?
+
+    /// True when this copy came from the Mac App Store. Other copies (the
+    /// Homebrew build, a development build) have no receipt and StoreKit
+    /// offers them no products, so the tip jar says where tips live
+    /// instead of "temporarily unavailable" forever.
+    var isAppStoreCopy: Bool { AppStoreCopy.isAppStoreCopy }
 
     private var transactionListener: Task<Void, Never>?
 
@@ -64,7 +73,9 @@ final class TipJarService: ObservableObject {
     func loadProducts() async {
         guard !isLoading else { return }
         isLoading = true
-        lastError = nil
+        // lastError is left alone: the tip view reloads the products right
+        // after a failed purchase, and clearing it here dropped the alert
+        // before it could show.
 
         let allIDs = Self.consumableProductIDs + Self.subscriptionProductIDs
 
@@ -91,7 +102,7 @@ final class TipJarService: ObservableObject {
     // MARK: - Purchase
 
     /// Begin the purchase flow for the given product. Returns true on success,
-    /// false if the user cancelled, and throws on a verification failure.
+    /// false if the user canceled, and throws on a verification failure.
     @discardableResult
     func purchase(_ product: Product) async throws -> Bool {
         purchaseInProgress = product.id
@@ -124,6 +135,7 @@ final class TipJarService: ObservableObject {
         case .pending:
             // Pending transactions resolve later (e.g. parental approval).
             // The transaction listener picks them up.
+            notice = "Your tip is waiting for approval. It will go through on its own once approved."
             return false
 
         @unknown default:
@@ -138,6 +150,8 @@ final class TipJarService: ObservableObject {
         do {
             try await AppStore.sync()
             await refreshActiveSubscription()
+            notice = activeSubscription.map { "Restored. Your \($0.displayName) is active." }
+                ?? "Restored. There are no active monthly tips on this Apple Account."
         } catch {
             lastError = "Could not restore purchases: \(error.localizedDescription)"
         }

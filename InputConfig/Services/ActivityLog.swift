@@ -7,7 +7,7 @@ import AppKit
 /// engine starting a preset, presses and releases, permission changes,
 /// helper processes, the chassis sensor, MIDI, the emergency stop, and
 /// anything that fails. Entries carry a level and a source so the view can
-/// colour them, count problems, and filter, and `report()` turns the lot
+/// color them, count problems, and filter, and `report()` turns the lot
 /// into one text file a user can send.
 ///
 /// `post` is safe from any thread (the sensor thread and HID callbacks use
@@ -36,7 +36,7 @@ final class ActivityLog: ObservableObject, @unchecked Sendable {
         let level: Level
         let source: String
         let text: String
-        /// Controller slot the entry belongs to, for per-controller colour.
+        /// Controller slot the entry belongs to, for per-controller color.
         let slot: Int?
     }
 
@@ -106,10 +106,17 @@ final class ActivityLog: ObservableObject, @unchecked Sendable {
         pending.removeAll(keepingCapacity: true)
         lock.unlock()
         entries.append(contentsOf: batch)
-        if entries.count > Self.capacity { entries.removeFirst(entries.count - Self.capacity) }
-        for e in batch {
-            if e.level == .warning { warningCount += 1 }
-            if e.level == .error { errorCount += 1 }
+        if entries.count > Self.capacity {
+            entries.removeFirst(entries.count - Self.capacity)
+            // Counted from what is still in the log: trimmed lines used to
+            // stay counted, so the badges only ever went up.
+            warningCount = entries.lazy.filter { $0.level == .warning }.count
+            errorCount = entries.lazy.filter { $0.level == .error }.count
+        } else {
+            for e in batch {
+                if e.level == .warning { warningCount += 1 }
+                if e.level == .error { errorCount += 1 }
+            }
         }
         revision &+= 1
     }
@@ -164,7 +171,17 @@ final class ActivityLog: ObservableObject, @unchecked Sendable {
         out += "reduce transparency \(d.bool(forKey: "InputConfig.a11y.reduceTransparency"))\n"
 
         let tap = ChassisTapService.shared.calibrationSnapshot(window: 1)
-        out += "Chassis tap sensor: \(tap.running ? "streaming \(Int(tap.hz)) Hz" : (tap.error ?? "not running"))"
+        let tapState: String
+        if !tap.running {
+            tapState = tap.error ?? "not running"
+        } else {
+            // measuredHz holds the last good second, so the rate is only
+            // quoted while reports are actually arriving.
+            tapState = String(format: "open, last report %.1f s ago", tap.silence)
+                + (tap.silence < 1 && tap.hz > 0 ? ", \(Int(tap.hz)) Hz" : "")
+        }
+        out += "Chassis tap sensor: \(tapState)"
+        out += ", wake denied by macOS: \(tap.wakeDenied ? "yes" : "no")"
         if tap.rewakes > 0 { out += ", re-woken \(tap.rewakes)x" }
         out += "\n"
 

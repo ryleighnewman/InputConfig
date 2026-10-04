@@ -27,7 +27,7 @@ import AppKit
 /// A force quit (Activity Monitor → kill, or `kill -9`) leaves the
 /// sentinel in the same "not clean" state as a crash, because the
 /// process is killed before it can flip the flag. From inside the
-/// process we cannot reliably distinguish the two. The behaviour is
+/// process we cannot reliably distinguish the two. The behavior is
 /// the same in both cases: the user gets their preset back. If they
 /// want to suppress that they can disable session restore in
 /// Settings → General → Reliability.
@@ -60,6 +60,12 @@ final class CrashRecoveryService: ObservableObject {
 
     private let fileURL: URL
     private static let sessionRestorePrefKey = "InputConfig.sessionRestore.enabled"
+
+    /// Match the stored setting after Reset or Restore changed it underneath.
+    func reloadFromDefaults() {
+        let stored = (UserDefaults.standard.object(forKey: Self.sessionRestorePrefKey) as? Bool) ?? true
+        if stored != sessionRestoreEnabled { sessionRestoreEnabled = stored }
+    }
     nonisolated private static let lastFreezeKey = "InputConfig.recovery.lastFreezeAt"
 
     /// Window during which a second crash will NOT trigger another
@@ -104,6 +110,17 @@ final class CrashRecoveryService: ObservableObject {
         // Read the previous session BEFORE we overwrite the file. This
         // tells us whether the last process exited cleanly.
         let previous = readSentinel()
+        // Another copy still running (it quits this one at launch): its
+        // record is live, not a crash, and writing ours over it would make
+        // that copy's next launch look like a crash, or hide a real one.
+        if let other = previous?.processID, other != Int(ProcessInfo.processInfo.processIdentifier),
+           other > 0,
+           // Not kill(pid, 0): the sandbox answers EPERM for another
+           // process, live or not, so that probe never saw the other copy.
+           NSRunningApplication(processIdentifier: pid_t(other))?.bundleIdentifier == Bundle.main.bundleIdentifier {
+            secondCopy = true
+            return
+        }
         determineRecoveryDecision(from: previous)
         writeSentinel()
 
@@ -116,23 +133,22 @@ final class CrashRecoveryService: ObservableObject {
 
     // MARK: - Public API
 
-    /// Call whenever the user activates a different preset so the
-    /// recovery file always reflects the latest "wanted" state.
     /// Show the crash reports macOS kept for this app. The reports folder
     /// is outside the sandbox, so it is opened through the Finder, and if
     /// that is refused the Console app is opened instead, which lists the
     /// same reports under Crash Reports.
     static func openCrashReports() {
-        let reports = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
-        // The sandbox home is the container; strip it back to the real one.
-        let realHome = reports.path.replacingOccurrences(
-            of: "/Library/Containers/\(Bundle.main.bundleIdentifier ?? "")/Data", with: "")
-        if NSWorkspace.shared.open(URL(fileURLWithPath: realHome, isDirectory: true)) { return }
+        // The account's real home, not the sandbox container's.
+        let home = getpwuid(getuid()).flatMap { $0.pointee.pw_dir.map { String(cString: $0) } }
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let reports = home + "/Library/Logs/DiagnosticReports"
+        if NSWorkspace.shared.open(URL(fileURLWithPath: reports, isDirectory: true)) { return }
         let console = URL(fileURLWithPath: "/System/Applications/Utilities/Console.app")
         NSWorkspace.shared.openApplication(at: console, configuration: NSWorkspace.OpenConfiguration())
     }
 
+    /// Call whenever the user activates a different preset so the
+    /// recovery file always reflects the latest "wanted" state.
     func recordActivePreset(_ presetID: UUID?) {
         currentSession.activePresetID = presetID
         writeSentinel()
@@ -171,7 +187,14 @@ final class CrashRecoveryService: ObservableObject {
 
     // MARK: - Internal
 
+    /// The last run ended without a clean quit (crash, force quit, kill),
+    /// with a preset running, so it may have left synthetic keys held.
+    private(set) var previousRunEndedWithPresetRunning = false
+
     private func determineRecoveryDecision(from previous: Session?) {
+        if let prev = previous, !prev.cleanShutdown, prev.activePresetID != nil {
+            previousRunEndedWithPresetRunning = true
+        }
         guard sessionRestoreEnabled,
               let prev = previous,
               prev.cleanShutdown == false,
@@ -206,7 +229,12 @@ final class CrashRecoveryService: ObservableObject {
         return try? JSONDecoder().decode(Session.self, from: data)
     }
 
+    /// True in a copy launched while another is running; it quits at once
+    /// and must leave the running copy's record alone.
+    private var secondCopy = false
+
     private func writeSentinel() {
+        guard !secondCopy else { return }
         guard let data = try? JSONEncoder().encode(currentSession) else { return }
         try? data.write(to: fileURL, options: .atomic)
     }

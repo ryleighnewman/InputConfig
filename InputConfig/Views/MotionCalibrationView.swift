@@ -23,6 +23,8 @@ struct MotionCalibrationView: View {
     @State private var captureRemaining: Double = 0
     @State private var captureSamples: [SampleVector] = []
     @State private var lastSavedKey: String?
+    /// The pad moved during the last full calibration, so nothing was saved.
+    @State private var captureMovedKey: String?
     /// Two-step calibration flow: first click reveals instructions
     /// (scrolls them into view), second click actually starts the
     /// capture. Prevents accidental calibration with the controller
@@ -95,7 +97,11 @@ struct MotionCalibrationView: View {
             }
             controllerService.retainLiveInput("motion calibration")
         }
+        .onChange(of: listeningForRezeroButton) { _, armed in
+            MappingEngine.editorListenerArmed = armed
+        }
         .onDisappear {
+            MappingEngine.editorListenerArmed = false
             controllerService.releaseLiveInput("motion calibration")
             captureTimer?.invalidate()
             captureTimer = nil
@@ -106,6 +112,12 @@ struct MotionCalibrationView: View {
         // pose when the controller is still. Paused during capture so
         // the model stays at flat for the duration of calibration.
         .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
+            // Follow the controller list: a pad that connects after the
+            // sheet opens, or one whose serial arrives a moment late, is
+            // picked up instead of leaving the sheet on nothing.
+            if selectedControllerEntry == nil, let first = motionCapableControllers.first {
+                selectedKey = MotionCalibrationService.identityKey(for: first.controller)
+            }
             trackRezero()
             guard !captureInProgress,
                   let entry = selectedControllerEntry,
@@ -123,8 +135,8 @@ struct MotionCalibrationView: View {
                 z: Float(motion.rotationRate.z),
                 forKey: key)
             integratedPitch = (integratedPitch + gx * dt) * 0.98
-            integratedYaw   = (integratedYaw + gy * dt) * 0.98
-            integratedRoll  = (integratedRoll + gz * dt) * 0.98
+            integratedYaw   = (integratedYaw + gz * dt) * 0.98
+            integratedRoll  = (integratedRoll + gy * dt) * 0.98
             integratedPitch = max(-(.pi / 2), min(.pi / 2, integratedPitch))
             integratedYaw   = max(-(.pi / 2), min(.pi / 2, integratedYaw))
             integratedRoll  = max(-(.pi / 2), min(.pi / 2, integratedRoll))
@@ -224,7 +236,7 @@ struct MotionCalibrationView: View {
     }
 
     private var noControllerNote: some View {
-        Text("Connect a controller with motion sensors: DualSense, DualShock 4, Switch Pro or Joy-Con.")
+        Text("Connect a controller with motion sensors: a DualSense, DualSense Edge or DualShock 4.")
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
@@ -310,14 +322,14 @@ struct MotionCalibrationView: View {
             HStack(spacing: 4) {
                 Text(axis)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                     .frame(width: 10, alignment: .leading)
                 Text(String(format: "%+0.2f", value))
                     .font(.caption.monospacedDigit())
                     .frame(width: 50, alignment: .trailing)
                 Text(unit)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
             }
             MotionBar(value: value, scale: scale, tint: color)
                 .frame(height: 6)
@@ -422,6 +434,9 @@ struct MotionCalibrationView: View {
             } else if let key = lastSavedKey, key == selectedKey {
                 Label("Saved", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            } else if let key = captureMovedKey, key == selectedKey {
+                Label("It moved, nothing saved. Rest it flat and start again", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
             } else {
                 Text(String(format: "rest it flat and untouched for %.1f seconds", captureDuration))
                     .foregroundStyle(.secondary)
@@ -432,8 +447,13 @@ struct MotionCalibrationView: View {
     }
 
     private var rezeroButtonChoices: [(index: Int, label: String)] {
-        var choices = BindingRowView.standardButtonLabels.filter { $0.index <= 12 }
-        if let slot = selectedControllerEntry?.slot {
+        // Named for the selected controller's family, on its numbering.
+        let slot = selectedControllerEntry?.slot
+        let family = slot.flatMap { controllerService.namingFamily(forSlot: $0) }
+        let model = slot.map { controllerService.modelNames(forSlot: $0) } ?? .none
+        var choices = ButtonNames.labels(for: family, model: model)
+            .filter { ButtonNames.ownNumbering(family) || $0.index <= 12 }
+        if let slot {
             for extra in controllerService.extraButtonsSnapshot(for: slot)
             where !choices.contains(where: { $0.index == extra.index }) {
                 choices.append((extra.index, extra.label))
@@ -456,7 +476,9 @@ struct MotionCalibrationView: View {
     private func rezeroNow() {
         guard let entry = selectedControllerEntry else { return }
         if controllerService.rezeroMotion(slot: entry.slot) {
-            AccessibilityNotification.Announcement("Motion re-zeroed").post()
+            AccessibilityNotification.Announcement(controllerService.lastRezeroStoredZero
+                ? "Motion re-zeroed"
+                : "The controller was moving. Hold it still and try again").post()
         }
     }
 
@@ -529,6 +551,15 @@ struct MotionCalibrationView: View {
         return result
     }
 
+    /// A controller's name in the picker, with its controller number when
+    /// another connected pad has the same name.
+    private func pickerName(_ entry: (slot: Int, controller: GCController, info: ControllerInfo),
+                            in list: [(slot: Int, controller: GCController, info: ControllerInfo)]) -> String {
+        let name = entry.controller.vendorName ?? "Controller"
+        let twins = list.filter { ($0.controller.vendorName ?? "Controller") == name }.count
+        return twins > 1 ? "\(name) (controller \(entry.slot + 1))" : name
+    }
+
     /// The controller being calibrated, on the heading line: a name when
     /// there is one, a menu when there are several, and whether it has a
     /// stored zero.
@@ -542,12 +573,12 @@ struct MotionCalibrationView: View {
                 if list.count > 1 {
                     Menu {
                         ForEach(list, id: \.slot) { e in
-                            Button(e.controller.vendorName ?? "Controller") {
+                            Button(pickerName(e, in: list)) {
                                 selectedKey = MotionCalibrationService.identityKey(for: e.controller)
                             }
                         }
                     } label: {
-                        Text(entry.controller.vendorName ?? "Controller")
+                        Text(pickerName(entry, in: list))
                     }
                     .fixedSize()
                 } else {
@@ -600,6 +631,8 @@ struct MotionCalibrationView: View {
         captureRemaining = captureDuration
         captureSamples.removeAll(keepingCapacity: true)
         lastSavedKey = nil
+        captureMovedKey = nil
+        let hasAccel = motion.hasGravityAndUserAcceleration
         // Snap the 3D model to absolute flat at the start of calibration
         // so the user has a clear visual reference for what "flat" means.
         // The integrator loop (further down) keeps these at zero while
@@ -615,11 +648,13 @@ struct MotionCalibrationView: View {
                 gx: motion.hasRotationRate ? Float(motion.rotationRate.x) : 0,
                 gy: motion.hasRotationRate ? Float(motion.rotationRate.y) : 0,
                 gz: motion.hasRotationRate ? Float(motion.rotationRate.z) : 0,
-                ax: Float(motion.userAcceleration.x),
-                ay: Float(motion.userAcceleration.y),
-                az: Float(motion.userAcceleration.z)
+                ax: hasAccel ? Float(motion.userAcceleration.x) : 0,
+                ay: hasAccel ? Float(motion.userAcceleration.y) : 0,
+                az: hasAccel ? Float(motion.userAcceleration.z) : 0
             )
-            captureSamples.append(s)
+            if [s.gx, s.gy, s.gz, s.ax, s.ay, s.az].allSatisfy(\.isFinite) {
+                captureSamples.append(s)
+            }
             captureRemaining = max(0, captureDuration - Date().timeIntervalSince(start))
             if captureRemaining <= 0 {
                 t.invalidate()
@@ -644,6 +679,17 @@ struct MotionCalibrationView: View {
         let ax = captureSamples.map(\.ax).reduce(0, +) / n
         let ay = captureSamples.map(\.ay).reduce(0, +) / n
         let az = captureSamples.map(\.az).reduce(0, +) / n
+        // A resting pad's gyro wanders by hundredths of a radian per
+        // second. A sample far from the mean means it was picked up or
+        // bumped, and averaging that in would store the movement as rest.
+        let moved = captureSamples.contains { s in
+            abs(s.gx - gx) > 0.15 || abs(s.gy - gy) > 0.15 || abs(s.gz - gz) > 0.15
+        }
+        if moved {
+            captureMovedKey = key
+            AccessibilityNotification.Announcement("The controller moved, so nothing was saved. Rest it flat and start again").post()
+            return
+        }
         let cal = MotionCalibration(
             controllerKey: key,
             gyroDriftX: gx, gyroDriftY: gy, gyroDriftZ: gz,

@@ -39,10 +39,10 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     /// Quick gesture on the controller's touchpad surface: two-finger
     /// tap, two-finger swipes, etc. Stored discriminator is in
     /// `touchpadGestureKind`. Behaves like a button - fires for one
-    /// poll frame when the gesture is recognised.
+    /// poll frame when the gesture is recognized.
     case touchpadGesture = "tpg"
     /// A physical tap on the Mac's own chassis, read from the built-in
-    /// accelerometer. `index` carries the tap count: 1, 2, or 3.
+    /// accelerometer. `index` carries the tap count, 1 to 5.
     case chassisTap = "cht"
     /// A message from an external MIDI device (keyboard, pad controller,
     /// knob box). Notes and pads behave like buttons; CC knobs, pitch
@@ -72,13 +72,13 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// Recognised gesture kinds for an `.touchpadGesture` input. Detected
+/// Recognized gesture kinds for an `.touchpadGesture` input. Detected
 /// by `TouchpadService`'s gesture state machine - the model just stores
 /// the discriminator.
 enum TouchpadGestureKind: String, Codable, CaseIterable, Identifiable {
     /// Two fingers touch and lift within ~250 ms with very little
     /// movement on either contact. The most useful "modifier" gesture
-    /// because it's instantly recognisable and doesn't conflict with
+    /// because it's instantly recognizable and doesn't conflict with
     /// scrolling / region taps.
     case twoFingerTap
     /// One finger lands and lifts within ~300 ms with little movement
@@ -107,12 +107,17 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
     /// Control Change (knobs, sliders, sustain pedals, mod wheel).
     /// Continuous, so it can drive an axis as well as a threshold.
     case cc
-    /// Pitch bend wheel. Centre-detented, so it reads as a bipolar axis.
+    /// Pitch bend wheel. Center-detented, so it reads as a bipolar axis.
     case pitchBend
     /// Program Change - fires momentarily like a button press.
     case programChange
     /// Channel aftertouch (pressure applied after the key is down).
     case aftertouch
+    /// System Real-Time transport: Start, Continue, or Stop from a
+    /// sequencer, drum machine, or DAW. `index` carries the status byte
+    /// (0xFA Start, 0xFB Continue, 0xFC Stop); there is no channel.
+    /// Fires momentarily like Program Change.
+    case transport
 
     var id: String { rawValue }
 
@@ -123,6 +128,16 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
         case .pitchBend:     return "Pitch Bend"
         case .programChange: return "Program Change"
         case .aftertouch:    return "Aftertouch"
+        case .transport:     return "Transport"
+        }
+    }
+
+    /// Start, Continue, or Stop for a transport status byte.
+    static func transportName(_ status: Int) -> String {
+        switch status {
+        case 0xFB: return "Continue"
+        case 0xFC: return "Stop"
+        default:   return "Start"
         }
     }
 
@@ -131,7 +146,7 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
     var isContinuous: Bool {
         switch self {
         case .cc, .pitchBend, .aftertouch: return true
-        case .note, .programChange:        return false
+        case .note, .programChange, .transport: return false
         }
     }
 
@@ -140,8 +155,8 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
     /// number field is unused.
     var usesNumber: Bool {
         switch self {
-        case .note, .cc, .programChange: return true
-        case .pitchBend, .aftertouch:    return false
+        case .note, .cc, .programChange, .transport: return true
+        case .pitchBend, .aftertouch:                return false
         }
     }
 }
@@ -150,13 +165,13 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
 /// Only meaningful when `midiKind == .cc`; every other message family
 /// ignores it.
 enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
-    /// The 1.2 behaviour and the default: fires like a switch once the
+    /// The 1.2 behavior and the default: fires like a switch once the
     /// value passes the halfway point. Right for sustain pedals and
     /// on/off style CCs.
     case threshold
-    /// Speed-from-centre: the knob's centre (64) is zero, distance from
-    /// centre sets the output speed, side sets the direction, and the
-    /// binding's deadzone keeps it silent near centre. Behaves like an
+    /// Speed-from-center: the knob's center (64) is zero, distance from
+    /// center sets the output speed, side sets the direction, and the
+    /// binding's deadzone keeps it silent near center. Behaves like an
     /// analog stick axis, including variable-speed mouse and scroll.
     case centered
     /// Relative nudges: each turn fires the outputs as short pulses,
@@ -169,7 +184,7 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .threshold: return "Switch (past halfway)"
-        case .centered:  return "Dial (speed from centre)"
+        case .centered:  return "Dial (speed from center)"
         case .relative:  return "Turn (nudge per step)"
         }
     }
@@ -227,8 +242,8 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
 /// Which motion-sensor channel a `.motion` input reads.
 ///
 ///   .gyroX        - rotation around the controller's X axis (pitch): + is nose up
-///   .gyroY        - rotation around the Y axis (yaw): + is a turn to the right
-///   .gyroZ        - rotation around the Z axis (roll)
+///   .gyroY        - sideways tilt (roll): + is the right side down
+///   .gyroZ        - turning flat like a torch (yaw about the real vertical): + is a turn to the right
 ///
 /// Signs were checked by hand on a DualSense through GCMotion on the Mac.
 /// The bundled presets bind gyroY + to pointer right (straight) and gyroX +
@@ -269,8 +284,8 @@ enum MotionChannel: String, Codable, CaseIterable, Identifiable {
     var menuDescription: String {
         switch self {
         case .gyroX:      return "Gyro X (pitch rate)"
-        case .gyroY:      return "Gyro Y (yaw rate)"
-        case .gyroZ:      return "Gyro Z (roll rate)"
+        case .gyroY:      return "Gyro Y (sideways tilt)"
+        case .gyroZ:      return "Gyro Z (turn)"
         default:          return displayName
         }
     }
@@ -345,7 +360,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
     /// Same on-disk format as `touchpadRegionID` - kept on a separate
     /// field so the two region kinds don't collide in tooling.
     var cursorRegionID: UUID?
-    /// Recognised touchpad gesture (two-finger tap, etc.). Only valid
+    /// Recognized touchpad gesture (two-finger tap, etc.). Only valid
     /// for `.touchpadGesture`. Stored as the raw enum string in JSON
     /// so older saves without the field decode as nil.
     var touchpadGestureKind: TouchpadGestureKind?
@@ -374,12 +389,17 @@ struct InputEvent: Codable, Hashable, Identifiable {
     var midiDeviceID: String?
     /// Knob interpretation for `.cc` bindings. nil decodes as
     /// `.threshold`, so presets saved before this field existed keep
-    /// their exact behaviour.
+    /// their exact behavior.
     var midiCCMode: MIDICCMode?
     /// Turn-mode sensitivity: raw CC units of travel per nudge. nil means
     /// the default of 4 (a full knob sweep is about 32 nudges). Smaller
     /// is finer. Only meaningful when `midiCCMode == .relative`.
     var midiTurnStep: Int?
+    /// Which touch surface a touchpad input reads: nil or 0 the main one
+    /// (a PlayStation touchpad, a Steam Controller's right trackpad), 1 the
+    /// second (a Steam Controller's left trackpad). Serialized as a
+    /// trailing " s1" only for surface 1, so every older row is unchanged.
+    var touchpadSurface: Int? = nil
 
     var displayName: String {
         switch type {
@@ -392,10 +412,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let dir = hatDirection?.displayName ?? "Up"
             return "Hat \(index) \(dir)"
         case .touchpad:
-            let finger = (touchpadFinger ?? 0) + 1
+            let finger = min(max(touchpadFinger ?? 0, 0), 9) + 1
             let axis = touchpadAxis?.rawValue.uppercased() ?? "X"
             let dir = axisDirection?.displayName ?? "+"
-            return "Touchpad F\(finger) \(axis) \(dir)"
+            return (touchpadSurface == 1 ? "Left trackpad" : "Touchpad") + " F\(finger) \(axis) \(dir)"
         case .touchpadRegion:
             // The region name lives in TouchpadService; we resolve it where
             // we have access (BindingRowView). The serialized id is enough
@@ -437,6 +457,8 @@ struct InputEvent: Codable, Hashable, Identifiable {
             switch index {
             case 2:  return "Double tap the Mac"
             case 3:  return "Triple tap the Mac"
+            case 4:  return "Quadruple tap the Mac"
+            case 5:  return "Quintuple tap the Mac"
             default: return "Tap the Mac"
             }
         case .midi:
@@ -456,6 +478,8 @@ struct InputEvent: Codable, Hashable, Identifiable {
                 return "MIDI Pitch Bend\(dir) (\(chan))"
             case .aftertouch:
                 return "MIDI Aftertouch (\(chan))"
+            case .transport:
+                return "MIDI \(MIDIInputKind.transportName(index))"
             }
         }
     }
@@ -474,7 +498,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let finger = touchpadFinger ?? 0
             let axis = touchpadAxis?.rawValue ?? "x"
             let dir = axisDirection?.rawValue ?? "+"
-            return "tpd \(finger) \(axis) \(dir)"
+            return "tpd \(finger) \(axis) \(dir)" + (touchpadSurface == 1 ? " s1" : "")
         case .touchpadRegion:
             // Region UUIDs are stored as 32-char lowercase hex (no dashes)
             // to keep the binding key short. Missing IDs serialize to all-zeros.
@@ -509,7 +533,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
             return "srg \(index) \(raw)"
         case .touchpadGesture:
             // "tpg <kind>" e.g. "tpg twoFingerTap"
-            return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")"
+            return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")" + (touchpadSurface == 1 ? " s1" : "")
         case .chassisTap:
             // "cht <count>" e.g. "cht 2" for a double tap
             return "cht \(index)"
@@ -548,13 +572,15 @@ struct InputEvent: Codable, Hashable, Identifiable {
             return InputEvent(type: .hat, index: index, hatDirection: dir)
         case "tpd":
             guard parts.count >= 4,
-                  let finger = Int(parts[1]),
+                  let finger = Int(parts[1]), (0...9).contains(finger),
                   let axis = TouchpadAxis(rawValue: parts[2]) else { return nil }
             let dir = AxisDirection(rawValue: parts[3]) ?? .positive
-            return InputEvent(type: .touchpad, index: finger,
-                              axisDirection: dir,
-                              touchpadFinger: finger,
-                              touchpadAxis: axis)
+            var event = InputEvent(type: .touchpad, index: finger,
+                                   axisDirection: dir,
+                                   touchpadFinger: finger,
+                                   touchpadAxis: axis)
+            if parts.count >= 5, parts[4] == "s1" { event.touchpadSurface = 1 }
+            return event
         case "tpr":
             guard parts.count >= 2 else { return nil }
             // Restore canonical UUID format from the 32-char compact form.
@@ -610,12 +636,17 @@ struct InputEvent: Codable, Hashable, Identifiable {
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             guard parts.count >= 2,
                   let kind = TouchpadGestureKind(rawValue: parts[1]) else { return nil }
-            return InputEvent(type: .touchpadGesture, index: 0,
-                              touchpadGestureKind: kind)
+            var event = InputEvent(type: .touchpadGesture, index: 0,
+                                   touchpadGestureKind: kind)
+            if parts.count >= 3, parts[2] == "s1" { event.touchpadSurface = 1 }
+            return event
         case "cht":
             // "cht <count>"
             guard parts.count >= 2, let count = Int(parts[1]) else { return nil }
-            return InputEvent(type: .chassisTap, index: max(1, min(3, count)))
+            // Up to five taps, as the detector counts and the editor offers;
+            // clamped to three, quadruple and quintuple rows read "cht 4"
+            // and "cht 5" as a triple tap.
+            return InputEvent(type: .chassisTap, index: max(1, min(5, count)))
         case "mid":
             // "mid <kind> <number> <channel|any> <dir> <deviceID|any>"
             guard parts.count >= 3,
@@ -656,7 +687,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
                    touchpadAxis: axis)
     }
 
-    /// `count` is how many taps make the gesture: 1, 2 or 3.
+    /// `count` is how many taps make the gesture, 1 to 5.
     static func chassisTap(_ count: Int) -> InputEvent {
         InputEvent(type: .chassisTap, index: count)
     }

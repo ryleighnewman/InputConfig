@@ -18,6 +18,13 @@ final class InputSimulator: @unchecked Sendable {
 
     private var pressedKeys: Set<Int> = []
     private var pressedMouseButtons: Set<Int> = []
+    /// Who holds each pressed key and button: a row's bindKey, its hold
+    /// action or macro, or "" for callers that do not say. Two rows that
+    /// both hold W keep it down until the second lets go; before, releasing
+    /// either one released it for both. A repeat press by the same holder
+    /// changes nothing, so a key can never be left counted down.
+    private var keyHolders: [Int: Set<String>] = [:]
+    private var mouseHolders: [Int: Set<String>] = [:]
 
     /// Cached event source for synthetic events. Created once on first
     /// access. Previously this was a computed property, which meant
@@ -25,7 +32,10 @@ final class InputSimulator: @unchecked Sendable {
     /// CGEventSource initialization cost. On a turbo-firing or
     /// joystick-as-mouse preset that was many hundreds of allocations
     /// per second.
-    private lazy var eventSource: CGEventSource? = CGEventSource(stateID: .hidSystemState)
+    ///
+    /// Made at init, not lazily: the motion pump's thread and the main
+    /// thread could both touch a lazy property first and race to create it.
+    private let eventSource: CGEventSource? = CGEventSource(stateID: .hidSystemState)
 
     /// Magic marker we stamp onto every `CGEvent` we post via this class.
     /// `ExternalInputDeviceService`'s `CGEventTap` reads back this field
@@ -38,106 +48,378 @@ final class InputSimulator: @unchecked Sendable {
     /// CGEventTap consumer can recognize and skip it. All post call sites
     /// in this file go through here.
     ///
-    /// IMPORTANT: posts to **`.cghidEventTap`**, not `.cgSessionEventTap`.
-    /// `.cghidEventTap` is the lowest-level tap - events appear as if
-    /// from real HID hardware, BEFORE the WindowServer's "is this app
-    /// trusted to post events" filter runs. That filter is what gates
-    /// `.cgSessionEventTap` posts on the Accessibility permission and
-    /// silently drops events from apps that haven't been granted it.
-    /// Posting at the HID layer is how Enjoyable, BetterMouse, Karabiner
-    /// and similar input remappers ship without requiring users to add
-    /// the app to System Settings → Privacy & Security → Accessibility.
+    /// Posts at `.cghidEventTap`, so every app, games included, receives the
+    /// event the way it receives one from a keyboard or mouse. macOS still
+    /// requires the Accessibility permission for this app to post events;
+    /// the app asks for it and explains why before any preset runs.
+    /// When this app last posted each kind of event (system uptime), so Tap
+    /// the Mac's typing guard can tell the app's own clicks and keys from a
+    /// person's. Per kind: one shared time was overwritten by the mouse-up
+    /// or pointer move that followed, and the app's own click then read as
+    /// a person clicking.
+    private static let lastPostLock = NSLock()
+    nonisolated(unsafe) private static var lastPostAt: [UInt32: TimeInterval] = [:]
+    static func lastPostUptime(of type: CGEventType) -> TimeInterval {
+        lastPostLock.lock(); defer { lastPostLock.unlock() }
+        return lastPostAt[type.rawValue] ?? 0
+    }
+    static func notePost(_ type: CGEventType) {
+        lastPostLock.lock()
+        lastPostAt[type.rawValue] = ProcessInfo.processInfo.systemUptime
+        lastPostLock.unlock()
+    }
+
     fileprivate func taggedPost(_ event: CGEvent) {
+        Self.notePost(event.type)
         event.setIntegerValueField(.eventSourceUserData, value: Self.ownEventMarker)
+        #if DEBUG
+        if let sink = Self.debugEventSink { sink(event); return }
+        #endif
         event.post(tap: .cghidEventTap)
     }
 
+    #if DEBUG
+    /// Tests only: when set, events are handed here instead of posted, so a
+    /// test can read exactly what would have gone out without typing into or
+    /// moving anything on the Mac. Never compiled into Release.
+    nonisolated(unsafe) static var debugEventSink: ((CGEvent) -> Void)?
+    #endif
+
     // MARK: - Keyboard Simulation
 
-    func keyDown(_ hidCode: Int) {
-        guard !pressedKeys.contains(hidCode) else { return }
+    /// Modifiers held by a row that presses nothing else: a button mapped to
+    /// Shift or Command on its own, or a macro's Down step. Those combine
+    /// with whatever else is pressed, the way a key held on a keyboard does.
+    /// Kept per owner: a modifier first held alone and then also by a chord
+    /// row stayed standalone after its lone row let go, so a third button
+    /// pressed during the chord picked it up (Space became Command Space).
+    private var standaloneModifiers: [Int: Set<String>] = [:]
+    /// For each held key that is not a modifier, the modifiers of its own
+    /// row (Command for a Command C row). Absent for a press from a caller
+    /// that does not say (the test bench, drive mode), which keeps the old
+    /// rule of taking every held modifier.
+    private var keyScopes: [Int: Set<Int>] = [:]
+
+    /// Press a key.
+    ///
+    /// `chord` is every key code of the row doing the pressing, its
+    /// modifiers and its key together. With it, a key carries the modifiers
+    /// of its own row plus any modifier a row holds on its own, and nothing
+    /// else. Before, a key carried every modifier any row held: press a
+    /// Command V button and, before letting go of it, a Space button, and
+    /// the Space went out as Command Space, which opens Spotlight; a Return
+    /// became Command Return. Quick presses across buttons came out as a
+    /// jumble of shortcuts.
+    /// The virtual key for a HID code. A letter in a Command or Control
+    /// shortcut goes to the key that types that letter on the current
+    /// layout, since macOS matches shortcuts by letter: posted by its US
+    /// position, Select All was Command Q on a French keyboard and Undo was
+    /// Command W. Plain keys and Option or Shift chords keep their position
+    /// (games read keys by where they are).
+    /// The same goes for the punctuation shortcuts (Command = and Command -
+    /// for zoom, Command [ and ], Command comma for Settings, and so on):
+    /// each goes to the key that types its character with Command on this
+    /// layout, when there is one; one that needs Shift there keeps its
+    /// position.
+    ///
+    /// With Settings, Keyboard output, "Keys follow the keyboard layout"
+    /// on, a plain letter, digit or punctuation key goes to the key that
+    /// types it on this layout too (on French AZERTY, A types a, not q),
+    /// when the layout has an unshifted key for it; otherwise it keeps its
+    /// position. Off by default: games read keys by position, so a WASD
+    /// row stays on the same physical keys on every layout.
+    private func virtualCode(for hidCode: Int, scope: Set<Int>?) -> Int? {
+        let base = KeyCodeMap.hidToVirtualKeyCode[hidCode]
+        let shortcut = scope.map { !$0.isDisjoint(with: Self.shortcutModifiers) } ?? false
+        if shortcut, let character = Self.shortcutCharacter(hidCode) {
+            if let known = layoutLetterKeys[hidCode] { return known ?? base }
+            let found = SystemActionService.virtualKey(typing: character, command: true)
+            layoutLetterKeys[hidCode] = .some(found)
+            return found ?? base
+        }
+        guard !shortcut, UserDefaults.standard.bool(forKey: Self.followLayoutKey),
+              let character = Self.shortcutCharacter(hidCode) ?? Self.digitCharacter(hidCode) else { return base }
+        if let known = layoutPlainKeys[hidCode] { return known ?? base }
+        let found = SystemActionService.virtualKey(typing: character)
+        layoutPlainKeys[hidCode] = .some(found)
+        return found ?? base
+    }
+
+    /// The setting that sends plain keys by what they type on the layout.
+    nonisolated static let followLayoutKey = "InputConfig.keysFollowLayout"
+
+    /// The digit a HID code types on a US keyboard (1 to 9, then 0).
+    private static func digitCharacter(_ hidCode: Int) -> Character? {
+        guard (30...39).contains(hidCode) else { return nil }
+        return hidCode == 39 ? "0" : Character(String(hidCode - 29))
+    }
+
+    /// Each plain key's key on the current layout, found once per layout.
+    private var layoutPlainKeys: [Int: Int?] = [:]
+
+    /// The character a HID code types on a US keyboard, for the keys whose
+    /// shortcuts macOS matches by character: the letters and the
+    /// punctuation keys (not the ` key, whose window shortcut follows its
+    /// position).
+    private static func shortcutCharacter(_ hidCode: Int) -> Character? {
+        if (4...29).contains(hidCode) { return Character(UnicodeScalar(UInt8(97 + hidCode - 4))) }
+        let punctuation: [Int: Character] = [45: "-", 46: "=", 47: "[", 48: "]", 49: "\\", 51: ";",
+                                             52: "'", 54: ",", 55: ".", 56: "/"]
+        return punctuation[hidCode]
+    }
+
+    /// The virtual key each held key went down on, so it comes up on the
+    /// same one: worked out again at release, a layout switched while the
+    /// key was held sent the release to a different key and left the first
+    /// one down.
+    private var postedKeys: [Int: Int] = [:]
+
+    /// Command and Control, left and right.
+    private static let shortcutModifiers: Set<Int> = [224, 228, 227, 231]
+    /// Each letter's key on the current layout, found once per layout.
+    private var layoutLetterKeys: [Int: Int?] = [:]
+    private var layoutObserver: NSObjectProtocol?
+
+    private func watchLayout() {
+        guard layoutObserver == nil else { return }
+        layoutObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"),
+            object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.layoutLetterKeys.removeAll()
+                self?.layoutPlainKeys.removeAll()
+                EmergencyStopService.shared.refreshRegistration()
+            }
+        }
+    }
+
+    func keyDown(_ hidCode: Int, chord: [Int]? = nil, owner: String = "", repeats: Bool = false) {
+        watchLayout()
+        keyHolders[hidCode, default: []].insert(owner)
+        let isModifier = modifierFlags(for: hidCode) != nil
+        if repeats && !isModifier { repeatOwners[hidCode, default: []].insert(owner) }
+        let scope: Set<Int>? = chord.map { Set($0.filter { self.modifierFlags(for: $0) != nil }) }
+        // A modifier held by a switcher shortcut (Command Tab, Command `)
+        // lends itself like one held alone: holding the switcher open and
+        // pressing arrows or Return on other buttons is how it is used, and
+        // the App Switcher preset depends on it, as in 1.5.
+        if isModifier, chord.map({ keys in
+            keys.allSatisfy { self.modifierFlags(for: $0) != nil } || keys.contains { Self.switcherKeys.contains($0) }
+        }) ?? true {
+            standaloneModifiers[hidCode, default: []].insert(owner)
+        }
+        if pressedKeys.contains(hidCode) {
+            // Already down for another row. A second row pressing the same
+            // key with other modifiers (Command Z held, Command Shift Z
+            // pressed) still gets its shortcut: the key goes up and comes
+            // down again with this row's modifiers. The same key with the
+            // same modifiers (two buttons that both hold W) just stays down.
+            // No stored scope (drive mode, the test bench) is the same as an
+            // empty one: W held by drive mode and pressed by a plain W row
+            // blipped up and down for nothing.
+            guard !isModifier, let scope, (keyScopes[hidCode] ?? []) != scope,
+                  hidCode != KeyCodeMap.globeFnCode,
+                  let virtualCode = virtualCode(for: hidCode, scope: scope) else {
+                // Held already by a row without repeat: this row's repeat
+                // still starts, instead of being dropped.
+                if repeats, !isModifier, repeatTimers[hidCode] == nil,
+                   let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
+                    startRepeat(hidCode, virtualCode: virtualCode)
+                }
+                return
+            }
+            postPlainKey(postedKeys[hidCode] ?? self.virtualCode(for: hidCode, scope: keyScopes[hidCode]) ?? virtualCode, down: false,
+                         modifiers: scopedModifierFlags(keyScopes[hidCode]))
+            keyScopes[hidCode] = scope
+            postedKeys[hidCode] = virtualCode
+            postPlainKey(virtualCode, down: true, modifiers: scopedModifierFlags(scope))
+            return
+        }
         pressedKeys.insert(hidCode)
+        if !isModifier {
+            if let scope { keyScopes[hidCode] = scope } else { keyScopes.removeValue(forKey: hidCode) }
+        }
 
         // Globe / fn is a pure modifier here. Posting a real fn key event would
         // trigger whatever single-press action the user has assigned to it, so
         // it only ever decorates the keys pressed alongside it.
         if hidCode == KeyCodeMap.globeFnCode { return }
 
-        if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
-            if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: true) {
-                // Apply EVERY currently-held modifier, not just the case where
-                // this key is itself a modifier. Without this, a chord like
-                // Cmd+C (Cmd held, then C pressed) fired C as a bare key because
-                // the C event carried no modifier flags, so combo outputs like
-                // Copy, the screenshot shortcuts, and Cmd+Shift+Z did nothing.
-                var flags = currentModifierFlags()
-                // The bits CoreGraphics gave this key on its own (fn and
-                // numeric-pad for the arrows and the keypad) are kept; every
-                // other bit is written explicitly below. An event whose flags
-                // are left unset inherits the HID system state, which after
-                // a synthesized arrow still carries fn and numeric-pad, so a
-                // Delete that followed an arrow became forward delete and a
-                // Return became keypad Enter.
-                let keyOwnBits = keyOwnFlagBits(virtualCode)
-                if modifierFlags(for: hidCode) != nil {
-                    // A modifier pressed on its own goes out as flagsChanged,
-                    // which is what a physical keyboard sends. Posted as a
-                    // keyDown it never reached apps that watch for a lone
-                    // Option or Command tap (IME voice toggles, switchers).
-                    // The flags are written explicitly, with the device bit
-                    // that tells left Option from right, so the event matches
-                    // the physical key it stands for.
-                    event.type = .flagsChanged
-                    flags.formUnion(deviceModifierBits())
-                    flags.insert(.maskNonCoalesced)
-                    event.flags = flags
-                } else {
-                    flags.formUnion(keyOwnBits)
-                    flags.insert(.maskNonCoalesced)
-                    event.flags = flags
-                }
-                taggedPost(event)
+        if let virtualCode = virtualCode(for: hidCode, scope: scope) {
+            if isModifier {
+                postModifierChange(virtualCode, down: true)
+            } else {
+                postedKeys[hidCode] = virtualCode
+                postPlainKey(virtualCode, down: true, modifiers: scopedModifierFlags(scope))
+                if repeats { startRepeat(hidCode, virtualCode: virtualCode) }
             }
         } else {
             postSpecialKey(hidCode, keyDown: true)
         }
     }
 
-    func keyUp(_ hidCode: Int) {
-        guard pressedKeys.contains(hidCode) else { return }
+    // MARK: Key repeat
+
+    /// Held keys repeat like a real key does, after the Mac's own Delay
+    /// Until Repeat and at its Key Repeat rate (Keyboard settings), so a
+    /// D-pad on Down Arrow walks down a list and a button on Delete keeps
+    /// deleting. Rows can turn it off for games that count repeats as
+    /// presses. Repeats carry the autorepeat flag, as a keyboard's do.
+    private var repeatTimers: [Int: DispatchSourceTimer] = [:]
+    /// The rows that asked a held key to repeat. The repeat stops when the
+    /// last of them lets go, even while a row set not to repeat still
+    /// holds the key.
+    private var repeatOwners: [Int: Set<String>] = [:]
+
+    private func startRepeat(_ hidCode: Int, virtualCode: Int) {
+        // One key repeats at a time, the last one pressed, as on a Mac
+        // keyboard: a D-pad diagonal held on two arrows sent both,
+        // interleaved.
+        for (_, timer) in repeatTimers { timer.cancel() }
+        repeatTimers.removeAll()
+        let delay = max(0.1, NSEvent.keyRepeatDelay)
+        let interval = max(0.015, NSEvent.keyRepeatInterval)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay, repeating: interval, leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.pressedKeys.contains(hidCode),
+                  let event = CGEvent(keyboardEventSource: self.eventSource,
+                                      virtualKey: CGKeyCode(virtualCode), keyDown: true) else {
+                self?.stopRepeat(hidCode)
+                return
+            }
+            var flags = self.scopedModifierFlags(self.keyScopes[hidCode])
+            flags.formUnion(self.keyOwnFlagBits(virtualCode))
+            flags.insert(.maskNonCoalesced)
+            event.flags = flags
+            event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+            self.taggedPost(event)
+        }
+        repeatTimers[hidCode] = timer
+        timer.resume()
+    }
+
+    private func stopRepeat(_ hidCode: Int) {
+        repeatTimers.removeValue(forKey: hidCode)?.cancel()
+    }
+
+    func keyUp(_ hidCode: Int, owner: String = "") {
+        guard pressedKeys.contains(hidCode) else { keyHolders.removeValue(forKey: hidCode); return }
+        // This owner no longer holds it on its own, even if a chord row
+        // keeps the key down below.
+        if var lone = standaloneModifiers[hidCode] {
+            lone.remove(owner)
+            standaloneModifiers[hidCode] = lone.isEmpty ? nil : lone
+        }
+        if var repeaters = repeatOwners[hidCode] {
+            repeaters.remove(owner)
+            repeatOwners[hidCode] = repeaters.isEmpty ? nil : repeaters
+            if repeaters.isEmpty { stopRepeat(hidCode) }
+        }
+        if var holders = keyHolders[hidCode] {
+            holders.remove(owner)
+            // Still held by another row: stays down.
+            if !holders.isEmpty { keyHolders[hidCode] = holders; return }
+            keyHolders.removeValue(forKey: hidCode)
+        }
+        repeatOwners.removeValue(forKey: hidCode)
+        stopRepeat(hidCode)
         pressedKeys.remove(hidCode)
+        let isModifier = modifierFlags(for: hidCode) != nil
+        if isModifier { standaloneModifiers.removeValue(forKey: hidCode) }
+        let scope = keyScopes.removeValue(forKey: hidCode)
 
         // Globe / fn is a pure modifier here. Posting a real fn key event would
         // trigger whatever single-press action the user has assigned to it, so
         // it only ever decorates the keys pressed alongside it.
         if hidCode == KeyCodeMap.globeFnCode { return }
 
-        if let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
-            if let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: false) {
-                // Carry the still-held modifiers so releasing the letter of a
-                // chord (e.g. the C of Cmd+C) does not read as a bare key-up.
-                var flags = currentModifierFlags()
-                let keyOwnBits = keyOwnFlagBits(virtualCode)
-                if modifierFlags(for: hidCode) != nil {
-                    // The release of a lone modifier: flagsChanged again, and
-                    // the flags are written even when empty. Left unset, the
-                    // event inherited the HID system state, where the key was
-                    // still down, so apps saw two presses and no release.
-                    event.type = .flagsChanged
-                    flags.formUnion(deviceModifierBits())
-                    flags.insert(.maskNonCoalesced)
-                    event.flags = flags
-                } else {
-                    // Written even when empty, for the same reason as above.
-                    flags.formUnion(keyOwnBits)
-                    flags.insert(.maskNonCoalesced)
-                    event.flags = flags
-                }
-                taggedPost(event)
+        let posted = postedKeys.removeValue(forKey: hidCode)
+        if let virtualCode = posted ?? virtualCode(for: hidCode, scope: scope) {
+            if isModifier {
+                // The release of a lone modifier: flagsChanged again, and the
+                // flags are written even when empty. Left unset, the event
+                // inherited the HID system state, where the key was still
+                // down, so apps saw two presses and no release.
+                postModifierChange(virtualCode, down: false)
+            } else {
+                // Carry the modifiers of its own row that are still held, so
+                // releasing the C of Command C does not read as a bare key-up.
+                postPlainKey(virtualCode, down: false, modifiers: scopedModifierFlags(scope))
             }
         } else {
             postSpecialKey(hidCode, keyDown: false)
         }
+    }
+
+    /// The modifier flags a key carries: every held modifier that belongs to
+    /// its own row (`scope`) or is held on its own. A nil scope takes every
+    /// held modifier, the rule for callers that do not say which row pressed.
+    private func scopedModifierFlags(_ scope: Set<Int>?) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        // A modifier in the row's own scope that the person is holding on
+        // the keyboard (not this app): a Left Command row sending Command
+        // Tab lets the finger supply the Command.
+        if let scope {
+            var physical: UInt64?
+            for code in scope where !pressedKeys.contains(code) {
+                guard let f = modifierFlags(for: code), let side = Self.deviceBit[code] else { continue }
+                let held = physical ?? CGEventSource.flagsState(.hidSystemState).rawValue
+                physical = held
+                if held & side != 0 { flags.insert(f); flags.insert(CGEventFlags(rawValue: side)) }
+            }
+        }
+        for code in pressedKeys {
+            guard let f = modifierFlags(for: code) else { continue }
+            if let scope, !scope.contains(code), standaloneModifiers[code] == nil { continue }
+            flags.insert(f)
+            // Which side, as a real keyboard's key events carry: apps that
+            // tell Right Option from Left (iTerm2, VMs, remote desktops)
+            // saw neither on the letter's own event.
+            if let side = Self.deviceBit[code] { flags.insert(CGEventFlags(rawValue: side)) }
+        }
+        return flags
+    }
+
+    /// Tab and ` (Grave): the keys of the app and window switchers.
+    private static let switcherKeys: Set<Int> = [43, 53]
+
+    /// The NX_DEVICE bit of each side-specific modifier, by HID code.
+    private static let deviceBit: [Int: UInt64] = [
+        224: 0x0001, 228: 0x2000, 225: 0x0002, 229: 0x0004,
+        226: 0x0020, 230: 0x0040, 227: 0x0008, 231: 0x0010,
+    ]
+
+    /// One ordinary key event with its flags written out in full.
+    private func postPlainKey(_ virtualCode: Int, down: Bool, modifiers: CGEventFlags) {
+        guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: down) else { return }
+        // The bits CoreGraphics gave this key on its own (fn and numeric-pad
+        // for the arrows and the keypad) are kept; every other bit is written
+        // explicitly. An event whose flags are left unset inherits the HID
+        // system state, which after a synthesized arrow still carries fn and
+        // numeric-pad, so a Delete that followed an arrow became forward
+        // delete and a Return became keypad Enter.
+        var flags = modifiers
+        flags.formUnion(keyOwnFlagBits(virtualCode))
+        flags.insert(.maskNonCoalesced)
+        event.flags = flags
+        taggedPost(event)
+    }
+
+    /// A modifier going down or up. It goes out as flagsChanged, which is what
+    /// a physical keyboard sends: posted as a keyDown it never reached apps
+    /// that watch for a lone Option or Command tap (IME voice toggles,
+    /// switchers). The flags are every modifier now held, with the device
+    /// bit that tells left Option from right, so the event matches the
+    /// physical key it stands for.
+    private func postModifierChange(_ virtualCode: Int, down: Bool) {
+        guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: down) else { return }
+        event.type = .flagsChanged
+        var flags = currentModifierFlags()
+        flags.formUnion(deviceModifierBits())
+        flags.insert(.maskNonCoalesced)
+        event.flags = flags
+        taggedPost(event)
     }
 
     /// Type a literal string by posting keyboard events whose characters are
@@ -154,12 +436,17 @@ final class InputSimulator: @unchecked Sendable {
         var chunk: [UInt16] = []
         func flush() {
             guard !chunk.isEmpty else { return }
+            // Typed text carries no modifiers. Left unset, the flags came from
+            // the HID system state, so text typed while a Command shortcut was
+            // still held on another button went out as Command A, Select All.
             if let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true) {
                 down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                down.flags = [.maskNonCoalesced]
                 taggedPost(down)
             }
             if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false) {
                 up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                up.flags = [.maskNonCoalesced]
                 taggedPost(up)
             }
             chunk.removeAll(keepingCapacity: true)
@@ -242,8 +529,13 @@ final class InputSimulator: @unchecked Sendable {
     /// a local `let` inside `postSpecialKey`, allocating a fresh dict
     /// on every media-key press.
     private static let specialKeyMap: [Int: Int] = [
-        71: 0x91,   // Brightness Down
-        72: 0x90,   // Brightness Up
+        // NX_KEYTYPE values from IOKit's ev_keymap.h. Brightness was 0x91
+        // and 0x90, which are not key types, so it did nothing.
+        71: 3,      // Brightness Down (NX_KEYTYPE_BRIGHTNESS_DOWN)
+        72: 2,      // Brightness Up (NX_KEYTYPE_BRIGHTNESS_UP)
+        305: 22,    // Keyboard Light Down (NX_KEYTYPE_ILLUMINATION_DOWN)
+        306: 21,    // Keyboard Light Up (NX_KEYTYPE_ILLUMINATION_UP)
+        313: 14,    // Eject (NX_KEYTYPE_EJECT)
         307: 0x14,  // Rewind
         308: 0x10,  // Play/Pause
         309: 0x13,  // Fast Forward
@@ -273,25 +565,67 @@ final class InputSimulator: @unchecked Sendable {
 
     // MARK: - Mouse Button Simulation
 
-    /// The height of the primary display, the one whose origin is (0, 0).
-    /// `NSEvent.mouseLocation` is in the global bottom-left space anchored to
-    /// that display, so the flip to CoreGraphics' top-left space must use its
-    /// height. `NSScreen.main` is the screen with the key window, which on a
-    /// second display of a different height put the flip off by the
-    /// difference and walked the pointer to the top edge on every re-sync.
-    /// The display rectangles in CoreGraphics (top-left origin) space.
+    /// The pointer's position in CoreGraphics' global space (origin at the
+    /// top left of the primary display), the space every posted mouse event
+    /// uses. Read from CoreGraphics rather than flipped from
+    /// `NSEvent.mouseLocation`, so no screen height is involved (a second
+    /// display of a different height once put the flip off and walked the
+    /// pointer to the top edge), and it is safe on the motion pump's thread.
+    private func pointerLocationCG() -> CGPoint {
+        CGEvent(source: nil)?.location ?? .zero
+    }
+
+    /// The display rectangles in the same space, from CoreGraphics, which is
+    /// safe off the main thread. The pump used to ask NSScreen for them on
+    /// its own queue on every move: AppKit does not promise that works off
+    /// the main thread, an empty answer skipped the edge clamp entirely (a
+    /// pointer that ran off the screen and would not come back), and the
+    /// lookup at up to 125 Hz was CPU for nothing. Cached now, re-read when
+    /// the arrangement changes and every two seconds, and never replaced by
+    /// an empty list, so the clamp always has a screen to hold the pointer to.
+    private let displayLock = NSLock()
+    private var displayCache: [CGRect] = []
+    private var displayCacheAt: TimeInterval = 0
+    private var displaysChanged = true
+    private var displayObserver: NSObjectProtocol?
+
     private func displayRectsCG() -> [CGRect] {
-        guard let h = primaryScreenHeight else { return [] }
-        return NSScreen.screens.map { sc in
-            let f = sc.frame
-            return CGRect(x: f.origin.x, y: h - f.origin.y - f.height, width: f.width, height: f.height)
+        displayLock.lock(); defer { displayLock.unlock() }
+        if displayObserver == nil {
+            displayObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil, queue: nil
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.displayLock.lock()
+                self.displaysChanged = true
+                self.displayLock.unlock()
+            }
         }
+        let now = ProcessInfo.processInfo.systemUptime
+        if displaysChanged || displayCache.isEmpty || now - displayCacheAt > 2 {
+            var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+            var count: UInt32 = 0
+            if CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success, count > 0 {
+                displayCache = ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+                displaysChanged = false
+            }
+            displayCacheAt = now
+        }
+        return displayCache
     }
 
     /// `point` if some display contains it; otherwise the point pulled back
     /// onto the edge of the display that held `previous` (or the nearest).
     private func clampedToDisplays(_ point: CGPoint, from previous: CGPoint) -> CGPoint {
-        let rects = displayRectsCG()
+        var rects = displayRectsCG()
+        if rects.isEmpty {
+            // No list yet (the very first read failed): hold the pointer to
+            // the main display rather than letting it run off every screen,
+            // where it turns invisible until the real mouse is moved.
+            let main = CGDisplayBounds(CGMainDisplayID())
+            if main.width > 1, main.height > 1 { rects = [main] }
+        }
         guard !rects.isEmpty else { return point }
         if rects.contains(where: { $0.contains(point) }) { return point }
         let home = rects.first(where: { $0.contains(previous) }) ?? rects.min(by: {
@@ -299,10 +633,6 @@ final class InputSimulator: @unchecked Sendable {
         })!
         return CGPoint(x: min(max(point.x, home.minX), home.maxX - 1),
                        y: min(max(point.y, home.minY), home.maxY - 1))
-    }
-
-    private var primaryScreenHeight: CGFloat? {
-        (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.screens.first)?.frame.height
     }
 
     /// Put the pointer at a fixed screen point (CoreGraphics coordinates,
@@ -316,19 +646,63 @@ final class InputSimulator: @unchecked Sendable {
             taggedPost(move)
         }
         CGWarpMouseCursorPosition(point)
+        // Re-associated, as in warpPointer: a bare warp froze the physical
+        // mouse for a quarter second on every fixed-point auto-click pulse.
+        CGAssociateMouseAndMouseCursorPosition(1)
+        // Under the lock the motion pump reads it with, and stamped, so the
+        // pump continues from here instead of re-reading a stale position.
+        mouseLock.lock()
         trackedCursor = point
+        trackedAt = ProcessInfo.processInfo.systemUptime
+        mouseLock.unlock()
     }
 
-    /// Move the pointer to the centre of whichever screen it is on, for the
-    /// Center Pointer app action.
-    func centerPointerOnCurrentScreen() {
-        let loc = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { NSMouseInRect(loc, $0.frame, false) })
-            ?? NSScreen.main ?? NSScreen.screens.first
-        guard let screen, let h = primaryScreenHeight else { return }
-        let f = screen.frame
-        // AppKit is bottom-up; CG is top-down from the primary display.
-        placePointer(atX: f.midX, y: h - f.midY)
+    /// Put the pointer somewhere without a move event (confine, recenter).
+    /// Through here rather than a bare CGWarpMouseCursorPosition: the pump's
+    /// next stick or gyro move carried on from the old tracked point and
+    /// undid the warp, and a warp freezes the physical mouse for about a
+    /// quarter second unless the mouse is re-associated with the cursor.
+    func warpPointer(to point: CGPoint) {
+        CGWarpMouseCursorPosition(point)
+        CGAssociateMouseAndMouseCursorPosition(1)
+        mouseLock.lock()
+        trackedCursor = point
+        trackedAt = ProcessInfo.processInfo.systemUptime
+        mouseLock.unlock()
+    }
+
+    /// Move the pointer to the center of whichever screen it is on, for the
+    /// Center Pointer app action and every motion re-zero. Returns where it
+    /// put the pointer, or nil when no display is known.
+    @discardableResult
+    func centerPointerOnCurrentScreen() -> CGPoint? {
+        guard let center = Self.recenterPoint(pointer: pointerLocationCG(), displays: displayRectsCG()) else {
+            return nil
+        }
+        placePointer(atX: Double(center.x), y: Double(center.y))
+        return center
+    }
+
+    /// The center of the display that holds `pointer`. Both are in
+    /// CoreGraphics' global space (origin at the top left of the primary
+    /// display, y growing down, as `CGDisplayBounds` and `CGEvent.location`
+    /// report it), so no AppKit flip is involved. A pointer on a display's
+    /// bottom or right edge, which `CGRect.contains` leaves out, or one just
+    /// off every display, belongs to the nearest display, never to the
+    /// first one in the list: falling back to the first sent the re-center
+    /// to the primary monitor from a pointer on a second one.
+    nonisolated static func recenterPoint(pointer: CGPoint, displays: [CGRect]) -> CGPoint? {
+        let usable = displays.filter { $0.width > 1 && $0.height > 1 }
+        guard !usable.isEmpty else { return nil }
+        func distance(_ r: CGRect) -> CGFloat {
+            let dx = max(r.minX - pointer.x, 0, pointer.x - r.maxX)
+            let dy = max(r.minY - pointer.y, 0, pointer.y - r.maxY)
+            return hypot(dx, dy)
+        }
+        let screen = usable.first(where: { $0.contains(pointer) })
+            ?? usable.min(by: { distance($0) < distance($1) })!
+        // Whole points, so the pointer lands on the same spot every time.
+        return CGPoint(x: (screen.midX).rounded(.down), y: (screen.midY).rounded(.down))
     }
 
     /// Buttons this simulator can post: 0 left, 1 right, 2 middle, 3 to
@@ -339,40 +713,75 @@ final class InputSimulator: @unchecked Sendable {
         (0...31).contains(index)
     }
 
-    func mouseButtonDown(_ button: Int) {
+    /// Click counting. Posted mouse events carry a click count of 1 unless it
+    /// is set, and apps read double and triple clicks from that count
+    /// (NSEvent.clickCount), not from the timing, so two quick synthesized
+    /// clicks reached them as two single clicks: a Double click row, or two
+    /// quick presses of a Click button, did not open a file in Finder.
+    private var lastClickButton = -1
+    private var lastClickTime: TimeInterval = 0
+    private var lastClickPoint = CGPoint.zero
+    private var lastClickCount = 0
+    /// The count each held button was pressed with, for its release and drags.
+    private var pressedClickCounts: [Int: Int] = [:]
+
+    /// `singleClick`: a turbo or auto-click pulse. Each is its own click,
+    /// never part of a double click, or an auto-clicker at 10 a second sent
+    /// click 2, 3, 4 and up and opened files and selected words.
+    func mouseButtonDown(_ button: Int, owner: String = "", singleClick: Bool = false) {
         // Every early return must release the lock. An earlier version
         // returned with it held for any button past 2 (or with no screen
         // during sleep), which hung the pointer pump and then every later
         // press, and left the emergency stop unable to run.
         guard Self.isPostableMouseButton(button) else { return }
+        // CoreGraphics answers even during sleep and wake, so the press
+        // always reaches the front app and matches the release that follows.
+        let point = pointerLocationCG()
+        let now = ProcessInfo.processInfo.systemUptime
+        let interval = NSEvent.doubleClickInterval
         mouseLock.lock()
+        mouseHolders[button, default: []].insert(owner)
         let alreadyDown = pressedMouseButtons.contains(button)
-        if !alreadyDown { pressedMouseButtons.insert(button) }
+        var count = 1
+        if !alreadyDown {
+            pressedMouseButtons.insert(button)
+            // The next click of a double or triple click: same button, soon
+            // enough for the system's double-click speed, about the same spot.
+            // A triple click is the most any app reads; a fourth starts over.
+            if !singleClick, button == lastClickButton, now - lastClickTime <= interval,
+               abs(point.x - lastClickPoint.x) <= 4, abs(point.y - lastClickPoint.y) <= 4 {
+                count = lastClickCount >= 3 ? 1 : lastClickCount + 1
+            }
+            lastClickButton = button
+            // A turbo or auto-click pulse never starts a chain either, or the
+            // next ordinary click at that spot went out as a double click.
+            lastClickTime = singleClick ? 0 : now
+            lastClickPoint = point
+            lastClickCount = count
+            pressedClickCounts[button] = count
+        }
         mouseLock.unlock()
         guard !alreadyDown else { return }
-
-        // The screen list can be empty during sleep and wake; post from a
-        // zero-height screen rather than skip, so the press still reaches
-        // the front app and matches the release that will follow.
-        let screenHeight = primaryScreenHeight ?? 0
-        let location = NSEvent.mouseLocation
-        let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-        postMouseButton(button, down: true, at: cgPoint)
+        postMouseButton(button, down: true, at: point, clickCount: count)
     }
 
-    func mouseButtonUp(_ button: Int) {
+    func mouseButtonUp(_ button: Int, owner: String = "") {
         guard Self.isPostableMouseButton(button) else { return }
         mouseLock.lock()
+        if var holders = mouseHolders[button], pressedMouseButtons.contains(button) {
+            holders.remove(owner)
+            // Still held by another row, for example the other half of a drag.
+            if !holders.isEmpty { mouseHolders[button] = holders; mouseLock.unlock(); return }
+        }
+        mouseHolders.removeValue(forKey: button)
         let wasDown = pressedMouseButtons.remove(button) != nil
+        let count = pressedClickCounts.removeValue(forKey: button) ?? 1
         mouseLock.unlock()
         guard wasDown else { return }
 
         // Always release, even with no screen, so a button never stays
         // physically down past a sleep.
-        let screenHeight = primaryScreenHeight ?? 0
-        let location = NSEvent.mouseLocation
-        let cgPoint = CGPoint(x: location.x, y: screenHeight - location.y)
-        postMouseButton(button, down: false, at: cgPoint)
+        postMouseButton(button, down: false, at: pointerLocationCG(), clickCount: count)
     }
 
     /// One button event. Left and right have their own event types; every
@@ -380,7 +789,7 @@ final class InputSimulator: @unchecked Sendable {
     /// button-number field, which is how CoreGraphics addresses the extra
     /// buttons on a gaming mouse. Only 0, 1 and 2 exist as CGMouseButton
     /// values, so the old code could not represent button 3 at all.
-    private func postMouseButton(_ button: Int, down: Bool, at point: CGPoint) {
+    private func postMouseButton(_ button: Int, down: Bool, at point: CGPoint, clickCount: Int) {
         let type: CGEventType
         let cgButton: CGMouseButton
         switch button {
@@ -393,6 +802,7 @@ final class InputSimulator: @unchecked Sendable {
         if button >= 2 {
             event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
         }
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, clickCount)))
         taggedPost(event)
     }
 
@@ -402,12 +812,11 @@ final class InputSimulator: @unchecked Sendable {
     /// window server where the cursor is on every poll frame (that call plus
     /// the screen lookup was the cost behind "Variable Sensitivity spikes
     /// the CPU"). Re-read from the system after an idle gap, when the user
-    /// may have moved the real mouse, and every 8th frame so the tracked
-    /// point cannot drift past a screen edge for long.
+    /// may have moved the real mouse, and every 16th move so the tracked
+    /// point cannot drift from the real one for long.
     private var trackedCursor: CGPoint?
     private var trackedAt: TimeInterval = 0
     private var trackedFrames = 0
-    private var cachedScreenHeight: CGFloat = 0
     /// Guards the tracked-cursor state and the pressed-button set, which the
     /// motion pump reads from its own thread while the main thread presses
     /// and releases buttons.
@@ -418,10 +827,7 @@ final class InputSimulator: @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         trackedFrames &+= 1
         if trackedCursor == nil || now - trackedAt > 0.1 {
-            let location = NSEvent.mouseLocation
-            if let h = primaryScreenHeight { cachedScreenHeight = h }
-            if cachedScreenHeight == 0 { cachedScreenHeight = 1080 }
-            trackedCursor = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
+            trackedCursor = pointerLocationCG()
         } else if trackedFrames % 16 == 0, let tracked = trackedCursor {
             // Periodic check against the real pointer. Adopt it only when it
             // has clearly moved on its own (the user touched the mouse, or a
@@ -429,9 +835,7 @@ final class InputSimulator: @unchecked Sendable {
             // just the window server not having applied the last events yet,
             // and snapping to it every eighth frame put a visible hitch in
             // otherwise smooth motion.
-            let location = NSEvent.mouseLocation
-            if let h = primaryScreenHeight { cachedScreenHeight = h }
-            let real = CGPoint(x: location.x, y: cachedScreenHeight - location.y)
+            let real = pointerLocationCG()
             // The window server applies posted moves a little behind the
             // pump's 240 Hz, so the real pointer can trail by a few steps
             // without anything being wrong; only a clearly larger gap means
@@ -456,12 +860,13 @@ final class InputSimulator: @unchecked Sendable {
         let type: CGEventType
         let button: CGMouseButton
         var otherNumber: Int?
+        var heldButton: Int?
         if pressedMouseButtons.contains(0) {
-            type = .leftMouseDragged; button = .left
+            type = .leftMouseDragged; button = .left; heldButton = 0
         } else if pressedMouseButtons.contains(1) {
-            type = .rightMouseDragged; button = .right
+            type = .rightMouseDragged; button = .right; heldButton = 1
         } else if let other = pressedMouseButtons.first {
-            type = .otherMouseDragged; button = .center; otherNumber = other
+            type = .otherMouseDragged; button = .center; otherNumber = other; heldButton = other
         } else {
             type = .mouseMoved; button = .left
         }
@@ -471,6 +876,11 @@ final class InputSimulator: @unchecked Sendable {
             event.setIntegerValueField(.mouseEventDeltaX, value: Int64(deltaX))
             event.setIntegerValueField(.mouseEventDeltaY, value: Int64(deltaY))
             if let n = otherNumber { event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(n)) }
+            // A drag carries the count of the press that started it, so a
+            // double click held and dragged selects word by word, as with a mouse.
+            if let held = heldButton, let n = pressedClickCounts[held] {
+                event.setIntegerValueField(.mouseEventClickState, value: Int64(n))
+            }
             taggedPost(event)
         }
     }
@@ -484,19 +894,29 @@ final class InputSimulator: @unchecked Sendable {
         }
     }
 
-    func scrollWheelStep(axis: MouseAxis, direction: MouseDirection) {
-        let delta: Int32 = direction == .positive ? 5 : -5
-        switch axis {
-        case .vertical:
-            scrollWheel(deltaX: 0, deltaY: delta)
-        case .horizontal:
-            scrollWheel(deltaX: delta, deltaY: 0)
+    /// One wheel notch, posted in line units like a real notched wheel.
+    /// A 5-pixel scroll read back as continuous (trackpad-style) scrolling,
+    /// which games that count notches, such as weapon switching, ignore.
+    /// Same sign as before, so presets keep their direction.
+    /// One wheel notch, a line each, so games that count notches see them.
+    /// `lines` carries the preset's Scroll speed, which these rows ignored.
+    func scrollWheelStep(axis: MouseAxis, direction: MouseDirection, lines: Int = 1) {
+        let count = Int32(max(1, min(20, lines)))
+        let delta: Int32 = direction == .positive ? count : -count
+        let vertical = axis == .vertical
+        if let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .line,
+                               wheelCount: 2, wheel1: vertical ? delta : 0,
+                               wheel2: vertical ? 0 : delta, wheel3: 0) {
+            taggedPost(event)
         }
     }
 
     // MARK: - Release All
 
     func releaseAll() {
+        // A forced release is never the first half of a double click: the
+        // next press after a preset switch or a pause goes out as click 1.
+        defer { lastClickTime = 0 }
         // Every key goes out through keyUp, the one place that knows how to
         // release a modifier: a bare key-up event for Command or Shift
         // inherits the HID state where the key is still down, so the system
@@ -504,6 +924,25 @@ final class InputSimulator: @unchecked Sendable {
         // or a disconnect. Snapshot first, since keyUp mutates the set.
         // Held modifiers are released last so a letter in a chord is
         // released as the letter of that chord, the way a hand would do it.
+        // Everyone lets go at once: clear the holders first, or keyUp
+        // would keep a key down for a row that still claims it.
+        // Mouse buttons go first, before any modifier: an Option drag lets
+        // go of the button before Option, so a copy is not dropped as a
+        // move. Snapshot under the lock, then release each through
+        // mouseButtonUp, which posts the up event and drops the button
+        // from the set itself.
+        mouseLock.lock()
+        mouseHolders.removeAll()
+        let heldButtons = pressedMouseButtons
+        mouseLock.unlock()
+        for button in heldButtons {
+            mouseButtonUp(button)
+        }
+
+        keyHolders.removeAll()
+        repeatOwners.removeAll()
+        for timer in repeatTimers.values { timer.cancel() }
+        repeatTimers.removeAll()
         let held = pressedKeys.sorted { a, b in
             let aMod = modifierFlags(for: a) != nil
             let bMod = modifierFlags(for: b) != nil
@@ -511,14 +950,71 @@ final class InputSimulator: @unchecked Sendable {
         }
         for key in held { keyUp(key) }
         pressedKeys.removeAll()
+        keyScopes.removeAll()
+        postedKeys.removeAll()
+        standaloneModifiers.removeAll()
+    }
 
-        // Snapshot under the lock, then release each through mouseButtonUp,
-        // which posts the up event and drops the button from the set itself.
+    /// After a crash or force quit, a modifier or mouse button this app was
+    /// holding stays down system-wide (Command held forever, a stuck drag),
+    /// and a relaunch did not clear it. Let go of any that the system still
+    /// reports down. Called once at launch when the last run ended with a
+    /// preset running.
+    func releaseLeftoversFromLastRun() {
+        let modifiers: [CGKeyCode] = [56, 60, 59, 62, 58, 61, 55, 54, 63]
+        for vk in modifiers where CGEventSource.keyState(.combinedSessionState, key: vk) {
+            if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: vk, keyDown: false) {
+                up.type = .flagsChanged
+                up.flags = []
+                taggedPost(up)
+            }
+        }
+        // Ordinary keys too (a game preset holding W), and every mouse
+        // button, side buttons included.
+        let modifierSet = Set(modifiers)
+        for vk in Set(KeyCodeMap.hidToVirtualKeyCode.values) where !modifierSet.contains(CGKeyCode(vk))
+            && CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(vk)) {
+            if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(vk), keyDown: false) {
+                up.flags = []
+                taggedPost(up)
+            }
+        }
+        let point = pointerLocationCG()
+        for number in 0..<32 {
+            guard let button = CGMouseButton(rawValue: UInt32(number)),
+                  CGEventSource.buttonState(.combinedSessionState, button: button) else { continue }
+            let type: CGEventType = number == 0 ? .leftMouseUp : (number == 1 ? .rightMouseUp : .otherMouseUp)
+            if let up = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                                mouseCursorPosition: point, mouseButton: button) {
+                up.setIntegerValueField(.mouseEventButtonNumber, value: Int64(number))
+                taggedPost(up)
+            }
+        }
+    }
+
+    /// True while this app holds the key down itself. Read on the main
+    /// thread, where keys are pressed and released.
+    func isHolding(_ hidCode: Int) -> Bool { pressedKeys.contains(hidCode) }
+
+    /// The side bits of the modifiers this app holds, as posted on its
+    /// own events; the input poll masks them out of the session's flags.
+    func ownDeviceModifierBits() -> UInt { UInt(deviceModifierBits().rawValue) }
+
+    /// Let go of what owners starting with `prefix` hold (a controller group's
+    /// rows, "2:" for group 2). A key or button another owner still holds
+    /// stays down.
+    func releaseOwners(withPrefix prefix: String) {
+        // Buttons, then keys, then modifiers, the order a hand lets go in.
         mouseLock.lock()
-        let heldButtons = pressedMouseButtons
+        let buttons = mouseHolders.filter { $0.value.contains(where: { $0.hasPrefix(prefix) }) }
         mouseLock.unlock()
-        for button in heldButtons {
-            mouseButtonUp(button)
+        for (button, holders) in buttons {
+            for owner in holders where owner.hasPrefix(prefix) { mouseButtonUp(button, owner: owner) }
+        }
+        let keys = keyHolders.filter { $0.value.contains(where: { $0.hasPrefix(prefix) }) }
+            .sorted { a, b in modifierFlags(for: a.key) == nil && modifierFlags(for: b.key) != nil }
+        for (code, holders) in keys {
+            for owner in holders where owner.hasPrefix(prefix) { keyUp(code, owner: owner) }
         }
     }
 
@@ -527,57 +1023,13 @@ final class InputSimulator: @unchecked Sendable {
     /// test to prove the emergency stop actually let go of them.
     var debugHeldKeyCount: Int { pressedKeys.count + pressedMouseButtons.count }
     #endif
-
-    // MARK: - Diagnostic Test
-
-    /// Test that event creation + posting works. Returns a description
-    /// of what happened.
-    ///
-    /// Note: output is synthesized at the HID layer via `.cghidEventTap`
-    /// (see `taggedPost`). Delivery to other apps requires the Accessibility
-    /// permission, which `AccessibilityPermissionService.requestAccess()`
-    /// asks for; this diagnostic only verifies that event creation and
-    /// posting do not fail, so it intentionally runs without an
-    /// `AXIsProcessTrusted` check.
-    static func runDiagnostic() -> String {
-        var results: [String] = []
-
-        // 1. Check if we can create an event source
-        let source = CGEventSource(stateID: .hidSystemState)
-        results.append("Event Source: \(source != nil ? "OK" : "FAILED")")
-
-        // 2. Check if we can create a keyboard event
-        let keyEvent = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-        results.append("Key Event Create: \(keyEvent != nil ? "OK" : "FAILED")")
-
-        // 3. Check if we can create a mouse move event
-        let mouseEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
-                                  mouseCursorPosition: .zero, mouseButton: .left)
-        results.append("Mouse Event Create: \(mouseEvent != nil ? "OK" : "FAILED")")
-
-        // 4. Try posting a harmless mouse move with zero delta
-        if let event = mouseEvent {
-            event.setIntegerValueField(.mouseEventDeltaX, value: 0)
-            event.setIntegerValueField(.mouseEventDeltaY, value: 0)
-            // taggedPost is an instance method; use the singleton.
-            InputSimulator.shared.taggedPost(event)
-            results.append("Event Post: OK (no error)")
-        } else {
-            results.append("Event Post: SKIPPED (no event)")
-        }
-
-        // 5. App path
-        results.append("App Path: \(Bundle.main.bundlePath)")
-
-        return results.joined(separator: "\n")
-    }
 }
 
 /// Tracks and helps the user grant the macOS Accessibility permission,
 /// which InputConfig needs to deliver the keyboard and mouse actions a
-/// user maps to their controller. This is the app's one approved use of
-/// Accessibility (App Store guideline 2.4.5): it is used solely to perform
-/// the user's own mappings, never to read or monitor input.
+/// user maps to their controller. The same permission lets the app watch
+/// the keyboard and mouse while a preset, Scan, or the Live Visualizer uses
+/// them as inputs; nothing is recorded or sent anywhere.
 ///
 /// macOS posts no notification when this permission changes, so we re-check
 /// on app activation and via a short poll after we prompt.
@@ -601,6 +1053,46 @@ final class AccessibilityPermissionService: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        // The system announces Accessibility list changes on this
+        // distributed notification. The trust state lags it slightly, so
+        // look again a moment later too.
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refresh()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.refresh()
+            }
+        }
+        // While a preset runs, check every 10 s, so a revoke made while the
+        // app sits in the background is noticed and logged instead of
+        // every output silently going nowhere.
+        NotificationCenter.default.addObserver(
+            forName: MappingEngine.didStartNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.setRunningWatch(true) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: MappingEngine.didStopNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.setRunningWatch(false) }
+        }
+    }
+
+    private var runningWatch: Timer?
+
+    private func setRunningWatch(_ on: Bool) {
+        runningWatch?.invalidate()
+        runningWatch = nil
+        guard on else { return }
+        let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        timer.tolerance = 2
+        runningWatch = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// Re-read the current trust state, publishing only on change.
@@ -689,6 +1181,10 @@ final class HotKeyCenter: @unchecked Sendable {
     private var handlerRef: EventHandlerRef?
     private var actions: [UInt32: () -> Void] = [:]
     private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var chords: [UInt32: (keyCode: UInt32, modifiers: UInt32)] = [:]
+    /// Chords let go while a shortcut recorder listens; they come back on resume.
+    private var suspended: Set<UInt32> = []
+    private var suspendDepth = 0
     private var nextID: UInt32 = 1
 
     private init() {}
@@ -704,6 +1200,15 @@ final class HotKeyCenter: @unchecked Sendable {
 
         let id = nextID
         nextID &+= 1
+        // While a recorder listens, a new chord waits for the resume like
+        // the others; registered live, a preset could take the emergency
+        // stop's chord while it was let go.
+        if suspendDepth > 0 {
+            chords[id] = (keyCode, modifiers)
+            actions[id] = action
+            suspended.insert(id)
+            return id
+        }
         var ref: EventHotKeyRef?
         let hotKeyID = EventHotKeyID(signature: OSType(0x4A4B4350), id: id)  // 'JKCP'
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
@@ -713,6 +1218,7 @@ final class HotKeyCenter: @unchecked Sendable {
             return nil
         }
         refs[id] = ref
+        chords[id] = (keyCode, modifiers)
         actions[id] = action
         return id
     }
@@ -722,7 +1228,61 @@ final class HotKeyCenter: @unchecked Sendable {
         defer { lock.unlock() }
         if let ref = refs.removeValue(forKey: token) { UnregisterEventHotKey(ref) }
         actions.removeValue(forKey: token)
+        chords.removeValue(forKey: token)
+        suspended.remove(token)
     }
+
+    /// Let go of every chord while a shortcut recorder listens. A registered
+    /// hot key never reaches the app as a key press, so recording one of
+    /// InputConfig's own chords ran its action (a stop, a preset switch)
+    /// instead of reaching the recorder and its refusal message.
+    func suspendAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        suspendDepth += 1
+        guard suspendDepth == 1 else { return }
+        for (id, ref) in refs {
+            UnregisterEventHotKey(ref)
+            suspended.insert(id)
+        }
+        refs.removeAll()
+    }
+
+    /// Take the chords back, each under its old ID so its action still fires.
+    /// `first` are taken back before the rest (the emergency stop's). The
+    /// IDs that could not be taken back are returned and kept in
+    /// `lostOnResume`.
+    @discardableResult
+    func resumeAll(first: Set<UInt32> = []) -> Set<UInt32> {
+        lock.lock()
+        defer { lock.unlock() }
+        guard suspendDepth > 0 else { return [] }
+        suspendDepth -= 1
+        guard suspendDepth == 0 else { return [] }
+        var failed = Set<UInt32>()
+        let order = suspended.sorted { a, b in first.contains(a) && !first.contains(b) }
+        for id in order {
+            guard let c = chords[id] else { continue }
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(c.keyCode, c.modifiers,
+                                             EventHotKeyID(signature: OSType(0x4A4B4350), id: id),
+                                             GetApplicationEventTarget(), 0, &ref)
+            if status == noErr, let ref {
+                refs[id] = ref
+            } else {
+                NSLog("HotKeyCenter: could not take a chord back after recording (status \(status))")
+                failed.insert(id)
+                actions.removeValue(forKey: id)
+                chords.removeValue(forKey: id)
+            }
+        }
+        suspended.removeAll()
+        lostOnResume = failed
+        return failed
+    }
+
+    /// Chords whose registration failed when a recorder let them go again.
+    private(set) var lostOnResume: Set<UInt32> = []
 
     /// Called from the C callback with the ID read off the event.
     fileprivate func fire(_ id: UInt32) {
@@ -781,8 +1341,12 @@ struct HotKeySpec: Codable, Hashable {
     /// True when this is a bare key you would normally type, so registering
     /// it system-wide would swallow it everywhere. Function keys, arrows and
     /// the navigation cluster are fine on their own.
+    /// A plain key, Shift with a key that types (Shift slash is "?"), or
+    /// Option with one (Option E is the accent key, and on a German layout
+    /// Option L is @): a hot key takes that character away from every app.
     var stealsATypingKey: Bool {
-        guard modifiers == 0 else { return false }
+        let typingMods: Set<UInt32> = [0, UInt32(shiftKey), UInt32(optionKey), UInt32(optionKey | shiftKey)]
+        guard typingMods.contains(modifiers) else { return false }
         switch Int(keyCode) {
         case kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8,
              kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15,
@@ -796,6 +1360,12 @@ struct HotKeySpec: Codable, Hashable {
     }
 
     static func keyName(for code: UInt32) -> String {
+        // A punctuation key by what it types on the current layout: the
+        // period key of a US keyboard is the semicolon of a French one.
+        if [kVK_ANSI_Period, kVK_ANSI_Comma, kVK_ANSI_Slash].contains(Int(code)),
+           let typed = SystemActionService.character(forVirtualKey: Int(code)) {
+            return typed
+        }
         switch Int(code) {
         case kVK_ANSI_Period: return "."
         case kVK_ANSI_Comma:  return ","
@@ -841,6 +1411,11 @@ final class EmergencyStopService: @unchecked Sendable {
     static let controllerKey    = "InputConfig.panicControllerEnabled"
     static let controllerBtnKey = "InputConfig.panicControllerButton"
     static let holdSecondsKey   = "InputConfig.panicHoldSeconds"
+    /// The default hold is Back and Start together: Back alone is bound in
+    /// Easy Browse and every game preset, and a slow press of it (common with
+    /// limited motor control) stopped the preset with no warning.
+    static let withStartKey     = "InputConfig.panicControllerWithStart"
+    static let startButton = 9
 
     /// Control + Option + Command + period. Period is the Mac's cancel key,
     /// and the three modifiers keep it clear of anything an app or game binds.
@@ -854,7 +1429,10 @@ final class EmergencyStopService: @unchecked Sendable {
     static let defaultHoldSeconds = 3.0
 
     private var token: UInt32?
+    private var shiftToken: UInt32?
     private(set) var isRegistered = false
+    /// The stop's hot-key IDs, which a recorder takes back first.
+    var tokens: Set<UInt32> { Set([token, shiftToken].compactMap { $0 }) }
 
     private init() {}
 
@@ -866,15 +1444,26 @@ final class EmergencyStopService: @unchecked Sendable {
             controllerKey: true,
             controllerBtnKey: defaultControllerButton,
             holdSecondsKey: defaultHoldSeconds,
+            withStartKey: true,
         ])
     }
 
     var spec: HotKeySpec {
         let d = UserDefaults.standard
-        let code = d.object(forKey: Self.keyCodeKey) as? Int
-        let mods = d.object(forKey: Self.modifiersKey) as? Int
-        return HotKeySpec(keyCode: UInt32(code ?? Int(Self.defaultSpec.keyCode)),
-                          modifiers: UInt32(mods ?? Int(Self.defaultSpec.modifiers)))
+        // UInt32(exactly:): a negative or huge stored value (a hand-edited
+        // plist or an odd backup) trapped here on every launch.
+        let code = (d.object(forKey: Self.keyCodeKey) as? Int).flatMap { UInt32(exactly: $0) }
+        let mods = (d.object(forKey: Self.modifiersKey) as? Int).flatMap { UInt32(exactly: $0) }
+        let stored = HotKeySpec(keyCode: code ?? Self.defaultSpec.keyCode,
+                                modifiers: mods ?? Self.defaultSpec.modifiers)
+        // The default chord is on whatever key types a period on this
+        // layout (help and Settings call it period); on AZERTY, Dvorak and
+        // Turkish the US period position types something else.
+        if stored == Self.defaultSpec,
+           let period = SystemActionService.virtualKey(typing: ".", command: true), period != Int(Self.defaultSpec.keyCode) {
+            return HotKeySpec(keyCode: UInt32(period), modifiers: stored.modifiers)
+        }
+        return stored
     }
 
     var isEnabled: Bool { UserDefaults.standard.bool(forKey: Self.enabledKey) }
@@ -886,11 +1475,15 @@ final class EmergencyStopService: @unchecked Sendable {
     private var cachedHoldEnabled = true
     private var cachedButton = EmergencyStopService.defaultControllerButton
     private var cachedHoldSeconds = EmergencyStopService.defaultHoldSeconds
+    private var cachedWithStart = true
     private var defaultsObserver: NSObjectProtocol?
 
     var controllerHoldEnabled: Bool { cachedHoldEnabled }
     var controllerButton: Int { cachedButton }
     var holdSeconds: Double { cachedHoldSeconds }
+    /// Whether the hold needs Start (9) held with the button: on by default
+    /// for the default button, off for any button picked in Settings.
+    var holdNeedsStart: Bool { cachedWithStart && cachedButton == Self.defaultControllerButton }
 
     /// Pull the controller-hold settings into memory. Called at registration
     /// and whenever any default changes.
@@ -899,6 +1492,7 @@ final class EmergencyStopService: @unchecked Sendable {
         cachedHoldEnabled = d.bool(forKey: Self.controllerKey)
         cachedButton = (d.object(forKey: Self.controllerBtnKey) as? Int)
             ?? Self.defaultControllerButton
+        cachedWithStart = d.bool(forKey: Self.withStartKey)
         let secs = d.double(forKey: Self.holdSecondsKey)
         cachedHoldSeconds = secs > 0 ? secs : Self.defaultHoldSeconds
     }
@@ -919,6 +1513,7 @@ final class EmergencyStopService: @unchecked Sendable {
         refreshCachedSettings()
         observeDefaults()
         if let t = token { HotKeyCenter.shared.unregister(t); token = nil }
+        if let t = shiftToken { HotKeyCenter.shared.unregister(t); shiftToken = nil }
         isRegistered = false
         guard isEnabled else { return true }
         let s = spec
@@ -929,8 +1524,58 @@ final class EmergencyStopService: @unchecked Sendable {
             return false
         }
         token = t
+        // A preset holding Shift (a sprint toggle) adds Shift to the chord,
+        // and hot keys match their modifiers exactly, so the same chord with
+        // Shift stops too. Best effort: it may be taken by another app.
+        if s.modifiers & UInt32(shiftKey) == 0 {
+            shiftToken = HotKeyCenter.shared.register(keyCode: s.keyCode, modifiers: s.modifiers | UInt32(shiftKey),
+                                                      action: { EmergencyStopService.shared.stop(reason: .hotkey) })
+        }
         isRegistered = true
+        // Registered now, so a later conflict on the same chord warns again.
+        UserDefaults.standard.removeObject(forKey: "InputConfig.emergencyStopWarnedChord")
         return true
+    }
+
+    /// The chord plus Shift, also registered while the chord has no Shift
+    /// of its own. Nil when the chord already includes Shift.
+    var shiftVariant: HotKeySpec? {
+        let s = spec
+        guard s.modifiers & UInt32(shiftKey) == 0 else { return nil }
+        return HotKeySpec(keyCode: s.keyCode, modifiers: s.modifiers | UInt32(shiftKey))
+    }
+
+    /// True when the chord, or its Shift variant, is exactly this one.
+    func claims(_ other: HotKeySpec) -> Bool {
+        other == spec || other == shiftVariant
+    }
+
+    /// A preset's own shortcut wins over the extra Shift chord: the stop
+    /// registers first at launch, which took that preset's shortcut away.
+    @discardableResult
+    func yieldShiftVariant(to other: HotKeySpec) -> Bool {
+        guard let t = shiftToken, other == shiftVariant else { return false }
+        HotKeyCenter.shared.unregister(t)
+        shiftToken = nil
+        return true
+    }
+
+    /// Record a new chord and switch the keyboard stop on with it. When the
+    /// chord cannot be registered, the previous chord and switch come back.
+    @discardableResult
+    func trySpec(_ newSpec: HotKeySpec) -> Bool {
+        let d = UserDefaults.standard
+        let previous = spec
+        let wasEnabled = isEnabled
+        d.set(Int(newSpec.keyCode), forKey: Self.keyCodeKey)
+        d.set(Int(newSpec.modifiers), forKey: Self.modifiersKey)
+        d.set(true, forKey: Self.enabledKey)
+        if refreshRegistration() { return true }
+        d.set(Int(previous.keyCode), forKey: Self.keyCodeKey)
+        d.set(Int(previous.modifiers), forKey: Self.modifiersKey)
+        d.set(wasEnabled, forKey: Self.enabledKey)
+        refreshRegistration()
+        return false
     }
 
     func setSpec(_ newSpec: HotKeySpec) {
@@ -956,6 +1601,15 @@ final class EmergencyStopService: @unchecked Sendable {
     /// nothing is re-pressed on the next frame, then let go of every key,
     /// button, and note we are holding, then put the cursor back.
     func stop(reason: Reason) {
+        // Heard and spoken, so a stop is never silent; from the controller,
+        // also how to start again.
+        DispatchQueue.main.async {
+            NSSound(named: "Funk")?.play()
+            let said = reason == .controllerHold
+                ? "Stopped by the controller hold. Hold it again to start the preset back up."
+                : "Emergency stop. Everything stopped."
+            AccessibilityNotification.Announcement(said).post()
+        }
         let work = {
             // 1. Engine and preset. Observers run synchronously on this
             //    thread, so the poll loop is stopped before we release.
@@ -968,6 +1622,7 @@ final class EmergencyStopService: @unchecked Sendable {
             InputSimulator.shared.releaseAll()
             MIDIService.shared.releaseAllNotes()
             InProcessLightWriter.shared.stopMotors()
+            MainActor.assumeIsolated { RawHIDGamepadService.shared.stopSteamController2026Rumble() }
             MainActor.assumeIsolated { FeedbackService.shared.clearHapticEngines() }
             // 3. Give the pointer back. CursorGuardService is main-actor
             //    isolated and this block only ever runs on the main thread.
@@ -1012,6 +1667,14 @@ final class PresetHotKeyService: @unchecked Sendable {
                         name: PresetHotKeyService.activateNotification, object: id)
                 }) {
                 tokens[id] = token
+            } else if EmergencyStopService.shared.yieldShiftVariant(to: spec),
+                      let token = HotKeyCenter.shared.register(
+                        keyCode: spec.keyCode, modifiers: spec.modifiers,
+                        action: {
+                            NotificationCenter.default.post(
+                                name: PresetHotKeyService.activateNotification, object: id)
+                        }) {
+                tokens[id] = token
             } else {
                 failed.insert(id)
             }
@@ -1020,10 +1683,12 @@ final class PresetHotKeyService: @unchecked Sendable {
 
     /// True when two presets ask for the same chord, or one collides with
     /// the emergency stop, so the editor can warn instead of failing silently.
+    /// The stop's chord counts even while its switch is off, so turning it
+    /// back on cannot find a preset sitting on it.
     static func conflicts(for spec: HotKeySpec, excluding presetID: UUID?,
                           in presets: [Preset]) -> Bool {
-        if EmergencyStopService.shared.isEnabled,
-           EmergencyStopService.shared.spec == spec { return true }
+        if EmergencyStopService.shared.spec == spec { return true }
+        if GlobalHotKeyService.shared.isEnabled, spec == GlobalHotKeyService.spec { return true }
         return presets.contains { $0.id != presetID && $0.activateHotKey == spec }
     }
 }
@@ -1040,8 +1705,26 @@ final class GlobalHotKeyService: @unchecked Sendable {
     private var token: UInt32?
     private(set) var isEnabled = false
 
+    /// Each press of the shortcut, numbered. Two listeners (the main window
+    /// and the menu bar) can both hear one press; only the first to claim it
+    /// acts. With the app hidden, both toggled, so the preset went on and
+    /// straight back off. Main thread only.
+    nonisolated(unsafe) static var pressSerial = 0
+    nonisolated(unsafe) private static var claimedSerial = 0
+
+    /// True for the first listener to ask about this press.
+    static func claim(_ note: Notification) -> Bool {
+        let serial = (note.object as? NSNumber)?.intValue ?? 0
+        guard serial == 0 || serial != claimedSerial else { return false }
+        claimedSerial = serial
+        return true
+    }
+
     /// Human-readable chord, shown in Settings.
     let shortcutDescription = "Control + Option + Command + P"
+    /// The fixed chord, so the emergency stop recorder can refuse it.
+    static let spec = HotKeySpec(keyCode: UInt32(kVK_ANSI_P),
+                                 modifiers: UInt32(controlKey | optionKey | cmdKey))
 
     private init() {}
 
@@ -1051,11 +1734,13 @@ final class GlobalHotKeyService: @unchecked Sendable {
     func enable() -> Bool {
         guard !isEnabled else { return true }
         guard let t = HotKeyCenter.shared.register(
-            keyCode: UInt32(kVK_ANSI_P),
-            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            keyCode: Self.spec.keyCode,
+            modifiers: Self.spec.modifiers,
             action: {
+                GlobalHotKeyService.pressSerial &+= 1
                 NotificationCenter.default.post(
-                    name: GlobalHotKeyService.toggleNotification, object: nil)
+                    name: GlobalHotKeyService.toggleNotification,
+                    object: NSNumber(value: GlobalHotKeyService.pressSerial))
             }) else { return false }
         token = t
         isEnabled = true
@@ -1080,16 +1765,17 @@ final class GlobalHotKeyService: @unchecked Sendable {
 final class InputSimulator: @unchecked Sendable {
     nonisolated(unsafe) static let shared = InputSimulator()
 
-    func keyDown(_ hidCode: Int) {}
-    func keyUp(_ hidCode: Int) {}
-    func mouseButtonDown(_ button: Int) {}
-    func mouseButtonUp(_ button: Int) {}
+    func keyDown(_ hidCode: Int, chord: [Int]? = nil, owner: String = "", repeats: Bool = false) {}
+    func keyUp(_ hidCode: Int, owner: String = "") {}
+    func mouseButtonDown(_ button: Int, owner: String = "", singleClick: Bool = false) {}
+    func mouseButtonUp(_ button: Int, owner: String = "") {}
     func moveMouse(deltaX: Int, deltaY: Int) {}
     func scrollWheel(deltaX: Int32, deltaY: Int32) {}
-    func scrollWheelStep(axis: MouseAxis, direction: MouseDirection) {}
+    func scrollWheelStep(axis: MouseAxis, direction: MouseDirection, lines: Int = 1) {}
     func releaseAll() {}
+    func releaseOwners(withPrefix prefix: String) {}
+    func ownDeviceModifierBits() -> UInt { 0 }
 
-    static func runDiagnostic() -> String { "iOS: Not supported" }
 }
 
 @MainActor
@@ -1200,8 +1886,9 @@ final class SystemListsCache: ObservableObject {
         SystemActionService.shared.loadLists { shortcuts, apps in
             MainActor.assumeIsolated {
                 let cache = SystemListsCache.shared
-                cache.shortcuts = shortcuts
-                cache.apps = apps
+                // Only on a change: each publish redraws every chooser.
+                if cache.shortcuts != shortcuts { cache.shortcuts = shortcuts }
+                if cache.apps != apps { cache.apps = apps }
                 cache.loadedAt = Date()
                 cache.loading = false
             }
@@ -1242,11 +1929,13 @@ final class SystemActionService: @unchecked Sendable {
         case .missionControl:
             openSystemApp("Mission Control")
         case .launchpad:
-            openSystemApp("Launchpad")
+            openLaunchpad()
         case .spotlight:
             postCombo(keyCode: 49, flags: .maskCommand)            // Cmd+Space
         case .lockScreen:
-            postCombo(keyCode: 12, flags: [.maskControl, .maskCommand])  // Ctrl+Cmd+Q
+            // Ctrl+Cmd+Q, where Q is wherever the current layout puts it
+            // (the A key on AZERTY); macOS matches the shortcut by letter.
+            postCombo(keyCode: CGKeyCode(Self.virtualKey(typing: "q", command: true) ?? 12), flags: [.maskControl, .maskCommand])
         case .screenshotMenu:
             postCombo(keyCode: 23, flags: [.maskCommand, .maskShift])    // Cmd+Shift+5
         case .runShortcut:
@@ -1257,6 +1946,63 @@ final class SystemActionService: @unchecked Sendable {
             if let raw = parameter, let url = URL(string: raw) {
                 NSWorkspace.shared.open(url)
             }
+        }
+    }
+
+    /// The virtual key that types `character` on the current keyboard
+    /// layout, or nil when the layout has no unmodified key for it.
+    /// With `command`, the key that types it while Command is held, which
+    /// is what a shortcut matches: "Dvorak - QWERTY Command" types Dvorak
+    /// letters plain and QWERTY ones with Command, so the plain search sent
+    /// Control Command X for Lock Screen. Falls back to the plain search.
+    static func virtualKey(typing character: Character, command: Bool) -> Int? {
+        if command, let code = virtualKey(typing: character, modifierState: UInt32((cmdKey >> 8) & 0xFF)) { return code }
+        return virtualKey(typing: character)
+    }
+
+    static func virtualKey(typing character: Character) -> Int? {
+        virtualKey(typing: character, modifierState: 0)
+    }
+
+    /// What a key types on the current layout with no modifiers, or nil.
+    static func character(forVirtualKey code: Int) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        return data.withUnsafeBytes { buffer -> String? in
+            guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
+            var deadKeys: UInt32 = 0
+            var chars = [UniChar](repeating: 0, count: 4)
+            var length = 0
+            let status = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), 0,
+                                        UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                        &deadKeys, chars.count, &length, &chars)
+            guard status == noErr, length > 0 else { return nil }
+            let s = String(utf16CodeUnits: chars, count: length)
+            return s.trimmingCharacters(in: .controlCharacters).isEmpty ? nil : s
+        }
+    }
+
+    private static func virtualKey(typing character: Character, modifierState: UInt32) -> Int? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        let target = String(character).lowercased()
+        return data.withUnsafeBytes { buffer -> Int? in
+            guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
+            for code in 0..<128 {
+                var deadKeys: UInt32 = 0
+                var chars = [UniChar](repeating: 0, count: 4)
+                var length = 0
+                let status = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), modifierState,
+                                            UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                            &deadKeys, chars.count, &length, &chars)
+                if status == noErr, length > 0,
+                   String(utf16CodeUnits: chars, count: length).lowercased() == target {
+                    return code
+                }
+            }
+            return nil
         }
     }
 
@@ -1348,6 +2094,7 @@ final class SystemActionService: @unchecked Sendable {
                 ), let cg = event.cgEvent else { continue }
                 cg.setIntegerValueField(.eventSourceUserData,
                                         value: InputSimulator.ownEventMarker)
+                InputSimulator.notePost(cg.type)
                 cg.post(tap: .cghidEventTap)
             }
         }
@@ -1376,6 +2123,7 @@ final class SystemActionService: @unchecked Sendable {
             event.flags = [.maskSecondaryFn, .maskNonCoalesced]
             event.setIntegerValueField(.eventSourceUserData,
                                        value: InputSimulator.ownEventMarker)
+            InputSimulator.notePost(event.type)
             event.post(tap: .cghidEventTap)
         }
     }
@@ -1391,11 +2139,24 @@ final class SystemActionService: @unchecked Sendable {
             event.flags = flags
             event.setIntegerValueField(.eventSourceUserData,
                                        value: InputSimulator.ownEventMarker)
+            InputSimulator.notePost(event.type)
             event.post(tap: .cghidEventTap)
         }
     }
 
     // MARK: Mac shortcuts
+
+    /// Launchpad, or Apps on macOS 26 and later, where Launchpad.app is
+    /// gone. Found by bundle id so the path does not matter; a miss is
+    /// logged rather than silent.
+    private func openLaunchpad() {
+        let ids = ["com.apple.apps.launcher", "com.apple.launchpad.launcher"]
+        guard let url = ids.lazy.compactMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }).first else {
+            ActivityLog.shared.warning("Outputs", "Could not find Launchpad or Apps on this Mac")
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
 
     private func openSystemApp(_ name: String) {
         let url = URL(fileURLWithPath: "/System/Applications/\(name).app")
@@ -1414,13 +2175,24 @@ final class SystemActionService: @unchecked Sendable {
             task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
             task.arguments = ["run", name]
             task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
+            let errors = Pipe()
+            task.standardError = errors
             do {
                 try task.run()
+                let message = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 task.waitUntilExit()
                 if task.terminationStatus == 0 { return }
-                NSLog("[SystemAction] shortcuts run '%@' exited %d; falling back to URL scheme",
-                      name, task.terminationStatus)
+                // Fall back only when the tool could not reach Shortcuts. Not
+                // judged from its error text, which is localized and varies:
+                // if the tool can list this shortcut it reached Shortcuts,
+                // so the shortcut ran and failed partway, and running it
+                // again through the URL scheme would run it twice.
+                if self.installedShortcuts().contains(name) {
+                    let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ActivityLog.shared.warning("Outputs", "Shortcut \u{201C}\(name)\u{201D} did not finish" + (detail.isEmpty ? "" : ": \(detail)"))
+                    return
+                }
+                NSLog("[SystemAction] shortcuts run '%@' could not reach Shortcuts; falling back to URL scheme", name)
             } catch {
                 NSLog("[SystemAction] shortcuts CLI unavailable (%@); falling back to URL scheme",
                       String(describing: error))
@@ -1457,15 +2229,7 @@ final class SystemActionService: @unchecked Sendable {
         let cached = cachedApps
         shortcutsLock.unlock()
         if fresh, !cached.isEmpty { return cached }
-        var names = Set<String>()
-        let fm = FileManager.default
-        for dir in ["/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities",
-                    NSHomeDirectory() + "/Applications"] {
-            guard let items = try? fm.contentsOfDirectory(atPath: dir) else { continue }
-            for item in items where item.hasSuffix(".app") {
-                names.insert(String(item.dropLast(4)))
-            }
-        }
+        var names = Set<String>(Self.appBundlesByName().keys)
         for app in NSWorkspace.shared.runningApplications {
             if let n = app.localizedName, !n.isEmpty { names.insert(n) }
         }
@@ -1520,24 +2284,71 @@ final class SystemActionService: @unchecked Sendable {
         }
     }
 
-    private func openApp(_ target: String) {
-        let config = NSWorkspace.OpenConfiguration()
-        if target.hasPrefix("/") {
-            NSWorkspace.shared.openApplication(
-                at: URL(fileURLWithPath: target), configuration: config)
-            return
+    /// The folders apps live in. The user's own Applications folder is
+    /// found through the account's real home: NSHomeDirectory() is the
+    /// sandbox container, where no apps are.
+    private static var appDirectories: [String] {
+        var dirs = ["/Applications", "/Applications/Utilities", "/System/Applications", "/System/Applications/Utilities"]
+        if let pw = getpwuid(getuid()), let home = pw.pointee.pw_dir {
+            dirs.append(String(cString: home) + "/Applications")
         }
-        for dir in ["/Applications", "/System/Applications", "/System/Applications/Utilities"] {
-            let path = "\(dir)/\(target).app"
-            if FileManager.default.fileExists(atPath: path) {
-                NSWorkspace.shared.openApplication(
-                    at: URL(fileURLWithPath: path), configuration: config)
-                return
+        return dirs
+    }
+
+    nonisolated(unsafe) private static var appBundleCache: (at: Date, map: [String: URL])?
+    private static func cachedAppBundlesByName() -> [String: URL] {
+        if let cache = appBundleCache, Date().timeIntervalSince(cache.at) < 60 { return cache.map }
+        let map = appBundlesByName()
+        appBundleCache = (Date(), map)
+        return map
+    }
+
+    /// Every app bundle in those folders and one folder deeper (apps that
+    /// install into a vendor folder), by name.
+    private static func appBundlesByName() -> [String: URL] {
+        var out: [String: URL] = [:]
+        let fm = FileManager.default
+        for dir in appDirectories {
+            guard let items = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for item in items {
+                let path = dir + "/" + item
+                if item.hasSuffix(".app") {
+                    let name = String(item.dropLast(4))
+                    if out[name] == nil { out[name] = URL(fileURLWithPath: path) }
+                } else if let inner = try? fm.contentsOfDirectory(atPath: path) {
+                    for sub in inner where sub.hasSuffix(".app") {
+                        let name = String(sub.dropLast(4))
+                        if out[name] == nil { out[name] = URL(fileURLWithPath: path + "/" + sub) }
+                    }
+                }
             }
         }
-        // Last try: treat the string as a bundle identifier.
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: target) {
-            NSWorkspace.shared.openApplication(at: url, configuration: config)
+        return out
+    }
+
+    private func openApp(_ target: String) {
+        let config = NSWorkspace.OpenConfiguration()
+        let url: URL? = {
+            if target.hasPrefix("/") { return URL(fileURLWithPath: target) }
+            // The usual places first, one file check each, as 1.5 did; the
+            // full folder scan runs on every press on the main thread, so it
+            // is the fallback, and its result is kept for a minute.
+            for dir in Self.appDirectories {
+                let path = dir + "/" + target + ".app"
+                if FileManager.default.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
+            }
+            if let found = Self.cachedAppBundlesByName()[target] { return found }
+            // A running app listed by its display name, which can differ
+            // from its bundle's file name.
+            if let running = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == target }),
+               let bundle = running.bundleURL { return bundle }
+            // Last try: the string as a bundle identifier.
+            return NSWorkspace.shared.urlForApplication(withBundleIdentifier: target)
+        }()
+        guard let url else {
+            ActivityLog.shared.warning("Outputs", "Open App could not find \u{201C}\(target)\u{201D}")
+            return
         }
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 }

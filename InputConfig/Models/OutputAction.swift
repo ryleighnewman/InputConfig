@@ -24,6 +24,11 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
     /// URL. Fires on press; the specific function lives in
     /// `systemActionKind` with an optional string parameter in `text`.
     case systemAction = "sys"
+    /// Colors the controller's light bar (DualSense, DualShock 4): the
+    /// color rides in `lightColor`, and `lightMode` says whether it shows
+    /// while the input is held, stays until something else changes it, or
+    /// switches the rainbow on and off. Posts no events.
+    case lightBar = "lit"
 
     var id: String { rawValue }
 
@@ -34,6 +39,7 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
         case .appAction: return "App Action"
         case .absoluteVolume: return "System Volume (follows input)"
         case .systemAction: return "System Function"
+        case .lightBar: return "Light Bar Color"
         case .mouseButton: return "Mouse Button"
         case .mouseMotion: return "Mouse Motion"
         case .mouseWheel: return "Mouse Wheel"
@@ -136,7 +142,9 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         case .zoomIn: return "Zoom In"
         case .zoomOut: return "Zoom Out"
         case .missionControl: return "Mission Control"
-        case .launchpad: return "Launchpad"
+        case .launchpad:
+            if #available(macOS 26, *) { return "Apps (Launchpad)" }
+            return "Launchpad"
         case .spotlight: return "Spotlight Search"
         case .lockScreen: return "Lock Screen"
         case .screenshotMenu: return "Screenshot Menu"
@@ -224,6 +232,65 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     ]
 }
 
+/// How a light bar output uses its color.
+enum LightOutputMode: String, Codable, CaseIterable, Identifiable {
+    /// The color shows while the input is held, then the light goes back
+    /// to what it was showing (a standing color, the preset's color, a
+    /// rainbow, or the controller's own color).
+    case whileHeld = "held"
+    /// The color stays until another light output changes it or the
+    /// preset stops.
+    case set = "set"
+    /// Each press switches the rainbow cycle on or off.
+    case rainbowToggle = "rainbow"
+
+    var id: String { rawValue }
+
+    /// A mode added by a newer build reads as While Held, the one that
+    /// always puts the light back, instead of making the row unreadable.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = LightOutputMode(rawValue: raw) ?? .whileHeld
+    }
+
+    var displayName: String {
+        switch self {
+        case .whileHeld: return "While held"
+        case .set: return "Set and keep"
+        case .rainbowToggle: return "Rainbow on / off"
+        }
+    }
+}
+
+extension RGBLightColor {
+    /// The named colors the preset's light bar picker offers, in its order.
+    static let namedSwatches: [(name: String, color: RGBLightColor)] = [
+        ("Red", RGBLightColor(r: 255, g: 0, b: 0)),
+        ("Orange", RGBLightColor(r: 255, g: 89, b: 0)),
+        ("Yellow", RGBLightColor(r: 255, g: 179, b: 0)),
+        ("Green", RGBLightColor(r: 0, g: 255, b: 0)),
+        ("Cyan", RGBLightColor(r: 0, g: 255, b: 255)),
+        ("Blue", RGBLightColor(r: 0, g: 0, b: 255)),
+        ("Purple", RGBLightColor(r: 128, g: 0, b: 255)),
+        ("Pink", RGBLightColor(r: 255, g: 0, b: 153)),
+        ("White", RGBLightColor(r: 255, g: 255, b: 255)),
+        ("Off", RGBLightColor(r: 0, g: 0, b: 0)),
+    ]
+
+    /// The swatch name this color matches, or the nearest one for a
+    /// custom color, so a row reads "red" rather than three numbers.
+    var nearestName: String {
+        func distance(_ c: RGBLightColor) -> Int {
+            let dr = Int(r) - Int(c.r), dg = Int(g) - Int(c.g), db = Int(b) - Int(c.b)
+            return dr * dr + dg * dg + db * db
+        }
+        return Self.namedSwatches.min { distance($0.color) < distance($1.color) }?.name ?? "Custom"
+    }
+
+    /// True when the color is exactly one of the named swatches.
+    var isNamedSwatch: Bool { Self.namedSwatches.contains { $0.color == self } }
+}
+
 /// Mouse motion / wheel axis
 enum MouseAxis: Int, Codable, CaseIterable {
     case horizontal = 0
@@ -299,7 +366,7 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
     case rezeroMotion = "rezero"
     /// Put the pointer in the middle of the screen it is on. Pairs with
     /// Re-zero Motion on the same button for gyro pointing: the controller
-    /// at rest becomes "pointer at centre" again in one press.
+    /// at rest becomes "pointer at center" again in one press.
     case centerPointer = "center"
 
     var id: String { rawValue }
@@ -358,6 +425,10 @@ struct OutputAction: Codable, Hashable, Identifiable {
     /// parameter for Run Shortcut / Open App / Open URL rides in `text`.
     var systemActionKind: SystemActionKind?
 
+    /// The color and mode of a .lightBar output.
+    var lightColor: RGBLightColor?
+    var lightMode: LightOutputMode?
+
     init(type: OutputType, keyCode: Int? = nil, mouseButtonIndex: Int? = nil,
          mouseAxis: MouseAxis? = nil, mouseDirection: MouseDirection? = nil, speed: Int? = nil,
          midiNote: Int? = nil, midiVelocity: Int? = nil,
@@ -368,7 +439,9 @@ struct OutputAction: Codable, Hashable, Identifiable {
          text: String? = nil,
          appActionKind: AppActionKind? = nil,
          targetPresetID: UUID? = nil,
-         systemActionKind: SystemActionKind? = nil) {
+         systemActionKind: SystemActionKind? = nil,
+         lightColor: RGBLightColor? = nil,
+         lightMode: LightOutputMode? = nil) {
         self.id = UUID()
         self.type = type
         self.keyCode = keyCode
@@ -387,6 +460,8 @@ struct OutputAction: Codable, Hashable, Identifiable {
         self.appActionKind = appActionKind
         self.targetPresetID = targetPresetID
         self.systemActionKind = systemActionKind
+        self.lightColor = lightColor
+        self.lightMode = lightMode
     }
 
     var displayName: String {
@@ -459,29 +534,92 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 return "\(kind.displayName): \(preview)"
             }
             return kind.displayName
+        case .lightBar:
+            switch resolvedLightMode {
+            case .rainbowToggle: return "Light bar: rainbow on / off"
+            case .whileHeld: return "Light bar: \(resolvedLightColor.nearestName.lowercased()), while held"
+            case .set: return "Light bar: \(resolvedLightColor.nearestName.lowercased()), stays on"
+            }
+        }
+    }
+
+    /// The name written to the activity log: typed text, website
+    /// addresses, app paths and Shortcut names are counted, not quoted,
+    /// since a saved report goes wherever its owner sends it.
+    var logName: String {
+        switch type {
+        case .typeText:
+            return "Type Text (\((text ?? "").count) characters)"
+        case .systemAction:
+            guard let kind = systemActionKind else { return displayName }
+            if kind.needsParameter, let t = text, !t.isEmpty { return "\(kind.displayName) (\(t.count) characters)" }
+            return kind.displayName
+        default:
+            return displayName
         }
     }
 
     /// Serialize to original format: "key 26", "mbt 0", "mou 1 - 11", "whe 0 + 6", "whs 1 +"
+    // MARK: Mouse defaults
+    //
+    // What the editor shows when a mouse field is unset: Main Click, and
+    // vertical "Up" at speed 6. The engine and export read through these
+    // too, so an output switched to a mouse type without touching its
+    // pickers does what the row says instead of nothing.
+    static let defaultMouseButton = 0
+    static let defaultMouseAxis: MouseAxis = .vertical
+    static let defaultMouseDirection: MouseDirection = .negative
+    static let defaultMouseSpeed = 6
+
+    var resolvedMouseButton: Int { mouseButtonIndex ?? Self.defaultMouseButton }
+    var resolvedMouseAxis: MouseAxis { mouseAxis ?? Self.defaultMouseAxis }
+    var resolvedMouseDirection: MouseDirection { mouseDirection ?? Self.defaultMouseDirection }
+
+    /// A light bar output with no color set shows red, held.
+    static let defaultLightColor = RGBLightColor(r: 255, g: 0, b: 0)
+    var resolvedLightColor: RGBLightColor { lightColor ?? Self.defaultLightColor }
+    var resolvedLightMode: LightOutputMode { lightMode ?? .whileHeld }
+
+    /// Fill the fields the current type needs with the editor's defaults.
+    /// Called whenever a row's output type changes.
+    mutating func fillDefaultsForType() {
+        switch type {
+        case .mouseButton:
+            if mouseButtonIndex == nil { mouseButtonIndex = Self.defaultMouseButton }
+        case .mouseMotion, .mouseWheel:
+            if mouseAxis == nil { mouseAxis = Self.defaultMouseAxis }
+            if mouseDirection == nil { mouseDirection = Self.defaultMouseDirection }
+            if speed == nil { speed = Self.defaultMouseSpeed }
+        case .mouseWheelStep:
+            if mouseAxis == nil { mouseAxis = Self.defaultMouseAxis }
+            if mouseDirection == nil { mouseDirection = Self.defaultMouseDirection }
+        case .lightBar:
+            if lightColor == nil { lightColor = Self.defaultLightColor }
+            if lightMode == nil { lightMode = .whileHeld }
+        default:
+            break
+        }
+    }
+
     var serialized: String {
         switch type {
         case .key:
             return "key \(keyCode ?? 0)"
         case .mouseButton:
-            return "mbt \(mouseButtonIndex ?? 0)"
+            return "mbt \(resolvedMouseButton)"
         case .mouseMotion:
-            let a = mouseAxis?.rawValue ?? 0
-            let d = mouseDirection?.rawValue ?? "+"
+            let a = resolvedMouseAxis.rawValue
+            let d = resolvedMouseDirection.rawValue
             let s = speed ?? 6
             return "mou \(a) \(d) \(s)"
         case .mouseWheel:
-            let a = mouseAxis?.rawValue ?? 0
-            let d = mouseDirection?.rawValue ?? "+"
+            let a = resolvedMouseAxis.rawValue
+            let d = resolvedMouseDirection.rawValue
             let s = speed ?? 6
             return "whe \(a) \(d) \(s)"
         case .mouseWheelStep:
-            let a = mouseAxis?.rawValue ?? 0
-            let d = mouseDirection?.rawValue ?? "+"
+            let a = resolvedMouseAxis.rawValue
+            let d = resolvedMouseDirection.rawValue
             return "whs \(a) \(d)"
         case .midiNote:
             return "mni \(midiNote ?? 60) \(midiVelocity ?? 100) \(midiChannel ?? 1)"
@@ -513,6 +651,10 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 return "sys \(kind) \(encoded)"
             }
             return "sys \(kind)"
+        case .lightBar:
+            // lit <held|set|rainbow> <r> <g> <b>
+            let c = resolvedLightColor
+            return "lit \(resolvedLightMode.rawValue) \(c.r) \(c.g) \(c.b)"
         }
     }
 
@@ -583,6 +725,14 @@ struct OutputAction: Codable, Hashable, Identifiable {
             guard parts.count >= 2, let kind = SystemActionKind(rawValue: parts[1]) else { return nil }
             let param = parts.count >= 3 ? parts[2].removingPercentEncoding : nil
             return OutputAction(type: .systemAction, text: param, systemActionKind: kind)
+        case "lit":
+            // lit <held|set|rainbow> [<r> <g> <b>]
+            let mode = parts.count >= 2 ? (LightOutputMode(rawValue: parts[1]) ?? .whileHeld) : .whileHeld
+            var color = OutputAction.defaultLightColor
+            if parts.count >= 5, let r = Int(parts[2]), let g = Int(parts[3]), let b = Int(parts[4]) {
+                color = RGBLightColor(r: UInt8(clamping: r), g: UInt8(clamping: g), b: UInt8(clamping: b))
+            }
+            return OutputAction(type: .lightBar, lightColor: color, lightMode: mode)
         case "txt":
             // txt <percent-encoded text>
             let decoded = parts.count >= 2 ? (parts[1].removingPercentEncoding ?? "") : ""
@@ -608,5 +758,6 @@ struct OutputAction: Codable, Hashable, Identifiable {
         case text
         case appActionKind, targetPresetID
         case systemActionKind
+        case lightColor, lightMode
     }
 }

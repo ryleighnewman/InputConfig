@@ -239,7 +239,10 @@ fileprivate struct SimulatedCursor: View {
     let targetCenter: CGPoint
     let pressed: Bool
     @State private var landed: Bool = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The system setting or the app's own Reduce motion switch.
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         ZStack {
@@ -297,7 +300,7 @@ struct TutorialCardView: View {
                         .background(step.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Quick Start - \(state.stepIndex + 1) of \(state.steps.count)")
+                        Text("Quick Start, step \(state.stepIndex + 1) of \(state.steps.count)")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Text(step.title)
@@ -315,8 +318,9 @@ struct TutorialCardView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Skip tutorial")
-                    .accessibilityLabel("Skip tutorial")
-                    .accessibilityHint("Closes the quick start tour")
+                    // The visible Skip button below is the one assistive
+                    // tech gets, so Voice Control's "Click Skip" finds it.
+                    .accessibilityHidden(true)
                 }
 
                 Text(step.body)
@@ -352,10 +356,9 @@ struct TutorialCardView: View {
                     }
                     .buttonStyle(.solidSecondaryCompact)
                     .foregroundStyle(.secondary)
-                    // The header close button already exposes a single
-                    // "Skip tutorial" action to VoiceOver; hide this
-                    // duplicate so assistive tech surfaces only one.
-                    .accessibilityHidden(true)
+                    .accessibilityHint("Closes the quick start tour")
+                    // Escape ends the tour too.
+                    .keyboardShortcut(.cancelAction)
 
                     Spacer()
 
@@ -422,13 +425,13 @@ final class TutorialWindowController {
         if let p = panel {
             // Don't re-position on subsequent shows - the user may have
             // dragged the card and we want Next to stay where they put it.
-            p.orderFront(nil)
+            p.makeKeyAndOrderFront(nil)
             return
         }
         // Truly borderless + non-activating + floating. No .titled means
         // no chrome (which was creating the weird jagged corners the
         // user pointed at on the screenshot).
-        let p = NSPanel(
+        let p = TourPanel(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 540),
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered, defer: false
@@ -448,12 +451,14 @@ final class TutorialWindowController {
             TutorialCardView()
                 .padding(20)
                 .reduceMotionFriendly()
+                .appAccessibility()
         )
         host.autoresizingMask = [.width, .height]
         p.contentView = host
         panel = p
         position(panel: p)
-        p.orderFront(nil)
+        // Key, so Return reaches Next and Tab reaches the card's buttons.
+        p.makeKeyAndOrderFront(nil)
     }
 
     func hide() {
@@ -514,7 +519,10 @@ struct SpotlightDimView: View {
     let rect: CGRect
     var shape: SpotlightShape = .roundedRect
     @State private var pulse: Bool = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The system setting or the app's own Reduce motion switch.
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         GeometryReader { geo in
@@ -682,7 +690,7 @@ private struct PressureTriggerDemo: View {
                         Rectangle().fill(.orange).frame(width: 8, height: 2)
                         Text("deadzone")
                             .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.hint)
                     }
                 }
                 Spacer(minLength: 0)
@@ -801,7 +809,7 @@ private struct ButtonMappingDemo: View {
                     .overlay(Text("A").font(.caption.weight(.semibold)))
                     .shadow(color: pressed ? .green.opacity(0.7) : .clear, radius: 8)
                 Image(systemName: "arrow.right")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                 Text(pressed ? "Space" : " ")
                     .font(.caption.weight(.semibold).monospaced())
                     .frame(width: 60, height: 28)
@@ -813,4 +821,11 @@ private struct ButtonMappingDemo: View {
             }
         }
     }
+}
+
+/// The tour card's panel. A borderless panel cannot become key by default,
+/// so the card's Return for Next and its buttons were out of reach from the
+/// keyboard. It still never activates the app.
+private final class TourPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }

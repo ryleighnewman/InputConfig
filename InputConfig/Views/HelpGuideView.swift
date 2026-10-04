@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Help window. A sidebar of short titles grouped the way the app is
-/// organised (getting started, inputs, outputs, row options, controllers,
+/// organized (getting started, inputs, outputs, row options, controllers,
 /// the app), and on the right one page rendered as a document: a title, one
 /// intro line, sections with a clear heading and their content in order,
 /// numbered steps, term lists, tables, and a Questions section. Content is
@@ -104,7 +104,7 @@ struct HelpGuideView: View {
         })
     }
 
-    /// The window title, centerd over the detail column. AppKit's own copy
+    /// The window title, centered over the detail column. AppKit's own copy
     /// is suppressed by HelpWindow. A non-empty toolbar also keeps the
     /// sidebar's titlebar inset, which an empty one collapses.
     @ToolbarContentBuilder
@@ -200,7 +200,7 @@ private struct HelpPageView: View {
 
                 Text(helpMarkdown("This page on the web: [\(guide.url.replacingOccurrences(of: "https://", with: ""))](\(guide.url))"))
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.hint)
                     .padding(.bottom, 24)
             }
             .frame(maxWidth: HelpLayout.column, alignment: .leading)
@@ -503,7 +503,7 @@ final class HelpGuideWindowController {
             return
         }
         let hosting = NSHostingController(rootView: HelpGuideView()
-            .background(VisualEffectBackground().ignoresSafeArea())
+            .windowBackdrop()
             .reduceMotionFriendly()
             .appAccessibility())
         let newWindow = HelpWindow(contentViewController: hosting)
@@ -522,7 +522,7 @@ final class HelpGuideWindowController {
     }
 }
 
-/// The title is drawn centred by the view's toolbar. AppKit's own copy
+/// The title is drawn centered by the view's toolbar. AppKit's own copy
 /// would sit at the leading edge of the detail column, and the split view
 /// turns it back on whenever the selection changes, so the window refuses
 /// to show it at all. The title itself stays for the Window menu.

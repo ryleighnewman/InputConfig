@@ -1,25 +1,27 @@
 import Foundation
 import AppKit
 import Combine
+import StoreKit
+import Security
 
-/// Decides when to ask for an App Store rating, and remembers the answer.
+/// Decides when to ask for an App Store rating.
 ///
-/// The ask itself is the system review sheet (StoreKit's `requestReview`),
-/// which is the only way a person can tap a star right there and the only
-/// way Apple allows a rating to be collected in-app. Apple also limits how
-/// often that sheet may appear (three times a year, and never on demand
-/// while the app is being reviewed), so this service asks only people who
-/// have clearly been using the app: several preset activations spread over
-/// a few days, and never twice in four months. "Don't ask again" is final.
+/// The ask is the system review sheet (StoreKit's `requestReview`) and
+/// nothing else: a card of our own in front of it pre-screened who saw the
+/// real one, and recorded "rated" even when the system chose not to show
+/// its sheet. Apple limits how often that sheet may appear (three times a
+/// year), so this service asks only people who have clearly been using the
+/// app: several preset activations spread over a few days, and never twice
+/// in four months. Someone who chose "Don't ask again" on the old card, or
+/// rated from it, is not asked again.
 @MainActor
 final class ReviewPromptService: ObservableObject {
 
     static let shared = ReviewPromptService()
 
-    /// True while the in-app "would you rate it?" card should be up.
-    @Published var showPrompt = false
-    /// True for a moment after a rating was offered, for the thank-you.
-    @Published var celebrate = false
+    /// Bumped when the system review sheet should be requested; the main
+    /// window's presenter calls `requestReview` on each change.
+    @Published private(set) var reviewRequest = 0
 
     static let activationsKey = "InputConfig.review.activations"
     static let firstLaunchKey = "InputConfig.review.firstLaunch"
@@ -79,47 +81,68 @@ final class ReviewPromptService: ObservableObject {
         return true
     }
 
-    /// Show the card only when the app is in front with its window up and
-    /// nothing else (an editor, a tour) is in the way.
+    /// Ask only when the app is in front with its window up and nothing
+    /// else (an editor, a tour) is in the way.
     private func offerIfQuiet() {
+        // The main window, not Help or the Tip Jar: only the main window
+        // can show the ask, and an ask nobody saw still blocked the next
+        // one for four months.
         guard isDue, NSApp.isActive,
-              let window = NSApp.keyWindow, window.attachedSheet == nil,
-              window.isVisible, !window.isMiniaturized else { return }
+              let window = NSApp.keyWindow, window === MenuBarController.mainWindow,
+              window.attachedSheet == nil, window.isVisible, !window.isMiniaturized else { return }
         present()
     }
 
-    /// Put the card up now (also the debug hook's entry point).
+    /// Request the system review sheet now (also the debug hook's entry
+    /// point). Only a Mac App Store copy can show it; the Homebrew copy has
+    /// the Rate InputConfig menu item instead.
     func present() {
         askedThisLaunch = true
         defaults.set(Date(), forKey: Self.lastAskedKey)
-        showPrompt = true
-    }
-
-    // MARK: - Answers
-
-    /// They said yes: the caller shows the system sheet; we remember and
-    /// start the thank-you.
-    func accepted() {
-        defaults.set("rated", forKey: Self.stateKey)
-        showPrompt = false
-        celebrate = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) { [weak self] in
-            self?.celebrate = false
-        }
-    }
-
-    /// "Not now": ask again after the usual gap.
-    func snoozed() {
-        showPrompt = false
-    }
-
-    /// "Don't ask again": final.
-    func declined() {
-        defaults.set("never", forKey: Self.stateKey)
-        showPrompt = false
+        if Self.isAppStoreCopy { reviewRequest &+= 1 }
     }
 
     /// The App Store page, opened to the review form, for a manual
     /// "Rate InputConfig" menu item.
     static let writeReviewURL = URL(string: "https://apps.apple.com/us/app/inputconfig/id6777759147?action=write-review")!
+
+    /// True for a copy installed from the Mac App Store, which carries a
+    /// receipt. The Homebrew copy (Developer ID) has none, and there the
+    /// system review sheet does nothing, so a yes opens the review page.
+    static var isAppStoreCopy: Bool { AppStoreCopy.isAppStoreCopy }
+}
+
+/// Whether this copy came from the Mac App Store. The receipt file can be
+/// missing on a fresh install or under App Review, so the code signature is
+/// checked too. StoreKit is not asked at launch: fetching an app transaction
+/// can put an Apple Account sign-in in front of an app that has no accounts.
+enum AppStoreCopy {
+    static var isAppStoreCopy: Bool {
+        if signedByAppStore { return true }
+        guard let url = Bundle.main.appStoreReceiptURL else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private static let signedByAppStore: Bool = signedForAppStore()
+
+    /// True when this copy is signed with Apple's App Store certificate,
+    /// which carries the Mac App Store signing extension (6.1.9), or the
+    /// TestFlight one (6.1.9.1).
+    private static func signedForAppStore() -> Bool {
+        satisfies("anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.9] exists or certificate leaf[field.1.2.840.113635.100.6.1.9.1] exists)")
+    }
+
+    /// True for a Developer ID copy (the Homebrew build): the only kind that
+    /// is certainly not from the App Store, so the only one told so.
+    static let isDeveloperIDCopy: Bool = satisfies(
+        "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists")
+
+    private static func satisfies(_ requirementText: String) -> Bool {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+    }
 }

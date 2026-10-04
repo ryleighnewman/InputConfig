@@ -38,6 +38,8 @@ struct ExamplePresets {
 
     /// Preset name → group name. Presets not in this map seed ungrouped.
     static let groupAssignments: [String: String] = [
+        "Easy Browse":                   GroupName.desktop,
+        "Easy Edit":                     GroupName.desktop,
         "Desktop Navigation":            GroupName.desktop,
         "Web Browsing":                  GroupName.desktop,
         "Mouse + Scroll":                GroupName.desktop,
@@ -45,10 +47,10 @@ struct ExamplePresets {
         "Presentation Remote":           GroupName.desktop,
         "Anki":                          GroupName.desktop,
         "Access Controller":             GroupName.desktop,
-        "Keyboard Deck":                 GroupName.desktop,
         "Trackpad & Mouse":              GroupName.desktop,
         "Modifier Holds":                GroupName.desktop,
         "Double Click Deck":             GroupName.desktop,
+        "Auto Clicker":                  GroupName.desktop,
 
         "FPS (PS5 DualSense)":           GroupName.firstPerson,
         "FPS (Xbox)":                    GroupName.firstPerson,
@@ -72,6 +74,7 @@ struct ExamplePresets {
         "Macros & Turbo":         GroupName.showcase,
         "Touchpad Mouse":         GroupName.showcase,
         "Steam Controller":       GroupName.showcase,
+        "Steam Controller (2026)": GroupName.showcase,
         "Gyro Aim":               GroupName.showcase,
         "Motion Cursor":          GroupName.showcase,
         "Toggle Mode":            GroupName.showcase,
@@ -126,48 +129,51 @@ struct ExamplePresets {
     /// button by button, and any Mac setting it depends on. Applied when a
     /// preset is seeded and, once, to installs whose copy has empty notes.
     static let presetNotes: [String: String] = [
+        "Easy Browse": "A calm, ready-made way to use the whole Mac from a controller: browse, read, and write without the keyboard. The left stick moves the pointer and starts slow, so small targets are easy to land on; the right stick scrolls. A clicks, B goes back a page, X closes menus and pop-ups, Y confirms or opens.\n\nPress the left stick to grab (a window, a file, or text to select) and again to drop it; press the right stick for a double click. Both give a short buzz so you know the press counted. LB starts Dictation and stops it, RB reads the selected text aloud, Start or the touchpad opens Spotlight, Back shows Mission Control. On the D-pad, left and right go back and forward a web page, down and up switch tabs; it counts one direction at a time, so a quick press cannot fire the one next to it. Other apps may use those keys for something else.\n\nThe face buttons say their names out loud while you learn them; switch that off in each row's Options. Dictation needs to be on in System Settings > Keyboard, and reading aloud needs Speak selection on in System Settings > Accessibility > Spoken Content.",
+        "Easy Edit": "A calm layout for writing and editing, made for a controller in one hand and a mouse or trackpad in the other. Every button does one thing, and the ones used most stay under the thumb.\n\nThe D-pad holds the four editing shortcuts together, the way they sit together on a keyboard: up Undo, down Copy, left Cut, right Paste. It counts one direction at a time, so a quick press cannot fire the one next to it. A deletes, B saves, X types a space, Y is Return. Push the left stick down to hear the selected text read aloud, or up, firmly, to start Dictation; push up again to stop. The right stick scrolls.\n\nLT and LB go back and forward a web page, RT and RB switch to the previous and next tab. Back jumps to the browser's address bar, Start opens Spotlight, and a press on the left stick or the touchpad shows Mission Control. The left stick press gives a firm buzz so you know it counted.\n\nThe face buttons and the D-pad say their names out loud while you learn them; switch that off in each row's Options. Dictation needs to be on in System Settings > Keyboard, and reading aloud needs Speak selection on in System Settings > Accessibility > Spoken Content.",
         "Anki": "A flashcard session from the pad. Cross shows the answer and rates Good, Square is Again, Circle is Hard, Triangle is Easy, so one thumb runs a whole review. L1 undoes a mis-rating, R1 replays the audio, Share opens the deck list, Options starts studying, the stick clicks mark and bury a card, and the touchpad press edits it.\n\nThe left stick is the pointer, the right stick scrolls, the triggers click, and the D-pad sends the arrow keys for long cards and lists. Anki's shortcuts are its defaults; if you have changed them in Anki, change the matching row here.",
         "Modifier Holds": "The right-hand modifier keys, held on their own, run the Mac: hold Right Command for Spotlight (double tap it for Launchpad), hold Right Option to start Dictation, hold Right Shift for Mission Control.\n\nNo row fires on a plain press, so Command, Option, and Shift keep working as modifiers in every shortcut. The hold is 450 ms and the double tap window 300 ms; open a row's Options to change either.",
+        "Auto Clicker": "An auto clicker for the Mac, from a controller, the keyboard, or a mouse. Pull the right trigger once and the left button clicks 10 times a second where the pointer is, until you pull it again; the left trigger does the same with right clicks, 5 a second. Hold the right bumper for 20 clicks a second only while held. Y clicks 100 times and stops by itself, and X clicks at an uneven, human pace (150 ms, give or take 40). The left stick moves the pointer and A clicks once, so you can aim without a mouse.\n\nNo controller needed: fn F6 starts and stops left clicks, fn F7 right clicks, and holding a mouse's side button 4 clicks 15 times a second.\n\nChange the speed in a row's Options, under How it fires: Every, Vary by up to, and Stop after. To stop everything at once, use the emergency stop.",
         "Double Click Deck": "Double clicks as inputs. Double click a mouse's side button 4 for Mission Control, side button 5 for Launchpad, or the middle button for Spotlight. A single click on each keeps doing what it always did, because a double click is only counted on the second click.\n\nOn a trackpad with tap to click on, a double tap is a double click too.",
-        "Keyboard Deck": "The Mac's own keyboard as an input. F13 opens Mission Control, F14 Spotlight, F15 plays or pauses, F16 opens the screenshot menu, F17 Launchpad, F18 starts dictation, F19 locks the screen.\n\nThose seven keys are on every full-size keyboard and nothing in macOS uses them, so this preset never takes a key away from you: InputConfig listens alongside macOS, it does not replace what a key does. Scan any row and press the key you would rather use. Needs the Accessibility permission the app asks for.",
         "Trackpad & Mouse": "The Mac's trackpad or mouse as an input. The two side buttons on a mouse go back and forward, the middle click opens Mission Control, and a force click on the trackpad opens Launchpad.\n\nForce Touch is read only while InputConfig is the front window, because macOS gives trackpad force to the front app alone; the buttons work from any app. Watch the Live Visualizer's Mouse and Trackpad template to see each click, scroll, and press as it happens.",
-        "Deadzone Calibration": "A showcase for deadzones. Both sticks move the pointer; the right stick has a wide inner deadzone and an outer limit, the left stick a tight one. Move each and feel the difference, then open Calibrate on a stick row to set your own with the live plot. A clicks.",
-        "Desktop Navigation": "A pointer and the everyday shortcuts, for using the Mac without touching the keyboard. Left stick moves the pointer, right stick scrolls, right trigger clicks, left trigger right-clicks, the D-pad sends the arrow keys.\n\nFace buttons: A selects all, B undoes, X cuts, Y pastes. Bumpers switch apps, Back opens Spotlight, Start is Return. For copy, add a row for Cmd C or change B.\n\nNo Mac settings needed beyond the Accessibility permission the app asks for.",
-        "FPS (8BitDo)": "The first-person layout tuned for 8BitDo pads in A (Apple) mode. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Select is Escape, Start is Tab.\n\nSet the mode switch on the back to A before pairing.",
-        "FPS (PS5 DualSense)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, R2 fires, L2 aims. Cross jumps, Circle crouches with Control, Square reloads, Triangle is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. L3 sprints with Shift, R3 sends V. The touchpad press opens the map with M. Share is Tab, Options is Escape.\n\nThe touchpad can also be a trackpad; see the Touchpad Mouse preset.",
+        "Deadzone Calibration": "A showcase for deadzones. Both sticks move the pointer; the right stick has a wide inner deadzone and an outer limit, the left stick a tight one. Move each and feel the difference, then open a stick row's Options and use Adjust live to set your own while you watch the stick. A clicks.",
+        "Desktop Navigation": "A pointer and the everyday shortcuts, for using the Mac without touching the keyboard. Left stick moves the pointer, right stick scrolls, right trigger clicks, left trigger right-clicks, the D-pad sends the arrow keys.\n\nFace buttons: A clicks (so does the right trigger), B undoes, X cuts, Y pastes. Press the right stick to select all. Bumpers switch apps, Back opens Spotlight, Start is Return. For copy, add a row for Cmd C or change B.\n\nNo Mac settings needed beyond the Accessibility permission the app asks for.",
+        "FPS (8BitDo)": "The first-person layout tuned for 8BitDo pads in the mode 8BitDo lists for Apple devices (D on models with a mode switch). Left stick moves, right stick looks, right trigger fires, left trigger aims. The bottom face button jumps, the right one is C for crouch, the left one reloads, the top one is slot 1 (8BitDo prints these letters either way, so Face button names in Settings decides what they are called). L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Select is Tab, Start is Escape.\n\nSet the mode switch on the back to D before pairing; the SN30 Pro family has no switch, so hold B and Start to turn it on.",
+        "FPS (PS5 DualSense)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, R2 fires, L2 aims. Cross jumps, Circle crouches with Control, Square reloads, Triangle is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. L3 sprints with Shift, R3 uses with E. The touchpad press opens the map with M. Share is Tab, Options is Escape.\n\nThe touchpad can also be a trackpad; see the Touchpad Mouse preset.",
         "FPS (Switch Pro)": "The same first-person layout with Nintendo button positions: B (bottom) jumps, A (right) is C for crouch, Y (left) reloads, X (top) is slot 1. Left stick moves, right stick looks, ZR fires, ZL aims. L is slot 4, R middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Minus is Tab, Plus is Escape.",
-        "FPS (Xbox)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. LB is slot 4, RB middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints with Shift, right stick click sends E. View is Escape, Menu is Tab.",
+        "FPS (Xbox)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. LB is slot 4, RB middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints with Shift, right stick click sends E. View is Tab, Menu is Escape.",
         "Fortnite": "For cloud streams (Xbox Cloud Gaming, GeForce NOW) that do not see the pad. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B crouches, X reloads, Y uses. Bumpers place a wall and a floor, D-pad places stairs and a roof, sets a trap, and opens the map. Left stick click sprints, right stick click edits. Back is the inventory, Start is Escape.",
         "Haptic Feedback": "A showcase for Vibrate. Each face button types its letter (A, B, C, D) and rumbles, stronger from A to D. Vibrate is an option on every row, with an intensity and a duration, on controllers with rumble.",
-        "MIDI: CC Dials": "The sticks and triggers as soft MIDI controllers on channel 1: left stick X and Y send CC 1 and CC 11, right stick X and Y send CC 74 and CC 71, triggers send CC 7 and CC 10. Use MIDI Learn in any synth or DAW to grab one.",
-        "MIDI: DAW Performance": "A MIDI instrument from the controller, through InputConfig's virtual MIDI port. Face buttons play a C major chord (C, E, G, C), right stick bends pitch and adds modulation, right trigger is volume (CC 7), left trigger is expression (CC 11). D-pad up starts, down stops, right continues the transport.\n\nIn GarageBand or Logic, pick InputConfig as the MIDI input on a software instrument track.",
+        "MIDI: CC Dials": "The sticks and triggers as soft MIDI controllers on channel 1: the left stick pushed left or right sends CC 1 and pushed down sends CC 11, the right stick pushed right sends CC 74 and pushed down sends CC 71, and the triggers send CC 7 and CC 10. Use MIDI Learn in any synth or DAW to grab one.",
+        "MIDI: DAW Performance": "A MIDI instrument from the controller, through InputConfig's virtual MIDI port. Face buttons play a C major chord (C, E, G, C), right stick bends pitch, and pushed down adds modulation, right trigger is volume (CC 7), left trigger is expression (CC 11). D-pad up starts, down stops, right continues the transport.\n\nIn GarageBand or Logic, pick InputConfig as the MIDI input on a software instrument track.",
         "MIDI: Drum Pad": "Finger drumming from the face buttons on channel 10: kick, snare, closed hat, open hat, with turbo for rolls while held; the triggers hit a low tom and a crash. Each pad vibrates. Point a drum instrument in your DAW at InputConfig's MIDI port.",
-        "MIDI: Knob Deck": "A MIDI controller runs the Mac. CC 7 (a fader) is the Mac's volume, the mod wheel scrolls, CC 71 turned sends the arrow keys, the sustain pedal clicks, pads 36 and 37 send Return and Escape. Pick your MIDI device in the slot's input kind menu.",
-        "MIDI: Media Deck": "A MIDI controller as a media remote. CC 7 is the Mac's volume fader, CC 71 steps volume, CC 74 steps brightness, pads 36 to 41 are play, next, previous, mute, Mission Control, and an app. Pick your MIDI device in the slot's input kind menu.",
-        "MIDI: Transport Control": "A DAW remote over MIDI. A starts, B stops, X continues (MIDI transport messages), the bumpers select patch 1 and patch 2 with program changes, the D-pad nudges CC 7 volume. Map them in your DAW's control surface or MIDI Learn settings.",
-        "Macros & Turbo": "A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. LB sends J. Turbo and macros are options on every row.",
-        "Media Controller": "A remote for Music, Spotify, VLC, the TV app, and YouTube in a browser: it sends the Mac's own media keys, so it works whichever app is playing.\n\nA plays and pauses, B skips forward, X skips back, Y mutes. Bumpers, the D-pad, and the left stick change the volume. Back is Escape for leaving full screen.",
+        "MIDI: Knob Deck": "A MIDI controller runs the Mac. CC 7 (a fader) is the Mac's volume, a center-detent pan knob (CC 10) scrolls, CC 71 turned sends the arrow keys, the sustain pedal clicks, pads 36 and 37 send Return and Escape. Rows listen to any MIDI device; to tie a row to one device, pick it from the row's input menu.",
+        "MIDI: Media Deck": "A MIDI controller as a media remote. CC 7 is the Mac's volume fader, CC 71 steps volume, CC 74 steps brightness, pads 36 to 41 are play, next, previous, mute, Mission Control, and an app. Rows listen to any MIDI device; to tie a row to one device, pick it from the row's input menu.",
+        "MIDI: Transport Control": "A DAW remote over MIDI. A starts, B stops, X continues (MIDI transport messages), the bumpers select patch 1 and patch 2 with program changes, D-pad up and down send CC 20 and CC 21 to learn as volume up and down. Map them in your DAW's control surface or MIDI Learn settings.",
+        "Macros & Turbo": "A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. LB sends J three times (Repeat). Turbo, macros, and Repeat are options on every row.",
+        "Media Controller": "A remote for Music, Spotify, VLC, the TV app, and YouTube in a browser: it sends the Mac's own media keys, so it works whichever app is playing.\n\nA plays and pauses, B skips forward, X skips back, Y mutes. The bumpers, and up and down on the D-pad and the left stick, change the volume; left and right on them skip tracks. Back is Escape for leaving full screen.",
         "Minecraft": "Java Edition, which has no controller support of its own. Left stick walks (WASD), right stick looks (mouse), right trigger mines and attacks, left trigger places and uses. A jumps, B sneaks, X opens the inventory, Y drops. Bumpers scroll the hotbar, D-pad picks hotbar slots 1 to 4, left stick click sprints, right stick click swaps hands.\n\nIf the camera creeps, raise the deadzone on the right stick rows. Look speed is the Speed value on those rows.",
-        "Motion Cursor": "Point the controller like a laser pointer: tilt it and the pointer follows the tilt, so tilting back to level puts the pointer back where it started. Works on the DualSense, DualShock 4, Switch Pro Controller, and Joy-Cons. A clicks, B right-clicks, Y is Return, right stick scrolls.\n\nRB makes the controller's current tilt the new neutral and puts the pointer in the middle of the screen. Hold LB to move the controller without moving the pointer, the way you lift a mouse off the desk. The gyro zero looks after itself while the controller rests; Calibrate Motion in a row's Options is there if you want to set it by hand.",
-        "Mouse + Scroll": "The plain pointer preset. Left stick moves the pointer, right stick scrolls, D-pad nudges the pointer slowly for small targets. A clicks, B right-clicks, X middle-clicks.\n\nIf the pointer drifts on its own, raise the stick's deadzone on its row (Calibrate opens a live plot). If it feels too fast or too slow, change Speed on the stick rows.",
+        "Motion Cursor": "Point the controller like a laser pointer: tilt it and the pointer follows the tilt, so tilting back to level puts the pointer back where it started. Works on the DualSense, DualSense Edge, DualShock 4, and the 2026 Steam Controller (experimental). Cross clicks, Circle right-clicks, Triangle is Return, right stick scrolls (on the Steam Controller: A, B, and Y).\n\nR1 makes the controller's current tilt the new neutral and puts the pointer in the middle of the screen. Hold L1 to move the controller without moving the pointer, the way you lift a mouse off the desk. The gyro zero looks after itself while the controller rests; Calibrate Motion in a row's Options is there if you want to set it by hand.",
+        "Mouse + Scroll": "The plain pointer preset. Left stick moves the pointer, right stick scrolls, D-pad nudges the pointer slowly for small targets. A clicks, B right-clicks, X middle-clicks.\n\nIf the pointer drifts on its own, raise the Deadzone in the stick row's Options (Adjust live shows the stick as you set it). If it feels too fast or too slow, change Speed on the stick rows.",
         "Presentation Remote": "Keynote, PowerPoint, and Google Slides. A goes to the next slide, B to the previous one, X starts or advances with Space, Y blanks the screen (B in Keynote and PowerPoint). Left stick moves the pointer for a laser-pointer effect, bumpers click. Back is Escape to leave the show, Start sends F5 to start a PowerPoint show.",
-        "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows above only cover the eight sockets: handbrake, horn, boost, reset, gears, camera, and rewind. Change the letters on each row to match the game's own key list.",
-        "Racing Game": "Any racing game that takes keyboard input. Left stick steers with A and D, right trigger is the throttle (W), left trigger the brake (S). A is the handbrake, B shifts up with Shift, X sends E, Y sends R for reset, bumpers send Q and F. Right stick looks around. Back is Escape, Start is Tab.\n\nChange the letters on each row to match the game's own key list; most racers let you rebind.",
+        "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows cover the buttons: handbrake, horn, boost, reset, gears, camera, and rewind. On an Access Controller's base profile only Cross (the center button), Circle (socket 5) and Options (socket 7) send; give the other sockets buttons in a profile made on a PS5. Change the letters on each row to match the game's own key list.",
+        "Racing Game": "Any racing game that takes keyboard input. Left stick steers with A and D, right trigger is the throttle (W), left trigger the brake (S). A is the handbrake, B shifts up with Shift, X sends E, Y sends R for reset, bumpers send Q and F. Right stick looks around. Back is Tab, Start is Escape.\n\nChange the letters on each row to match the game's own key list; most racers let you rebind.",
         "Spoken Feedback": "A showcase for Speak. Each face button types its letter and says a phrase out loud. Speak is an option on every row; the voice is chosen in Settings, Accessibility (System voice follows the Mac's Spoken Content setting).",
         "Stacked Outputs": "A showcase for several outputs on one row, fired together. A presses Space, right-clicks, plays a MIDI note, speaks, and vibrates, all at once. B presses Command and 4 together, which is a stacked shortcut. Add outputs to any row with the plus button; for a sequence with delays, use a macro instead.",
-        "Steam Controller": "Valve's Steam Controller, wired or with its dongle. The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
-        "Access Controller": "The PlayStation Access Controller's PS button is kept by macOS and never reaches an app, so nothing is bound to it; everything here runs from the stick and the sockets. Built for the PlayStation Access Controller with its default button profile: Cross, Circle, Square, Triangle, L1, R1, L2, and R2 on the eight sockets, which the Mac sees as buttons 1 to 8. The stick is the pointer; the sockets click, double click, scroll, and send Return and Space; L2 holds Command so a press with another socket is a shortcut. If you changed the profile in the PlayStation app, Scan each row and press the socket you mean.\n\nIf the pointer drifts, raise the deadzone on the stick rows (Calibrate opens a live plot). Change Speed on those rows if it feels too fast or slow.",
+        "Steam Controller": "The original Steam Controller from 2015, wired or with its dongle (the 2026 model has its own preset). The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
+        "Steam Controller (2026)": "Valve's 2026 Steam Controller, on a cable, over Bluetooth, or through its Puck (experimental). The right trackpad moves the pointer like a Mac trackpad, and a tap or a press on it clicks. The right trigger clicks, the left trigger right-clicks. The left trackpad and the right stick scroll. A is Return, B is Escape, X is Tab, Y is Space. The bumpers send Command [ and Command ], the Steam button opens Spotlight, and the back buttons L4 and R4 hold Shift and Option. Quit Steam first, since it takes the controller over while it runs.",
+        "Access Controller": "Built for the PlayStation Access Controller. Out of the box its base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick: the stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight. The other rows wait for Square, Triangle, L1, R1, L2, R2 and Create, which reach the Mac once a profile made on a PS5 gives them to sockets: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control. The PS button is kept by macOS and never reaches an app, so nothing is bound to it. If your profile puts buttons elsewhere, Scan a row and press the socket you mean.\n\nTo stop everything at once, hold socket 7 (Options) for the emergency stop's hold time; the usual Create hold cannot reach the Mac from the base profile. Settings, General, Emergency stop sets the time.\n\nIf the pointer drifts, raise the Deadzone in the stick rows' Options (Adjust live shows the stick as you set it). Change Speed on those rows if it feels too fast or slow.",
         "Touchpad Zones": "The DualSense or DualShock 4 touchpad divided into four zones, each a soft button: touch the top-left corner to undo, top-right to redo, bottom-left to copy, bottom-right to paste. Each zone gives a short pulse so you can feel that it landed. The press is still a left click and a two-finger tap is a right click.\n\nThe four zones belong to this preset. Open Calibrate Touchpad in any touchpad row's Options to resize them, rename them, or draw your own; a new zone becomes a Touchpad Region input on any row, and every preset has zones of its own.",
         "Cursor Regions": "Three corners of the screen are the inputs: put the pointer in the top-left corner for Mission Control, the top-right for Spotlight, the bottom-right for Launchpad. No controller is involved, though a controller moving the pointer fires them just the same.\n\nThe regions belong to this preset. Resize them, move them, or add more in the preset's own region editor, and the same corner can mean something different in another preset.",
         "Hold & Double-Tap": "One control, three outputs. A / Cross clicks, held it right-clicks, tapped twice it presses Return. B / Circle is Space, held it is Escape. LB is Tab, tapped twice it is Shift Tab.\n\nThe thresholds are in each row's Options: the hold time and the double-tap window. Longer windows suit a hand that moves slowly; shorter ones feel snappier.",
         "Keyboard & Mouse Input": "The Mac's own keyboard and mouse as inputs, not just as outputs. F13, F14, and F15 run Mission Control, Spotlight, and play / pause; the two side buttons on a mouse go back and forward.\n\nThose keys were chosen because nothing else needs them, so running this preset never takes a key away from you. Scan any row and press the key or button you would rather use.",
         "Shortcuts & Apps": "Outputs that run something instead of pressing a key: Cross opens Safari, Circle opens inputconfig.com, Square and Triangle are Mission Control and Spotlight, and LB is set to Run Shortcut.\n\nOpen that row's menu to pick one of your own Shortcuts; the list is read from the Shortcuts app. Open App takes an app name, a bundle id, or a path, and Open URL takes anything the Mac has a handler for.",
-        "Gyro Aim": "Aim by tilting: the pointer follows the controller's tilt, up and down and side to side, and the triggers click. Tilting back to level brings the pointer back to where it started.\n\nHold LB to pause the motion while you swing the controller back to a comfortable angle, the way you lift a mouse off the desk, then let go and carry on. Press RB to make the current tilt the new neutral and centre the pointer. Both are App Action outputs, so you can move them to any control. Speed on the motion rows sets how far the pointer travels per degree of tilt.",
-        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Works on M2 and later, and on M1 Pro, Max, and Ultra.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
+        "Gyro Aim": "Aim by tilting: the pointer follows the controller's tilt, up and down and side to side, and the triggers click. Tilting back to level brings the pointer back to where it started.\n\nHold the left bumper (L1 or LB) to pause the motion while you swing the controller back to a comfortable angle, the way you lift a mouse off the desk, then let go and carry on. Press the right bumper (R1 or RB) to make the current tilt the new neutral and center the pointer. Both are App Action outputs, so you can move them to any control. Speed on the motion rows sets how far the pointer travels per degree of tilt.",
+        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Tested on M4 MacBooks; the calibrator shows whether your MacBook's sensor is listening.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
         "Toggle Mode": "A showcase for Toggle: press once to hold a key, press again to release it. A holds Shift, B holds Command, X holds F10 (mute in many apps), Y holds W for auto-run in games. The row vibrates when it latches. Toggle is an option on every row.",
         "Touchpad Mouse": "The DualSense or DualShock 4 touchpad as a trackpad. One finger moves the pointer, a second finger scrolls, pressing the touchpad clicks. Cross clicks too, Circle right-clicks.\n\nTouchpad rows have their own sensitivity; open Calibrate on a touchpad row to see your finger live and set the speed. Regions and swipe gestures can be added from the touchpad row's options.",
-        "Variable Sensitivity": "A showcase for response curves. Both sticks move the pointer; the right stick uses a smooth curve (slow near centre, fast at the edge) and the left an aggressive one. Push each the same amount and compare. The curve is on every stick row under its options. A clicks.",
-        "Web Browsing": "Safari, Chrome, Firefox: pointer on the left stick, scroll on the right, click on the right trigger. B right-clicks. X closes the tab, Y opens a new one, the bumpers go back and forward, the triggers switch tabs, Back jumps to the address bar. Start switches apps.\n\nWith the address bar focused, Dictation (System Settings, Keyboard) is the easiest way to type a search from the sofa; add a Dictation row to a spare button.",
+        "Variable Sensitivity": "A showcase for response curves. Both sticks move the pointer; the right stick uses a smooth curve (slow near center, fast at the edge) and the left an aggressive one. Push each the same amount and compare. The curve is on every stick row under its options. A clicks.",
+        "Web Browsing": "Safari, Chrome, Firefox: pointer on the left stick, scroll on the right, A clicks. B right-clicks. X closes the tab, Y opens a new one, the bumpers go back and forward, the triggers switch tabs, Back jumps to the address bar. Start switches apps.\n\nWith the address bar focused, Dictation (System Settings, Keyboard) is the easiest way to type a search from the sofa; add a Dictation row to a spare button.",
     ]
 
     /// The per-row note for each shipped preset, by preset name and the
@@ -196,7 +202,7 @@ struct ExamplePresets {
             "axi 3 -": "Scroll up",
             "axi 4 +": "Right click",
             "axi 5 +": "Left click",
-            "btn 0": "Select all (Cmd A)",
+            "btn 0": "Left click",
             "btn 1": "Undo (Cmd Z)",
             "btn 2": "Cut (Cmd X)",
             "btn 3": "Paste (Cmd V)",
@@ -204,6 +210,7 @@ struct ExamplePresets {
             "btn 5": "Previous app (Cmd Shift Tab)",
             "btn 8": "Spotlight (Cmd Space)",
             "btn 9": "Return",
+            "btn 12": "Select all (Cmd A)",
             "hat 0 D": "Down arrow",
             "hat 0 L": "Left arrow",
             "hat 0 R": "Right arrow",
@@ -227,11 +234,11 @@ struct ExamplePresets {
             "btn 2": "Reload (R)",
             "btn 3": "Weapon slot 1",
             "btn 4": "Weapon slot 4",
-            "btn 5": "Middle click",
-            "btn 8": "Menu (Escape)",
-            "btn 9": "Scoreboard (Tab)",
+            "btn 5": "Middle click (ping or melee in many games)",
+            "btn 8": "Scoreboard (Tab)",
+            "btn 9": "Menu (Escape)",
             "hat 0 D": "Previous weapon (scroll down)",
-            "hat 0 L": "Q",
+            "hat 0 L": "Ability or lean (Q)",
             "hat 0 R": "Use (F)",
             "hat 0 U": "Next weapon (scroll up)",
         ],
@@ -249,16 +256,16 @@ struct ExamplePresets {
             "btn 0": "Jump (Space)",
             "btn 1": "Crouch (Control)",
             "btn 11": "Sprint (Shift, held)",
-            "btn 12": "V",
+            "btn 12": "Use (E)",
             "btn 13": "Map (M)",
             "btn 2": "Reload (R)",
             "btn 3": "Weapon slot 1",
             "btn 4": "Weapon slot 4",
-            "btn 5": "Middle click",
+            "btn 5": "Middle click (ping or melee in many games)",
             "btn 8": "Scoreboard (Tab)",
             "btn 9": "Menu (Escape)",
             "hat 0 D": "Previous weapon (scroll down)",
-            "hat 0 L": "Q",
+            "hat 0 L": "Ability or lean (Q)",
             "hat 0 R": "Use (F)",
             "hat 0 U": "Next weapon (scroll up)",
         ],
@@ -280,11 +287,11 @@ struct ExamplePresets {
             "btn 2": "Reload (R)",
             "btn 3": "Weapon slot 1",
             "btn 4": "Weapon slot 4",
-            "btn 5": "Middle click",
+            "btn 5": "Middle click (ping or melee in many games)",
             "btn 8": "Scoreboard (Tab)",
             "btn 9": "Menu (Escape)",
             "hat 0 D": "Previous weapon (scroll down)",
-            "hat 0 L": "Q",
+            "hat 0 L": "Ability or lean (Q)",
             "hat 0 R": "Use (F)",
             "hat 0 U": "Next weapon (scroll up)",
         ],
@@ -306,11 +313,11 @@ struct ExamplePresets {
             "btn 2": "Reload (R)",
             "btn 3": "Weapon slot 1",
             "btn 4": "Weapon slot 4",
-            "btn 5": "Middle click",
-            "btn 8": "Menu (Escape)",
-            "btn 9": "Scoreboard (Tab)",
+            "btn 5": "Middle click (ping or melee in many games)",
+            "btn 8": "Scoreboard (Tab)",
+            "btn 9": "Menu (Escape)",
             "hat 0 D": "Previous weapon (scroll down)",
-            "hat 0 L": "Q",
+            "hat 0 L": "Ability or lean (Q)",
             "hat 0 R": "Use (F)",
             "hat 0 U": "Next weapon (scroll up)",
         ],
@@ -345,10 +352,12 @@ struct ExamplePresets {
             "axi 5 +": "Fire (left click)",
             "btn 0": "Jump (Space)",
             "btn 1": "Crouch (Control)",
+            "btn 4": "Hold to pause motion, to reposition the controller",
+            "btn 5": "Re-zero motion and center the pointer",
             "mtn gyroX +": "Tilt up: look up",
             "mtn gyroX -": "Tilt down: look down",
-            "mtn gyroY +": "Turn right: look right",
-            "mtn gyroY -": "Turn left: look left",
+            "mtn gyroY +": "Tilt right: look right",
+            "mtn gyroY -": "Tilt left: look left",
         ],
         "Haptic Feedback": [
             "btn 0": "Type A, light rumble",
@@ -393,13 +402,24 @@ struct ExamplePresets {
             "btn 2": "Transport continue",
             "btn 4": "Patch 1 (program change 0)",
             "btn 5": "Patch 2 (program change 1)",
-            "hat 0 D": "Volume down (CC 7)",
-            "hat 0 U": "Volume up (CC 7)",
+            "hat 0 D": "Volume down trigger (CC 21)",
+            "hat 0 U": "Volume up trigger (CC 20)",
+        ],
+        "Auto Clicker": [
+            "btn 0": "Click once",
+            "btn 2": "Auto click at a human pace (150 ms, give or take 40), on and off",
+            "btn 3": "Auto click 100 times, then stop",
+            "btn 5": "Auto click 20 a second while held",
+            "btn 6": "Auto right click 5 a second, on and off",
+            "btn 7": "Auto click 10 a second, on and off",
+            "ekb 63 any": "fn F6: auto click 10 a second, on and off",
+            "ekb 64 any": "fn F7: auto right click 5 a second, on and off",
+            "ems button 3 + any": "Mouse button 4: auto click 15 a second while held",
         ],
         "Macros & Turbo": [
             "btn 0": "Macro: copy, switch app, paste",
             "btn 3": "Macro: down three items, then Return",
-            "btn 4": "J",
+            "btn 4": "J, three times (Repeat)",
             "btn 5": "Space, repeated while held (turbo)",
         ],
         "Media Controller": [
@@ -438,16 +458,16 @@ struct ExamplePresets {
             "btn 3": "Drop item (Q)",
             "btn 4": "Previous hotbar slot (scroll)",
             "btn 5": "Next hotbar slot (scroll)",
-            "btn 8": "Escape (menu)",
-            "btn 9": "Player list (Tab)",
+            "btn 8": "Player list (Tab)",
+            "btn 9": "Menu (Escape)",
             "hat 0 D": "Hotbar slot 3",
             "hat 0 L": "Hotbar slot 4",
             "hat 0 R": "Hotbar slot 2",
             "hat 0 U": "Hotbar slot 1",
         ],
         "Motion Cursor": [
-            "axi 3 +": "Scroll up",
-            "axi 3 -": "Scroll down",
+            "axi 3 +": "Scroll down",
+            "axi 3 -": "Scroll up",
             "btn 0": "Left click",
             "btn 1": "Right click",
             "btn 3": "Return",
@@ -455,8 +475,8 @@ struct ExamplePresets {
             "btn 5": "Re-zero gyro, center pointer",
             "mtn gyroX +": "Tilt up: pointer up",
             "mtn gyroX -": "Tilt down: pointer down",
-            "mtn gyroY +": "Turn right: pointer right",
-            "mtn gyroY -": "Turn left: pointer left",
+            "mtn gyroY +": "Tilt right: pointer right",
+            "mtn gyroY -": "Tilt left: pointer left",
         ],
         "Mouse + Scroll": [
             "axi 0 +": "Pointer right",
@@ -500,12 +520,12 @@ struct ExamplePresets {
             "axi 5 +": "Throttle (W)",
             "btn 0": "Handbrake (Space)",
             "btn 1": "Shift up (Shift)",
-            "btn 2": "E",
+            "btn 2": "Camera or look back (E, varies by game)",
             "btn 3": "Reset car (R)",
-            "btn 4": "Q",
-            "btn 5": "F",
-            "btn 8": "Menu (Escape)",
-            "btn 9": "Tab",
+            "btn 4": "Q (varies by game)",
+            "btn 5": "F (varies by game)",
+            "btn 8": "Standings or map (Tab, varies by game)",
+            "btn 9": "Menu (Escape)",
         ],
         "Spoken Feedback": [
             "btn 0": "Type A and speak",
@@ -534,6 +554,29 @@ struct ExamplePresets {
             "btn 5": "B: Escape",
             "btn 6": "X: Tab",
             "btn 7": "A: Return",
+        ],
+        "Steam Controller (2026)": [
+            "tpd 0 x +": "Right trackpad: pointer right",
+            "tpd 0 x -": "Right trackpad: pointer left",
+            "tpd 0 y +": "Right trackpad: pointer down",
+            "tpd 0 y -": "Right trackpad: pointer up",
+            "tpg oneFingerTap": "Right trackpad tap: left click",
+            "tpd 0 y + s1": "Left trackpad down: scroll down",
+            "tpd 0 y - s1": "Left trackpad up: scroll up",
+            "axi 3 +": "Right stick down: scroll down",
+            "axi 3 -": "Right stick up: scroll up",
+            "axi 4 +": "Left trigger: right click",
+            "axi 5 +": "Right trigger: left click",
+            "btn 0": "A: Return",
+            "btn 1": "B: Escape",
+            "btn 2": "X: Tab",
+            "btn 3": "Y: Space",
+            "btn 4": "Left bumper: Cmd [ (back)",
+            "btn 5": "Right bumper: Cmd ] (forward)",
+            "btn 10": "Steam button: Spotlight (Cmd Space)",
+            "btn 14": "L4 (left back button): Shift (held)",
+            "btn 15": "R4 (right back button): Option (held)",
+            "btn 19": "Right trackpad press: left click",
         ],
         "Toggle Mode": [
             "btn 0": "Toggle Shift held",
@@ -587,13 +630,158 @@ struct ExamplePresets {
         ],
     ]
 
+    /// Notes an earlier version wrote itself that the full shipped notes
+    /// replace. The Anki builder filled in a one-line note, so the full
+    /// notes below never appeared; a copy still holding that line exactly
+    /// is treated as empty.
+    private static let supersededNotes: [String: String] = [
+        "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows above only cover the eight sockets: handbrake, horn, boost, reset, gears, camera, and rewind. Change the letters on each row to match the game's own key list.",
+        // 1.5 shipped this Media Deck note, pointing to a menu with no device list.
+        "MIDI: Media Deck": "A MIDI controller as a media remote. CC 7 is the Mac's volume fader, CC 71 steps volume, CC 74 steps brightness, pads 36 to 41 are play, next, previous, mute, Mission Control, and an app. Pick your MIDI device in the slot's input kind menu.",
+        "Anki": "Anki's default shortcuts. If you changed them in Anki's Preferences, Scan the row and press the new key.",
+        "Steam Controller": "Valve's Steam Controller, wired or with its dongle. The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
+    ]
+
+    /// The preset and group descriptions 1.5 shipped where 1.6 reworded
+    /// them, so a backup's copy still holding them counts as untouched.
+    static let tags15: [String: (preset: String, groups: [String])] = [
+        "Access Controller": (preset: "One stick and eight buttons for the whole desktop", groups: ["Stick = pointer; sockets click, scroll, Return, Space, and hold Command; Options and PS open Mission Control and Spotlight"]),
+        "Deadzone Calibration": (preset: "Right stick wide deadzone + outer saturation, left stick tight", groups: ["Open Advanced > Calibrate on any axis row to see the live ring visualizer"]),
+        "Gyro Aim": (preset: "Tilt the controller to aim; triggers fire and ADS", groups: ["Tilt to aim: sideways tilt → mouse X, forward tilt → mouse Y. LB pauses motion while held, RB re-zeros and centres the pointer"]),
+        "MIDI: Drum Pad": (preset: "Finger-drumming pads with turbo for rolls", groups: ["Face buttons = drum kit pieces with turbo (hold for rolls), triggers = cymbals"]),
+        "MIDI: Knob Deck": (preset: "MIDI input drives the Mac: volume fader, Dial scroll, Turn nudges", groups: ["CC 7 = volume fader, mod wheel = scroll, CC 71 = arrows, pedal = click"]),
+        "MIDI: Transport Control": (preset: "DAW remote: start, stop, continue, program change", groups: ["A = Start, B = Stop, X = Continue, LB/RB = patch up/down"]),
+        "Minecraft": (preset: "Full Minecraft controls - works with any controller", groups: ["WASD + mouse look, triggers mine/place, bumpers cycle hotbar, D-pad hotbar 1-4. Uses standard gamepad indices so the same layout drives DualSense, Xbox, Switch Pro, 8BitDo and any other connected controller."]),
+        "Motion Cursor": (preset: "Wave the controller to move the cursor; face buttons click", groups: ["Slower than Gyro Aim, with clicks and scrolling on the buttons; perfect for couch desktop use on Switch Pro / DualSense"]),
+        "Spoken Feedback": (preset: "Each face button speaks a phrase aloud", groups: ["Each face button says its phrase through the Mac's sound output"]),
+        "Stacked Outputs": (preset: "One press fires keystroke + mouse + MIDI + speech together", groups: ["A = parallel output stack (key + click + MIDI + speech). B = parallel keystroke pair. Different from a macro - no delays, no sequence; these fire simultaneously."]),
+    ]
+
+    /// Row notes 1.5 wrote that 1.6 reworded, so a row still holding the
+    /// 1.5 text counts as untouched when a backup is restored.
+    static let rowNotes15: [String: [String: String]] = [
+        "Access Controller": [
+            "btn 0": "Socket 1 (Cross): left click",
+            "btn 1": "Socket 2 (Circle): right click",
+            "btn 2": "Socket 3 (Square): double click",
+            "btn 3": "Socket 4 (Triangle): Return",
+            "btn 4": "Socket 5 (L1): scroll up while held",
+            "btn 5": "Socket 6 (R1): scroll down while held",
+            "btn 6": "Socket 7 (L2): hold Command, for Command-click and shortcuts",
+            "btn 7": "Socket 8 (R2): Space",
+            "btn 8": "Options: Mission Control",
+            "btn 9": "Menu socket: Spotlight",
+        ],
+        "One-Stick Driving": [
+            "btn 0": "Socket 1 (Cross): handbrake (Space)",
+            "btn 1": "Socket 2 (Circle): horn (H)",
+            "btn 2": "Socket 3 (Square): boost (Shift)",
+            "btn 3": "Socket 4 (Triangle): reset the car (R)",
+            "btn 4": "Socket 5 (L1): shift down (Q)",
+            "btn 5": "Socket 6 (R1): shift up (E)",
+            "btn 6": "Socket 7 (L2): change camera (C)",
+            "btn 7": "Socket 8 (R2): rewind / flashback (Tab)",
+            "btn 8": "Options: pause (Escape)",
+            "btn 9": "Menu socket: confirm (Return)",
+        ],
+        "Desktop Navigation": [
+            "btn 0": "Select all (Cmd A)",
+        ],
+        "FPS (8BitDo)": [
+            "btn 5": "Middle click",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Scoreboard (Tab)",
+            "hat 0 L": "Q",
+        ],
+        "FPS (PS5 DualSense)": [
+            "btn 12": "V",
+            "btn 5": "Middle click",
+            "hat 0 L": "Q",
+        ],
+        "FPS (Switch Pro)": [
+            "btn 5": "Middle click",
+            "hat 0 L": "Q",
+        ],
+        "FPS (Xbox)": [
+            "btn 5": "Middle click",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Scoreboard (Tab)",
+            "hat 0 L": "Q",
+        ],
+        "Gyro Aim": [
+            "mtn gyroY +": "Turn right: look right",
+            "mtn gyroY -": "Turn left: look left",
+        ],
+        "MIDI: Transport Control": [
+            "hat 0 D": "Volume down (CC 7)",
+            "hat 0 U": "Volume up (CC 7)",
+        ],
+        "Macros & Turbo": [
+            "btn 4": "J",
+        ],
+        "Minecraft": [
+            "btn 8": "Escape (menu)",
+            "btn 9": "Player list (Tab)",
+        ],
+        "Motion Cursor": [
+            "axi 3 +": "Scroll up",
+            "axi 3 -": "Scroll down",
+            "mtn gyroY +": "Turn right: pointer right",
+            "mtn gyroY -": "Turn left: pointer left",
+        ],
+        "Racing Game": [
+            "btn 2": "E",
+            "btn 4": "Q",
+            "btn 5": "F",
+            "btn 8": "Menu (Escape)",
+            "btn 9": "Tab",
+        ],
+    ]
+
+    /// The Notes text 1.5 shipped for the built-ins whose text 1.6 rewrote.
+    /// A copy still holding it was never edited: it takes the 1.6 text, and
+    /// a backup holding it is restored as the untouched built-in.
+    private static let presetNotes15: [String: String] = [
+        "Media Controller": "A remote for Music, Spotify, VLC, the TV app, and YouTube in a browser: it sends the Mac's own media keys, so it works whichever app is playing.\n\nA plays and pauses, B skips forward, X skips back, Y mutes. Bumpers, the D-pad, and the left stick change the volume. Back is Escape for leaving full screen.",
+        "MIDI: CC Dials": "The sticks and triggers as soft MIDI controllers on channel 1: left stick X and Y send CC 1 and CC 11, right stick X and Y send CC 74 and CC 71, triggers send CC 7 and CC 10. Use MIDI Learn in any synth or DAW to grab one.",
+        "MIDI: DAW Performance": "A MIDI instrument from the controller, through InputConfig's virtual MIDI port. Face buttons play a C major chord (C, E, G, C), right stick bends pitch and adds modulation, right trigger is volume (CC 7), left trigger is expression (CC 11). D-pad up starts, down stops, right continues the transport.\n\nIn GarageBand or Logic, pick InputConfig as the MIDI input on a software instrument track.",
+        "Access Controller": "The PlayStation Access Controller's PS button is kept by macOS and never reaches an app, so nothing is bound to it; everything here runs from the stick and the sockets. Built for the PlayStation Access Controller with its default button profile: Cross, Circle, Square, Triangle, L1, R1, L2, and R2 on the eight sockets, which the Mac sees as buttons 1 to 8. The stick is the pointer; the sockets click, double click, scroll, and send Return and Space; L2 holds Command so a press with another socket is a shortcut. If you changed the profile in the PlayStation app, Scan each row and press the socket you mean.\n\nIf the pointer drifts, raise the deadzone on the stick rows (Calibrate opens a live plot). Change Speed on those rows if it feels too fast or slow.",
+        "Deadzone Calibration": "A showcase for deadzones. Both sticks move the pointer; the right stick has a wide inner deadzone and an outer limit, the left stick a tight one. Move each and feel the difference, then open Calibrate on a stick row to set your own with the live plot. A clicks.",
+        "Desktop Navigation": "A pointer and the everyday shortcuts, for using the Mac without touching the keyboard. Left stick moves the pointer, right stick scrolls, right trigger clicks, left trigger right-clicks, the D-pad sends the arrow keys.\n\nFace buttons: A selects all, B undoes, X cuts, Y pastes. Bumpers switch apps, Back opens Spotlight, Start is Return. For copy, add a row for Cmd C or change B.\n\nNo Mac settings needed beyond the Accessibility permission the app asks for.",
+        "FPS (8BitDo)": "The first-person layout tuned for 8BitDo pads in A (Apple) mode. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints, right stick click sends E. Select is Escape, Start is Tab.\n\nSet the mode switch on the back to A before pairing.",
+        "FPS (PS5 DualSense)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, R2 fires, L2 aims. Cross jumps, Circle crouches with Control, Square reloads, Triangle is slot 1. L1 is slot 4, R1 middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. L3 sprints with Shift, R3 sends V. The touchpad press opens the map with M. Share is Tab, Options is Escape.\n\nThe touchpad can also be a trackpad; see the Touchpad Mouse preset.",
+        "FPS (Xbox)": "A first-person layout for games with no controller support. Left stick moves, right stick looks, right trigger fires, left trigger aims. A jumps, B is C for crouch, X reloads, Y is slot 1. LB is slot 4, RB middle-clicks. D-pad up and down scroll weapons, left is Q, right is F. Left stick click sprints with Shift, right stick click sends E. View is Escape, Menu is Tab.",
+        "Gyro Aim": "Aim by tilting: the pointer follows the controller's tilt, up and down and side to side, and the triggers click. Tilting back to level brings the pointer back to where it started.\n\nHold LB to pause the motion while you swing the controller back to a comfortable angle, the way you lift a mouse off the desk, then let go and carry on. Press RB to make the current tilt the new neutral and center the pointer. Both are App Action outputs, so you can move them to any control. Speed on the motion rows sets how far the pointer travels per degree of tilt.",
+        "MIDI: Knob Deck": "A MIDI controller runs the Mac. CC 7 (a fader) is the Mac's volume, the mod wheel scrolls, CC 71 turned sends the arrow keys, the sustain pedal clicks, pads 36 and 37 send Return and Escape. Pick your MIDI device in the slot's input kind menu.",
+        "MIDI: Transport Control": "A DAW remote over MIDI. A starts, B stops, X continues (MIDI transport messages), the bumpers select patch 1 and patch 2 with program changes, the D-pad nudges CC 7 volume. Map them in your DAW's control surface or MIDI Learn settings.",
+        "Macros & Turbo": "A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. LB sends J. Turbo and macros are options on every row.",
+        "Motion Cursor": "Point the controller like a laser pointer: tilt it and the pointer follows the tilt, so tilting back to level puts the pointer back where it started. Works on the DualSense, DualShock 4, Switch Pro Controller, and Joy-Cons. A clicks, B right-clicks, Y is Return, right stick scrolls.\n\nRB makes the controller's current tilt the new neutral and puts the pointer in the middle of the screen. Hold LB to move the controller without moving the pointer, the way you lift a mouse off the desk. The gyro zero looks after itself while the controller rests; Calibrate Motion in a row's Options is there if you want to set it by hand.",
+        "Mouse + Scroll": "The plain pointer preset. Left stick moves the pointer, right stick scrolls, D-pad nudges the pointer slowly for small targets. A clicks, B right-clicks, X middle-clicks.\n\nIf the pointer drifts on its own, raise the stick's deadzone on its row (Calibrate opens a live plot). If it feels too fast or too slow, change Speed on the stick rows.",
+        "Racing Game": "Any racing game that takes keyboard input. Left stick steers with A and D, right trigger is the throttle (W), left trigger the brake (S). A is the handbrake, B shifts up with Shift, X sends E, Y sends R for reset, bumpers send Q and F. Right stick looks around. Back is Escape, Start is Tab.\n\nChange the letters on each row to match the game's own key list; most racers let you rebind.",
+        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Works on M2 and later, and on M1 Pro, Max, and Ultra.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
+        "Variable Sensitivity": "A showcase for response curves. Both sticks move the pointer; the right stick uses a smooth curve (slow near center, fast at the edge) and the left an aggressive one. Push each the same amount and compare. The curve is on every stick row under its options. A clicks.",
+        "Web Browsing": "Safari, Chrome, Firefox: pointer on the left stick, scroll on the right, click on the right trigger. B right-clicks. X closes the tab, Y opens a new one, the bumpers go back and forward, the triggers switch tabs, Back jumps to the address bar. Start switches apps.\n\nWith the address bar focused, Dictation (System Settings, Keyboard) is the easiest way to type a search from the sofa; add a Dictation row to a spare button.",
+    ]
+
+    /// Whether `text` is notes this app wrote for the preset, in this
+    /// version or an earlier one.
+    static func isShippedNotes(_ text: String, for name: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        func norm(_ s: String?) -> String? {
+            s?.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "centre", with: "center")
+        }
+        let n = norm(t)
+        return n == norm(presetNotes[name]) || n == norm(presetNotes15[name]) || n == norm(supersededNotes[name])
+    }
+
     /// Fill in the shipped notes wherever the preset has none: the Notes
     /// field, and every row whose note is empty. Text the user has written
     /// is never replaced. Returns whether anything changed.
     @discardableResult
     static func fillShippedNotes(_ preset: inout Preset) -> Bool {
         var changed = false
-        if preset.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        let current = preset.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || (isShippedNotes(current, for: preset.name) && current != presetNotes[preset.name]),
            let text = presetNotes[preset.name] {
             preset.notes = text
             changed = true
@@ -615,15 +803,80 @@ struct ExamplePresets {
 
     /// Puts a shipped preset's rows under section headings (Left stick,
     /// Buttons, D-pad...) when none of them has a section yet, so the editor
-    /// shows it organised. A preset whose rows all belong to one section is
+    /// shows it organized. A preset whose rows all belong to one section is
     /// left flat: one heading over everything says nothing. Returns true when
     /// anything changed.
+    /// The built-in presets written for one controller family, drawn and
+    /// named that way whatever pad is connected (see Preset.buttonFamily).
+    static let buttonFamilies: [String: FaceLetters] = [
+        "FPS (PS5 DualSense)": .playstation,
+        "FPS (Xbox)": .xbox,
+        "FPS (Switch Pro)": .nintendo,
+        "Steam Controller": .steamController,
+        "Steam Controller (2026)": .steamController2026,
+        "Touchpad Mouse": .playstation,
+        "Touchpad Zones": .playstation,
+        "Access Controller": .playstation,
+    ]
+
+    /// Built-ins made for one model with no Buttons family of its own, by
+    /// the drawing the Live Visualizer shows for them.
+    static let drawnModels: [String: ControllerModelID] = [
+        "FPS (8BitDo)": .eightBitDoPro2,
+    ]
+
+    /// The built-ins that got a family in the third 1.6 pass.
+    static let familiedIn16v3: Set<String> = ["Touchpad Mouse", "Touchpad Zones", "Access Controller"]
+
+    /// Gives a Steam Controller preset still on the standard section
+    /// headings (1.5 filed its trackpads under Right stick) its own.
+    /// Returns true when changed.
+    @discardableResult
+    static func refreshSteamSections(_ preset: inout Preset) -> Bool {
+        guard let family = buttonFamilies[preset.name], family.isSteam else { return false }
+        var changed = false
+        for j in preset.joysticks.indices {
+            let rows = preset.joysticks[j].bindings
+            guard !rows.isEmpty, rows.allSatisfy({ ($0.section ?? "") == ControllerScaffold.section(for: $0.input) }) else { continue }
+            let regrouped = ControllerScaffold.grouped(rows, family: family)
+            guard regrouped.map(\.section) != rows.map(\.section) else { continue }
+            preset.joysticks[j].bindings = regrouped
+            changed = true
+        }
+        return changed
+    }
+
+    /// Points a shipped Steam Controller preset's group at its controller
+    /// when it is still on Auto-detect. Returns true when set.
+    @discardableResult
+    static func fillSteamTarget(_ preset: inout Preset) -> Bool {
+        let target: String
+        switch preset.name {
+        case "Steam Controller": target = steamTarget2015
+        case "Steam Controller (2026)": target = steamTarget2026
+        default: return false
+        }
+        guard preset.joysticks.count == 1, preset.joysticks[0].customName == nil,
+              preset.joysticks[0].inputKind == .auto else { return false }
+        preset.joysticks[0].customName = target
+        preset.joysticks[0].inputKind = .controller
+        return true
+    }
+
+    /// Gives a shipped copy its family if it has none. Returns true when set.
+    @discardableResult
+    static func fillButtonFamily(_ preset: inout Preset) -> Bool {
+        guard preset.buttonFamily == nil, let family = buttonFamilies[preset.name] else { return false }
+        preset.buttonFamily = family
+        return true
+    }
+
     static func fillShippedSections(_ preset: inout Preset) -> Bool {
         var changed = false
         for j in preset.joysticks.indices {
             let rows = preset.joysticks[j].bindings
             guard !rows.isEmpty, rows.allSatisfy({ ($0.section ?? "").isEmpty }) else { continue }
-            let grouped = ControllerScaffold.grouped(rows)
+            let grouped = ControllerScaffold.grouped(rows, family: preset.buttonFamily ?? buttonFamilies[preset.name])
             let sections = Set(grouped.compactMap(\.section))
             guard sections.count > 1 else { continue }
             preset.joysticks[j].bindings = grouped
@@ -652,7 +905,7 @@ struct ExamplePresets {
         "midi_input":           "MIDI: Knob Deck",
         "system_control":       "Media Controller",
         "siri_shortcuts":       "Shortcuts & Apps",
-        "input_remap":          "Keyboard Deck",
+        "input_remap":          "Keyboard & Mouse Input",
         "mac_trackpad":         "Trackpad & Mouse",
         "modifier_holds":       "Modifier Holds",
         "hold_double_tap":      "Hold & Double-Tap",
@@ -664,20 +917,28 @@ struct ExamplePresets {
 
     /// Map a connected controller's brand to the best built-in example
     /// preset to jump to from the controller info popover. Brands we don't
-    /// ship a tailored layout for - generic MFi pads, unrecognized brands
-    /// (e.g. Lightfire), Steam, Stadia - fall back to the DualSense FPS
-    /// layout, which uses the standard extended-gamepad axis/button indices
-    /// and therefore works on any controller. This guarantees every
+    /// ship a tailored layout for (generic MFi pads, unrecognized brands such
+    /// as Lightfire, and Stadia) fall back to the Xbox FPS layout, which uses
+    /// the standard extended-gamepad indices, A/B/X/Y names, and no touchpad
+    /// row, so it works on any controller. This guarantees every
     /// connected controller has a "Take me to an example" destination.
+    /// The 2026 Steam Controller shares the 2015 model's brand but has its
+    /// own preset, so the slot's family decides between them.
+    static func exampleName(for brand: ControllerBrand, family: FaceLetters?) -> String {
+        family == .steamController2026 ? "Steam Controller (2026)" : exampleName(for: brand)
+    }
+
     static func exampleName(for brand: ControllerBrand) -> String {
         switch brand {
         case .xbox:                       return "FPS (Xbox)"
         case .switchPro, .joyConLeft,
              .joyConRight, .joyConPair:   return "FPS (Switch Pro)"
         case .eightBitDo:                 return "FPS (8BitDo)"
-        case .dualSense, .dualShock4,
-             .stadia, .steamController,
-             .mfiGeneric, .unknown:       return "FPS (PS5 DualSense)"
+        case .accessController:           return "Access Controller"
+        case .dualSense, .dualShock4:    return "FPS (PS5 DualSense)"
+        // A/B/X/Y names, no touchpad row, the same standard numbering.
+        case .stadia, .mfiGeneric, .unknown: return "FPS (Xbox)"
+        case .steamController:            return "Steam Controller"
         }
     }
 
@@ -686,6 +947,8 @@ struct ExamplePresets {
     static var all: [Preset] {
         return [
             // Desktop & Productivity
+            easyBrowse,
+            easyEdit,
             desktopNavigation,
             webBrowsing,
             mouseScroll,
@@ -693,10 +956,10 @@ struct ExamplePresets {
             presentationRemote,
             anki,
             accessController,
-            keyboardDeck,
             trackpadAndMouse,
             modifierHolds,
             doubleClickDeck,
+            autoClicker,
 
             // Gaming - First-Person (one per controller family)
             fpsDualSense,
@@ -724,6 +987,7 @@ struct ExamplePresets {
             showcaseMacrosTurbo,
             showcaseTouchpadMouse,
             showcaseSteamController,
+            showcaseSteamController2026,
             showcaseGyroAim,
             showcaseMotionCursor,
             showcaseToggleMode,
@@ -759,7 +1023,7 @@ struct ExamplePresets {
                     "axi 3 -": ["whe 1 - 5"],
                     "axi 4 +": ["mbt 1"],
                     "axi 5 +": ["mbt 0"],
-                    "btn 0": ["key 227", "key 4"],
+                    "btn 0": ["mbt 0"],
                     "btn 1": ["key 227", "key 29"],
                     "btn 2": ["key 227", "key 27"],
                     "btn 3": ["key 227", "key 25"],
@@ -770,7 +1034,8 @@ struct ExamplePresets {
                     "hat 0 L": ["key 80"],
                     "hat 0 R": ["key 79"],
                     "btn 8": ["key 227", "key 44"],
-                    "btn 9": ["key 40"]
+                    "btn 9": ["key 40"],
+                    "btn 12": ["key 227", "key 4"]
                 }
             }]
         }
@@ -836,6 +1101,128 @@ struct ExamplePresets {
             }]
         }
         """)
+    }
+
+    static let easyBrowseName = "Easy Browse"
+
+    /// The ready-made layout the welcome screen offers first: a calm way to
+    /// use the whole Mac from a controller, named for what it does rather
+    /// than for who might want it (it was Easy Mac until a tester pointed out
+    /// that name belongs to a boxed macaroni, and Mac to Apple). The same
+    /// layout as the guide
+    /// preset on inputconfig.com (a tester's own, the jobs used most on the
+    /// bumpers and the D-pad), plus the pointer ramp-up and a short buzz on
+    /// the two stick presses.
+    static var easyBrowse: Preset {
+        func pointer(_ axis: Int, _ dir: AxisDirection, _ mouseAxis: MouseAxis, _ mouseDir: MouseDirection, _ note: String) -> BindingModel {
+            BindingModel(input: .axis(axis, direction: dir),
+                         outputs: [OutputAction(type: .mouseMotion, mouseAxis: mouseAxis, mouseDirection: mouseDir, speed: 9)],
+                         deadzone: 0.28, sensitivityCurve: .exponential, variableSensitivity: true,
+                         rampMs: 400, note: note)
+        }
+        func scroll(_ dir: AxisDirection, _ wheelDir: MouseDirection, _ note: String) -> BindingModel {
+            BindingModel(input: .axis(3, direction: dir),
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: wheelDir, speed: 4)],
+                         deadzone: 0.25, variableSensitivity: true, note: note)
+        }
+        func key(_ codes: [Int]) -> [OutputAction] { codes.map { OutputAction(type: .key, keyCode: $0) } }
+        func system(_ kind: SystemActionKind) -> [OutputAction] { [OutputAction(type: .systemAction, systemActionKind: kind)] }
+        let bindings: [BindingModel] = [
+            pointer(0, .negative, .horizontal, .negative, "Pointer left"),
+            pointer(0, .positive, .horizontal, .positive, "Pointer right"),
+            pointer(1, .negative, .vertical, .negative, "Pointer up"),
+            pointer(1, .positive, .vertical, .positive, "Pointer down"),
+            scroll(.negative, .negative, "Scroll up"),
+            scroll(.positive, .positive, "Scroll down"),
+            BindingModel(input: .button(0), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)],
+                         hapticEnabled: true, hapticIntensity: 0.3,
+                         speechEnabled: true, speechText: "click", speechDestination: .controller, note: "Click"),
+            BindingModel(input: .button(1), outputs: key([227, 47]),
+                         speechEnabled: true, speechText: "back", speechDestination: .controller, note: "Go back"),
+            BindingModel(input: .button(2), outputs: key([41]),
+                         speechEnabled: true, speechText: "close", speechDestination: .controller, note: "Close menus and pop-ups"),
+            BindingModel(input: .button(3), outputs: key([40]),
+                         speechEnabled: true, speechText: "open", speechDestination: .controller, note: "Confirm, open, send"),
+            BindingModel(input: .button(11), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)],
+                         toggleMode: true, hapticEnabled: true, hapticIntensity: 0.8,
+                         note: "Left stick press: grab and drop (press once to hold the click, again to let go)"),
+            BindingModel(input: .button(12), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)],
+                         repeatCount: 2, repeatDelayMs: 80, hapticEnabled: true, hapticIntensity: 0.8,
+                         note: "Right stick press: double click"),
+            BindingModel(input: .button(4), outputs: system(.startDictation), note: "Start Dictation, press again to stop"),
+            BindingModel(input: .button(5), outputs: system(.speakSelection), note: "Read Selection: reads the selected text aloud"),
+            BindingModel(input: .button(9), outputs: system(.spotlight), note: "Spotlight: type the first letters of anything"),
+            BindingModel(input: .button(8), outputs: system(.missionControl), note: "Mission Control: every open window at once"),
+            BindingModel(input: .button(13), outputs: system(.spotlight), note: "Spotlight: type the first letters of anything"),
+            BindingModel(input: .hat(0, direction: .left), outputs: key([227, 47]), note: "Back one web page"),
+            BindingModel(input: .hat(0, direction: .right), outputs: key([227, 48]), note: "Forward one web page"),
+            BindingModel(input: .hat(0, direction: .down), outputs: key([227, 225, 47]), note: "Previous tab"),
+            BindingModel(input: .hat(0, direction: .up), outputs: key([227, 225, 48]), note: "Next tab"),
+        ]
+        var preset = makePreset(
+            name: easyBrowseName,
+            tag: "A calm layout for using the whole Mac from a controller",
+            joystickTag: "Left stick = pointer (starts slow), right stick = scroll, A click, B back, X close, Y open, L3 grab and drop, R3 double click, LB dictation, RB read aloud, Start or touchpad = Spotlight, Back = Mission Control, D-pad = web pages and tabs",
+            bindings: bindings,
+            light: RGBLightColor(r: 90, g: 200, b: 120))
+        preset.automation.dpadOneDirection = true
+        return preset
+    }
+
+    static let easyEditName = "Easy Edit"
+
+    /// The companion to Easy Browse for someone who keeps a mouse or trackpad in
+    /// the other hand: a tester's own layout, one job per button, the four
+    /// editing shortcuts together on the D-pad the way they sit together on
+    /// a keyboard, and the D-pad counting one direction at a time so a quick
+    /// press never fires Cut in place of Copy.
+    static var easyEdit: Preset {
+        func key(_ codes: [Int]) -> [OutputAction] { codes.map { OutputAction(type: .key, keyCode: $0) } }
+        func system(_ kind: SystemActionKind) -> [OutputAction] { [OutputAction(type: .systemAction, systemActionKind: kind)] }
+        func spoken(_ input: InputEvent, _ outputs: [OutputAction], _ word: String, _ note: String) -> BindingModel {
+            BindingModel(input: input, outputs: outputs,
+                         speechEnabled: true, speechText: word, speechDestination: .controller, note: note)
+        }
+        func scroll(_ dir: AxisDirection, _ wheelDir: MouseDirection, _ note: String) -> BindingModel {
+            BindingModel(input: .axis(3, direction: dir),
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: wheelDir, speed: 4)],
+                         deadzone: 0.25, variableSensitivity: true, note: note)
+        }
+        let bindings: [BindingModel] = [
+            BindingModel(input: .axis(1, direction: .positive), outputs: system(.speakSelection),
+                         deadzone: 0.28, note: "Left stick down: read the selected text aloud"),
+            BindingModel(input: .axis(1, direction: .negative), outputs: system(.startDictation),
+                         deadzone: 0.49, note: "Left stick up, pushed firmly: start Dictation, again to stop"),
+            scroll(.negative, .negative, "Scroll up"),
+            scroll(.positive, .positive, "Scroll down"),
+            spoken(.button(0), key([42]), "delete", "Delete: erases the letter before the cursor, or the selection"),
+            spoken(.button(1), key([227, 22]), "save", "Save (Command S)"),
+            spoken(.button(2), key([44]), "space", "Space"),
+            spoken(.button(3), key([40]), "return", "Return: confirm, open, send"),
+            BindingModel(input: .button(11), outputs: system(.missionControl),
+                         hapticEnabled: true, hapticIntensity: 0.8,
+                         note: "Left stick press: Mission Control, every open window at once"),
+            BindingModel(input: .button(13), outputs: system(.missionControl),
+                         note: "Touchpad press: Mission Control, the same as the left stick press"),
+            BindingModel(input: .button(6), outputs: key([227, 47]), note: "Back one web page"),
+            BindingModel(input: .button(4), outputs: key([227, 48]), note: "Forward one web page"),
+            BindingModel(input: .button(7), outputs: key([227, 225, 47]), note: "Previous tab"),
+            BindingModel(input: .button(5), outputs: key([227, 225, 48]), note: "Next tab"),
+            BindingModel(input: .button(8), outputs: key([227, 15]), note: "Browser address bar (Command L): type a search or an address"),
+            BindingModel(input: .button(9), outputs: system(.spotlight), note: "Spotlight: type the first letters of anything"),
+            spoken(.hat(0, direction: .up), key([227, 29]), "undo", "Undo (Command Z)"),
+            spoken(.hat(0, direction: .down), key([227, 6]), "copy", "Copy (Command C)"),
+            spoken(.hat(0, direction: .left), key([227, 27]), "cut", "Cut (Command X)"),
+            spoken(.hat(0, direction: .right), key([227, 25]), "paste", "Paste (Command V)"),
+        ]
+        var preset = makePreset(
+            name: easyEditName,
+            tag: "A calm editing layout for one hand, with a mouse in the other",
+            joystickTag: "D-pad = undo, copy, cut, paste; A delete, B save, X space, Y return; left stick down = read aloud, up = dictation; right stick = scroll; LT and LB = back and forward a page, RT and RB = previous and next tab; Back = address bar, Start = Spotlight, L3 or touchpad = Mission Control",
+            bindings: bindings,
+            light: RGBLightColor(r: 90, g: 150, b: 230))
+        preset.automation.dpadOneDirection = true
+        return preset
     }
 
     static var mediaController: Preset {
@@ -939,7 +1326,6 @@ struct ExamplePresets {
             tag: "Flashcard review: rate, undo, replay audio",
             joystickTag: "Face buttons rate the card, bumpers undo and replay, sticks drive the pointer",
             bindings: bindings)
-        preset.notes = "Anki's default shortcuts. If you changed them in Anki's Preferences, Scan the row and press the new key."
         var automation = PresetAutomation()
         automation.launchAppPath = "/Applications/Anki.app"
         // Current Anki builds identify as net.ankiweb.anki; older releases
@@ -964,20 +1350,21 @@ struct ExamplePresets {
             bind("axi 0 +", ["mou 0 + 18"],  "Stick right: pointer right"),
             bind("axi 1 -", ["mou 1 - 18"],  "Stick up: pointer up"),
             bind("axi 1 +", ["mou 1 + 18"],  "Stick down: pointer down"),
-            bind("btn 0",   ["mbt 0"],       "Socket 1 (Cross): left click"),
-            bind("btn 1",   ["mbt 1"],       "Socket 2 (Circle): right click"),
-            bind("btn 2",   ["mbt 0"],       "Socket 3 (Square): double click"),
-            bind("btn 3",   ["key 40"],      "Socket 4 (Triangle): Return"),
-            bind("btn 4",   ["whe 1 - 5"],   "Socket 5 (L1): scroll up while held"),
-            bind("btn 5",   ["whe 1 + 5"],   "Socket 6 (R1): scroll down while held"),
-            bind("btn 6",   ["key 227"],     "Socket 7 (L2): hold Command, for Command-click and shortcuts"),
-            bind("btn 7",   ["key 44"],      "Socket 8 (R2): Space"),
-            // The centre buttons: which index a socket sends depends on the
-            // on-device profile, so both are bound. The PS button itself is
-            // kept by macOS and never reaches an app, so nothing is bound to
-            // it; use a socket for anything you need on the Mac.
-            bind("btn 8",   ["sys mct"],     "Options: Mission Control"),
-            bind("btn 9",   ["sys spt"],     "Menu socket: Spotlight"),
+            // Sony's base profile reports Cross on the center button, Circle
+            // on socket 5, Options on socket 7, and the stick. The other
+            // buttons reach the Mac once a profile made on a PS5 gives them
+            // to sockets. The PS button is kept by macOS and never reaches an
+            // app, so nothing is bound to it.
+            bind("btn 0",   ["mbt 0"],       "Center button (Cross): left click"),
+            bind("btn 1",   ["mbt 1"],       "Socket 5 (Circle): right click"),
+            bind("btn 2",   ["mbt 0"],       "Square (in a PS5 profile): double click"),
+            bind("btn 3",   ["key 40"],      "Triangle (in a PS5 profile): Return"),
+            bind("btn 4",   ["whe 1 - 5"],   "L1 (in a PS5 profile): scroll up while held"),
+            bind("btn 5",   ["whe 1 + 5"],   "R1 (in a PS5 profile): scroll down while held"),
+            bind("btn 6",   ["key 227"],     "L2 (in a PS5 profile): hold Command, for Command-click and shortcuts"),
+            bind("btn 7",   ["key 44"],      "R2 (in a PS5 profile): Space"),
+            bind("btn 8",   ["sys mct"],     "Create (in a PS5 profile): Mission Control"),
+            bind("btn 9",   ["sys spt"],     "Socket 7 (Options): Spotlight"),
         ].compactMap { $0 }
         // Square is a double click: one press, two clicks.
         if let i = bindings.firstIndex(where: { $0.input.serialized == "btn 2" }) {
@@ -995,7 +1382,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Access Controller",
             tag: "One stick and eight buttons for the whole desktop",
-            joystickTag: "Stick = pointer; sockets click, scroll, Return, Space, and hold Command; Options and PS open Mission Control and Spotlight",
+            joystickTag: "Stick = pointer; center button clicks, socket 5 right-clicks, socket 7 opens Spotlight; more with a PS5 profile",
             bindings: bindings)
     }
 
@@ -1006,16 +1393,19 @@ struct ExamplePresets {
     /// PlayStation Access Controller (or any eight buttons) take the rest.
     static var oneStickDriving: Preset {
         var bindings: [BindingModel] = [
-            bind("btn 0", ["key 44"],  "Socket 1 (Cross): handbrake (Space)"),
-            bind("btn 1", ["key 11"],  "Socket 2 (Circle): horn (H)"),
-            bind("btn 2", ["key 225"], "Socket 3 (Square): boost (Shift)"),
-            bind("btn 3", ["key 21"],  "Socket 4 (Triangle): reset the car (R)"),
-            bind("btn 4", ["key 20"],  "Socket 5 (L1): shift down (Q)"),
-            bind("btn 5", ["key 8"],   "Socket 6 (R1): shift up (E)"),
-            bind("btn 6", ["key 6"],   "Socket 7 (L2): change camera (C)"),
-            bind("btn 7", ["key 43"],  "Socket 8 (R2): rewind / flashback (Tab)"),
-            bind("btn 8", ["key 41"],  "Options: pause (Escape)"),
-            bind("btn 9", ["key 40"],  "Menu socket: confirm (Return)"),
+            // Named by the button each socket sends, not the socket: on an
+            // Access controller's base profile only Cross (the center
+            // button), Circle (socket 5) and Options (socket 7) send.
+            bind("btn 0", ["key 44"],  "Cross: handbrake (Space)"),
+            bind("btn 1", ["key 11"],  "Circle: horn (H)"),
+            bind("btn 2", ["key 225"], "Square: boost (Shift)"),
+            bind("btn 3", ["key 21"],  "Triangle: reset the car (R)"),
+            bind("btn 4", ["key 20"],  "L1: shift down (Q)"),
+            bind("btn 5", ["key 8"],   "R1: shift up (E)"),
+            bind("btn 6", ["key 6"],   "L2: change camera (C)"),
+            bind("btn 7", ["key 43"],  "R2: rewind / flashback (Tab)"),
+            bind("btn 8", ["key 41"],  "Create: pause (Escape)"),
+            bind("btn 9", ["key 40"],  "Options: confirm (Return)"),
         ].compactMap { $0 }
         for i in bindings.indices {
             bindings[i].section = bindings[i].input.index >= 8 ? "Menu buttons" : "Sockets"
@@ -1039,7 +1429,7 @@ struct ExamplePresets {
         drive.brakeKey = 22         // S
         drive.reverseKey = 22       // S again once stopped, as most games treat it
         drive.deadzone = 0.15
-        drive.steerCurve = 1.4      // gentle near centre, full lock at the edge
+        drive.steerCurve = 1.4      // gentle near center, full lock at the edge
         drive.throttleCurve = 1.3   // fine low-speed control
         // Let go of the stick and the car slows like a power chair does.
         drive.coastBrake = true
@@ -1078,14 +1468,14 @@ struct ExamplePresets {
                     "btn 4": ["key 33"],
                     "btn 5": ["mbt 2"],
                     "btn 11": ["key 225"],
-                    "btn 12": ["key 25"],
+                    "btn 12": ["key 8"],
                     "hat 0 U": ["whs 1 -"],
                     "hat 0 D": ["whs 1 +"],
                     "hat 0 L": ["key 20"],
                     "hat 0 R": ["key 9"],
                     "btn 8": ["key 43"],
                     "btn 9": ["key 41"],
-                    "btn 13": ["key 8"]
+                    "btn 13": ["key 16"]
                 }
             }]
         }
@@ -1125,8 +1515,8 @@ struct ExamplePresets {
                     "hat 0 D": ["whs 1 +"],
                     "hat 0 L": ["key 20"],
                     "hat 0 R": ["key 9"],
-                    "btn 8": ["key 41"],
-                    "btn 9": ["key 43"]
+                    "btn 8": ["key 43"],
+                    "btn 9": ["key 41"]
                 }
             }]
         }
@@ -1201,8 +1591,8 @@ struct ExamplePresets {
                     "hat 0 D": ["whs 1 +"],
                     "hat 0 L": ["key 20"],
                     "hat 0 R": ["key 9"],
-                    "btn 8": ["key 41"],
-                    "btn 9": ["key 43"]
+                    "btn 8": ["key 43"],
+                    "btn 9": ["key 41"]
                 }
             }]
         }
@@ -1215,7 +1605,7 @@ struct ExamplePresets {
         var preset = parse("""
         {
             "name": "Minecraft",
-            "tag": "Full Minecraft controls - works with any controller",
+            "tag": "Full Minecraft controls, works with any controller",
             "joysticks": [{
                 "tag": "WASD + mouse look, triggers mine/place, bumpers cycle hotbar, D-pad hotbar 1-4. Uses standard gamepad indices so the same layout drives DualSense, Xbox, Switch Pro, 8BitDo and any other connected controller.",
                 "binds": {
@@ -1236,13 +1626,13 @@ struct ExamplePresets {
                     "btn 4": ["whs 1 -"],
                     "btn 5": ["whs 1 +"],
                     "btn 11": ["key 224"],
-                    "btn 12": ["key 62"],
+                    "btn 12": ["key 9"],
                     "hat 0 U": ["key 30"],
                     "hat 0 R": ["key 31"],
                     "hat 0 D": ["key 32"],
                     "hat 0 L": ["key 33"],
-                    "btn 8": ["key 41"],
-                    "btn 9": ["key 43"]
+                    "btn 8": ["key 43"],
+                    "btn 9": ["key 41"]
                 }
             }]
         }
@@ -1326,8 +1716,8 @@ struct ExamplePresets {
                     "btn 3": ["key 21"],
                     "btn 4": ["key 20"],
                     "btn 5": ["key 9"],
-                    "btn 8": ["key 41"],
-                    "btn 9": ["key 43"]
+                    "btn 8": ["key 43"],
+                    "btn 9": ["key 41"]
                 }
             }]
         }
@@ -1371,7 +1761,7 @@ struct ExamplePresets {
             BindingModel(input: .button(3),
                          outputs: [OutputAction(type: .midiNote, midiNote: 72, midiVelocity: 100, midiChannel: 1)],
                          hapticEnabled: true, hapticIntensity: 0.4),
-            // D-pad runs transport (start/stop/continue) plus a tap-tempo CC.
+            // D-pad runs transport: start, stop, continue.
             BindingModel(input: .hat(0, direction: .up),
                          outputs: [OutputAction(type: .midiTransport, midiTransport: .start)]),
             BindingModel(input: .hat(0, direction: .down),
@@ -1395,7 +1785,7 @@ struct ExamplePresets {
                          turboEnabled: true, turboRate: 8,
                          hapticEnabled: true, hapticIntensity: 0.5)
         }
-        // Triggers roll alternating kick/snare for fast fills.
+        // Triggers hit a low tom and a crash cymbal.
         bindings.append(BindingModel(input: .axis(4, direction: .positive),
                                      outputs: [OutputAction(type: .midiNote, midiNote: 41, midiVelocity: 100, midiChannel: 10)]))
         bindings.append(BindingModel(input: .axis(5, direction: .positive),
@@ -1403,7 +1793,7 @@ struct ExamplePresets {
         return makePreset(
             name: "MIDI: Drum Pad",
             tag: "Finger-drumming pads with turbo for rolls",
-            joystickTag: "Face buttons = drum kit pieces with turbo (hold for rolls), triggers = cymbals",
+            joystickTag: "Face buttons = drum kit pieces with turbo (hold for rolls), triggers = low tom and crash",
             bindings: bindings)
     }
 
@@ -1416,15 +1806,18 @@ struct ExamplePresets {
                          outputs: [OutputAction(type: .midiProgramChange, midiChannel: 1, midiProgramNumber: 0)]),
             BindingModel(input: .button(5),
                          outputs: [OutputAction(type: .midiProgramChange, midiChannel: 1, midiProgramNumber: 1)]),
+            // A button CC sends its value on press and 0 on release, so
+            // CC 7 itself dropped the volume to 0 on every release. Two
+            // trigger CCs, learned in the DAW as volume up and down, work.
             BindingModel(input: .hat(0, direction: .up),
-                         outputs: [OutputAction(type: .midiCC, midiCCNumber: 7, midiCCValue: 127, midiChannel: 1)]),
+                         outputs: [OutputAction(type: .midiCC, midiCCNumber: 20, midiCCValue: 127, midiChannel: 1)]),
             BindingModel(input: .hat(0, direction: .down),
-                         outputs: [OutputAction(type: .midiCC, midiCCNumber: 7, midiCCValue: 0, midiChannel: 1)]),
+                         outputs: [OutputAction(type: .midiCC, midiCCNumber: 21, midiCCValue: 127, midiChannel: 1)]),
         ]
         return makePreset(
             name: "MIDI: Transport Control",
             tag: "DAW remote: start, stop, continue, program change",
-            joystickTag: "A = Start, B = Stop, X = Continue, LB/RB = patch up/down",
+            joystickTag: "A = Start, B = Stop, X = Continue, LB/RB = patch 1/2",
             bindings: bindings)
     }
 
@@ -1440,12 +1833,16 @@ struct ExamplePresets {
             BindingModel(input: .midi(.cc, number: 7),
                          outputs: [OutputAction(type: .absoluteVolume)],
                          note: "Volume knob (CC 7): Mac volume follows it, engages once you move it"),
-            BindingModel(input: .midi(.cc, number: 1, direction: .positive, ccMode: .centered),
+            // Dial mode wants a control that rests at its center: a pan
+            // knob (CC 10) with a center detent. The mod wheel it used
+            // before stays wherever it is left, usually at the bottom,
+            // which read as "below center" and scrolled forever.
+            BindingModel(input: .midi(.cc, number: 10, direction: .positive, ccMode: .centered),
                          outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 6)],
-                         note: "Mod wheel above centre: scroll up, faster the further you push"),
-            BindingModel(input: .midi(.cc, number: 1, direction: .negative, ccMode: .centered),
+                         note: "Pan knob (CC 10) right of center: scroll down, faster the further you turn"),
+            BindingModel(input: .midi(.cc, number: 10, direction: .negative, ccMode: .centered),
                          outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 6)],
-                         note: "Mod wheel below centre: scroll down"),
+                         note: "Pan knob (CC 10) left of center: scroll up"),
             BindingModel(input: .midi(.cc, number: 71, direction: .positive, ccMode: .relative),
                          outputs: [OutputAction(type: .key, keyCode: 79)],
                          note: "Knob (CC 71) clockwise: Right Arrow per step"),
@@ -1465,7 +1862,7 @@ struct ExamplePresets {
         return makePreset(
             name: "MIDI: Knob Deck",
             tag: "MIDI input drives the Mac: volume fader, Dial scroll, Turn nudges",
-            joystickTag: "CC 7 = volume fader, mod wheel = scroll, CC 71 = arrows, pedal = click",
+            joystickTag: "CC 7 = volume fader, CC 10 pan knob = scroll, CC 71 = arrows, pedal = click",
             bindings: bindings)
     }
 
@@ -1594,7 +1991,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Deadzone Calibration",
             tag: "Right stick wide deadzone + outer saturation, left stick tight",
-            joystickTag: "Open Advanced > Calibrate on any axis row to see the live ring visualizer",
+            joystickTag: "Open a stick row's Options and choose Adjust live to see the live ring visualizer",
             bindings: bindings)
     }
 
@@ -1642,7 +2039,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Spoken Feedback",
             tag: "Each face button speaks a phrase aloud",
-            joystickTag: "A/B through Mac speakers, X/Y through controller speaker if available",
+            joystickTag: "Every phrase plays on the Mac's sound output; pick the controller there in System Settings, Sound",
             bindings: bindings)
     }
 
@@ -1844,16 +2241,11 @@ struct ExamplePresets {
             bindings: bindings)
     }
 
-    /// Showcase: the Mac's own keyboard and mouse as inputs. Deliberately
-    /// only keys and buttons nothing else needs, so running it never takes a
-    /// key away from you.
-    /// The Mac's own keyboard as an input device. F13 to F19 exist on every
-    /// full-size keyboard and nothing in macOS uses them, so each one can
-    /// carry a system function without taking a key away from anything.
-    /// The app listens alongside macOS, so a key keeps doing what it did;
-    /// that is why this deck avoids keys that already do something.
-    static var keyboardDeck: Preset {
-        var bindings: [BindingModel] = [
+    /// Keyboard Deck's rows exactly as 1.5 shipped them. The preset was
+    /// retired in 1.6; PresetStore compares installed copies against these so
+    /// only an untouched copy is moved to Recently Deleted.
+    static var retiredKeyboardDeckRows: [BindingModel] {
+        [
             bind("ekb 104 any", ["sys mct"], "F13: Mission Control"),
             bind("ekb 105 any", ["sys spt"], "F14: Spotlight"),
             bind("ekb 106 any", ["sys ply"], "F15: Play / Pause"),
@@ -1862,12 +2254,6 @@ struct ExamplePresets {
             bind("ekb 109 any", ["sys dct"], "F18: Start Dictation"),
             bind("ekb 110 any", ["sys lck"], "F19: Lock Screen"),
         ].compactMap { $0 }
-        for i in bindings.indices { bindings[i].section = "Function keys" }
-        return makePreset(
-            name: "Keyboard Deck",
-            tag: "F13 to F19 run the Mac",
-            joystickTag: "The Mac's keyboard: seven spare function keys, each a system function",
-            bindings: bindings)
     }
 
     /// The Mac's trackpad or mouse as an input device: the side buttons go
@@ -1875,13 +2261,18 @@ struct ExamplePresets {
     /// force click on the trackpad opens Launchpad.
     static var trackpadAndMouse: Preset {
         var bindings: [BindingModel] = [
-            bind("ems button 3 + any", ["key 227", "key 91"], "Side button 4: back"),
-            bind("ems button 4 + any", ["key 227", "key 92"], "Side button 5: forward"),
+            bind("ems button 3 + any", ["key 227", "key 47"], "Side button 4: back"),
+            bind("ems button 4 + any", ["key 227", "key 48"], "Side button 5: forward"),
             bind("ems button 2 + any", ["sys mct"], "Middle click: Mission Control"),
             bind("ems deepPress 0 + any", ["sys lpd"], "Force click: Launchpad"),
         ].compactMap { $0 }
         for i in bindings.indices {
             bindings[i].section = bindings[i].input.extMouseKind == .deepPress ? "Trackpad" : "Mouse buttons"
+            // The side buttons already go back and forward in Chrome and
+            // Firefox, so without blocking each press went two pages.
+            if [3, 4].contains(bindings[i].input.index), bindings[i].input.extMouseKind != .deepPress {
+                bindings[i].blockOriginal = true
+            }
         }
         return makePreset(
             name: "Trackpad & Mouse",
@@ -1923,6 +2314,68 @@ struct ExamplePresets {
     /// Double clicks as inputs. A double click on a button nobody
     /// double-clicks (the side buttons, the middle button) is free to mean
     /// something, and a single click keeps doing what it always did.
+    /// An auto clicker: toggle and hold rows with Turbo on a click, from a
+    /// controller, and with no controller from fn F6, fn F7 and a mouse's
+    /// side button. The keyboard and mouse rows sit in their own group so
+    /// the Live Visualizer draws them as the keyboard and mouse.
+    /// Raised whenever a built-in preset is added, so existing libraries
+    /// pick it up at the next launch even without a new build number
+    /// (PresetStore.reseedExamplePresets). 2: the Auto Clicker.
+    static let seedRevision = 2
+
+    static var autoClicker: Preset {
+        func click(_ input: String, button: Int, note: String, toggle: Bool, intervalMs: Int,
+                   jitterMs: Int? = nil, stopAfter: Int? = nil, section: String) -> BindingModel? {
+            guard var row = bind(input, ["mbt \(button)"], note) else { return nil }
+            row.turboEnabled = true
+            row.turboIntervalMs = intervalMs
+            row.turboJitterMs = jitterMs
+            row.turboMaxCount = stopAfter
+            row.toggleMode = toggle ? true : nil
+            row.section = section
+            return row
+        }
+        var pad: [BindingModel] = [
+            bind("axi 0 -", ["mou 0 - 14"], "Move the pointer left"),
+            bind("axi 0 +", ["mou 0 + 14"], "Move the pointer right"),
+            bind("axi 1 -", ["mou 1 - 14"], "Move the pointer up"),
+            bind("axi 1 +", ["mou 1 + 14"], "Move the pointer down"),
+        ].compactMap { $0 }
+        for i in pad.indices { pad[i].section = "Aim" }
+        if var once = bind("btn 0", ["mbt 0"], "Click once") { once.section = "Aim"; pad.append(once) }
+        pad += [
+            click("btn 7", button: 0, note: "Auto click 10 a second, on and off", toggle: true, intervalMs: 100, section: "Auto click"),
+            click("btn 6", button: 1, note: "Auto right click 5 a second, on and off", toggle: true, intervalMs: 200, section: "Auto click"),
+            click("btn 5", button: 0, note: "Auto click 20 a second while held", toggle: false, intervalMs: 50, section: "Auto click"),
+            click("btn 3", button: 0, note: "Auto click 100 times, then stop", toggle: true, intervalMs: 100, stopAfter: 100, section: "Auto click"),
+            click("btn 2", button: 0, note: "Auto click at a human pace (150 ms, give or take 40), on and off", toggle: true,
+                  intervalMs: 150, jitterMs: 40, section: "Auto click"),
+        ].compactMap { $0 }
+        // A buzz when an auto clicker starts or stops, so a controller user
+        // feels it change.
+        for i in pad.indices where pad[i].toggleMode == true {
+            pad[i].hapticEnabled = true
+            pad[i].hapticIntensity = 0.4
+        }
+        var mac: [BindingModel] = [
+            click("ekb 63 any", button: 0, note: "fn F6: auto click 10 a second, on and off", toggle: true, intervalMs: 100, section: "Keyboard"),
+            click("ekb 64 any", button: 1, note: "fn F7: auto right click 5 a second, on and off", toggle: true, intervalMs: 200, section: "Keyboard"),
+            click("ems button 3 + any", button: 0, note: "Mouse button 4: auto click 15 a second while held", toggle: false,
+                  intervalMs: 66, section: "Mouse"),
+        ].compactMap { $0 }
+        // The side button's own Back is held back while it auto clicks.
+        for i in mac.indices where mac[i].input.type == .extMouse { mac[i].blockOriginal = true }
+        var preset = Preset(name: "Auto Clicker",
+                            tag: "Click automatically: toggle, hold, or a set number of clicks",
+                            joysticks: [
+                                JoystickMapping(tag: "Right trigger starts and stops auto clicking; the left stick aims", bindings: pad),
+                                JoystickMapping(tag: "No controller: fn F6 and fn F7 start and stop, mouse button 4 clicks while held", bindings: mac),
+                            ],
+                            filename: Preset.generateFilename())
+        preset.lightBarColor = nil
+        return preset
+    }
+
     static var doubleClickDeck: Preset {
         var bindings: [BindingModel] = [
             bind("ems doubleClick 3 + any", ["sys mct"], "Double click side button 4: Mission Control"),
@@ -1942,11 +2395,14 @@ struct ExamplePresets {
             bind("ekb 104 any", ["sys mct"], "F13: Mission Control"),
             bind("ekb 105 any", ["sys spt"], "F14: Spotlight"),
             bind("ekb 106 any", ["sys ply"], "F15: Play / Pause"),
-            bind("ems button 3 + any", ["key 227", "key 91"], "Mouse button 4: back (Cmd left bracket)"),
-            bind("ems button 4 + any", ["key 227", "key 92"], "Mouse button 5: forward (Cmd right bracket)"),
+            bind("ems button 3 + any", ["key 227", "key 47"], "Mouse button 4: back (Cmd left bracket)"),
+            bind("ems button 4 + any", ["key 227", "key 48"], "Mouse button 5: forward (Cmd right bracket)"),
         ].compactMap { $0 }
         for i in bindings.indices {
             bindings[i].section = bindings[i].input.type == .extKey ? "Keyboard" : "Mouse"
+            // Blocked, so a side button goes one page in Chrome and Firefox,
+            // which act on the button themselves, not two.
+            if bindings[i].input.type == .extMouse { bindings[i].blockOriginal = true }
         }
         return makePreset(
             name: "Keyboard & Mouse Input",
@@ -1978,9 +2434,9 @@ struct ExamplePresets {
     /// Steam Controller demo preset. Steam Controller is read by our raw-HID
     /// helper (it doesn't speak MFi), so it occupies a virtual slot just
     /// past the last MFi gamepad. The button numbers match
-    /// `SteamControllerButton`: A=7, B=5, X=6, Y=4, etc. Two trackpads and
-    /// a stick share the same axis indices 0-3 (left axis is the stick when
-    /// the stickActive bit is set, the left trackpad otherwise).
+    /// `SteamControllerButton`: A=7, B=5, X=6, Y=4, etc. The stick is axes
+    /// 0 and 1, the right trackpad 2 and 3, and the left trackpad 6 and 7
+    /// while a finger is on it (SteamControllerService).
     static var showcaseSteamController: Preset {
         let bindings: [BindingModel] = [
             // Face buttons -> WASD-ish keys
@@ -2023,23 +2479,110 @@ struct ExamplePresets {
             BindingModel(input: .button(15), outputs: [OutputAction(type: .key, keyCode: 225)]),
             BindingModel(input: .button(16), outputs: [OutputAction(type: .key, keyCode: 226)]),
         ]
-        return makePreset(
+        // The Steam Controller numbers its controls its own way (the
+        // bumpers are buttons 2 and 3, the face buttons 4 to 7), so the
+        // standard gamepad sections would file them under the wrong
+        // headings. Its sections are set here by what each control is.
+        var sectioned = bindings
+        for i in sectioned.indices {
+            let input = sectioned[i].input
+            switch (input.type, input.index) {
+            case (.axis, 2), (.axis, 3), (.button, 18): sectioned[i].section = "Right trackpad"
+            case (.axis, 4), (.axis, 5): sectioned[i].section = ControllerScaffold.SectionName.triggers
+            case (.button, 2), (.button, 3): sectioned[i].section = "Bumpers"
+            case (.button, 4...7): sectioned[i].section = ControllerScaffold.SectionName.buttons
+            case (.button, 15), (.button, 16): sectioned[i].section = "Grips"
+            case (.button, 13): sectioned[i].section = ControllerScaffold.SectionName.menuButtons
+            default: break
+            }
+        }
+        let order = ["Right trackpad", ControllerScaffold.SectionName.triggers, "Bumpers", ControllerScaffold.SectionName.buttons, "Grips", ControllerScaffold.SectionName.menuButtons]
+        func rank(_ b: BindingModel) -> Int { order.firstIndex(of: b.section ?? "") ?? order.count }
+        sectioned = sectioned.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map(\.element)
+        var preset = makePreset(
             name: "Steam Controller",
             tag: "Right trackpad drives the mouse, face buttons + grips type keys",
             joystickTag: "Plug in a Steam Controller (wired or wireless dongle); it appears as a virtual slot just past your MFi controllers",
-            bindings: bindings)
+            bindings: sectioned)
+        // Reads the Steam Controller by name: on Auto-detect it read slot 0,
+        // which is any other pad connected, and fired these rows from it.
+        preset.joysticks[0].customName = steamTarget2015
+        preset.joysticks[0].inputKind = .controller
+        return preset
     }
 
-    /// Gyroscope showcase. Gyro Y (yaw rate) drives mouse left/right, gyro X
-    /// (pitch rate) drives mouse up/down - the standard "motion aim" feel
+    /// The device names the two Steam Controller presets read, as the
+    /// group's device menu writes them.
+    static let steamTarget2015 = "Steam Controller"
+    static let steamTarget2026 = "Steam Controller (2026, Experimental)"
+
+    /// The 2026 Steam Controller on the standard numbering its decoder uses:
+    /// A to Y at 0 to 3, the bumpers 4 and 5, Steam 10, the back buttons 14
+    /// to 17, the right trackpad on axes 8 and 9 and its press on 19.
+    static var showcaseSteamController2026: Preset {
+        func keys(_ codes: Int...) -> [OutputAction] { codes.map { OutputAction(type: .key, keyCode: $0) } }
+        // The right trackpad moves the pointer the way a Mac trackpad does:
+        // by the finger's movement, not its position.
+        func touch(_ axis: TouchpadAxis, _ dir: AxisDirection, surface: Int? = nil, _ out: OutputAction) -> BindingModel {
+            var input = InputEvent.touchpad(finger: 0, axis: axis, direction: dir)
+            input.touchpadSurface = surface
+            return BindingModel(input: input, outputs: [out])
+        }
+        func motion(_ axis: MouseAxis, _ dir: MouseDirection) -> OutputAction {
+            OutputAction(type: .mouseMotion, mouseAxis: axis, mouseDirection: dir, speed: 12)
+        }
+        func wheel(_ dir: MouseDirection) -> OutputAction {
+            OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: dir, speed: 6)
+        }
+        let bindings: [BindingModel] = [
+            touch(.x, .positive, motion(.horizontal, .positive)),
+            touch(.x, .negative, motion(.horizontal, .negative)),
+            touch(.y, .positive, motion(.vertical, .positive)),
+            touch(.y, .negative, motion(.vertical, .negative)),
+            BindingModel(input: .touchpadGesture(.oneFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            touch(.y, .positive, surface: 1, wheel(.positive)),
+            touch(.y, .negative, surface: 1, wheel(.negative)),
+            BindingModel(input: .axis(5, direction: .positive), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            BindingModel(input: .axis(4, direction: .positive), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
+            BindingModel(input: .button(19), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
+            BindingModel(input: .axis(3, direction: .positive),
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 4)],
+                         deadzone: 0.2),
+            BindingModel(input: .axis(3, direction: .negative),
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 4)],
+                         deadzone: 0.2),
+            BindingModel(input: .button(0), outputs: keys(40)),
+            BindingModel(input: .button(1), outputs: keys(41)),
+            BindingModel(input: .button(2), outputs: keys(43)),
+            BindingModel(input: .button(3), outputs: keys(44)),
+            BindingModel(input: .button(4), outputs: keys(227, 47)),
+            BindingModel(input: .button(5), outputs: keys(227, 48)),
+            BindingModel(input: .button(10), outputs: keys(227, 44)),
+            BindingModel(input: .button(14), outputs: keys(225)),
+            BindingModel(input: .button(15), outputs: keys(226)),
+        ]
+        var preset = makePreset(
+            name: "Steam Controller (2026)",
+            tag: "Right trackpad drives the mouse, back buttons hold Shift and Option",
+            joystickTag: "Plug in, pair over Bluetooth, or use the Steam Controller Puck; quit Steam first",
+            bindings: bindings)
+        preset.joysticks[0].customName = steamTarget2026
+        preset.joysticks[0].inputKind = .controller
+        return preset
+    }
+
+    /// Gyroscope showcase. Gyro Y (sideways tilt) drives mouse left/right,
+    /// gyro X (pitch rate) drives mouse up/down, the standard "motion aim" feel
     /// used by every Nintendo and PlayStation shooter. Triggers click,
     /// face buttons type. Works on any controller whose GCController.motion
     /// is non-nil (DualSense, DualShock 4, Switch Pro, Joy-Con).
     static var showcaseGyroAim: Preset {
         let bindings: [BindingModel] = [
-            // Yaw: turning the controller right moves the pointer right. A
-            // positive gyro Y rate is a turn to the right as delivered on
-            // the Mac (checked by hand on a DualSense), so these are straight.
+            // Sideways: tilting the controller right moves the pointer right.
+            // A positive gyro Y rate is the right side going down, so these
+            // are straight.
             BindingModel(input: .motion(.gyroY, direction: .positive),
                          outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 10)],
                          deadzone: 0.05, variableSensitivity: true),
@@ -2077,7 +2620,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Gyro Aim",
             tag: "Tilt the controller to aim; triggers fire and ADS",
-            joystickTag: "Tilt to aim: sideways tilt → mouse X, forward tilt → mouse Y. LB pauses motion while held, RB re-zeros and centres the pointer",
+            joystickTag: "Tilt to aim: sideways tilt → mouse X, forward tilt → mouse Y. The left bumper pauses motion while held, the right bumper re-zeros and centers the pointer",
             bindings: bindings,
             light: RGBLightColor(r: 128, g: 0, b: 255))
     }
@@ -2112,12 +2655,14 @@ struct ExamplePresets {
             BindingModel(input: .button(0), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
             BindingModel(input: .button(1), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
             BindingModel(input: .button(3), outputs: [OutputAction(type: .key, keyCode: 40)]),
-            // Right stick still scrolls so you can read long pages without tilting.
+            // Right stick still scrolls so you can read long pages without
+            // tilting, the same way round as Mouse + Scroll and every other
+            // built-in: stick up scrolls up (wheel minus).
             BindingModel(input: .axis(3, direction: .positive),
-                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 4)],
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 4)],
                          deadzone: 0.18, variableSensitivity: true),
             BindingModel(input: .axis(3, direction: .negative),
-                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .positive, speed: 4)],
+                         outputs: [OutputAction(type: .mouseWheel, mouseAxis: .vertical, mouseDirection: .negative, speed: 4)],
                          deadzone: 0.18, variableSensitivity: true),
             // Same motion controls as Gyro Aim: hold LB to park the pointer
             // while you bring the controller back to a comfortable angle,
@@ -2131,7 +2676,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Motion Cursor",
             tag: "Wave the controller to move the cursor; face buttons click",
-            joystickTag: "Slower than Gyro Aim, with clicks and scrolling on the buttons; perfect for couch desktop use on Switch Pro / DualSense",
+            joystickTag: "Slower than Gyro Aim, with clicks and scrolling on the buttons; good for couch desktop use on a DualSense or DualShock 4",
             bindings: bindings,
             light: RGBLightColor(r: 0, g: 255, b: 255))
     }
@@ -2204,7 +2749,7 @@ struct ExamplePresets {
         return makePreset(
             name: "Stacked Outputs",
             tag: "One press fires keystroke + mouse + MIDI + speech together",
-            joystickTag: "A = parallel output stack (key + click + MIDI + speech). B = parallel keystroke pair. Different from a macro - no delays, no sequence; these fire simultaneously.",
+            joystickTag: "A = parallel output stack (key + click + MIDI + speech). B = parallel keystroke pair. Different from a macro: no delays, no sequence; these fire simultaneously.",
             bindings: bindings)
     }
 
@@ -2359,7 +2904,39 @@ struct SmartPresetProfile: Codable, Identifiable, Hashable {
     }
 
     struct Light: Codable, Hashable { var r: Int; var g: Int; var b: Int }
-    struct Binding: Codable, Hashable { var input: String; var outputs: [String]; var note: String }
+    /// One catalog row. Only input, outputs and note are required; every other
+    /// field is an optional row feature, absent on most entries.
+    struct Binding: Codable, Hashable {
+        var input: String
+        var outputs: [String]
+        var note: String
+        /// Held past `holdMs` (default 300): these fire instead, until release.
+        var hold: [String]? = nil
+        var holdMs: Int? = nil
+        /// Two presses inside `doubleMs` (default 300): these fire instead.
+        var double: [String]? = nil
+        var doubleMs: Int? = nil
+        /// Chord: the row fires only while these controls are also held.
+        var with: [String]? = nil
+        var toggle: Bool? = nil
+        /// Turbo, in presses per second.
+        var turbo: Int? = nil
+        var repeatCount: Int? = nil
+        var repeatMs: Int? = nil
+        /// Stick and trigger shaping: inner and outer deadzone (0 to 1),
+        /// curve ("linear", "smooth", "aggressive"), speed by depth, ramp-up ms.
+        var deadzone: Double? = nil
+        var outer: Double? = nil
+        var curve: String? = nil
+        var variable: Bool? = nil
+        var ramp: Int? = nil
+        /// Feedback: rumble strength (0 to 1) and a phrase to speak.
+        var rumble: Double? = nil
+        var speak: String? = nil
+        /// Hardware the row needs: "touchpad", "motion", "lightbar", "paddles".
+        /// Rows are left out for controllers that do not have it.
+        var needs: String? = nil
+    }
 
     var id: String
     var category: Category
@@ -2380,18 +2957,33 @@ struct SmartPresetProfile: Codable, Identifiable, Hashable {
 
 /// The library of Smart Preset profiles, decoded once from embedded JSON.
 enum SmartPresetLibrary {
+    /// Decoded one profile at a time: decoding the array in one go dropped
+    /// the whole library when any single entry was malformed.
     static let all: [SmartPresetProfile] = {
-        guard let data = libraryJSON.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode([SmartPresetProfile].self, from: data)) ?? []
+        guard let data = libraryJSON.data(using: .utf8),
+              let entries = try? JSONDecoder().decode([JSONValue].self, from: data) else { return [] }
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        var out: [SmartPresetProfile] = []
+        for entry in entries {
+            if let one = try? encoder.encode(entry),
+               let profile = try? decoder.decode(SmartPresetProfile.self, from: one) {
+                out.append(profile)
+            } else {
+                #if DEBUG
+                print("[SmartPresetLibrary] skipped an unreadable profile")
+                #endif
+            }
+        }
+        return out
     }()
 
     static func profiles(in category: SmartPresetProfile.Category) -> [SmartPresetProfile] {
         all.filter { $0.category == category }.sorted { $0.displayName < $1.displayName }
     }
 
-    /// Embedded, verified profile data. Authored + adversarially checked by
-    /// the `smart-preset-library` build workflow. This is the starter set;
-    /// the workflow's full ~50-profile output is merged in once it returns.
+    /// Embedded profile data, one entry per game or app. The count is
+    /// checked by a test so a malformed entry cannot go missing quietly.
     static let libraryJSON = """
     [
       {
@@ -2421,7 +3013,7 @@ enum SmartPresetLibrary {
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / menu"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Player list"}
         ],
-        "tips": ["Hold sprint (left-stick click) while pushing forward to run.", "Triggers mine and place - swap them in the editor if you prefer."]
+        "tips": ["Hold sprint (left-stick click) while pushing forward to run.", "Triggers mine and place. Swap them in the editor if you prefer."]
       },
       {
         "id": "microsoft-word", "category": "app", "displayName": "Microsoft Word",
@@ -2465,15 +3057,16 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Left click"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Right click"},
-          {"input": "btn 0", "outputs": ["key 227", "key 4"], "note": "Select all"},
+          {"input": "btn 0", "outputs": ["mbt 0"], "note": "Left click"},
+          {"input": "btn 12", "outputs": ["key 227", "key 4"], "note": "Select all"},
           {"input": "btn 8", "outputs": ["key 227", "key 44"], "note": "Spotlight"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Return"}
         ],
-        "tips": ["Left stick moves the pointer; right stick scrolls.", "Triggers are left and right click."]
+        "tips": ["Left stick moves the pointer; right stick scrolls.", "Triggers and A click; the right stick press selects all."]
       },
       {
         "id": "roblox", "category": "game", "displayName": "Roblox",
-        "subtitle": "Move, jump, and look - default third-person controls",
+        "subtitle": "Move, jump, and look: default third-person controls",
         "appPath": "/Applications/Roblox.app", "launchURL": "",
         "light": {"r": 225, "g": 55, "b": 55},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -2523,13 +3116,15 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 8"], "note": "Edit build (E)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon slot 1"},
           {"input": "hat 0 R", "outputs": ["key 31"], "note": "Weapon slot 2"},
-          {"input": "hat 0 D", "outputs": ["key 32"], "note": "Weapon slot 3"}
+          {"input": "hat 0 D", "outputs": ["key 32"], "note": "Weapon slot 3"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
+          {"input": "btn 8", "outputs": ["key 16"], "note": "Map (M)"}
         ],
-        "tips": ["Building pieces vary by your binds - set wall/floor/stair/roof in the editor to match yours.", "Aim feels best with confine + hidden cursor in fullscreen."]
+        "tips": ["Building pieces vary by your binds. Set wall/floor/stair/roof in the editor to match yours.", "Aim feels best with confine + hidden cursor in fullscreen."]
       },
       {
         "id": "elden-ring", "category": "game", "displayName": "Elden Ring",
-        "subtitle": "Action RPG - attack, dodge, and explore",
+        "subtitle": "Action RPG: attack, dodge, and explore",
         "appPath": "", "launchURL": "steam://run/1245620",
         "light": {"r": 200, "g": 160, "b": 40},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -2553,7 +3148,7 @@ enum SmartPresetLibrary {
           {"input": "btn 12", "outputs": ["key 18"], "note": "Reset camera / lock-on (O)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Elden Ring's keyboard binds differ from this layout's assumptions - open Controls in-game and match, or rebind here with Scan.", "Lock-on is on right-stick click; change it to whatever you set in-game."]
+        "tips": ["Elden Ring's keyboard binds differ from this layout's assumptions. Open Controls in-game and match, or rebind here with Scan.", "Lock-on is on right-stick click; change it to whatever you set in-game."]
       },
       {
         "id": "stardew-valley", "category": "game", "displayName": "Stardew Valley",
@@ -2585,7 +3180,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "celeste", "category": "game", "displayName": "Celeste",
-        "subtitle": "Precision platformer - move, jump, dash, climb",
+        "subtitle": "Precision platformer: move, jump, dash, climb",
         "appPath": "/Applications/Celeste.app", "launchURL": "steam://run/504230",
         "light": {"r": 220, "g": 45, "b": 90},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -2606,7 +3201,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Climb / grab (either hand)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
-        "tips": ["Defaults assume Celeste's C = jump, X = dash, Z = climb - match those in-game or rebind here.", "The D-pad is recommended for tight platforming; the left stick also works."]
+        "tips": ["Defaults assume Celeste's C = jump, X = dash, Z = climb. Match those in-game or rebind here.", "The D-pad is recommended for tight platforming; the left stick also works."]
       },
       {
         "id": "blender", "category": "app", "displayName": "Blender",
@@ -2619,8 +3214,8 @@ enum SmartPresetLibrary {
           {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Cursor right"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Cursor up"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Cursor down"},
-          {"input": "axi 3 +", "outputs": ["whe 1 - 4"], "note": "Zoom out"},
-          {"input": "axi 3 -", "outputs": ["whe 1 + 4"], "note": "Zoom in"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 4"], "note": "Zoom out"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 4"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["mbt 0"], "note": "Select (left click)"},
           {"input": "btn 1", "outputs": ["mbt 2"], "note": "Orbit / pan (middle click)"},
           {"input": "btn 2", "outputs": ["key 10"], "note": "Grab / move (G)"},
@@ -2631,7 +3226,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 227", "key 29"], "note": "Undo (Cmd+Z)"},
           {"input": "btn 8", "outputs": ["key 227", "key 22"], "note": "Save (Cmd+S)"}
         ],
-        "tips": ["Left stick moves the cursor; right stick zooms; B (middle click) orbits.", "G/R/S are grab/rotate/scale - the heart of Blender modeling."]
+        "tips": ["Left stick moves the cursor; right stick zooms; B (middle click) orbits.", "G/R/S are grab/rotate/scale. The heart of Blender modeling."]
       },
       {
         "id": "web-browsing", "category": "workflow", "displayName": "Web Browsing",
@@ -2685,7 +3280,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "gta-v", "category": "game", "displayName": "Grand Theft Auto V",
-        "subtitle": "On-foot and driving - move, aim, shoot",
+        "subtitle": "On-foot and driving: move, aim, shoot",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 180, "b": 90},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -2711,7 +3306,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "cyberpunk-2077", "category": "game", "displayName": "Cyberpunk 2077",
-        "subtitle": "First-person RPG - shoot, aim, hack",
+        "subtitle": "First-person RPG: shoot, aim, hack",
         "appPath": "", "launchURL": "steam://run/1091500",
         "light": {"r": 245, "g": 220, "b": 40},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -2735,11 +3330,11 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 12"], "note": "Backpack (I)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
-        "tips": ["Cyberpunk's keyboard binds are extensive - match its defaults in-game or rebind here with Scan.", "Confine + hidden cursor keeps mouse-look locked in fullscreen."]
+        "tips": ["Cyberpunk's keyboard binds are extensive. Match its defaults in-game or rebind here with Scan.", "Confine + hidden cursor keeps mouse-look locked in fullscreen."]
       },
       {
         "id": "hollow-knight", "category": "game", "displayName": "Hollow Knight",
-        "subtitle": "Metroidvania - move, jump, attack, dash",
+        "subtitle": "Metroidvania: move, jump, attack, dash",
         "appPath": "/Applications/Hollow Knight.app", "launchURL": "steam://run/367520",
         "light": {"r": 60, "g": 90, "b": 160},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -2761,11 +3356,11 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 7"], "note": "Dream nail (D)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
-        "tips": ["Defaults assume Hollow Knight's Z=jump, X=attack, C=dash, A=cast - match those in-game.", "Both stick and D-pad move; the D-pad is steadier for precise platforming."]
+        "tips": ["Defaults assume Hollow Knight's Z=jump, X=attack, C=dash, A=cast. Match those in-game.", "Both stick and D-pad move; the D-pad is steadier for precise platforming."]
       },
       {
         "id": "terraria", "category": "game", "displayName": "Terraria",
-        "subtitle": "Dig, build, fight - move and use tools",
+        "subtitle": "Dig, build, fight: move and use tools",
         "appPath": "/Applications/Terraria.app", "launchURL": "steam://run/105600",
         "light": {"r": 110, "g": 180, "b": 70},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -2788,11 +3383,11 @@ enum SmartPresetLibrary {
           {"input": "hat 0 L", "outputs": ["key 33"], "note": "Hotbar slot 4"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right stick aims the tool cursor; right trigger uses the held item.", "Hotbar is on the D-pad (slots 1-4) - extend with more bindings if you like."]
+        "tips": ["Right stick aims the tool cursor; right trigger uses the held item.", "Hotbar is on the D-pad (slots 1-4). Extend with more bindings if you like."]
       },
       {
         "id": "hades", "category": "game", "displayName": "Hades",
-        "subtitle": "Roguelike action - attack, dash, cast",
+        "subtitle": "Roguelike action: attack, dash, cast",
         "appPath": "/Applications/Hades.app", "launchURL": "steam://run/1145360",
         "light": {"r": 200, "g": 60, "b": 30},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -2814,7 +3409,7 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 21"], "note": "Hammer / use (R)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Attack and Special sit on the triggers; Dash is A/Cross.", "Cast = Q, Call = E by Hades' keyboard defaults - rebind in-game if yours differ."]
+        "tips": ["Attack and Special sit on the triggers; Dash is A/Cross.", "Cast = Q, Call = E by Hades' keyboard defaults. Rebind in-game if yours differ."]
       },
       {
         "id": "adobe-photoshop", "category": "app", "displayName": "Adobe Photoshop",
@@ -2886,7 +3481,7 @@ enum SmartPresetLibrary {
           {"input": "axi 1 -", "outputs": ["mou 1 - 14"], "note": "Pointer up"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 14"], "note": "Pointer down"}
         ],
-        "tips": ["Either trigger, bumper, face button, or D-pad advances slides - use whatever's comfortable.", "Left stick moves a pointer for gesturing at the screen."]
+        "tips": ["Either trigger, bumper, face button, or D-pad advances slides. Use whatever's comfortable.", "Left stick moves a pointer for gesturing at the screen."]
       },
       {
         "id": "counter-strike-2", "category": "game", "displayName": "Counter-Strike 2",
@@ -3647,7 +4242,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click"}
         ],
-        "tips": ["A button plays and pauses; B and X skip tracks.", "Bumpers change the volume; left stick clicks through playlists."]
+        "tips": ["A button plays and pauses; B and X skip tracks.", "Bumpers change the volume."]
       },
       {
         "id": "anki", "category": "app", "displayName": "Anki",
@@ -4317,8 +4912,8 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 225"], "note": "Run (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Primary (1)"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Pistol (2)"},
-          {"input": "hat 0 R", "outputs": ["key 34"], "note": "Health kit (5)"},
-          {"input": "hat 0 D", "outputs": ["key 33"], "note": "Grenade (4)"},
+          {"input": "hat 0 R", "outputs": ["key 33"], "note": "Health kit (4)"},
+          {"input": "hat 0 D", "outputs": ["key 32"], "note": "Grenade (3)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left trigger shoves zombies back; D-pad picks weapons, grenades, and health.", "Right trigger fires; A jumps over obstacles."]
@@ -4402,8 +4997,8 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Move / context (right click)"},
           {"input": "btn 0", "outputs": ["key 40"], "note": "Next turn / confirm (Enter)"},
           {"input": "btn 1", "outputs": ["key 41"], "note": "Cancel (Esc)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 2", "outputs": ["key 23"], "note": "Tech tree (T)"},
           {"input": "btn 10", "outputs": ["key 5"], "note": "Found / build (B)"}
         ],
@@ -4426,8 +5021,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -4457,8 +5052,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 30"], "note": "Normal speed (1)"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Fast (2)"},
           {"input": "btn 3", "outputs": ["key 32"], "note": "Superfast (3)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick is the pointer; right stick scrolls the colony.", "A pauses; B, X, Y are the speed settings."]
@@ -4669,8 +5264,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 30"], "note": "Normal speed (1)"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Fast (2)"},
           {"input": "btn 3", "outputs": ["key 32"], "note": "Faster (3)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick is the pointer; right stick pans the lot.", "A pauses or resumes; B, X, Y set the game speed."]
@@ -4696,8 +5291,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 31"], "note": "Control group 2"},
           {"input": "btn 2", "outputs": ["key 32"], "note": "Control group 3"},
           {"input": "btn 3", "outputs": ["key 5"], "note": "Build menu (B)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick is the pointer; right stick pans the battlefield.", "Face buttons jump to control groups; bumpers zoom."]
@@ -4750,8 +5345,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
           {"input": "btn 3", "outputs": ["key 32"], "note": "Speed 3"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick is the pointer; right stick pans the city.", "A pauses; B, X, Y change the speed of time."]
@@ -4777,8 +5372,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
           {"input": "btn 3", "outputs": ["key 32"], "note": "Speed 3"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick is the pointer; right stick pans the asteroid.", "A pauses; B, X, Y set the speed; bumpers zoom."]
@@ -4804,8 +5399,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact (E)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
           {"input": "btn 3", "outputs": ["key 20"], "note": "Use blank (Q)"},
-          {"input": "btn 4", "outputs": ["whe 1 - 1"], "note": "Previous gun"},
-          {"input": "btn 5", "outputs": ["whe 1 + 1"], "note": "Next gun"},
+          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Previous gun"},
+          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Next gun"},
           {"input": "btn 11", "outputs": ["mbt 1"], "note": "Dodge roll (right click)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
@@ -4878,7 +5473,7 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 6"], "note": "Lock aim (C)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["X shoots, Z jumps and parries pink objects, Left Shift dashes.", "Default keys shown - match them in Cuphead's options if yours differ."]
+        "tips": ["X shoots, Z jumps and parries pink objects, Left Shift dashes.", "Default keys shown. Match them in Cuphead's options if yours differ."]
       },
       {
         "id": "ori-will-of-the-wisps", "category": "game", "displayName": "Ori and the Will of the Wisps",
@@ -4991,7 +5586,7 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 41"], "note": "Back (Esc)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Left stick is precise, right stick is fast - both move the pointer.", "Right trigger or A clicks to select and play your hand."]
+        "tips": ["Left stick is precise, right stick is fast. Both move the pointer.", "Right trigger or A clicks to select and play your hand."]
       },
       {
         "id": "slay-the-spire", "category": "game", "displayName": "Slay the Spire",
@@ -5545,7 +6140,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click"}
         ],
-        "tips": ["A plays and pauses; B and X skip tracks.", "Bumpers change volume; left stick clicks through your library."]
+        "tips": ["A plays and pauses; B and X skip tracks.", "Bumpers change the volume."]
       },
       {
         "id": "terminal-navigation", "category": "workflow", "displayName": "Terminal",
@@ -6396,7 +6991,7 @@ enum SmartPresetLibrary {
         "light": {"r": 150, "g": 30, "b": 30},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
         "bindings": [
-          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A) - requires WASD movement mode in Options"},
+          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A); needs WASD movement mode in Options"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move up (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move down (S)"},
@@ -6440,7 +7035,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 14"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger: Use Item / attack (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger: Block and Parry / aim (right click)"},
-          {"input": "btn 0", "outputs": ["key 44"], "note": "A/Cross: Jump (hold to open glider) - Space"},
+          {"input": "btn 0", "outputs": ["key 44"], "note": "A/Cross: Jump (hold to open glider), Space"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "B/Circle: Evade dodge (Left Ctrl)"},
           {"input": "btn 2", "outputs": ["key 8"], "note": "X/Square: Contextual action / interact / grapple (E)"},
           {"input": "btn 3", "outputs": ["key 20"], "note": "Y/Triangle: Ready ranged weapon (Q)"},
@@ -6474,8 +7069,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Move pointer up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger: left click / place"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger: right click / cancel"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "RB/R1: zoom in (scroll up)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "LB/L1: zoom out (scroll down)"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "RB/R1: zoom in (scroll up)"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "LB/L1: zoom out (scroll down)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A/Cross: Pause time (Space)"},
           {"input": "btn 1", "outputs": ["key 27"], "note": "B/Circle: Speed up time (X)"},
           {"input": "btn 2", "outputs": ["key 29"], "note": "X/Square: Slow down time (Z)"},
@@ -6797,7 +7392,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 13", "key 14"], "note": "L1 = 3+4 (low / sweep macro)"},
           {"input": "axi 5 +", "outputs": ["key 24", "key 12", "key 13", "key 14"], "note": "RT = 1+2+3+4 (Rage Art)"},
           {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = 2+4 (right throw)"},
-          {"input": "btn 11", "outputs": ["key 79", "key 79"], "note": "L3 = quick forward dash (tap forward twice)"},
+          {"input": "btn 11", "outputs": ["key 79"], "repeatCount": 2, "repeatMs": 60, "note": "L3 = quick forward dash (tap forward twice)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Options = pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Share = view / select (Tab)"}
         ],
@@ -6826,7 +7421,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 18"], "note": "LT = Block (alt, key O)"},
           {"input": "btn 4", "outputs": ["key 44"], "note": "L1 = Throw / Grab (default Space)"},
           {"input": "btn 5", "outputs": ["key 51"], "note": "R1 = Kameo assist (default ;)"},
-          {"input": "btn 11", "outputs": ["key 79", "key 79"], "note": "L3 = forward dash (tap forward twice)"},
+          {"input": "btn 11", "outputs": ["key 79"], "repeatCount": 2, "repeatMs": 60, "note": "L3 = forward dash (tap forward twice)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = flip stance / select (Tab)"}
         ],
@@ -6866,7 +7461,6 @@ enum SmartPresetLibrary {
           {"input": "axi 0 -", "outputs": ["mou 0 - 20"], "note": "Left stick X moves player left"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 20"], "note": "Left stick Y moves player down"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 20"], "note": "Left stick Y moves player up"},
-          {"input": "axi 5 +", "outputs": ["mou 0 + 28"], "note": "RT = sprint (faster cursor away from player)"},
           {"input": "btn 0", "outputs": ["mbt 1"], "note": "Cross = short pass / header (Right Click)"},
           {"input": "btn 2", "outputs": ["key 4"], "note": "Square = through ball (A)"},
           {"input": "btn 1", "outputs": ["key 22"], "note": "Circle = lob pass / cross (S)"},
@@ -7059,7 +7653,7 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 14"], "note": "Play / Pause (K)"},
           {"input": "btn 3", "outputs": ["key 9"], "note": "Toggle fullscreen (F)"},
           {"input": "btn 2", "outputs": ["key 16"], "note": "Mute / unmute (M)"},
-          {"input": "btn 1", "outputs": ["key 23"], "note": "Theatre mode (T)"},
+          {"input": "btn 1", "outputs": ["key 23"], "note": "Theater mode (T)"},
           {"input": "btn 5", "outputs": ["key 82"], "note": "Volume up (Up arrow)"},
           {"input": "btn 4", "outputs": ["key 81"], "note": "Volume down (Down arrow)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Exit fullscreen / close menu (Esc)"},
@@ -7077,7 +7671,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Scroll chat / page down"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Left click (select)"}
         ],
-        "tips": ["A plays and pauses (K), Y goes fullscreen (F), and B switches to theatre mode (T).", "Bumpers and the D-pad up/down adjust volume with the arrow keys; X mutes instantly.", "Left stick moves the pointer and right stick scrolls chat; right trigger clicks."]
+        "tips": ["A plays and pauses (K), Y goes fullscreen (F), and B switches to theater mode (T).", "Bumpers and the D-pad up/down adjust volume with the arrow keys; X mutes instantly.", "Left stick moves the pointer and right stick scrolls chat; right trigger clicks."]
       },
       {
         "id": "mission-control", "category": "workflow", "displayName": "Mission Control & Spaces",
@@ -7550,7 +8144,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 27"], "note": "Ancient Magic (X)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 12", "outputs": ["key 29"], "note": "Ancient Magic throw (Z)"},
-          {"input": "btn 8", "outputs": ["whe 1 - 4"], "note": "Switch spell set (wheel up)"},
+          {"input": "btn 8", "outputs": ["whs 1 -"], "note": "Switch spell set (wheel up)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
         "tips": ["RT casts your first slotted spell; the d-pad fires the other three diamonds, the mouse wheel rolls spell sets.", "Hold RB for Protego, then time the basic cast right after for the Stupefy stun counter."]
@@ -7651,7 +8245,7 @@ enum SmartPresetLibrary {
           {"input": "btn 10", "outputs": ["key 224"], "note": "Force focus / slow (Ctrl)"},
           {"input": "hat 0 U", "outputs": ["key 21"], "note": "Activate BD-1 (R)"},
           {"input": "hat 0 D", "outputs": ["key 20"], "note": "Heal / stim (Q)"},
-          {"input": "hat 0 L", "outputs": ["whe 1 - 4"], "note": "Cycle lightsaber stance (wheel up)"},
+          {"input": "hat 0 L", "outputs": ["whs 1 -"], "note": "Cycle lightsaber stance (wheel up)"},
           {"input": "hat 0 R", "outputs": ["key 5"], "note": "Binoculars / scan (B)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Map / shortcuts (M)"}
         ],
@@ -7744,12 +8338,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 20"], "note": "Lock-on (Q)"},
           {"input": "btn 4", "outputs": ["key 30"], "note": "Pod program ability (1)"},
           {"input": "btn 5", "outputs": ["key 43"], "note": "Toggle pod fire (Tab)"},
-          {"input": "btn 9", "outputs": ["key 8"], "note": "Interact / use (E)"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["key 27"], "note": "Cycle weapons (X)"},
           {"input": "hat 0 R", "outputs": ["key 6"], "note": "Cycle pods (C)"},
           {"input": "hat 0 U", "outputs": ["key 5"], "note": "Self-destruct (B)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Map (M)"},
-          {"input": "btn 12", "outputs": ["mbt 2"], "note": "Center camera / lock (Middle click)"}
+          {"input": "btn 12", "outputs": ["mbt 2"], "note": "Center camera / lock (Middle click)"},
+          {"input": "hat 0 D", "outputs": ["key 8"], "note": "Interact / use (E)"}
         ],
         "tips": ["Evade (B / Circle) at the last moment to trigger a perfect-dodge counter window.", "Hold Pod fire (RT) while you attack; melee and ranged stack for big chip damage."]
       },
@@ -7771,7 +8366,7 @@ enum SmartPresetLibrary {
           {"input": "btn 2", "outputs": ["mbt 0"], "note": "Melee attack (Left click)"},
           {"input": "btn 3", "outputs": ["mbt 1"], "note": "Gun / shoot (Right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
-          {"input": "btn 1", "outputs": ["whe 1 + 4"], "note": "Style / special action (Mouse Wheel)"},
+          {"input": "btn 1", "outputs": ["whs 1 +"], "note": "Style / special action (Mouse Wheel)"},
           {"input": "axi 5 +", "outputs": ["key 225"], "note": "Lock-on (hold) (Shift)"},
           {"input": "btn 12", "outputs": ["key 224"], "note": "Switch target (Ctrl)"},
           {"input": "axi 4 +", "outputs": ["key 9"], "note": "Devil Breaker action (Nero arm) (F)"},
@@ -7868,18 +8463,19 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire (Left Click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Zoom / aim (Right Click)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload / vent (R)"},
-          {"input": "btn 11", "outputs": ["key 9"], "note": "Melee (F)"},
+          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 5", "outputs": ["key 10"], "note": "Throw grenade (G)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Use equipment (Q)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
-          {"input": "btn 9", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
-          {"input": "btn 1", "outputs": ["key 225"], "note": "Sprint (Shift)"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 25"], "note": "Swap / switch weapon (V)"},
-          {"input": "hat 0 U", "outputs": ["whe 1 - 4"], "note": "Switch weapon (wheel up)"},
+          {"input": "hat 0 U", "outputs": ["whs 1 -"], "note": "Switch weapon (wheel up)"},
           {"input": "hat 0 D", "outputs": ["key 17"], "note": "Next grenade type (N)"},
           {"input": "hat 0 R", "outputs": ["key 27"], "note": "Mark (X)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Scoreboard / menu (Tab)"},
-          {"input": "btn 12", "outputs": ["key 29"], "note": "AI scan (Z)"}
+          {"input": "btn 12", "outputs": ["key 9"], "note": "Melee (F)"},
+          {"input": "hat 0 L", "outputs": ["key 29"], "note": "AI scan (Z)"}
         ],
         "tips": ["Triggers fire and zoom; click the right stick to melee, matching the F default.", "D-pad right marks targets on the X key; B/Circle equipment is on Q."]
       },
@@ -7904,14 +8500,14 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump / double-jump (Space)"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
-          {"input": "btn 3", "outputs": ["key 9"], "note": "Melee (F)"},
+          {"input": "btn 3", "outputs": ["key 8"], "note": "Use / embark, hold (E)"},
           {"input": "btn 5", "outputs": ["key 20"], "note": "Ordnance / grenade (Q)"},
-          {"input": "btn 4", "outputs": ["whe 1 + 4"], "note": "Tactical ability (mouse wheel)"},
-          {"input": "btn 12", "outputs": ["key 8"], "note": "Use / embark, hold (E)"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Tactical ability (mouse wheel)"},
           {"input": "hat 0 U", "outputs": ["key 25"], "note": "Call / switch Titan (V)"},
           {"input": "hat 0 D", "outputs": ["key 6"], "note": "Activate boost (C)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Scoreboard (Tab)"},
-          {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / menu (Esc)"}
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / menu (Esc)"},
+          {"input": "btn 12", "outputs": ["key 9"], "note": "Melee (F)"}
         ],
         "tips": ["Tap A twice for the double jump that defines pilot movement.", "Click the left stick to sprint, then hold Ctrl to slide out of it."]
       },
@@ -8181,7 +8777,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "control", "category": "game", "displayName": "Control",
-        "subtitle": "Controller mapping for Control (PC) - third-person action with telekinesis",
+        "subtitle": "Controller mapping for Control (PC): third-person action with telekinesis",
         "appPath": "", "launchURL": "steam://run/870780",
         "light": {"r": 196, "g": 30, "b": 58},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -8208,11 +8804,11 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Map (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
-        "tips": ["Hold left trigger to aim, then right trigger to fire - matches Control's RMB aim / LMB fire defaults.", "RB throws objects with Launch (E); B is your Evade dash on Ctrl."]
+        "tips": ["Hold left trigger to aim, then right trigger to fire. Matches Control's RMB aim / LMB fire defaults.", "RB throws objects with Launch (E); B is your Evade dash on Ctrl."]
       },
       {
         "id": "alan-wake-2", "category": "game", "displayName": "Alan Wake 2",
-        "subtitle": "Controller mapping for Alan Wake 2 (PC) - survival horror with flashlight focus",
+        "subtitle": "Controller mapping for Alan Wake 2 (PC): survival horror with flashlight focus",
         "appPath": "", "launchURL": "",
         "light": {"r": 240, "g": 196, "b": 64},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -8227,7 +8823,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Look up"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim weapon (RMB)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Shoot (LMB)"},
-          {"input": "btn 5", "outputs": ["whe 1 - 4"], "note": "Flashlight focus / boost (scroll up)"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Flashlight focus / boost (scroll up)"},
           {"input": "btn 4", "outputs": ["key 8"], "note": "Flashlight / torch toggle (E)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload weapon (R)"},
           {"input": "btn 3", "outputs": ["key 20"], "note": "Flashlight batteries / reload light (Q)"},
@@ -8243,7 +8839,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "sifu", "category": "game", "displayName": "Sifu",
-        "subtitle": "Controller mapping for Sifu (PC) - kung-fu brawler with parry and dodge",
+        "subtitle": "Controller mapping for Sifu (PC): kung-fu brawler with parry and dodge",
         "appPath": "", "launchURL": "steam://run/2138710",
         "light": {"r": 214, "g": 40, "b": 40},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
@@ -8270,18 +8866,18 @@ enum SmartPresetLibrary {
           {"input": "hat 0 R", "outputs": ["key 224"], "note": "Directional throw (Ctrl)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
-        "tips": ["Hold right trigger to guard, then tap it as a blow lands to parry - Sifu's defense is all on the guard button.", "Hold left trigger with a direction on the left stick to dodge incoming strikes."]
+        "tips": ["Hold right trigger to guard, then tap it as a blow lands to parry. Sifu's defense is all on the guard button.", "Hold left trigger with a direction on the left stick to dodge incoming strikes."]
       },
       {
         "id": "ghostrunner", "category": "game", "displayName": "Ghostrunner",
-        "subtitle": "Controller mapping for Ghostrunner (PC) - first-person parkour and one-hit combat",
+        "subtitle": "Controller mapping for Ghostrunner (PC): first-person parkour and one-hit combat",
         "appPath": "", "launchURL": "steam://run/1139900",
         "light": {"r": 224, "g": 36, "b": 96},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
-          {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W) - wall-run is automatic"},
+          {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W); wall-run is automatic"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 20"], "note": "Look right"},
           {"input": "axi 2 -", "outputs": ["mou 0 - 20"], "note": "Look left"},
@@ -8301,11 +8897,11 @@ enum SmartPresetLibrary {
           {"input": "btn 2", "outputs": ["key 8"], "note": "Interact (E)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
-        "tips": ["Tap Dash (RB) in mid-air to trigger Sensory Boost and slow time for the perfect deflect.", "Wall-running is automatic - just hold forward into a wall and steer with the stick."]
+        "tips": ["Tap Dash (RB) in mid-air to trigger Sensory Boost and slow time for the perfect deflect.", "Wall-running is automatic. Just hold forward into a wall and steer with the stick."]
       },
       {
         "id": "gimp", "category": "app", "displayName": "GIMP",
-        "subtitle": "Controller mapping for GIMP - paint, tools, brush size, zoom and undo",
+        "subtitle": "Controller mapping for GIMP: paint, tools, brush size, zoom and undo",
         "appPath": "/Applications/GIMP.app", "launchURL": "",
         "light": {"r": 90, "g": 78, "b": 66},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -8324,19 +8920,19 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 48"], "note": "Increase brush size ( ] )"},
           {"input": "hat 0 U", "outputs": ["key 46"], "note": "Zoom in ( = )"},
           {"input": "hat 0 D", "outputs": ["key 45"], "note": "Zoom out ( - )"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "Undo (Ctrl+Z)"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 28"], "note": "Redo (Ctrl+Y)"},
-          {"input": "btn 11", "outputs": ["key 225", "key 224", "key 13"], "note": "Fit image in window (Shift+Ctrl+J)"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "Undo (Command Z)"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 28"], "note": "Redo (Command Y)"},
+          {"input": "btn 11", "outputs": ["key 225", "key 227", "key 13"], "note": "Fit image in window (Shift Command J)"},
           {"input": "axi 3 +", "outputs": ["whe 1 + 4"], "note": "Scroll canvas down"},
           {"input": "axi 3 -", "outputs": ["whe 1 - 4"], "note": "Scroll canvas up"},
-          {"input": "btn 8", "outputs": ["key 225", "key 224", "key 8"], "note": "Export As (Shift+Ctrl+E)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Save / overwrite (Ctrl+S)"}
+          {"input": "btn 8", "outputs": ["key 225", "key 227", "key 8"], "note": "Export As (Shift Command E)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save / overwrite (Command S)"}
         ],
         "tips": ["The shoulder buttons step brush size with the [ and ] bracket keys.", "D-pad left and right are mapped to Undo and Redo for fast iteration."]
       },
       {
         "id": "inkscape", "category": "app", "displayName": "Inkscape",
-        "subtitle": "Controller mapping for Inkscape - selection, node, pen tools, zoom and group",
+        "subtitle": "Controller mapping for Inkscape: selection, node, pen tools, zoom and group",
         "appPath": "/Applications/Inkscape.app", "launchURL": "",
         "light": {"r": 38, "g": 38, "b": 38},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -8357,12 +8953,12 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 45"], "note": "Zoom out ( - )"},
           {"input": "hat 0 L", "outputs": ["key 30"], "note": "Zoom 100% (1)"},
           {"input": "hat 0 R", "outputs": ["key 34"], "note": "Zoom to fit page (5)"},
-          {"input": "btn 11", "outputs": ["key 224", "key 10"], "note": "Group (Ctrl+G)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 224", "key 10"], "note": "Ungroup (Shift+Ctrl+G)"},
-          {"input": "btn 8", "outputs": ["key 225", "key 224", "key 4"], "note": "Align & Distribute (Shift+Ctrl+A)"},
-          {"input": "axi 3 +", "outputs": ["key 224", "key 28"], "note": "Redo (Ctrl+Y)"},
-          {"input": "axi 3 -", "outputs": ["key 224", "key 29"], "note": "Undo (Ctrl+Z)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Save (Ctrl+S)"}
+          {"input": "btn 11", "outputs": ["key 227", "key 10"], "note": "Group (Command G)"},
+          {"input": "btn 12", "outputs": ["key 225", "key 227", "key 10"], "note": "Ungroup (Shift Command G)"},
+          {"input": "btn 8", "outputs": ["key 225", "key 227", "key 4"], "note": "Align & Distribute (Shift Command A)"},
+          {"input": "axi 3 +", "outputs": ["key 227", "key 225", "key 29"], "note": "Redo (Command Shift Z)"},
+          {"input": "axi 3 -", "outputs": ["key 227", "key 29"], "note": "Undo (Command Z)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save (Command S)"}
         ],
         "tips": ["Face buttons pick the core tools: Selection (S), Node (N), Pen (B) and Pencil (P).", "The d-pad covers zoom: in, out, 100% and fit-page at a glance."]
       },
@@ -8389,12 +8985,12 @@ enum SmartPresetLibrary {
           {"input": "hat 0 L", "outputs": ["key 64"], "note": "Toggle Piano Roll (F7)"},
           {"input": "hat 0 R", "outputs": ["key 66"], "note": "Toggle Mixer (F9)"},
           {"input": "btn 4", "outputs": ["key 226", "key 65"], "note": "Toggle Browser (Alt+F8)"},
-          {"input": "btn 8", "outputs": ["key 224", "key 29"], "note": "Undo (Ctrl+Z)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Save (Ctrl+S)"},
-          {"input": "btn 11", "outputs": ["key 224", "key 226", "key 29"], "note": "Redo (Ctrl+Alt+Z)"},
+          {"input": "btn 8", "outputs": ["key 227", "key 29"], "note": "Undo (Command Z)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save (Command S)"},
+          {"input": "btn 11", "outputs": ["key 227", "key 226", "key 29"], "note": "Redo (Command Option Z)"},
           {"input": "btn 12", "outputs": ["mbt 2"], "note": "Middle click / pan view"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger left-click hold"},
-          {"input": "axi 4 +", "outputs": ["key 224"], "note": "Hold Ctrl modifier"}
+          {"input": "axi 4 +", "outputs": ["key 227"], "note": "Hold Command (FL Studio uses Command where Windows uses Ctrl)"}
         ],
         "tips": ["Space starts and stops playback; press Y to arm recording.", "D-pad toggles the four main windows: Playlist, Sequencer, Piano Roll, Mixer."]
       },
@@ -8419,11 +9015,11 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 21"], "note": "Rotate tool (R)"},
           {"input": "hat 0 U", "outputs": ["key 23"], "note": "Scale tool (T)"},
           {"input": "hat 0 L", "outputs": ["key 38"], "note": "Live Selection tool (9)"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 21"], "note": "Render viewport (Ctrl+R)"},
-          {"input": "hat 0 D", "outputs": ["key 225", "key 224", "key 21"], "note": "Render to Picture Viewer (Shift+Ctrl+R)"},
-          {"input": "btn 11", "outputs": ["key 224", "key 28"], "note": "Redo (Ctrl+Y)"},
-          {"input": "btn 8", "outputs": ["key 224", "key 29"], "note": "Undo (Ctrl+Z)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Save (Ctrl+S)"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 21"], "note": "Render viewport (Command R)"},
+          {"input": "hat 0 D", "outputs": ["key 225", "key 227", "key 21"], "note": "Render to Picture Viewer (Shift Command R)"},
+          {"input": "btn 11", "outputs": ["key 227", "key 28"], "note": "Redo (Command Y)"},
+          {"input": "btn 8", "outputs": ["key 227", "key 29"], "note": "Undo (Command Z)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save (Command S)"},
           {"input": "axi 1 +", "outputs": ["whe 1 + 4"], "note": "Scroll / zoom down"},
           {"input": "axi 1 -", "outputs": ["whe 1 - 4"], "note": "Scroll / zoom up"},
           {"input": "btn 12", "outputs": ["key 22"], "note": "Frame selected (S)"}
@@ -8447,14 +9043,14 @@ enum SmartPresetLibrary {
           {"input": "axi 1 -", "outputs": ["whe 1 - 4"], "note": "Scroll up"},
           {"input": "btn 0", "outputs": ["mbt 0"], "note": "Left click"},
           {"input": "btn 1", "outputs": ["mbt 1"], "note": "Right click"},
-          {"input": "btn 2", "outputs": ["key 224", "key 8"], "note": "Start Encode (Ctrl+E)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 14"], "note": "Stop Encode (Ctrl+K)"},
+          {"input": "btn 2", "outputs": ["key 227", "key 22"], "note": "Start Encoding (Command S)"},
+          {"input": "btn 3", "outputs": ["key 227", "key 19"], "note": "Pause Encoding (Command P)"},
           {"input": "btn 5", "outputs": ["key 226", "key 4"], "note": "Add to Queue (Alt+A)"},
           {"input": "btn 4", "outputs": ["key 226", "key 18"], "note": "Open Source (Alt+O)"},
-          {"input": "hat 0 U", "outputs": ["key 224", "key 20"], "note": "Open Queue window (Ctrl+Q)"},
+          {"input": "hat 0 U", "outputs": ["key 227", "key 31"], "note": "Queue window (Command 2)"},
           {"input": "hat 0 D", "outputs": ["key 226", "key 19"], "note": "Pause Encode (Alt+P)"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 15"], "note": "Open Activity Log (Ctrl+L)"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 225", "key 4"], "note": "Add Selection to Queue (Ctrl+Shift+A)"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 225", "key 7"], "note": "Activity window (Command Shift D)"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 5"], "note": "Add To Queue (Command B)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Confirm / Enter"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Move between fields (Tab)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger left-click"},
@@ -8488,9 +9084,9 @@ enum SmartPresetLibrary {
           {"input": "hat 0 R", "outputs": ["key 63"], "note": "Play current scene (F6)"},
           {"input": "hat 0 D", "outputs": ["key 64"], "note": "Pause running project (F7)"},
           {"input": "hat 0 L", "outputs": ["key 65"], "note": "Stop running project (F8)"},
-          {"input": "btn 8", "outputs": ["key 224", "key 29"], "note": "Undo (Ctrl+Z)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Save scene (Ctrl+S)"},
-          {"input": "btn 12", "outputs": ["key 224", "key 225", "key 29"], "note": "Redo (Ctrl+Shift+Z)"}
+          {"input": "btn 8", "outputs": ["key 227", "key 29"], "note": "Undo (Command Z)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save scene (Command S)"},
+          {"input": "btn 12", "outputs": ["key 227", "key 225", "key 29"], "note": "Redo (Command Shift Z)"}
         ],
         "tips": ["D-pad up runs the project (F5); right runs the current scene (F6).", "Face buttons map the W move, E rotate and R scale gizmo tools."]
       },
@@ -8517,7 +9113,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 R", "outputs": ["key 227", "key 18"], "note": "Go to class (Cmd+O)"},
           {"input": "hat 0 U", "outputs": ["key 227", "key 8"], "note": "Recent files (Cmd+E)"},
           {"input": "hat 0 D", "outputs": ["key 227", "key 56"], "note": "Comment line (Cmd+/)"},
-          {"input": "btn 8", "outputs": ["key 225", "key 225"], "note": "Search Everywhere (double Shift)"},
+          {"input": "btn 8", "outputs": ["key 225"], "repeatCount": 2, "repeatMs": 60, "note": "Search Everywhere (double Shift)"},
           {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Save all (Cmd+S)"},
           {"input": "btn 11", "outputs": ["key 227", "key 29"], "note": "Undo (Cmd+Z)"},
           {"input": "btn 12", "outputs": ["key 227", "key 226", "key 15"], "note": "Reformat code (Cmd+Opt+L)"},
@@ -8541,18 +9137,18 @@ enum SmartPresetLibrary {
           {"input": "axi 1 -", "outputs": ["whe 1 - 4"], "note": "Scroll page up"},
           {"input": "btn 0", "outputs": ["mbt 0"], "note": "Left click"},
           {"input": "btn 1", "outputs": ["mbt 1"], "note": "Right click"},
-          {"input": "btn 2", "outputs": ["key 224", "key 23"], "note": "New tab (Ctrl+T)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 26"], "note": "Close tab (Ctrl+W)"},
+          {"input": "btn 2", "outputs": ["key 227", "key 23"], "note": "New tab (Command T)"},
+          {"input": "btn 3", "outputs": ["key 227", "key 26"], "note": "Close tab (Command W)"},
           {"input": "btn 4", "outputs": ["key 226", "key 80"], "note": "Back (Alt+Left)"},
           {"input": "btn 5", "outputs": ["key 226", "key 79"], "note": "Forward (Alt+Right)"},
           {"input": "hat 0 R", "outputs": ["key 224", "key 43"], "note": "Next tab (Ctrl+Tab)"},
           {"input": "hat 0 L", "outputs": ["key 224", "key 225", "key 43"], "note": "Previous tab (Ctrl+Shift+Tab)"},
-          {"input": "hat 0 U", "outputs": ["key 224", "key 15"], "note": "Address bar (Ctrl+L)"},
-          {"input": "hat 0 D", "outputs": ["key 224", "key 21"], "note": "Reload page (Ctrl+R)"},
-          {"input": "btn 8", "outputs": ["key 224", "key 9"], "note": "Find on page (Ctrl+F)"},
-          {"input": "btn 9", "outputs": ["key 224", "key 225", "key 23"], "note": "Reopen closed tab (Ctrl+Shift+T)"},
-          {"input": "btn 11", "outputs": ["key 224", "key 30"], "note": "Jump to first tab (Ctrl+1)"},
-          {"input": "btn 12", "outputs": ["key 224", "key 38"], "note": "Jump to last tab (Ctrl+9)"},
+          {"input": "hat 0 U", "outputs": ["key 227", "key 15"], "note": "Address bar (Command L)"},
+          {"input": "hat 0 D", "outputs": ["key 227", "key 21"], "note": "Reload page (Command R)"},
+          {"input": "btn 8", "outputs": ["key 227", "key 9"], "note": "Find on page (Command F)"},
+          {"input": "btn 9", "outputs": ["key 227", "key 225", "key 23"], "note": "Reopen closed tab (Command Shift T)"},
+          {"input": "btn 11", "outputs": ["key 227", "key 30"], "note": "Jump to first tab (Command 1)"},
+          {"input": "btn 12", "outputs": ["key 227", "key 38"], "note": "Jump to last tab (Command 9)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger left-click"},
           {"input": "axi 4 +", "outputs": ["mbt 2"], "note": "Left trigger middle-click"}
         ],
@@ -8565,10 +9161,10 @@ enum SmartPresetLibrary {
         "light": {"r": 120, "g": 170, "b": 255},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
         "bindings": [
-          {"input": "axi 0 -", "outputs": ["mou 0 - 14"], "note": "Right stick X moves the cursor left through menus"},
-          {"input": "axi 0 +", "outputs": ["mou 0 + 14"], "note": "Right stick X moves the cursor right through menus"},
-          {"input": "axi 1 -", "outputs": ["mou 1 - 14"], "note": "Right stick Y moves the cursor up through menus"},
-          {"input": "axi 1 +", "outputs": ["mou 1 + 14"], "note": "Right stick Y moves the cursor down through menus"},
+          {"input": "axi 0 -", "outputs": ["mou 0 - 14"], "note": "Left stick X moves the cursor left through menus"},
+          {"input": "axi 0 +", "outputs": ["mou 0 + 14"], "note": "Left stick X moves the cursor right through menus"},
+          {"input": "axi 1 -", "outputs": ["mou 1 - 14"], "note": "Left stick Y moves the cursor up through menus"},
+          {"input": "axi 1 +", "outputs": ["mou 1 + 14"], "note": "Left stick Y moves the cursor down through menus"},
           {"input": "btn 0", "outputs": ["mbt 0"], "note": "A confirms and selects, left click also acts as the basic attack"},
           {"input": "btn 1", "outputs": ["key 41"], "note": "B backs out and closes menus, mapped to Escape"},
           {"input": "btn 2", "outputs": ["key 20"], "note": "X uses the basic attack in battle, mapped to Q"},
@@ -8587,7 +9183,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 L", "outputs": ["key 4"], "note": "D-pad left moves left, mapped to A"},
           {"input": "hat 0 R", "outputs": ["key 7"], "note": "D-pad right moves right, mapped to D"}
         ],
-        "tips": ["Movement is locked to WASD and battle actions to Q, E, and the number keys in this game, so this preset mirrors those fixed defaults on the D-pad and triggers.", "The right stick drives the cursor for menu and gacha screens, since the game is navigated by mouse rather than a free camera."]
+        "tips": ["Movement is locked to WASD and battle actions to Q, E, and the number keys in this game, so this preset mirrors those fixed defaults on the D-pad and triggers.", "The left stick drives the cursor for menu and gacha screens, since the game is navigated by mouse rather than a free camera."]
       },
       {
         "id": "wuthering-waves", "category": "game", "displayName": "Wuthering Waves",
@@ -8974,7 +9570,7 @@ enum SmartPresetLibrary {
           {"input": "btn 12", "outputs": ["key 29"], "note": "Right stick click goes prone, Z"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A jumps and vaults, Space"},
           {"input": "btn 4", "outputs": ["key 9"], "note": "Left bumper melee takedown, F"},
-          {"input": "btn 5", "outputs": ["key 33"], "note": "Right bumper throws a grenade, G"},
+          {"input": "btn 5", "outputs": ["key 10"], "note": "Right bumper throws a grenade, G"},
           {"input": "btn 3", "outputs": ["key 8"], "note": "Y enters or exits a vehicle, E"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "D-pad up selects the primary weapon, 1"},
           {"input": "hat 0 D", "outputs": ["key 31"], "note": "D-pad down selects the secondary weapon, 2"},
@@ -8986,7 +9582,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 14"], "note": "Right stick turns the camera horizontally, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 14"], "note": "Right stick turns the camera horizontally, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "btn 10", "outputs": ["key 41"], "note": "Guide opens the menu and pauses, Esc"}
         ],
@@ -9019,7 +9617,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 12"], "note": "Right stick turns the camera, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 12"], "note": "Right stick turns the camera, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 12"], "note": "Right stick pitches the camera, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 12"], "note": "Right stick pitches the camera, mouse Y"}
         ],
         "tips": ["Hold the right mouse heavy attack with a shield to guard, then dodge with A the instant a blow lands to recover stamina.", "Press Y to ready the Umbral Lamp and soulflay parasites or pull hidden platforms from the realm of the dead."]
@@ -9052,7 +9652,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 12"], "note": "Right stick turns the camera, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 12"], "note": "Right stick turns the camera, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 12"], "note": "Right stick pitches the camera, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 12"], "note": "Right stick pitches the camera, mouse Y"}
         ],
         "tips": ["Tap B right as an enemy strikes to Deflect, chaining deflects drains enemy Spirit and sets up a Fatal Strike.", "Right trigger spends your blue Spirit gauge on a Spirit attack, so build the meter with normal hits before unloading."]
@@ -9084,7 +9686,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left moves left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right moves right, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 12"], "note": "Right stick nudges the camera, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 12"], "note": "Right stick nudges the camera, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 12"], "note": "Right stick nudges the camera vertically, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 12"], "note": "Right stick nudges the camera vertically, mouse Y"}
         ],
         "tips": ["Time the right bumper parry to the song's beat to deflect attacks cleanly and build your reverb meter faster.", "Left trigger magnet pulls distant enemies into your combo, while the left bumper calls a partner to break shields and grapple points."]
@@ -9116,7 +9720,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 13"], "note": "Right stick turns the camera, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 13"], "note": "Right stick turns the camera, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 13"], "note": "Right stick pitches the camera, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 13"], "note": "Right stick pitches the camera, mouse Y"}
         ],
         "tips": ["Right bumper performs a push by combining block and attack, which staggers a swarm and buys room to swing.", "Hold the left trigger to block incoming hits, then release into the right trigger to land charged heavy attacks."]
@@ -9149,7 +9755,9 @@ enum SmartPresetLibrary {
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 12"], "note": "Right stick turns the camera, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 12"], "note": "Right stick turns the camera, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 12"], "note": "Right stick pitches the camera, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 12"], "note": "Right stick pitches the camera, mouse Y"}
         ],
         "tips": ["Hold sprint into crouch to slide under gaps and break line of sight, then lean with the bumpers to peek without stepping out.", "Press X to fire your rig ability, so keep the Stun or Heal rig charged to support teammates when an enemy closes in."]
@@ -9175,8 +9783,8 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 17"], "note": "Y opens Building Construction (N)"},
           {"input": "btn 4", "outputs": ["key 11"], "note": "LB opens Hubs Construction (H)"},
           {"input": "btn 5", "outputs": ["key 29"], "note": "RB opens Trails Construction (Z)"},
-          {"input": "axi 4 +", "outputs": ["whe 1 - 5"], "note": "Left trigger zooms the camera out"},
-          {"input": "axi 5 +", "outputs": ["whe 1 + 5"], "note": "Right trigger zooms the camera in"},
+          {"input": "axi 4 +", "outputs": ["whe 1 + 5"], "note": "Left trigger zooms the camera out"},
+          {"input": "axi 5 +", "outputs": ["whe 1 - 5"], "note": "Right trigger zooms the camera in"},
           {"input": "btn 11", "outputs": ["key 21"], "note": "L3 opens the Idea Tree (R)"},
           {"input": "btn 12", "outputs": ["key 6"], "note": "R3 opens the Council (C)"},
           {"input": "hat 0 U", "outputs": ["key 33"], "note": "D-pad up toggles the Heat and Fuel overlay (4)"},
@@ -9186,7 +9794,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 30"], "note": "Back sets normal game speed (1)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start opens the pause menu (Esc)"}
         ],
-        "tips": ["Frostpunk 2 has no native controller support, so this maps a pad onto its real keyboard and mouse defaults; pointer control lives on the right stick.", "Speed keys 1, 2 and 3 step the simulation; Back sets normal speed while Space fully pauses time."]
+        "tips": ["Frostpunk 2 has no native controller support, so this maps a pad onto its real keyboard and mouse defaults; pointer control lives on the right stick.", "Speed keys 1, 2 and 3 step the simulation; Back sets normal speed."]
       },
       {
         "id": "cities-skylines-2", "category": "game", "displayName": "Cities: Skylines II",
@@ -9243,8 +9851,8 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 22"], "note": "Y stops the selected units (S)"},
           {"input": "btn 4", "outputs": ["key 23"], "note": "LB retreats the selected units (T)"},
           {"input": "btn 5", "outputs": ["key 21"], "note": "RB reinforces the selected squad (R)"},
-          {"input": "axi 4 +", "outputs": ["whe 1 - 5"], "note": "Left trigger zooms the camera out"},
-          {"input": "axi 5 +", "outputs": ["whe 1 + 5"], "note": "Right trigger zooms the camera in"},
+          {"input": "axi 4 +", "outputs": ["whe 1 + 5"], "note": "Left trigger zooms the camera out"},
+          {"input": "axi 5 +", "outputs": ["whe 1 - 5"], "note": "Right trigger zooms the camera in"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "L3 holds to free-pan the camera (middle mouse)"},
           {"input": "btn 12", "outputs": ["key 226"], "note": "R3 holds Alt for WASD camera and the ability grid"},
           {"input": "hat 0 U", "outputs": ["key 58"], "note": "D-pad up selects HQ or production building 1 (F1)"},
@@ -9469,11 +10077,11 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 48"], "note": "Right bumper presses ] to grow the draw size"},
           {"input": "btn 11", "outputs": ["key 22"], "note": "Left stick click presses S to open the Draw Size slider"},
           {"input": "hat 0 U", "outputs": ["key 9"], "note": "D-pad up presses F to fit the mesh to the view"},
-          {"input": "hat 0 D", "outputs": ["key 224", "key 18"], "note": "D-pad down presses Ctrl+O to open a project"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 225", "key 29"], "note": "D-pad right presses Ctrl+Shift+Z to redo"},
-          {"input": "btn 8", "outputs": ["key 224", "key 17"], "note": "Back presses Ctrl+N to clear the canvas"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the project"}
+          {"input": "hat 0 D", "outputs": ["key 227", "key 18"], "note": "D-pad down presses Command O to open a project"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 225", "key 29"], "note": "D-pad right presses Command Shift Z to redo"},
+          {"input": "btn 8", "outputs": ["key 227", "key 17"], "note": "Back presses Command N to clear the canvas"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the project"}
         ],
         "tips": ["Hold the right trigger to sculpt or rotate, and hold the left trigger to turn a drag into a pan or scale of the view.", "ZBrush has no fixed zoom hotkey, so the right stick is wired to the scroll wheel, which ZBrush reads as canvas zoom."]
       },
@@ -9503,10 +10111,10 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 225", "key 29"], "note": "Left stick click presses Shift+Z to fit the model to the screen"},
           {"input": "hat 0 U", "outputs": ["key 9"], "note": "D-pad up presses F to frame the selection"},
           {"input": "hat 0 D", "outputs": ["mbt 1"], "note": "D-pad down holds right mouse, which with Alt held zooms the camera"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 225", "key 29"], "note": "D-pad right presses Ctrl+Shift+Z to redo"},
-          {"input": "btn 8", "outputs": ["key 224", "key 22"], "note": "Back presses Ctrl+S to save the project"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the project"}
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 225", "key 29"], "note": "D-pad right presses Command Shift Z to redo"},
+          {"input": "btn 8", "outputs": ["key 227", "key 22"], "note": "Back presses Command S to save the project"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the project"}
         ],
         "tips": ["Hold the left trigger for Alt, then the right stick scroll zooms and the left stick orbits, matching Substance Alt navigation.", "A and B switch between the Paint brush and the Eraser, while the bumpers shrink and grow the brush size with the bracket keys."]
       },
@@ -9536,9 +10144,9 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 44", "key 11"], "note": "Left stick click presses Space+H to home the view"},
           {"input": "hat 0 U", "outputs": ["key 44", "key 4"], "note": "D-pad up presses Space+A to frame all objects"},
           {"input": "hat 0 D", "outputs": ["key 79"], "note": "D-pad down presses the Right arrow to step the playbar forward one frame"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 28"], "note": "D-pad right presses Ctrl+Y to redo"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the scene"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 28"], "note": "D-pad right presses Command Y to redo"},
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the scene"},
           {"input": "btn 8", "outputs": ["key 80"], "note": "Back presses the Left arrow to step the playbar back one frame"}
         ],
         "tips": ["Hold the left trigger to hold Space, then the right trigger tumbles, the left bumper tracks, and the right bumper dollies.", "T, R, and E on the face buttons select the Move, Rotate, and Scale handles, exactly as in the Houdini viewport."]
@@ -9569,10 +10177,10 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 22"], "note": "Left stick click presses S to set a keyframe"},
           {"input": "hat 0 U", "outputs": ["key 9"], "note": "D-pad up presses F to frame the selected object"},
           {"input": "hat 0 D", "outputs": ["key 4"], "note": "D-pad down presses A to frame the entire scene"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 28"], "note": "D-pad right presses Ctrl+Y to redo"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 225", "key 29"], "note": "D-pad right presses Shift Z to redo"},
           {"input": "btn 8", "outputs": ["key 226", "key 25"], "note": "Back presses Alt+V to play or stop the timeline"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the scene"}
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the scene"}
         ],
         "tips": ["Hold the left trigger to hold Alt, then the right trigger tumbles, the left bumper tracks, and the right bumper dollies, the Maya navigation combo.", "Face buttons map Q, W, E, R to Select, Move, Rotate, and Scale, while D-pad up and down frame the selection or the whole scene."]
       },
@@ -9595,17 +10203,17 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["key 46"], "note": "Right trigger presses equals to zoom in on time"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A presses Space to play or stop"},
           {"input": "btn 1", "outputs": ["key 225", "key 44"], "note": "B presses Shift+Space to start recording"},
-          {"input": "btn 2", "outputs": ["key 224", "key 27"], "note": "X presses Ctrl+X to cut the selection"},
+          {"input": "btn 2", "outputs": ["key 227", "key 27"], "note": "X presses Command X to cut the selection"},
           {"input": "btn 3", "outputs": ["key 16"], "note": "Y presses M to add a marker at the playhead"},
-          {"input": "btn 4", "outputs": ["key 224", "key 29"], "note": "Left bumper presses Ctrl+Z to undo"},
-          {"input": "btn 5", "outputs": ["key 224", "key 25"], "note": "Right bumper presses Ctrl+V to paste"},
-          {"input": "btn 11", "outputs": ["key 224", "key 6"], "note": "Left stick click presses Ctrl+C to copy the selection"},
-          {"input": "hat 0 U", "outputs": ["key 224", "key 4"], "note": "D-pad up presses Ctrl+A to select the entire file"},
+          {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Left bumper presses Command Z to undo"},
+          {"input": "btn 5", "outputs": ["key 227", "key 25"], "note": "Right bumper presses Command V to paste"},
+          {"input": "btn 11", "outputs": ["key 227", "key 6"], "note": "Left stick click presses Command C to copy the selection"},
+          {"input": "hat 0 U", "outputs": ["key 227", "key 4"], "note": "D-pad up presses Command A to select the entire file"},
           {"input": "hat 0 D", "outputs": ["key 16"], "note": "D-pad down presses M to add a marker"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 225", "key 29"], "note": "D-pad right presses Ctrl+Shift+Z to redo"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 225", "key 29"], "note": "D-pad right presses Command Shift Z to redo"},
           {"input": "btn 8", "outputs": ["key 41"], "note": "Back presses Esc to stop playback"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the file"}
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the file"}
         ],
         "tips": ["A toggles play and stop with the spacebar, B starts recording with Shift+Space, and Y drops a marker with M.", "The triggers zoom the timeline out and in with the minus and equals keys, while the right stick scrolls through the session."]
       },
@@ -9624,10 +10232,10 @@ enum SmartPresetLibrary {
           {"input": "axi 2 +", "outputs": ["whe 0 + 5"], "note": "Right stick right scrolls the timeline right"},
           {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Right stick up scrolls the track list up"},
           {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Right stick down scrolls the track list down"},
-          {"input": "axi 4 +", "outputs": ["key 224", "key 47"], "note": "Left trigger presses Ctrl+left bracket to zoom horizontally out"},
-          {"input": "axi 5 +", "outputs": ["key 224", "key 48"], "note": "Right trigger presses Ctrl+right bracket to zoom horizontally in"},
+          {"input": "axi 4 +", "outputs": ["key 227", "key 47"], "note": "Left trigger presses Command left bracket to zoom horizontally out"},
+          {"input": "axi 5 +", "outputs": ["key 227", "key 48"], "note": "Right trigger presses Command right bracket to zoom horizontally in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A presses Space to play or stop"},
-          {"input": "btn 1", "outputs": ["key 224", "key 44"], "note": "B presses Ctrl+Space to arm and start recording"},
+          {"input": "btn 1", "outputs": ["key 227", "key 44"], "note": "B presses Command Space to arm and start recording"},
           {"input": "btn 2", "outputs": ["key 5"], "note": "X presses B to separate the clip at the cursor"},
           {"input": "btn 3", "outputs": ["key 8"], "note": "Y presses E to toggle the zoom view"},
           {"input": "btn 4", "outputs": ["key 4"], "note": "Left bumper presses A to trim the clip start to the cursor"},
@@ -9635,12 +10243,12 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 43"], "note": "Left stick click presses Tab to jump to the next transient or clip edge"},
           {"input": "hat 0 U", "outputs": ["key 88"], "note": "D-pad up presses the keypad Enter to create a memory location marker"},
           {"input": "hat 0 D", "outputs": ["key 40"], "note": "D-pad down presses Return to send the playhead to the start"},
-          {"input": "hat 0 L", "outputs": ["key 224", "key 29"], "note": "D-pad left presses Ctrl+Z to undo"},
-          {"input": "hat 0 R", "outputs": ["key 224", "key 225", "key 29"], "note": "D-pad right presses Ctrl+Shift+Z to redo"},
+          {"input": "hat 0 L", "outputs": ["key 227", "key 29"], "note": "D-pad left presses Command Z to undo"},
+          {"input": "hat 0 R", "outputs": ["key 227", "key 225", "key 29"], "note": "D-pad right presses Command Shift Z to redo"},
           {"input": "btn 8", "outputs": ["key 21"], "note": "Back presses R to zoom out one level on the edit window"},
-          {"input": "btn 9", "outputs": ["key 224", "key 22"], "note": "Start presses Ctrl+S to save the session"}
+          {"input": "btn 9", "outputs": ["key 227", "key 22"], "note": "Start presses Command S to save the session"}
         ],
-        "tips": ["A plays and stops with the spacebar, B arms and records with Ctrl+Space, and Y toggles the zoom view with E.", "D-pad up drops a memory location with the keypad Enter, and the triggers zoom horizontally with Ctrl+bracket."]
+        "tips": ["A plays and stops with the spacebar, B arms and records with Command Space, and Y toggles the zoom view with E.", "D-pad up drops a memory location with the keypad Enter, and the triggers zoom horizontally with Command bracket.", "Command Space is also the Spotlight shortcut. Turn it off in System Settings, Keyboard, Keyboard Shortcuts, Spotlight so B reaches Pro Tools."]
       },
       {
         "id": "capture-one", "category": "app", "displayName": "Capture One",
@@ -9668,8 +10276,8 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 227", "key 29"], "note": "Back: undo (Cmd+Z)"},
           {"input": "btn 9", "outputs": ["key 225", "key 227", "key 29"], "note": "Start: redo (Shift+Cmd+Z)"},
           {"input": "btn 10", "outputs": ["key 227", "key 7"], "note": "Guide: Process/export (Cmd+D)"},
-          {"input": "axi 3 -", "outputs": ["whe 1 + 1"], "note": "Right stick up: scroll browser up"},
-          {"input": "axi 3 +", "outputs": ["whe 1 - 1"], "note": "Right stick down: scroll browser down"}
+          {"input": "axi 3 -", "outputs": ["whe 1 - 1"], "note": "Right stick up: scroll browser up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 1"], "note": "Right stick down: scroll browser down"}
         ],
         "tips": ["Face buttons and shoulders map to star ratings, so you can cull a shoot one-handed: A keeps as 5, LB rejects as 1, B clears the rating.", "Triggers zoom in and out, the left stick scrubs through images, and Guide fires Process to export your selection."]
       },
@@ -9691,8 +10299,8 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 88"], "note": "Return to start (numpad Enter)"},
           {"input": "axi 2 +", "outputs": ["key 11"], "note": "Right stick right: zoom in horizontally (H)"},
           {"input": "axi 2 -", "outputs": ["key 10"], "note": "Right stick left: zoom out horizontally (G)"},
-          {"input": "axi 3 -", "outputs": ["whe 1 + 1"], "note": "Right stick up: scroll up"},
-          {"input": "axi 3 +", "outputs": ["whe 1 - 1"], "note": "Right stick down: scroll down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 1"], "note": "Right stick up: scroll up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 1"], "note": "Right stick down: scroll down"},
           {"input": "axi 0 -", "outputs": ["key 80"], "note": "Left stick left: nudge cursor left (Left)"},
           {"input": "axi 0 +", "outputs": ["key 79"], "note": "Left stick right: nudge cursor right (Right)"},
           {"input": "axi 5 +", "outputs": ["key 227", "key 29"], "note": "Right trigger: undo (Cmd+Z)"},
@@ -9727,8 +10335,8 @@ enum SmartPresetLibrary {
           {"input": "axi 0 -", "outputs": ["mou 0 - 6"], "note": "Left stick left: move cursor left"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 6"], "note": "Left stick down: move cursor down"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 6"], "note": "Left stick up: move cursor up"},
-          {"input": "axi 2 +", "outputs": ["whe 1 - 1"], "note": "Right stick down: scroll content down"},
-          {"input": "axi 2 -", "outputs": ["whe 1 + 1"], "note": "Right stick up: scroll content up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 1"], "note": "Right stick down: scroll content down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 1"], "note": "Right stick up: scroll content up"},
           {"input": "btn 11", "outputs": ["mbt 0"], "note": "L3: left click"},
           {"input": "btn 12", "outputs": ["mbt 1"], "note": "R3: right click / context menu"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger: left click (mirror of A)"},
@@ -9759,8 +10367,8 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 227", "key 81"], "note": "RB: open selected folder/item (Cmd+Down)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Start: confirm in dialogs / rename in Finder (Return)"},
           {"input": "btn 8", "outputs": ["key 226", "key 227", "key 28"], "note": "Back: Quick Look slideshow (Opt+Cmd+Y)"},
-          {"input": "axi 2 +", "outputs": ["whe 1 - 1"], "note": "Right stick down: scroll preview down"},
-          {"input": "axi 2 -", "outputs": ["whe 1 + 1"], "note": "Right stick up: scroll preview up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 1"], "note": "Right stick down: scroll preview down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 1"], "note": "Right stick up: scroll preview up"},
           {"input": "btn 11", "outputs": ["mbt 0"], "note": "L3: left click"},
           {"input": "btn 12", "outputs": ["mbt 1"], "note": "R3: right click / context menu"},
           {"input": "axi 5 +", "outputs": ["key 227", "key 81"], "note": "Right trigger: open selected item (Cmd+Down)"},
@@ -9787,7 +10395,7 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
-          {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
+          {"input": "btn 12", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
           {"input": "hat 0 L", "outputs": ["key 80"], "note": "Switch left hand weapon, Left"},
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Switch spell, Up"},
@@ -9851,9 +10459,9 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 31"], "note": "Skill 2, 2"},
           {"input": "axi 4 +", "outputs": ["key 32"], "note": "Skill 3, 3"},
           {"input": "axi 5 +", "outputs": ["key 33"], "note": "Skill 4, 4"},
-          {"input": "btn 1", "outputs": ["key 8"], "note": "Dodge, sidestep, E"},
+          {"input": "btn 1", "outputs": ["key 8"], "note": "Tap to dodge (E), hold to guard (Q)", "hold": ["key 20"], "holdMs": 250},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump, hop, Space"},
-          {"input": "btn 9", "outputs": ["key 20"], "note": "Guard, Q"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 21"], "note": "Combo or link attack, R"},
           {"input": "btn 11", "outputs": ["key 10"], "note": "Skybound Art, chain burst ultimate, G"},
           {"input": "btn 12", "outputs": ["mbt 2"], "note": "Lock on, change target, wheel click"},
@@ -9957,8 +10565,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
           {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Ability (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -10101,7 +10709,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Menu (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "System (Esc)"}
         ],
-        "tips": ["Right trigger attacks, left trigger blocks; it feels like Skyrim.", "Left stick click sprints; the View button opens your inventory."]
+        "tips": ["Right trigger attacks, left trigger blocks; it feels like Skyrim.", "Left stick click sprints; the View button opens the menu (Tab)."]
       },
       {
         "id": "conan-exiles", "category": "game", "displayName": "Conan Exiles",
@@ -10296,7 +10904,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Menu (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "System (Esc)"}
         ],
-        "tips": ["Right trigger attacks, left trigger blocks or aims a spell.", "Left stick click sprints; the View button opens your inventory."]
+        "tips": ["Right trigger attacks, left trigger blocks or aims a spell.", "Left stick click sprints; the View button opens the menu (Tab)."]
       },
       {
         "id": "silent-hill-2", "category": "game", "displayName": "Silent Hill 2",
@@ -10315,7 +10923,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire / attack (LMB)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim weapon (RMB)"},
-          {"input": "btn 5", "outputs": ["key 43"], "note": "Inventory / attaché case (Tab)"},
+          {"input": "btn 5", "outputs": ["key 43"], "note": "Inventory (Tab)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
           {"input": "btn 0", "outputs": ["key 9"], "note": "Action / interact (F)"},
           {"input": "btn 3", "outputs": ["key 44"], "note": "Ready knife / parry (Space)"},
@@ -10329,7 +10937,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 16"], "note": "Map (M)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
-        "tips": ["Hold left trigger to ready your weapon, right trigger fires.", "Run with the left stick click; the View button opens your inventory."]
+        "tips": ["Hold left trigger to ready your weapon, right trigger fires.", "Run with the left stick click; the View button opens the map."]
       },
       {
         "id": "f1-24", "category": "game", "displayName": "F1 24",
@@ -10344,13 +10952,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Left trigger is the brake (Z)"},
           {"input": "btn 5", "outputs": ["key 44"], "note": "RB shifts up a gear (Space)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Left Alt)"},
-          {"input": "btn 0", "outputs": ["key 22"], "note": "A engages the starter motor (S)"},
-          {"input": "btn 1", "outputs": ["key 15"], "note": "B cycles the car light stages (L)"},
-          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X flashes the high beams (Shift + L)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y toggles the rain lights (Ctrl + L)"},
-          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 engages the pit limiter (Alt + L)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 runs the ignition sequence (Shift + I)"},
-          {"input": "btn 8", "outputs": ["key 9"], "note": "Back cycles the cockpit display pages (F)"},
+          {"input": "btn 0", "outputs": ["key 22"], "note": "A presses S (the starter in some games)"},
+          {"input": "btn 1", "outputs": ["key 15"], "note": "B presses L (lights in most racers)"},
+          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X presses Shift L"},
+          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y presses Ctrl L"},
+          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 presses Alt L"},
+          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 presses Shift I"},
+          {"input": "btn 8", "outputs": ["key 9"], "note": "Back presses F"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start pauses to the race menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["mou 0 - 16"], "note": "D-pad left glances left in the cockpit"},
           {"input": "hat 0 R", "outputs": ["mou 0 + 16"], "note": "D-pad right glances right in the cockpit"},
@@ -10381,7 +10989,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 21"], "note": "Triangle = rewind (R)"},
           {"input": "btn 2", "outputs": ["key 11"], "note": "Square = horn (H)"},
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "D-pad down = change camera (Tab)"},
-          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = ANNA co-driver (C)"},
+          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = assist (C)"},
           {"input": "hat 0 U", "outputs": ["key 16"], "note": "D-pad up = view map (M)"},
           {"input": "btn 8", "outputs": ["key 41"], "note": "Back = pause / menu (Esc)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Start = activate / confirm (Enter)"}
@@ -10421,6 +11029,10 @@ enum SmartPresetLibrary {
           {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Cursor right"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Cursor up"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Cursor down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 5"], "note": "Scroll up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 5"], "note": "Scroll down"},
+          {"input": "axi 2 -", "outputs": ["whe 0 - 5"], "note": "Scroll left"},
+          {"input": "axi 2 +", "outputs": ["whe 0 + 5"], "note": "Scroll right"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Click / draw"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Right click"},
           {"input": "btn 0", "outputs": ["key 25"], "note": "Selection tool (V)"},
@@ -10432,7 +11044,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 227", "key 46"], "note": "Zoom in"},
           {"input": "hat 0 D", "outputs": ["key 227", "key 45"], "note": "Zoom out"}
         ],
-        "tips": ["Left stick moves the pointer; right stick scrolls or zooms.", "Face buttons are common shortcuts; rebind in the editor."]
+        "tips": ["Left stick moves the pointer; right stick scrolls.", "Face buttons are common shortcuts; rebind in the editor."]
       },
       {
         "id": "affinity-designer", "category": "app", "displayName": "Affinity Designer",
@@ -10590,8 +11202,8 @@ enum SmartPresetLibrary {
           {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Cursor right"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Cursor up"},
           {"input": "axi 1 +", "outputs": ["mou 1 + 16"], "note": "Cursor down"},
-          {"input": "axi 3 +", "outputs": ["whe 1 - 4"], "note": "Zoom out"},
-          {"input": "axi 3 -", "outputs": ["whe 1 + 4"], "note": "Zoom in"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 4"], "note": "Zoom out"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 4"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["mbt 0"], "note": "Select (left click)"},
           {"input": "btn 1", "outputs": ["mbt 2"], "note": "Orbit / pan (middle click)"},
           {"input": "btn 2", "outputs": ["key 10"], "note": "Grab / move (G)"},
@@ -10953,8 +11565,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -10981,8 +11593,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -11009,8 +11621,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -11037,8 +11649,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -11065,8 +11677,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -11091,11 +11703,11 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 12"], "note": "Triangle = Right Punch / 2 (default I)"},
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Left Kick / 3 (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Right Kick / 4 (default K)"},
-          {"input": "btn 5", "outputs": ["key 24", "key 12"], "note": "R1 = 1+2 (Heat Burst / forward throw)"},
+          {"input": "btn 5", "outputs": ["key 24", "key 12"], "note": "R1 = 1+2 (two-button macro)"},
           {"input": "btn 4", "outputs": ["key 13", "key 14"], "note": "L1 = 3+4 (low / sweep macro)"},
-          {"input": "axi 5 +", "outputs": ["key 24", "key 12", "key 13", "key 14"], "note": "RT = 1+2+3+4 (Rage Art)"},
+          {"input": "axi 5 +", "outputs": ["key 24", "key 12", "key 13", "key 14"], "note": "RT = 1+2+3+4 (all four buttons)"},
           {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = 2+4 (right throw)"},
-          {"input": "btn 11", "outputs": ["key 79", "key 79"], "note": "L3 = quick forward dash (tap forward twice)"},
+          {"input": "btn 11", "outputs": ["key 79"], "repeatCount": 2, "repeatMs": 60, "note": "L3 = quick forward dash (tap forward twice)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Options = pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Share = view / select (Tab)"}
         ],
@@ -11123,8 +11735,8 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["key 18"], "note": "RT = Block (R2 default, key O)"},
           {"input": "axi 4 +", "outputs": ["key 18"], "note": "LT = Block (alt, key O)"},
           {"input": "btn 4", "outputs": ["key 44"], "note": "L1 = Throw / Grab (default Space)"},
-          {"input": "btn 5", "outputs": ["key 51"], "note": "R1 = Kameo assist (default ;)"},
-          {"input": "btn 11", "outputs": ["key 79", "key 79"], "note": "L3 = forward dash (tap forward twice)"},
+          {"input": "btn 5", "outputs": ["key 51"], "note": "R1 = assist (default ;)"},
+          {"input": "btn 11", "outputs": ["key 79"], "repeatCount": 2, "repeatMs": 60, "note": "L3 = forward dash (tap forward twice)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = flip stance / select (Tab)"}
         ],
@@ -11164,7 +11776,7 @@ enum SmartPresetLibrary {
       },
       {
         "id": "snowrunner", "category": "game", "displayName": "SnowRunner",
-        "subtitle": "Off-road hauling: drive, diff, winch",
+        "subtitle": "Off-road hauling: drive, brake, shift",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 130, "b": 90},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
@@ -11177,22 +11789,22 @@ enum SmartPresetLibrary {
           {"input": "btn 5", "outputs": ["key 225"], "note": "RB shifts up a gear (Shift)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Alt)"},
           {"input": "btn 1", "outputs": ["key 11"], "note": "B sounds the horn (H)"},
-          {"input": "btn 2", "outputs": ["key 5"], "note": "X applies the engine brake or retarder (B)"},
-          {"input": "btn 3", "outputs": ["key 6"], "note": "Y toggles cruise control (C)"},
+          {"input": "btn 2", "outputs": ["key 5"], "note": "X presses B"},
+          {"input": "btn 3", "outputs": ["key 6"], "note": "Y presses C"},
           {"input": "btn 9", "outputs": ["key 8"], "note": "Start enters or exits the truck (E)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Back opens the world map (M)"},
-          {"input": "hat 0 L", "outputs": ["key 47"], "note": "D-pad left flicks the left turn signal ([)"},
-          {"input": "hat 0 R", "outputs": ["key 48"], "note": "D-pad right flicks the right turn signal (])"},
+          {"input": "hat 0 L", "outputs": ["key 47"], "note": "D-pad left presses ["},
+          {"input": "hat 0 R", "outputs": ["key 48"], "note": "D-pad right presses ]"},
           {"input": "hat 0 U", "outputs": ["key 15"], "note": "D-pad up toggles the headlights (L)"},
-          {"input": "hat 0 D", "outputs": ["key 9"], "note": "D-pad down toggles the hazard lights (F)"},
-          {"input": "btn 11", "outputs": ["key 14"], "note": "L3 toggles the high beams (K)"},
-          {"input": "btn 12", "outputs": ["key 19"], "note": "R3 toggles the wipers (P)"},
+          {"input": "hat 0 D", "outputs": ["key 9"], "note": "D-pad down presses F"},
+          {"input": "btn 11", "outputs": ["key 14"], "note": "L3 presses K"},
+          {"input": "btn 12", "outputs": ["key 19"], "note": "R3 presses P"},
           {"input": "axi 2 -", "outputs": ["key 30"], "note": "Right stick left selects the interior camera (1)"},
           {"input": "axi 2 +", "outputs": ["key 31"], "note": "Right stick right selects the chase camera (2)"},
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Right stick up free-looks around the cab"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 16"], "note": "Right stick down free-looks around the cab"}
         ],
-        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "Differential and winch controls sit on the face buttons."]
+        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "The face buttons send common truck-game keys; check them against SnowRunner's own key list."]
       },
       {
         "id": "wreckfest", "category": "game", "displayName": "Wreckfest",
@@ -11212,7 +11824,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 21"], "note": "Triangle = rewind (R)"},
           {"input": "btn 2", "outputs": ["key 11"], "note": "Square = horn (H)"},
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "D-pad down = change camera (Tab)"},
-          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = ANNA co-driver (C)"},
+          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = assist (C)"},
           {"input": "hat 0 U", "outputs": ["key 16"], "note": "D-pad up = view map (M)"},
           {"input": "btn 8", "outputs": ["key 41"], "note": "Back = pause / menu (Esc)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Start = activate / confirm (Enter)"}
@@ -11232,13 +11844,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Left trigger is the brake (Z)"},
           {"input": "btn 5", "outputs": ["key 44"], "note": "RB shifts up a gear (Space)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Left Alt)"},
-          {"input": "btn 0", "outputs": ["key 22"], "note": "A engages the starter motor (S)"},
-          {"input": "btn 1", "outputs": ["key 15"], "note": "B cycles the car light stages (L)"},
-          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X flashes the high beams (Shift + L)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y toggles the rain lights (Ctrl + L)"},
-          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 engages the pit limiter (Alt + L)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 runs the ignition sequence (Shift + I)"},
-          {"input": "btn 8", "outputs": ["key 9"], "note": "Back cycles the cockpit display pages (F)"},
+          {"input": "btn 0", "outputs": ["key 22"], "note": "A presses S (the starter in some games)"},
+          {"input": "btn 1", "outputs": ["key 15"], "note": "B presses L (lights in most racers)"},
+          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X presses Shift L"},
+          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y presses Ctrl L"},
+          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 presses Alt L"},
+          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 presses Shift I"},
+          {"input": "btn 8", "outputs": ["key 9"], "note": "Back presses F"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start pauses to the race menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["mou 0 - 16"], "note": "D-pad left glances left in the cockpit"},
           {"input": "hat 0 R", "outputs": ["mou 0 + 16"], "note": "D-pad right glances right in the cockpit"},
@@ -11249,7 +11861,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 18"], "note": "Right stick looks up around the cockpit"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 18"], "note": "Right stick looks down around the cockpit"}
         ],
-        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "Handbrake and look controls sit on the face buttons."]
+        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "The right stick and D-pad look around the cockpit. Check the face buttons against the game's own key list."]
       },
       {
         "id": "the-crew-motorfest", "category": "game", "displayName": "The Crew Motorfest",
@@ -11269,7 +11881,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 21"], "note": "Triangle = rewind (R)"},
           {"input": "btn 2", "outputs": ["key 11"], "note": "Square = horn (H)"},
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "D-pad down = change camera (Tab)"},
-          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = ANNA co-driver (C)"},
+          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = assist (C)"},
           {"input": "hat 0 U", "outputs": ["key 16"], "note": "D-pad up = view map (M)"},
           {"input": "btn 8", "outputs": ["key 41"], "note": "Back = pause / menu (Esc)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Start = activate / confirm (Enter)"}
@@ -11295,12 +11907,12 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["mbt 1"], "note": "Y casts magic, right click"},
           {"input": "btn 1", "outputs": ["key 226"], "note": "B dodges, mapped to Left Alt"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A jumps, mapped to Space"},
-          {"input": "btn 5", "outputs": ["key 225"], "note": "RB is the Phoenix Shift lunge, mapped to Left Shift"},
-          {"input": "btn 4", "outputs": ["key 29"], "note": "LB holds the Eikon ability modifier, mapped to Z"},
-          {"input": "axi 5 +", "outputs": ["key 20"], "note": "Right trigger fires the first Eikon ability, mapped to Q"},
-          {"input": "axi 4 +", "outputs": ["key 8"], "note": "Left trigger fires the second Eikon ability, mapped to E"},
+          {"input": "btn 5", "outputs": ["key 225"], "note": "RB is the dash, mapped to Left Shift"},
+          {"input": "btn 4", "outputs": ["key 29"], "note": "LB holds the ability modifier, mapped to Z"},
+          {"input": "axi 5 +", "outputs": ["key 20"], "note": "Right trigger fires the first ability, mapped to Q"},
+          {"input": "axi 4 +", "outputs": ["key 8"], "note": "Left trigger fires the second ability, mapped to E"},
           {"input": "btn 12", "outputs": ["mbt 2"], "note": "R3 locks on, mapped to the middle mouse button"},
-          {"input": "hat 0 U", "outputs": ["key 43"], "note": "D-pad up switches the active Eikon, mapped to Tab"},
+          {"input": "hat 0 U", "outputs": ["key 43"], "note": "D-pad up switches the ability set, mapped to Tab"},
           {"input": "hat 0 D", "outputs": ["key 21"], "note": "D-pad down drinks a potion, mapped to R"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start opens the menu via Escape"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Back opens the map, mapped to M"}
@@ -11358,7 +11970,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -11390,7 +12002,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire / attack (LMB)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim weapon (RMB)"},
-          {"input": "btn 5", "outputs": ["key 43"], "note": "Inventory / attaché case (Tab)"},
+          {"input": "btn 5", "outputs": ["key 43"], "note": "Inventory (Tab)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
           {"input": "btn 0", "outputs": ["key 9"], "note": "Action / interact (F)"},
           {"input": "btn 3", "outputs": ["key 44"], "note": "Ready knife / parry (Space)"},
@@ -11421,18 +12033,18 @@ enum SmartPresetLibrary {
           {"input": "axi 2 -", "outputs": ["mou 0 - 16"], "note": "Camera left"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 16"], "note": "Camera down"},
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Camera up"},
-          {"input": "btn 2", "outputs": ["mbt 0"], "note": "Light axe attack (LMB)"},
-          {"input": "btn 3", "outputs": ["mbt 1"], "note": "Heavy axe attack (RMB)"},
-          {"input": "axi 4 +", "outputs": ["key 224"], "note": "Aim / throw axe (Left Ctrl)"},
-          {"input": "btn 5", "outputs": ["key 21"], "note": "Recall axe (R)"},
+          {"input": "btn 2", "outputs": ["mbt 0"], "note": "Light attack (LMB)"},
+          {"input": "btn 3", "outputs": ["mbt 1"], "note": "Heavy attack (RMB)"},
+          {"input": "axi 4 +", "outputs": ["key 224"], "note": "Aim / throw (Left Ctrl)"},
+          {"input": "btn 5", "outputs": ["key 21"], "note": "Recall / reload (R)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Block / parry (Q)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Evade / dodge (Space)"},
           {"input": "btn 12", "outputs": ["mbt 2"], "note": "Lock-on / reset camera (MMB)"},
-          {"input": "axi 5 +", "outputs": ["key 9"], "note": "Atreus arrow / son action (F)"},
+          {"input": "axi 5 +", "outputs": ["key 9"], "note": "Special action (F)"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact (E)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Sheathe / swap weapon (1)"},
-          {"input": "hat 0 D", "outputs": ["key 225", "mbt 2"], "note": "Spartan Rage (Shift+MMB)"},
+          {"input": "hat 0 D", "outputs": ["key 225", "mbt 2"], "note": "Special mode (Shift+MMB)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Map (M)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / options (Esc)"}
         ],
@@ -11566,7 +12178,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Map (Tab)"},
           {"input": "btn 9", "outputs": ["key 58"], "note": "Pause menu (F1)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Party chat (1)"},
-          {"input": "hat 0 D", "outputs": ["key 20"], "note": "Mount / dismount Street Surfer (Q)"},
+          {"input": "hat 0 D", "outputs": ["key 20"], "note": "Mount / dismount (Q)"},
           {"input": "hat 0 L", "outputs": ["key 27"], "note": "Playlist previous (X)"},
           {"input": "hat 0 R", "outputs": ["key 25"], "note": "Playlist next (V)"}
         ],
@@ -11589,7 +12201,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -11651,7 +12263,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 L", "outputs": ["key 13"], "note": "Previous keyframe (J)"},
           {"input": "hat 0 R", "outputs": ["key 14"], "note": "Next keyframe (K)"}
         ],
-        "tips": ["Left stick moves the pointer; right stick scrolls or scrubs.", "Triggers click; face buttons run common shortcuts."]
+        "tips": ["The left stick steps frames; the right stick scrolls.", "Face buttons pick tools; the bumpers undo and save."]
       },
       {
         "id": "bitwig-studio", "category": "app", "displayName": "Bitwig Studio",
@@ -11802,17 +12414,17 @@ enum SmartPresetLibrary {
         "light": {"r": 120, "g": 90, "b": 230},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
         "bindings": [
-          {"input": "btn 0", "outputs": ["key 30"], "note": "Scene 1 (set hotkey in OBS)"},
-          {"input": "btn 1", "outputs": ["key 31"], "note": "Scene 2 (set hotkey in OBS)"},
-          {"input": "btn 2", "outputs": ["key 32"], "note": "Scene 3 (set hotkey in OBS)"},
-          {"input": "btn 3", "outputs": ["key 33"], "note": "Scene 4 (set hotkey in OBS)"},
-          {"input": "hat 0 U", "outputs": ["key 34"], "note": "Scene 5 (set hotkey in OBS)"},
-          {"input": "hat 0 D", "outputs": ["key 35"], "note": "Scene 6 (set hotkey in OBS)"},
-          {"input": "btn 4", "outputs": ["key 36"], "note": "Start / stop recording (set in OBS)"},
-          {"input": "btn 5", "outputs": ["key 37"], "note": "Start / stop streaming (set in OBS)"},
-          {"input": "btn 8", "outputs": ["key 38"], "note": "Mute mic (set in OBS)"}
+          {"input": "btn 0", "outputs": ["key 30"], "note": "Scene 1 (set its hotkey in Streamlabs)"},
+          {"input": "btn 1", "outputs": ["key 31"], "note": "Scene 2 (set its hotkey in Streamlabs)"},
+          {"input": "btn 2", "outputs": ["key 32"], "note": "Scene 3 (set its hotkey in Streamlabs)"},
+          {"input": "btn 3", "outputs": ["key 33"], "note": "Scene 4 (set its hotkey in Streamlabs)"},
+          {"input": "hat 0 U", "outputs": ["key 34"], "note": "Scene 5 (set its hotkey in Streamlabs)"},
+          {"input": "hat 0 D", "outputs": ["key 35"], "note": "Scene 6 (set its hotkey in Streamlabs)"},
+          {"input": "btn 4", "outputs": ["key 36"], "note": "Start / stop recording (set its hotkey in Streamlabs)"},
+          {"input": "btn 5", "outputs": ["key 37"], "note": "Start / stop streaming (set its hotkey in Streamlabs)"},
+          {"input": "btn 8", "outputs": ["key 38"], "note": "Mute mic (set its hotkey in Streamlabs)"}
         ],
-        "tips": ["Face buttons switch scenes and toggle sources.", "Right stick scrolls; rebind any control in the editor."]
+        "tips": ["The face buttons and D-pad up and down switch scenes 1 to 6. Give each scene the matching hotkey in Streamlabs Settings, Hotkeys.", "The bumpers start and stop recording and streaming, and Back mutes the mic; set those hotkeys in Streamlabs too."]
       },
       {
         "id": "luminar-neo", "category": "app", "displayName": "Luminar Neo",
@@ -11877,19 +12489,21 @@ enum SmartPresetLibrary {
           {"input": "btn 12", "outputs": ["key 29"], "note": "Right stick click goes prone, Z"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A jumps and vaults, Space"},
           {"input": "btn 4", "outputs": ["key 9"], "note": "Left bumper melee takedown, F"},
-          {"input": "btn 5", "outputs": ["key 33"], "note": "Right bumper throws a grenade, G"},
+          {"input": "btn 5", "outputs": ["key 10"], "note": "Right bumper throws a grenade, G"},
           {"input": "btn 3", "outputs": ["key 8"], "note": "Y enters or exits a vehicle, E"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "D-pad up selects the primary weapon, 1"},
           {"input": "hat 0 D", "outputs": ["key 31"], "note": "D-pad down selects the secondary weapon, 2"},
-          {"input": "hat 0 L", "outputs": ["key 32"], "note": "D-pad left selects the specialist gadget, 3"},
-          {"input": "hat 0 R", "outputs": ["key 33"], "note": "D-pad right selects the open gadget, 4"},
+          {"input": "hat 0 L", "outputs": ["key 32"], "note": "D-pad left selects gadget 1, 3"},
+          {"input": "hat 0 R", "outputs": ["key 33"], "note": "D-pad right selects gadget 2, 4"},
           {"input": "btn 9", "outputs": ["key 43"], "note": "Start opens the scoreboard and deploy, Tab"},
           {"input": "btn 8", "outputs": ["key 20"], "note": "Back holds the CommoRose to spot and ping, Q"},
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Left stick up moves forward, W"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 14"], "note": "Right stick turns the camera horizontally, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 14"], "note": "Right stick turns the camera horizontally, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "btn 10", "outputs": ["key 41"], "note": "Guide opens the menu and pauses, Esc"}
         ],
@@ -11910,19 +12524,21 @@ enum SmartPresetLibrary {
           {"input": "btn 12", "outputs": ["key 29"], "note": "Right stick click goes prone, Z"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "A jumps and vaults, Space"},
           {"input": "btn 4", "outputs": ["key 9"], "note": "Left bumper melee takedown, F"},
-          {"input": "btn 5", "outputs": ["key 33"], "note": "Right bumper throws a grenade, G"},
+          {"input": "btn 5", "outputs": ["key 10"], "note": "Right bumper throws a grenade, G"},
           {"input": "btn 3", "outputs": ["key 8"], "note": "Y enters or exits a vehicle, E"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "D-pad up selects the primary weapon, 1"},
           {"input": "hat 0 D", "outputs": ["key 31"], "note": "D-pad down selects the secondary weapon, 2"},
-          {"input": "hat 0 L", "outputs": ["key 32"], "note": "D-pad left selects the specialist gadget, 3"},
-          {"input": "hat 0 R", "outputs": ["key 33"], "note": "D-pad right selects the open gadget, 4"},
+          {"input": "hat 0 L", "outputs": ["key 32"], "note": "D-pad left selects gadget 1, 3"},
+          {"input": "hat 0 R", "outputs": ["key 33"], "note": "D-pad right selects gadget 2, 4"},
           {"input": "btn 9", "outputs": ["key 43"], "note": "Start opens the scoreboard and deploy, Tab"},
           {"input": "btn 8", "outputs": ["key 20"], "note": "Back holds the CommoRose to spot and ping, Q"},
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Left stick up moves forward, W"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down moves back, S"},
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left strafes, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right strafes, D"},
+          {"input": "axi 2 -", "outputs": ["mou 0 - 14"], "note": "Right stick turns the camera horizontally, mouse X"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 14"], "note": "Right stick turns the camera horizontally, mouse X"},
+          {"input": "axi 3 -", "outputs": ["mou 1 - 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 14"], "note": "Right stick aims the camera vertically, mouse Y"},
           {"input": "btn 10", "outputs": ["key 41"], "note": "Guide opens the menu and pauses, Esc"}
         ],
@@ -11991,7 +12607,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "Inventory (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right trigger fires, left trigger aims.", "Sprint with the left stick click; the View button opens your inventory."]
+        "tips": ["Right trigger fires, left trigger aims.", "Sprint with the left stick click; D-pad down opens your inventory."]
       },
       {
         "id": "fallout-76", "category": "game", "displayName": "Fallout 76",
@@ -12023,7 +12639,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "Pip-Boy (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right trigger fires, left trigger aims.", "Open the Pip-Boy from a face button; rebind to taste."]
+        "tips": ["Right trigger fires, left trigger aims.", "Open the Pip-Boy from D-pad down; rebind to taste."]
       },
       {
         "id": "mass-effect-legendary-edition", "category": "game", "displayName": "Mass Effect Legendary Edition",
@@ -12048,8 +12664,8 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Skill 1 (Q)"},
           {"input": "btn 5", "outputs": ["key 8"], "note": "Skill 2 (E)"},
-          {"input": "btn 3", "outputs": ["key 33"], "note": "Signature weapon (4)"},
-          {"input": "btn 12", "outputs": ["key 25"], "note": "Use armor kit / consumable (V)"},
+          {"input": "btn 3", "outputs": ["key 33"], "note": "Weapon 4 (4)"},
+          {"input": "btn 12", "outputs": ["key 25"], "note": "Use consumable (V)"},
           {"input": "hat 0 L", "outputs": ["key 30"], "note": "Primary weapon (1)"},
           {"input": "hat 0 R", "outputs": ["key 31"], "note": "Secondary weapon (2)"},
           {"input": "hat 0 D", "outputs": ["key 32"], "note": "Sidearm (3)"},
@@ -12089,7 +12705,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Menu (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "System (Esc)"}
         ],
-        "tips": ["Right trigger attacks, left trigger blocks; it feels like Skyrim.", "Left stick click sprints; the View button opens your inventory."]
+        "tips": ["Right trigger attacks, left trigger blocks; it feels like Skyrim.", "Left stick click sprints; the View button opens the menu (Tab)."]
       },
       {
         "id": "dark-souls-remastered", "category": "game", "displayName": "Dark Souls Remastered",
@@ -12110,7 +12726,7 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
-          {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
+          {"input": "btn 12", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
           {"input": "hat 0 L", "outputs": ["key 80"], "note": "Switch left hand weapon, Left"},
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Switch spell, Up"},
@@ -12141,7 +12757,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -12174,7 +12790,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -12211,11 +12827,11 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 31"], "note": "Control group 2"},
           {"input": "btn 2", "outputs": ["key 32"], "note": "Control group 3"},
           {"input": "btn 3", "outputs": ["key 5"], "note": "Build menu (B)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Left stick moves the pointer; triggers select and command.", "Face buttons and the D-pad run common commands."]
+        "tips": ["Left stick moves the pointer; triggers select and command.", "Face buttons run common commands."]
       },
       {
         "id": "total-war-three-kingdoms", "category": "game", "displayName": "Total War: Three Kingdoms",
@@ -12265,8 +12881,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -12292,8 +12908,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -12319,8 +12935,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -12463,7 +13079,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 14"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger: Use Item / attack (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger: Block and Parry / aim (right click)"},
-          {"input": "btn 0", "outputs": ["key 44"], "note": "A/Cross: Jump (hold to open glider) - Space"},
+          {"input": "btn 0", "outputs": ["key 44"], "note": "A/Cross: Jump (hold to open glider), Space"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "B/Circle: Evade dodge (Left Ctrl)"},
           {"input": "btn 2", "outputs": ["key 8"], "note": "X/Square: Contextual action / interact / grapple (E)"},
           {"input": "btn 3", "outputs": ["key 20"], "note": "Y/Triangle: Ready ranged weapon (Q)"},
@@ -12554,7 +13170,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
           {"input": "btn 5", "outputs": ["key 227", "key 22"], "note": "Save"}
         ],
-        "tips": ["Right stick scrubs the timeline; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
+        "tips": ["The left stick steps frames; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
       },
       {
         "id": "clip-studio-paint", "category": "app", "displayName": "Clip Studio Paint",
@@ -12725,7 +13341,7 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["key 227", "key 46"], "note": "Increase font size (Cmd++)"},
           {"input": "axi 4 +", "outputs": ["key 227", "key 45"], "note": "Decrease font size (Cmd+-)"}
         ],
-        "tips": ["Shoulder buttons and the D-pad turn pages.", "Left stick scrolls within a long page."]
+        "tips": ["Shoulder buttons, the D-pad and the left stick turn pages.", "The right stick scrolls within a long page."]
       },
       {
         "id": "diablo-ii-resurrected", "category": "game", "displayName": "Diablo II: Resurrected",
@@ -12914,11 +13530,11 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Throw equipment (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Special weapon (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -12941,13 +13557,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Left trigger is the brake (Z)"},
           {"input": "btn 5", "outputs": ["key 44"], "note": "RB shifts up a gear (Space)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Left Alt)"},
-          {"input": "btn 0", "outputs": ["key 22"], "note": "A engages the starter motor (S)"},
-          {"input": "btn 1", "outputs": ["key 15"], "note": "B cycles the car light stages (L)"},
-          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X flashes the high beams (Shift + L)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y toggles the rain lights (Ctrl + L)"},
-          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 engages the pit limiter (Alt + L)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 runs the ignition sequence (Shift + I)"},
-          {"input": "btn 8", "outputs": ["key 9"], "note": "Back cycles the cockpit display pages (F)"},
+          {"input": "btn 0", "outputs": ["key 22"], "note": "A presses S (the starter in some games)"},
+          {"input": "btn 1", "outputs": ["key 15"], "note": "B presses L (lights in most racers)"},
+          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X presses Shift L"},
+          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y presses Ctrl L"},
+          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 presses Alt L"},
+          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 presses Shift I"},
+          {"input": "btn 8", "outputs": ["key 9"], "note": "Back presses F"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start pauses to the race menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["mou 0 - 16"], "note": "D-pad left glances left in the cockpit"},
           {"input": "hat 0 R", "outputs": ["mou 0 + 16"], "note": "D-pad right glances right in the cockpit"},
@@ -12973,13 +13589,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Left trigger is the brake (Z)"},
           {"input": "btn 5", "outputs": ["key 44"], "note": "RB shifts up a gear (Space)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Left Alt)"},
-          {"input": "btn 0", "outputs": ["key 22"], "note": "A engages the starter motor (S)"},
-          {"input": "btn 1", "outputs": ["key 15"], "note": "B cycles the car light stages (L)"},
-          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X flashes the high beams (Shift + L)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y toggles the rain lights (Ctrl + L)"},
-          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 engages the pit limiter (Alt + L)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 runs the ignition sequence (Shift + I)"},
-          {"input": "btn 8", "outputs": ["key 9"], "note": "Back cycles the cockpit display pages (F)"},
+          {"input": "btn 0", "outputs": ["key 22"], "note": "A presses S (the starter in some games)"},
+          {"input": "btn 1", "outputs": ["key 15"], "note": "B presses L (lights in most racers)"},
+          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X presses Shift L"},
+          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y presses Ctrl L"},
+          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 presses Alt L"},
+          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 presses Shift I"},
+          {"input": "btn 8", "outputs": ["key 9"], "note": "Back presses F"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start pauses to the race menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["mou 0 - 16"], "note": "D-pad left glances left in the cockpit"},
           {"input": "hat 0 R", "outputs": ["mou 0 + 16"], "note": "D-pad right glances right in the cockpit"},
@@ -13013,8 +13629,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -13041,8 +13657,8 @@ enum SmartPresetLibrary {
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Light Kick (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Medium Kick (default K)"},
           {"input": "btn 4", "outputs": ["key 15"], "note": "L1 = Heavy Kick (default L)"},
-          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (throw / Drive Impact macro)"},
-          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (Drive Parry macro)"},
+          {"input": "axi 5 +", "outputs": ["key 18", "key 15"], "note": "RT = HP+HK (two-button macro)"},
+          {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = MP+MK (two-button macro)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start = pause / menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Back = view / select (Tab)"}
         ],
@@ -13066,18 +13682,19 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire (Left Click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Zoom / aim (Right Click)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload / vent (R)"},
-          {"input": "btn 11", "outputs": ["key 9"], "note": "Melee (F)"},
+          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 5", "outputs": ["key 10"], "note": "Throw grenade (G)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Use equipment (Q)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
-          {"input": "btn 9", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
-          {"input": "btn 1", "outputs": ["key 225"], "note": "Sprint (Shift)"},
+          {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 25"], "note": "Swap / switch weapon (V)"},
-          {"input": "hat 0 U", "outputs": ["whe 1 - 4"], "note": "Switch weapon (wheel up)"},
+          {"input": "hat 0 U", "outputs": ["whs 1 -"], "note": "Switch weapon (wheel up)"},
           {"input": "hat 0 D", "outputs": ["key 17"], "note": "Next grenade type (N)"},
           {"input": "hat 0 R", "outputs": ["key 27"], "note": "Mark (X)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Scoreboard / menu (Tab)"},
-          {"input": "btn 12", "outputs": ["key 29"], "note": "AI scan (Z)"}
+          {"input": "btn 12", "outputs": ["key 9"], "note": "Melee (F)"},
+          {"input": "hat 0 L", "outputs": ["key 29"], "note": "Extra action (Z)"}
         ],
         "tips": ["Right trigger fires, left trigger aims or places a portal.", "Sprint sits on the left stick click; rebind to taste."]
       },
@@ -13135,14 +13752,14 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
           {"input": "btn 3", "outputs": ["key 9"], "note": "Use / interact (F)"},
-          {"input": "btn 4", "outputs": ["key 20"], "note": "Tactical grenade (Q)"},
-          {"input": "btn 5", "outputs": ["key 8"], "note": "Lethal grenade (E)"},
-          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint / tactical sprint (Shift)"},
+          {"input": "btn 4", "outputs": ["key 20"], "note": "Secondary grenade (Q)"},
+          {"input": "btn 5", "outputs": ["key 8"], "note": "Grenade (E)"},
+          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 12", "outputs": ["key 25"], "note": "Melee (V)"},
           {"input": "btn 8", "outputs": ["key 6"], "note": "Prone / dive (C)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"},
-          {"input": "hat 0 U", "outputs": ["key 14"], "note": "Killstreak wheel (K)"},
-          {"input": "hat 0 D", "outputs": ["key 27"], "note": "Field upgrade (X)"},
+          {"input": "hat 0 U", "outputs": ["key 14"], "note": "Radial menu (K)"},
+          {"input": "hat 0 D", "outputs": ["key 27"], "note": "Equipment (X)"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Swap to weapon 2 (2)"},
           {"input": "hat 0 R", "outputs": ["key 23"], "note": "Mount weapon (T)"}
         ],
@@ -13229,8 +13846,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -13256,8 +13873,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -13283,7 +13900,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -13315,7 +13932,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -13348,11 +13965,11 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Throw equipment (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Special weapon (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -13379,7 +13996,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -13413,8 +14030,8 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 88"], "note": "Return to start (numpad Enter)"},
           {"input": "axi 2 +", "outputs": ["key 11"], "note": "Right stick right: zoom in horizontally (H)"},
           {"input": "axi 2 -", "outputs": ["key 10"], "note": "Right stick left: zoom out horizontally (G)"},
-          {"input": "axi 3 -", "outputs": ["whe 1 + 1"], "note": "Right stick up: scroll up"},
-          {"input": "axi 3 +", "outputs": ["whe 1 - 1"], "note": "Right stick down: scroll down"},
+          {"input": "axi 3 -", "outputs": ["whe 1 - 1"], "note": "Right stick up: scroll up"},
+          {"input": "axi 3 +", "outputs": ["whe 1 + 1"], "note": "Right stick down: scroll down"},
           {"input": "axi 0 -", "outputs": ["key 80"], "note": "Left stick left: nudge cursor left (Left)"},
           {"input": "axi 0 +", "outputs": ["key 79"], "note": "Left stick right: nudge cursor right (Right)"},
           {"input": "axi 5 +", "outputs": ["key 227", "key 29"], "note": "Right trigger: undo (Cmd+Z)"},
@@ -13661,12 +14278,12 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Up (d-pad)"},
           {"input": "hat 0 D", "outputs": ["key 81"], "note": "Down (d-pad)"},
           {"input": "btn 0", "outputs": ["key 29"], "note": "Jump (Z)"},
-          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack / nail (X)"},
+          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack (X)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Dash (C)"},
           {"input": "btn 3", "outputs": ["key 4"], "note": "Cast spell (A)"},
           {"input": "axi 5 +", "outputs": ["key 4"], "note": "Heal / special (hold)"},
           {"input": "btn 4", "outputs": ["key 4"], "note": "Heal / special"},
-          {"input": "btn 5", "outputs": ["key 7"], "note": "Dream nail (D)"},
+          {"input": "btn 5", "outputs": ["key 7"], "note": "Special ability (D)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
         "tips": ["Left stick or D-pad moves; the bottom face button jumps.", "Attack and dodge sit on the face buttons; rebind to taste."]
@@ -13687,12 +14304,12 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Up (d-pad)"},
           {"input": "hat 0 D", "outputs": ["key 81"], "note": "Down (d-pad)"},
           {"input": "btn 0", "outputs": ["key 29"], "note": "Jump (Z)"},
-          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack / nail (X)"},
+          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack (X)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Dash (C)"},
           {"input": "btn 3", "outputs": ["key 4"], "note": "Cast spell (A)"},
           {"input": "axi 5 +", "outputs": ["key 4"], "note": "Heal / special (hold)"},
           {"input": "btn 4", "outputs": ["key 4"], "note": "Heal / special"},
-          {"input": "btn 5", "outputs": ["key 7"], "note": "Dream nail (D)"},
+          {"input": "btn 5", "outputs": ["key 7"], "note": "Special ability (D)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
         "tips": ["Left stick or D-pad moves; the bottom face button jumps.", "Attack and shards sit on the face buttons; rebind to taste."]
@@ -13765,9 +14382,9 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
-          {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
+          {"input": "btn 12", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
           {"input": "hat 0 L", "outputs": ["key 80"], "note": "Switch left hand weapon, Left"},
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Switch spell, Up"},
@@ -13798,7 +14415,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -13902,7 +14519,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "Inventory (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right trigger fires, left trigger aims.", "Sprint with the left stick click; the View button opens your inventory."]
+        "tips": ["Right trigger fires, left trigger aims.", "Sprint with the left stick click; D-pad down opens your inventory."]
       },
       {
         "id": "octopath-traveler", "category": "game", "displayName": "Octopath Traveler",
@@ -13921,7 +14538,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -13949,13 +14566,13 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 29"], "note": "Left trigger is the brake (Z)"},
           {"input": "btn 5", "outputs": ["key 44"], "note": "RB shifts up a gear (Space)"},
           {"input": "btn 4", "outputs": ["key 226"], "note": "LB shifts down a gear (Left Alt)"},
-          {"input": "btn 0", "outputs": ["key 22"], "note": "A engages the starter motor (S)"},
-          {"input": "btn 1", "outputs": ["key 15"], "note": "B cycles the car light stages (L)"},
-          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X flashes the high beams (Shift + L)"},
-          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y toggles the rain lights (Ctrl + L)"},
-          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 engages the pit limiter (Alt + L)"},
-          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 runs the ignition sequence (Shift + I)"},
-          {"input": "btn 8", "outputs": ["key 9"], "note": "Back cycles the cockpit display pages (F)"},
+          {"input": "btn 0", "outputs": ["key 22"], "note": "A presses S (the starter in some games)"},
+          {"input": "btn 1", "outputs": ["key 15"], "note": "B presses L (lights in most racers)"},
+          {"input": "btn 2", "outputs": ["key 225", "key 15"], "note": "X presses Shift L"},
+          {"input": "btn 3", "outputs": ["key 224", "key 15"], "note": "Y presses Ctrl L"},
+          {"input": "btn 11", "outputs": ["key 226", "key 15"], "note": "L3 presses Alt L"},
+          {"input": "btn 12", "outputs": ["key 225", "key 12"], "note": "R3 presses Shift I"},
+          {"input": "btn 8", "outputs": ["key 9"], "note": "Back presses F"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Start pauses to the race menu (Esc)"},
           {"input": "hat 0 L", "outputs": ["mou 0 - 16"], "note": "D-pad left glances left in the cockpit"},
           {"input": "hat 0 R", "outputs": ["mou 0 + 16"], "note": "D-pad right glances right in the cockpit"},
@@ -13966,7 +14583,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 18"], "note": "Right stick looks up around the cockpit"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 18"], "note": "Right stick looks down around the cockpit"}
         ],
-        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "Handbrake and look controls sit on the face buttons."]
+        "tips": ["Right trigger accelerates, left trigger brakes; left stick steers.", "The right stick and D-pad look around the cockpit. Check the face buttons against the game's own key list."]
       },
       {
         "id": "the-crew-2", "category": "game", "displayName": "The Crew 2",
@@ -13986,7 +14603,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 21"], "note": "Triangle = rewind (R)"},
           {"input": "btn 2", "outputs": ["key 11"], "note": "Square = horn (H)"},
           {"input": "hat 0 D", "outputs": ["key 43"], "note": "D-pad down = change camera (Tab)"},
-          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = ANNA co-driver (C)"},
+          {"input": "hat 0 R", "outputs": ["key 6"], "note": "D-pad right = assist (C)"},
           {"input": "hat 0 U", "outputs": ["key 16"], "note": "D-pad up = view map (M)"},
           {"input": "btn 8", "outputs": ["key 41"], "note": "Back = pause / menu (Esc)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Start = activate / confirm (Enter)"}
@@ -14012,11 +14629,11 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 12"], "note": "Triangle = Right Punch / 2 (default I)"},
           {"input": "btn 0", "outputs": ["key 13"], "note": "Cross = Left Kick / 3 (default J)"},
           {"input": "btn 1", "outputs": ["key 14"], "note": "Circle = Right Kick / 4 (default K)"},
-          {"input": "btn 5", "outputs": ["key 24", "key 12"], "note": "R1 = 1+2 (Heat Burst / forward throw)"},
+          {"input": "btn 5", "outputs": ["key 24", "key 12"], "note": "R1 = 1+2 (two-button macro)"},
           {"input": "btn 4", "outputs": ["key 13", "key 14"], "note": "L1 = 3+4 (low / sweep macro)"},
-          {"input": "axi 5 +", "outputs": ["key 24", "key 12", "key 13", "key 14"], "note": "RT = 1+2+3+4 (Rage Art)"},
+          {"input": "axi 5 +", "outputs": ["key 24", "key 12", "key 13", "key 14"], "note": "RT = 1+2+3+4 (all four buttons)"},
           {"input": "axi 4 +", "outputs": ["key 12", "key 14"], "note": "LT = 2+4 (right throw)"},
-          {"input": "btn 11", "outputs": ["key 79", "key 79"], "note": "L3 = quick forward dash (tap forward twice)"},
+          {"input": "btn 11", "outputs": ["key 79"], "repeatCount": 2, "repeatMs": 60, "note": "L3 = quick forward dash (tap forward twice)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Options = pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Share = view / select (Tab)"}
         ],
@@ -14043,14 +14660,14 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch / slide (Ctrl)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
           {"input": "btn 3", "outputs": ["key 9"], "note": "Use / interact (F)"},
-          {"input": "btn 4", "outputs": ["key 20"], "note": "Tactical grenade (Q)"},
-          {"input": "btn 5", "outputs": ["key 8"], "note": "Lethal grenade (E)"},
-          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint / tactical sprint (Shift)"},
+          {"input": "btn 4", "outputs": ["key 20"], "note": "Secondary grenade (Q)"},
+          {"input": "btn 5", "outputs": ["key 8"], "note": "Grenade (E)"},
+          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "btn 12", "outputs": ["key 25"], "note": "Melee (V)"},
           {"input": "btn 8", "outputs": ["key 6"], "note": "Prone / dive (C)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"},
-          {"input": "hat 0 U", "outputs": ["key 14"], "note": "Killstreak wheel (K)"},
-          {"input": "hat 0 D", "outputs": ["key 27"], "note": "Field upgrade (X)"},
+          {"input": "hat 0 U", "outputs": ["key 14"], "note": "Radial menu (K)"},
+          {"input": "hat 0 D", "outputs": ["key 27"], "note": "Equipment (X)"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Swap to weapon 2 (2)"},
           {"input": "hat 0 R", "outputs": ["key 23"], "note": "Mount weapon (T)"}
         ],
@@ -14074,11 +14691,11 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Throw equipment (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Special weapon (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -14105,8 +14722,8 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 22"], "note": "Pan down (S)"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Place / select (left click)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Cancel / rotate (right click)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Pause (Space)"},
           {"input": "btn 1", "outputs": ["key 30"], "note": "Speed 1"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Speed 2"},
@@ -14135,7 +14752,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
           {"input": "btn 5", "outputs": ["key 227", "key 22"], "note": "Save"}
         ],
-        "tips": ["Right stick scrubs the timeline; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
+        "tips": ["The left stick steps frames; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
       },
       {
         "id": "opentoonz", "category": "app", "displayName": "OpenToonz",
@@ -14486,7 +15103,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -14519,7 +15136,7 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["key 225", "mbt 1"], "note": "Left hand heavy or parry, L2 to Shift plus right click"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Roll, backstep, sprint, Space"},
           {"input": "btn 1", "outputs": ["key 8"], "note": "Interact, pick up, E"},
-          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, Estus heal, R"},
+          {"input": "btn 3", "outputs": ["key 21"], "note": "Use item, heal, R"},
           {"input": "btn 2", "outputs": ["key 9"], "note": "Two hand weapon toggle, F"},
           {"input": "btn 11", "outputs": ["mbt 2"], "note": "Lock on, reset camera, middle click"},
           {"input": "hat 0 R", "outputs": ["key 79"], "note": "Switch right hand weapon, Right"},
@@ -14553,11 +15170,11 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Throw equipment (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Special weapon (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -14585,11 +15202,11 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Throw equipment (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Special weapon (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -14615,12 +15232,12 @@ enum SmartPresetLibrary {
           {"input": "hat 0 U", "outputs": ["key 82"], "note": "Up (d-pad)"},
           {"input": "hat 0 D", "outputs": ["key 81"], "note": "Down (d-pad)"},
           {"input": "btn 0", "outputs": ["key 29"], "note": "Jump (Z)"},
-          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack / nail (X)"},
+          {"input": "btn 2", "outputs": ["key 27"], "note": "Attack (X)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Dash (C)"},
           {"input": "btn 3", "outputs": ["key 4"], "note": "Cast spell (A)"},
           {"input": "axi 5 +", "outputs": ["key 4"], "note": "Heal / special (hold)"},
           {"input": "btn 4", "outputs": ["key 4"], "note": "Heal / special"},
-          {"input": "btn 5", "outputs": ["key 7"], "note": "Dream nail (D)"},
+          {"input": "btn 5", "outputs": ["key 7"], "note": "Special ability (D)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
         "tips": ["Left stick or D-pad moves; the bottom face button jumps.", "Attack and skills sit on the face buttons; rebind to taste."]
@@ -14645,7 +15262,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
           {"input": "btn 5", "outputs": ["key 227", "key 22"], "note": "Save"}
         ],
-        "tips": ["Right stick scrubs the timeline; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
+        "tips": ["The left stick steps frames; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
       },
       {
         "id": "descript", "category": "app", "displayName": "Descript",
@@ -14667,7 +15284,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 227", "key 29"], "note": "Undo"},
           {"input": "btn 5", "outputs": ["key 227", "key 22"], "note": "Save"}
         ],
-        "tips": ["Right stick scrubs; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
+        "tips": ["The left stick steps frames; the bottom face button plays.", "Triggers click and the face buttons run common shortcuts."]
       },
       {
         "id": "drafts", "category": "app", "displayName": "Drafts",
@@ -14785,7 +15402,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 4"], "note": "Cast spell (A)"},
           {"input": "axi 5 +", "outputs": ["key 4"], "note": "Focus / heal (A, hold)"},
           {"input": "btn 4", "outputs": ["key 4"], "note": "Focus / heal (alt)"},
-          {"input": "btn 5", "outputs": ["key 7"], "note": "Dream nail (D)"},
+          {"input": "btn 5", "outputs": ["key 7"], "note": "Tool or silk skill (D)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
         "tips": ["Left stick or D-pad moves; the bottom face button jumps.", "Attack and silk skills sit on the face buttons; rebind to taste."]
@@ -14835,7 +15452,7 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["key 14"], "note": "Turn camera down (K)"},
           {"input": "btn 0", "outputs": ["key 8"], "note": "Confirm / select (E)"},
           {"input": "btn 1", "outputs": ["key 6"], "note": "Cancel / back (C)"},
-          {"input": "btn 2", "outputs": ["key 224"], "note": "Third Eye / analyze (Ctrl)"},
+          {"input": "btn 2", "outputs": ["key 224"], "note": "Analyze or special view (Ctrl)"},
           {"input": "btn 3", "outputs": ["key 21"], "note": "Reset camera (R)"},
           {"input": "btn 5", "outputs": ["key 225"], "note": "Dash / run (Shift)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Page left / cycle (Q)"},
@@ -14866,13 +15483,13 @@ enum SmartPresetLibrary {
           {"input": "axi 3 +", "outputs": ["mou 1 + 16"], "note": "Look down"},
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
-          {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alt fire"},
+          {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Weapon mod / alternate fire (right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "Equipment launcher / throw (Ctrl)"},
-          {"input": "btn 2", "outputs": ["key 8"], "note": "Glory kill / melee (E)"},
+          {"input": "btn 2", "outputs": ["key 8"], "note": "Melee (E)"},
           {"input": "btn 3", "outputs": ["key 10"], "note": "Switch equipment (G)"},
-          {"input": "btn 4", "outputs": ["key 21"], "note": "Flame belch (R)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Crucible (V)"},
+          {"input": "btn 4", "outputs": ["key 21"], "note": "Ability (R)"},
+          {"input": "btn 5", "outputs": ["key 25"], "note": "Ability (V)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Dash (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Weapon 2"},
@@ -14880,7 +15497,7 @@ enum SmartPresetLibrary {
           {"input": "hat 0 D", "outputs": ["key 33"], "note": "Weapon 4"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right trigger fires; left trigger raises the shield.", "Keep moving with the left stick to stay alive."]
+        "tips": ["Right trigger fires; left trigger is the weapon mod or alternate fire.", "Keep moving with the left stick to stay alive."]
       },
       {
         "id": "assassins-creed-shadows", "category": "game", "displayName": "Assassins Creed Shadows",
@@ -14906,15 +15523,15 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 226"], "note": "Dodge (Alt)"},
           {"input": "btn 5", "outputs": ["key 225", "mbt 1"], "note": "Heavy attack (Shift + RMB)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
-          {"input": "btn 12", "outputs": ["key 21"], "note": "Assassin's Focus (R)"},
+          {"input": "btn 12", "outputs": ["key 21"], "note": "Focus (R)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "World map (M)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"},
           {"input": "hat 0 U", "outputs": ["key 10"], "note": "Tools wheel (G)"},
-          {"input": "hat 0 L", "outputs": ["key 25"], "note": "Eagle vision (V)"},
-          {"input": "hat 0 R", "outputs": ["key 5"], "note": "Call Enkidu eagle (B)"},
+          {"input": "hat 0 L", "outputs": ["key 25"], "note": "Vision mode (V)"},
+          {"input": "hat 0 R", "outputs": ["key 5"], "note": "Call companion (B)"},
           {"input": "hat 0 D", "outputs": ["key 11"], "note": "Heal (H)"}
         ],
-        "tips": ["Right trigger attacks; face buttons parkour and interact.", "Crouch and eagle controls sit where Mirage put them."]
+        "tips": ["Right trigger attacks; face buttons parkour and interact.", "Check the game's own key list, and Scan any row to change it to match."]
       },
       {
         "id": "civilization-vii", "category": "game", "displayName": "Civilization VII",
@@ -14935,8 +15552,8 @@ enum SmartPresetLibrary {
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Move / context (right click)"},
           {"input": "btn 0", "outputs": ["key 40"], "note": "Next turn / confirm (Enter)"},
           {"input": "btn 1", "outputs": ["key 41"], "note": "Cancel (Esc)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 2", "outputs": ["key 23"], "note": "Tech tree (T)"},
           {"input": "btn 10", "outputs": ["key 5"], "note": "Found / build (B)"}
         ],
@@ -14963,8 +15580,8 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 30"], "note": "Normal speed (1)"},
           {"input": "btn 2", "outputs": ["key 31"], "note": "Fast (2)"},
           {"input": "btn 3", "outputs": ["key 32"], "note": "Faster (3)"},
-          {"input": "btn 4", "outputs": ["whs 1 -"], "note": "Zoom out"},
-          {"input": "btn 5", "outputs": ["whs 1 +"], "note": "Zoom in"},
+          {"input": "btn 4", "outputs": ["whs 1 +"], "note": "Zoom out"},
+          {"input": "btn 5", "outputs": ["whs 1 -"], "note": "Zoom in"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
         "tips": ["Left stick drives the pointer; right stick moves the camera.", "Triggers click; face buttons run common shortcuts."]
@@ -15009,31 +15626,31 @@ enum SmartPresetLibrary {
         "light": {"r": 70, "g": 110, "b": 200},
         "confineCursor": true, "autoRecenter": true, "hideCursor": true,
         "bindings": [
-          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe / thrust left (A)"},
-          {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe / thrust right (D)"},
-          {"input": "axi 1 -", "outputs": ["key 26"], "note": "Thrust forward (W)"},
-          {"input": "axi 1 +", "outputs": ["key 22"], "note": "Thrust back (S)"},
+          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
+          {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
+          {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
+          {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
           {"input": "axi 2 -", "outputs": ["mou 0 - 16"], "note": "Look left"},
           {"input": "axi 2 +", "outputs": ["mou 0 + 16"], "note": "Look right"},
           {"input": "axi 3 -", "outputs": ["mou 1 - 16"], "note": "Look up"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 16"], "note": "Look down"},
-          {"input": "axi 5 +", "outputs": ["mbt 1"], "note": "Launch scout / Signalscope / Translate (contextual)"},
-          {"input": "axi 4 +", "outputs": ["key 225"], "note": "Up thrust / jetpack rise (LShift)"},
-          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump / jetpack boost / match velocity (Space)"},
-          {"input": "btn 1", "outputs": ["key 224"], "note": "Down thrust / descend (LCtrl)"},
+          {"input": "axi 5 +", "outputs": ["mbt 1"], "note": "Use (contextual)"},
+          {"input": "axi 4 +", "outputs": ["key 225"], "note": "Sprint (LShift)"},
+          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
+          {"input": "btn 1", "outputs": ["key 224"], "note": "Crouch (LCtrl)"},
           {"input": "btn 2", "outputs": ["key 8"], "note": "Interact (E)"},
           {"input": "btn 3", "outputs": ["key 9"], "note": "Flashlight (F)"},
-          {"input": "btn 4", "outputs": ["key 28"], "note": "Signalscope (Y)"},
-          {"input": "btn 5", "outputs": ["mbt 0"], "note": "Lock on / roll (Left Mouse)"},
-          {"input": "btn 11", "outputs": ["key 226"], "note": "Cockpit free look (LAlt)"},
-          {"input": "btn 12", "outputs": ["key 27"], "note": "Autopilot (X)"},
-          {"input": "hat 0 U", "outputs": ["key 6"], "note": "Landing camera (C)"},
-          {"input": "hat 0 D", "outputs": ["key 21"], "note": "Rearview scout snapshot (R)"},
-          {"input": "hat 0 L", "outputs": ["key 29"], "note": "Ship log mode (Z)"},
+          {"input": "btn 4", "outputs": ["key 28"], "note": "Tool (Y)"},
+          {"input": "btn 5", "outputs": ["mbt 0"], "note": "Select (Left Mouse)"},
+          {"input": "btn 11", "outputs": ["key 226"], "note": "Free look (LAlt)"},
+          {"input": "btn 12", "outputs": ["key 27"], "note": "Action (X)"},
+          {"input": "hat 0 U", "outputs": ["key 6"], "note": "Camera (C)"},
+          {"input": "hat 0 D", "outputs": ["key 21"], "note": "Action (R)"},
+          {"input": "hat 0 L", "outputs": ["key 29"], "note": "Log (Z)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "View map (Tab)"}
         ],
-        "tips": ["Left stick walks; right stick looks around.", "Right trigger interacts; the View button opens your notes."]
+        "tips": ["Left stick walks; right stick looks around.", "Right trigger interacts; the View button opens the map."]
       },
       {
         "id": "path-of-exile-2", "category": "game", "displayName": "Path of Exile 2",
@@ -15042,7 +15659,7 @@ enum SmartPresetLibrary {
         "light": {"r": 170, "g": 50, "b": 50},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
         "bindings": [
-          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A) - requires WASD movement mode in Options"},
+          {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A); needs WASD movement mode in Options"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move up (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move down (S)"},
@@ -15087,20 +15704,20 @@ enum SmartPresetLibrary {
           {"input": "btn 2", "outputs": ["mbt 0"], "note": "Melee attack (Left click)"},
           {"input": "btn 3", "outputs": ["mbt 1"], "note": "Gun / shoot (Right click)"},
           {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
-          {"input": "btn 1", "outputs": ["whe 1 + 4"], "note": "Style / special action (Mouse Wheel)"},
+          {"input": "btn 1", "outputs": ["whs 1 +"], "note": "Style / special action (Mouse Wheel)"},
           {"input": "axi 5 +", "outputs": ["key 225"], "note": "Lock-on (hold) (Shift)"},
           {"input": "btn 12", "outputs": ["key 224"], "note": "Switch target (Ctrl)"},
-          {"input": "axi 4 +", "outputs": ["key 9"], "note": "Devil Breaker action (Nero arm) (F)"},
-          {"input": "btn 5", "outputs": ["key 10"], "note": "Devil Trigger (G)"},
+          {"input": "axi 4 +", "outputs": ["key 9"], "note": "Special action (F)"},
+          {"input": "btn 5", "outputs": ["key 10"], "note": "Power mode (G)"},
           {"input": "btn 4", "outputs": ["key 224", "key 44"], "note": "Dodge / evade (Ctrl+Space)"},
-          {"input": "btn 11", "outputs": ["key 5"], "note": "Break away / discard Devil Breaker (B)"},
+          {"input": "btn 11", "outputs": ["key 5"], "note": "Break away (B)"},
           {"input": "btn 8", "outputs": ["key 21"], "note": "Taunt / provoke (R)"},
           {"input": "hat 0 U", "outputs": ["key 226"], "note": "Reset camera (Alt)"},
           {"input": "hat 0 L", "outputs": ["key 27"], "note": "Cycle weapon (X)"},
           {"input": "hat 0 R", "outputs": ["key 6"], "note": "Cycle gun (C)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
-        "tips": ["Face buttons attack; triggers block and dash.", "Same fast-action layout as Devil May Cry."]
+        "tips": ["Face buttons attack; triggers block and dash.", "Check the game's own key list, and Scan any row to change it to match."]
       },
       {
         "id": "arc-raiders", "category": "game", "displayName": "Arc Raiders",
@@ -15117,24 +15734,24 @@ enum SmartPresetLibrary {
           {"input": "axi 2 -", "outputs": ["mou 0 - 16"], "note": "Look left"},
           {"input": "axi 3 +", "outputs": ["mou 1 + 13"], "note": "Look down"},
           {"input": "axi 3 -", "outputs": ["mou 1 - 13"], "note": "Look up"},
-          {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire"},
-          {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim"},
-          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump"},
-          {"input": "btn 1", "outputs": ["key 6"], "note": "Crouch (C)"},
-          {"input": "btn 2", "outputs": ["key 21"], "note": "Reload (R)"},
-          {"input": "btn 3", "outputs": ["key 9"], "note": "Loot / use (F)"},
-          {"input": "btn 4", "outputs": ["key 10"], "note": "Throw tool (G)"},
-          {"input": "btn 5", "outputs": ["key 25"], "note": "Dark Sight (V)"},
-          {"input": "btn 8", "outputs": ["key 43"], "note": "Tools / consumables (Tab)"},
+          {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire, throw or deploy (left click)"},
+          {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim (right click)"},
+          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
+          {"input": "btn 1", "outputs": ["key 6"], "double": ["key 226"], "note": "Crouch (C); double tap: dodge roll (Left Alt, the Option key)"},
+          {"input": "btn 2", "outputs": ["key 21"], "hold": ["key 8"], "holdMs": 250, "note": "Reload (R); hold: interact and loot (E)"},
+          {"input": "btn 3", "outputs": ["whs 1 -"], "hold": ["key 11"], "holdMs": 300, "note": "Next weapon (scroll up); hold: unarmed (H)"},
+          {"input": "btn 4", "outputs": ["key 20"], "note": "Items (Q)"},
+          {"input": "btn 5", "outputs": ["mbt 2"], "note": "Ping (middle click); hold for the ping wheel"},
+          {"input": "btn 8", "outputs": ["key 43"], "hold": ["key 16"], "holdMs": 300, "note": "Inventory (Tab); hold: map (M)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
-          {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
-          {"input": "btn 12", "outputs": ["key 8"], "note": "Interact (E)"},
-          {"input": "hat 0 U", "outputs": ["key 30"], "note": "Weapon 1"},
-          {"input": "hat 0 D", "outputs": ["key 31"], "note": "Weapon 2"},
-          {"input": "hat 0 L", "outputs": ["key 32"], "note": "Tool (3)"},
-          {"input": "hat 0 R", "outputs": ["key 33"], "note": "Consumable (4)"}
+          {"input": "btn 11", "outputs": ["key 225"], "toggle": true, "note": "Sprint (Left Shift): click to run, click again to walk"},
+          {"input": "btn 12", "outputs": ["key 27"], "note": "Swap shoulder (X)"},
+          {"input": "hat 0 U", "outputs": ["key 10"], "note": "Emote (G)"},
+          {"input": "hat 0 D", "outputs": ["key 5"], "note": "Proximity voice chat (B), hold to talk"},
+          {"input": "hat 0 L", "outputs": ["key 32"], "note": "Melee weapon (3)"},
+          {"input": "hat 0 R", "outputs": ["key 9"], "note": "Flashlight (F)"}
         ],
-        "tips": ["Right trigger fires, left trigger aims down sights.", "Loot and ping controls sit on the face buttons."]
+        "tips": ["Right trigger fires, left trigger aims; the right bumper pings, and holding it opens the ping wheel.", "Click the left stick to start running and again to stop, as on the game's own controller layout."]
       },
       {
         "id": "deadlock", "category": "game", "displayName": "Deadlock",
@@ -15187,16 +15804,16 @@ enum SmartPresetLibrary {
           {"input": "btn 1", "outputs": ["key 224"], "note": "Sneak (Ctrl)"},
           {"input": "btn 2", "outputs": ["key 21"], "note": "Reload"},
           {"input": "btn 3", "outputs": ["key 8"], "note": "Activate (E)"},
-          {"input": "btn 4", "outputs": ["key 20"], "note": "VATS (Q)"},
+          {"input": "btn 4", "outputs": ["key 20"], "note": "Targeting / ability (Q)"},
           {"input": "btn 5", "outputs": ["key 21"], "note": "Reload / holster (R)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
           {"input": "hat 0 U", "outputs": ["key 30"], "note": "Favorite 1"},
           {"input": "hat 0 L", "outputs": ["key 31"], "note": "Favorite 2"},
           {"input": "hat 0 R", "outputs": ["key 32"], "note": "Favorite 3"},
-          {"input": "hat 0 D", "outputs": ["key 43"], "note": "Pip-Boy (Tab)"},
+          {"input": "hat 0 D", "outputs": ["key 43"], "note": "Menu / inventory (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"}
         ],
-        "tips": ["Right trigger attacks or fires; left trigger aims.", "Inventory and map sit on the View button and D-pad."]
+        "tips": ["Right trigger attacks or fires; left trigger aims.", "D-pad down opens the menu and inventory; the rest of the D-pad holds favorites."]
       },
       {
         "id": "split-fiction", "category": "game", "displayName": "Split Fiction",
@@ -15215,15 +15832,15 @@ enum SmartPresetLibrary {
           {"input": "axi 3 -", "outputs": ["mou 1 - 18"], "note": "Look up"},
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Fire weapon (LMB)"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Aim (RMB)"},
-          {"input": "btn 5", "outputs": ["key 8"], "note": "Launch / telekinesis (E)"},
+          {"input": "btn 5", "outputs": ["key 8"], "note": "Ability (E)"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "Evade / dodge (Ctrl)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Shield (Q)"},
           {"input": "btn 2", "outputs": ["key 25"], "note": "Melee (V)"},
-          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump / levitate (Space)"},
+          {"input": "btn 0", "outputs": ["key 44"], "note": "Jump (Space)"},
           {"input": "btn 11", "outputs": ["key 225"], "note": "Sprint (Shift)"},
-          {"input": "btn 3", "outputs": ["key 9"], "note": "Use / seize / switch weapon (F)"},
+          {"input": "btn 3", "outputs": ["key 9"], "note": "Use / switch weapon (F)"},
           {"input": "btn 12", "outputs": ["key 6"], "note": "Crouch / ground slam (C)"},
-          {"input": "hat 0 U", "outputs": ["key 10"], "note": "Loadout / weapon forms (G)"},
+          {"input": "hat 0 U", "outputs": ["key 10"], "note": "Loadout (G)"},
           {"input": "btn 8", "outputs": ["key 43"], "note": "Map (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause menu (Esc)"}
         ],
@@ -15439,7 +16056,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 43"], "note": "Change camera (Tab)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause / menu (Esc)"}
         ],
-        "tips": ["Push the stick forward to accelerate and back to brake. Snap fully back twice to shift into Reverse, then push fully forward to return to Drive.", "Steering is analog mouse by default; switch to A and D keys in the editor if your game needs them.", "Open the editor and use the live axis readout to confirm the right stick is assigned before you drive."],
+        "tips": ["Push the stick forward to accelerate and back to brake. Snap fully back twice to shift into Reverse, then push fully forward to return to Drive.", "Steering is analog mouse by default; switch to A and D keys in the editor if your game needs them.", "Open the editor and use the live axis readout to confirm the left stick is assigned before you drive."],
         "drive": {
           "enabled": true, "slot": 0, "steerAxis": 0, "throttleAxis": 1,
           "steerMode": "mouse", "steerMouseSpeed": 16,
@@ -15450,6 +16067,23 @@ enum SmartPresetLibrary {
       }
     ]
     """
+}
+
+extension ControllerBrand {
+    /// Whether this controller has the hardware a catalog row needs.
+    func supports(_ need: String) -> Bool {
+        switch need {
+        case "touchpad": return hasTouchpad
+        case "motion", "gyro": return hasMotion
+        case "lightbar": return hasLightBar
+        // Back paddles: the DualSense Edge, Xbox Elite, and the Steam
+        // Controller's grips. A pad of the same brand without them simply
+        // never presses the row. Not 8BitDo: the Pro 2's back buttons repeat
+        // other buttons inside the pad and are not inputs of their own.
+        case "paddles": return [.dualSense, .xbox, .steamController].contains(self)
+        default: return true
+        }
+    }
 }
 
 /// Turns a `SmartPresetProfile` plus the user's chosen controller into a
@@ -15475,6 +16109,12 @@ enum SmartPresetGenerator {
         var gyroFineAim: Bool = false
         /// A short rumble whenever a trigger-driven click fires.
         var rumbleOnTriggers: Bool = false
+        /// On a pad with back paddles, the paddles repeat A, B, X and Y, so
+        /// the thumbs never leave the sticks.
+        var backPaddles: Bool = false
+        /// Stick rows that move the pointer or the camera start slow and
+        /// speed up while held (ramp-up), for landing on small targets.
+        var pointerRamp: Bool = false
     }
 
     /// Whether the profile turns the controller into a mouse-look game
@@ -15492,12 +16132,33 @@ enum SmartPresetGenerator {
         // what every control does without a giant info dump in the notes box.
         var bindingModels: [BindingModel] = []
         for b in profile.bindings {
+            if let need = b.needs, !brand.supports(need) { continue }
             guard let input = InputEvent.parse(b.input) else { continue }
             let outputs = b.outputs.compactMap { OutputAction.parse($0) }
-            guard !outputs.isEmpty else { continue }
+            let hold = b.hold?.compactMap { OutputAction.parse($0) }
+            let double = b.double?.compactMap { OutputAction.parse($0) }
+            guard !outputs.isEmpty || hold?.isEmpty == false || double?.isEmpty == false else { continue }
             var bm = BindingModel(input: input, outputs: outputs)
-            let trimmed = b.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = Self.renamedNote(b.note.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           input: b.input, brand: brand)
             bm.note = trimmed.isEmpty ? nil : trimmed
+            if let hold, !hold.isEmpty { bm.holdOutputs = hold; bm.holdThresholdMs = b.holdMs ?? 300 }
+            if let double, !double.isEmpty { bm.doubleTapOutputs = double; bm.doubleTapWindowMs = b.doubleMs ?? 300 }
+            if let with = b.with { bm.setModifiers(with.compactMap { InputEvent.parse($0) }) }
+            if b.toggle == true { bm.toggleMode = true }
+            if let t = b.turbo, t > 0 { bm.turboEnabled = true; bm.turboRate = t }
+            if let r = b.repeatCount, r > 1 { bm.repeatCount = r; bm.repeatDelayMs = b.repeatMs ?? 100 }
+            if let dz = b.deadzone { bm.deadzone = Float(dz) }
+            if let o = b.outer { bm.outerDeadzone = Float(o) }
+            switch b.curve {
+            case "smooth": bm.sensitivityCurve = .exponential
+            case "aggressive": bm.sensitivityCurve = .aggressive
+            default: break
+            }
+            if let v = b.variable { bm.variableSensitivity = v }
+            if let r = b.ramp, r > 0 { bm.rampMs = r }
+            if let rumble = b.rumble, rumble > 0 { bm.hapticEnabled = true; bm.hapticIntensity = Float(rumble) }
+            if let phrase = b.speak { bm.speechEnabled = true; bm.speechText = phrase }
             // A trigger that clicks can rumble as it does, so a shot or a
             // swing is felt. Only rows a trigger drives to a mouse button.
             if options.rumbleOnTriggers, input.type == .axis, (4...5).contains(input.index),
@@ -15548,9 +16209,32 @@ enum SmartPresetGenerator {
                              outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
                              deadzone: 0.05, variableSensitivity: true),
             ]
-            let notes = ["Turn right: aim right", "Turn left: aim left", "Tilt up: aim up", "Tilt down: aim down"]
+            let notes = ["Tilt right: aim right", "Tilt left: aim left", "Tilt up: aim up", "Tilt down: aim down"]
             for i in rows.indices { rows[i].note = notes[i]; rows[i].section = "Gyro aim" }
             rows.forEach(add)
+        }
+        if options.backPaddles, brand.supports("paddles") {
+            // See paddlePairs for which button numbers they are.
+            let kind = brand == .xbox ? "Paddle" : "Back button"
+            for (paddle, face) in Self.paddlePairs(for: brand) {
+                guard let src = bindingModels.first(where: { $0.input.type == .button && $0.input.index == face && $0.modifiers.isEmpty }) else { continue }
+                var row = src.duplicated()
+                row.input = .button(paddle)
+                let faceName = label(for: "btn \(face)", brand: brand)
+                // The family's name already says paddle or back button.
+                let name = label(for: "btn \(paddle)", brand: brand)
+                let lower = name.lowercased()
+                let named = lower.contains("paddle") || lower.contains("back") ? name : "\(kind) \(name)"
+                row.note = "\(named): same as \(faceName)" + (src.note.map { " (\($0))" } ?? "")
+                row.section = brand == .xbox ? "Paddles" : "Back buttons"
+                add(row)
+            }
+        }
+        if options.pointerRamp {
+            for i in bindingModels.indices where bindingModels[i].input.type == .axis
+                && bindingModels[i].outputs.contains(where: { $0.type == .mouseMotion }) && bindingModels[i].rampMs == nil {
+                bindingModels[i].rampMs = 400
+            }
         }
         let slot = JoystickMapping(tag: slotGuide(for: profile, brand: brand),
                                    bindings: bindingModels)
@@ -15558,6 +16242,8 @@ enum SmartPresetGenerator {
                             joysticks: [slot], filename: Preset.generateFilename())
         preset.sortBindings()
         preset.groupID = options.groupID
+        // Made for this brand, so shown as its family.
+        preset.buttonFamily = family(for: brand)
 
         var auto = PresetAutomation()
         if options.autoLaunchApp {
@@ -15588,7 +16274,7 @@ enum SmartPresetGenerator {
     /// Compact "Label = action" summary for the slot subtitle.
     private static func slotGuide(for profile: SmartPresetProfile, brand: ControllerBrand) -> String {
         profile.bindings.prefix(6)
-            .map { "\(label(for: $0.input, brand: brand)) = \($0.note)" }
+            .map { "\(label(for: $0.input, brand: brand)) = \(action(of: $0.note))" }
             .joined(separator: ", ")
     }
 
@@ -15620,6 +16306,16 @@ enum SmartPresetGenerator {
         if options.rumbleOnTriggers {
             out += "The triggers rumble when they click.\n"
         }
+        if options.backPaddles, brand.supports("paddles") {
+            let faces = Self.paddlePairs(for: brand).map { label(for: "btn \($0.face)", brand: brand) }
+            let list = faces.count > 2
+                ? faces.dropLast().joined(separator: ", ") + ", and " + (faces.last ?? "")
+                : faces.joined(separator: " and ")
+            out += (brand == .xbox ? "The back paddles repeat \(list).\n" : "The back buttons repeat \(list).\n")
+        }
+        if options.pointerRamp {
+            out += "Pointer ramp-up is on: a short push moves slowly, a held push speeds up. Change it in a stick row's Options.\n"
+        }
         if !profile.tips.isEmpty {
             out += "\nTips:\n" + profile.tips.map { "- \($0)" }.joined(separator: "\n")
         }
@@ -15628,6 +16324,71 @@ enum SmartPresetGenerator {
 
     /// Translate a serialized input ("btn 0", "axi 2 +", "hat 0 U") into the
     /// physical control label for the chosen controller brand.
+    /// Which paddle repeats which face button. The DualSense Edge has two
+    /// back buttons (16, 17); the Xbox Elite four paddles (16 to 19); the
+    /// 2026 Steam Controller four back buttons, L4, R4, L5, R5 (14 to 17).
+    static func paddlePairs(for brand: ControllerBrand) -> [(paddle: Int, face: Int)] {
+        switch brand {
+        case .dualSense: return [(16, 0), (17, 1)]
+        case .steamController: return [(14, 0), (15, 1), (16, 2), (17, 3)]
+        default: return [(16, 0), (17, 1), (18, 2), (19, 3)]
+        }
+    }
+
+    /// The family a preset made for this brand names its buttons in. A
+    /// Steam Controller here is the 2026 model: the rows use the standard
+    /// numbering, which the 2015 model does not read.
+    static func family(for brand: ControllerBrand) -> FaceLetters? {
+        brand == .steamController ? .steamController2026 : ButtonNames.family(forBrand: brand)
+    }
+
+    /// The catalog writes a row's notes with Xbox names ("A: jump", "B
+    /// dodges", "LT/L2: aim", "look right (hold RT)"); on another pad those
+    /// names point at the wrong buttons, so they are swapped for this pad's.
+    /// A leading name is swapped only when it is the row's own control, and
+    /// one mid-sentence only after hold, press, or tap.
+    static func renamedNote(_ note: String, input: String, brand: ControllerBrand) -> String {
+        var out = note
+        if let range = out.range(of: leadingName, options: .regularExpression) {
+            out = label(for: input, brand: brand) + ": " + out[range.upperBound...]
+        } else if let range = out.range(of: #"^(B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide)(?= )|^A(?= = )"#,
+                                        options: .regularExpression),
+                  isSameControl(String(out[range]), input) {
+            out.replaceSubrange(range, with: label(for: input, brand: brand))
+        }
+        guard let regex = try? NSRegularExpression(pattern: #"\b(hold|holding|press|pressing|tap) (LB|RB|LT|RT|A|B|X|Y)\b"#) else {
+            return out
+        }
+        let ns = out as NSString
+        for match in regex.matches(in: out, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let token = ns.substring(with: match.range(at: 2))
+            guard let control = xboxControls[token] else { continue }
+            out = (out as NSString).replacingCharacters(in: match.range(at: 2), with: label(for: control, brand: brand))
+        }
+        return out
+    }
+
+    /// A catalog note without its leading button name ("A: jump" is
+    /// "jump"), for places that print the button name beside it.
+    static func action(of note: String) -> String {
+        guard let range = note.range(of: leadingName, options: .regularExpression) else { return note }
+        return String(note[range.upperBound...])
+    }
+
+    private static let leadingName = #"^(A|B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide|L3|R3)(\s*/\s*[A-Za-z0-9]+)?:\s*"#
+
+    /// The catalog's Xbox names and the inputs they stand for.
+    private static let xboxControls: [String: String] = [
+        "A": "btn 0", "B": "btn 1", "X": "btn 2", "Y": "btn 3", "LB": "btn 4", "RB": "btn 5",
+        "LT": "btn 6", "RT": "btn 7", "View": "btn 8", "Back": "btn 8", "Menu": "btn 9", "Start": "btn 9",
+        "Guide": "btn 10", "L3": "btn 11", "R3": "btn 12",
+    ]
+
+    private static func isSameControl(_ name: String, _ input: String) -> Bool {
+        if xboxControls[name] == input { return true }
+        return (name == "LT" && input.hasPrefix("axi 4")) || (name == "RT" && input.hasPrefix("axi 5"))
+    }
+
     static func label(for input: String, brand: ControllerBrand) -> String {
         let parts = input.split(separator: " ").map(String.init)
         guard let kind = parts.first else { return input }
@@ -15643,25 +16404,33 @@ enum SmartPresetGenerator {
         }
     }
 
+    /// A button's short name for notes, from the same tables the editor
+    /// and visualizer use (makePreset pins the preset to the brand's
+    /// family). A brand with no family takes the Face button names setting
+    /// for its face buttons.
     private static func buttonLabel(_ index: Int, brand: ControllerBrand) -> String {
-        let nintendo = brand.usesNintendoLayout
-        let ps = (brand == .dualSense || brand == .dualShock4)
+        let family = family(for: brand)
+        let model = ButtonNames.ModelNames.of(brand: brand, dualShock3: false)
+        if FaceLetters.current == .positions, let position = FaceLetters.positionName(index) {
+            return position
+        }
         switch index {
-        case 0:  return nintendo ? "B" : (ps ? "Cross" : "A")
-        case 1:  return nintendo ? "A" : (ps ? "Circle" : "B")
-        case 2:  return nintendo ? "Y" : (ps ? "Square" : "X")
-        case 3:  return nintendo ? "X" : (ps ? "Triangle" : "Y")
-        case 4:  return ps ? "L1" : (nintendo ? "L" : "LB")
-        case 5:  return ps ? "R1" : (nintendo ? "R" : "RB")
-        case 6:  return ps ? "L2" : (nintendo ? "ZL" : "LT")
-        case 7:  return ps ? "R2" : (nintendo ? "ZR" : "RT")
-        case 8:  return ps ? "Share" : (nintendo ? "Minus" : "View")
-        case 9:  return ps ? "Options" : (nintendo ? "Plus" : "Menu")
-        case 10: return ps ? "PS" : (nintendo ? "Home" : "Guide")
+        case 0...3:
+            // The same name the editor shows for this button: on an Xbox
+            // style pad that follows the Face button names setting.
+            if let family, family != .xbox, let name = ButtonNames.name(index, family: family) { return name }
+            if family == .xbox { return ButtonNames.label(index, family: .xbox, model: model) }
+            let choice = FaceLetters.current
+            if choice == .playstation { return FaceLetters.genericName(index, choice: .playstation) ?? "Button \(index)" }
+            let nintendo = FaceLetters.nintendo(for: brand, choice: choice)
+            return ButtonNames.name(index, family: nintendo ? .nintendo : .xbox) ?? "Button \(index)"
+        case 4...10:
+            if let short = ButtonNames.short(index, family: family, model: model) { return short }
+            return "Button \(index)"
         case 11: return "Left stick click (L3)"
         case 12: return "Right stick click (R3)"
-        case 13: return "Touchpad"
-        default: return "Button \(index)"
+        default:
+            return family.flatMap { ButtonNames.name(index, family: $0) } ?? (index == 13 ? "Touchpad" : "Button \(index)")
         }
     }
 
