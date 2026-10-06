@@ -3,6 +3,7 @@ import QuartzCore
 import GameController
 import Combine
 import AppKit
+import IOKit.hid
 
 /// Readable info about a connected controller.
 ///
@@ -380,37 +381,166 @@ class GameControllerService: ObservableObject {
     /// compiled into a Release build.
     func setMarketingFakeControllers(_ on: Bool) {
         guard on != marketingFakeActive else { return }
-        if !on {
-            controllerDetails.removeValue(forKey: 0)
-            controllerDetails.removeValue(forKey: 1)
-            controllerNames.removeValue(forKey: 0)
-            controllerNames.removeValue(forKey: 1)
-            marketingFakeActive = false
-            return
+        setMarketingFakeSet(on ? ["dualsense-edge", "access"] : [])
+    }
+
+    /// How many slots the synthetic set fills, from slot 0.
+    @Published private(set) var marketingFakeCount = 0
+    /// Slots of the synthetic set read as raw HID pads.
+    private var marketingFakeRawSlots: Set<Int> = []
+
+    /// Marketing capture: any mix of synthetic controllers, one per slot from
+    /// slot 0 (`post inputconfig.debug.fakeset "dualsense,xbox"`), so article
+    /// screenshots can show pads that are not on the desk. GameController
+    /// kinds get a description the way a stand-in does; raw kinds get a
+    /// RawHIDGamepad that is never opened (it borrows any HID device as its
+    /// placeholder and nothing writes to it). An empty list removes them all.
+    func setMarketingFakeSet(_ kinds: [String]) {
+        for slot in 0..<marketingFakeCount {
+            ActivityLog.shared.info("Controllers", "Disconnected \(controllerNames[slot] ?? "a controller") from slot \(slot)", slot: slot)
+            controllerDetails.removeValue(forKey: slot)
+            controllerNames.removeValue(forKey: slot)
         }
+        for slot in marketingFakeRawSlots { rawHIDGamepadSlots.removeValue(forKey: slot) }
+        marketingFakeRawSlots = []
+        marketingFakeCount = 0
+        marketingFakeActive = false
+        guard !kinds.isEmpty else { return }
         marketingFakeActive = true
-        controllerNames[0] = "DualSense Edge Wireless Controller"
-        controllerNames[1] = "Access Controller"
-        controllerDetails[0] = ControllerInfo(
-            name: "DualSense Edge Wireless Controller",
-            productCategory: "DualSense Edge",
-            hasExtendedGamepad: true, hasLight: true, hasBattery: true,
-            batteryLevel: 1.0, batteryState: "charging",
-            buttonCount: 18, axisCount: 6, supportsMotion: true,
-            hasTouchpad: true, hasMicroGamepad: false,
-            physicalButtonNames: ["A", "B", "X", "Y", "LB", "RB", "LT", "RT",
-                                  "Share", "Menu", "Home", "L3", "R3", "Touchpad",
-                                  "Mute", "Left Paddle", "Right Paddle"],
-            brand: .dualSense)
-        controllerDetails[1] = ControllerInfo(
-            name: "Access Controller",
-            productCategory: "Access Controller",
-            hasExtendedGamepad: true, hasLight: false, hasBattery: true,
-            batteryLevel: 0.95, batteryState: "discharging",
-            buttonCount: 8, axisCount: 2, supportsMotion: false,
-            hasTouchpad: false, hasMicroGamepad: false,
-            physicalButtonNames: ["1", "2", "3", "4", "5", "6", "7", "8"],
-            brand: .accessController)
+        for (slot, kind) in kinds.enumerated() {
+            if let info = Self.marketingFakeInfo(kind) {
+                controllerNames[slot] = info.name
+                controllerDetails[slot] = info
+                ActivityLog.shared.info("Controllers", "Connected \(info.name) in slot \(slot)", slot: slot)
+            } else if let pad = Self.marketingFakeRawPad(kind, slot: slot) {
+                rawHIDGamepadSlots[slot] = pad
+                marketingFakeRawSlots.insert(slot)
+                let names = pad.profile?.physicalButtonNames ?? []
+                controllerNames[slot] = pad.displayName
+                var deckKeys: Int?
+                if case .streamDeck(let format)? = pad.profile?.layout { deckKeys = format.keys }
+                controllerDetails[slot] = ControllerInfo(
+                    name: pad.displayName, productCategory: "Raw HID",
+                    hasExtendedGamepad: deckKeys == nil, hasLight: false, hasBattery: false,
+                    batteryLevel: nil, batteryState: nil,
+                    buttonCount: deckKeys ?? names.count, axisCount: Self.rawHIDAxisCount(pad),
+                    supportsMotion: false, hasTouchpad: false, hasMicroGamepad: false,
+                    physicalButtonNames: names,
+                    brand: ControllerTypeDetector.brand(fromName: "\(pad.manufacturer ?? "") \(pad.productName)") ?? .unknown)
+                ActivityLog.shared.info("Controllers", "Connected \(pad.displayName) in slot \(slot)", slot: slot)
+            }
+        }
+        marketingFakeCount = kinds.count
+    }
+
+    private static func marketingFakeInfo(_ kind: String) -> ControllerInfo? {
+        let sony = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Share", "Menu", "Home", "L3", "R3", "Touchpad"]
+        let xbox = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "View", "Menu", "Home", "L3", "R3"]
+        switch kind {
+        case "dualsense-edge":
+            return ControllerInfo(
+                name: "DualSense Edge Wireless Controller", productCategory: "DualSense Edge",
+                hasExtendedGamepad: true, hasLight: true, hasBattery: true,
+                batteryLevel: 1.0, batteryState: "charging",
+                buttonCount: 18, axisCount: 6, supportsMotion: true,
+                hasTouchpad: true, hasMicroGamepad: false,
+                physicalButtonNames: sony + ["Mute", "Left Paddle", "Right Paddle"], brand: .dualSense)
+        case "dualsense":
+            return ControllerInfo(
+                name: "DualSense Wireless Controller", productCategory: "DualSense",
+                hasExtendedGamepad: true, hasLight: true, hasBattery: true,
+                batteryLevel: 0.8, batteryState: "discharging",
+                buttonCount: 16, axisCount: 6, supportsMotion: true,
+                hasTouchpad: true, hasMicroGamepad: false,
+                physicalButtonNames: sony + ["Mute"], brand: .dualSense)
+        case "dualshock4":
+            return ControllerInfo(
+                name: "DUALSHOCK 4 Wireless Controller", productCategory: "DualShock 4",
+                hasExtendedGamepad: true, hasLight: true, hasBattery: true,
+                batteryLevel: 0.6, batteryState: "discharging",
+                buttonCount: 15, axisCount: 6, supportsMotion: true,
+                hasTouchpad: true, hasMicroGamepad: false,
+                physicalButtonNames: sony, brand: .dualShock4)
+        case "xbox":
+            return ControllerInfo(
+                name: "Xbox Wireless Controller", productCategory: "Xbox One",
+                hasExtendedGamepad: true, hasLight: false, hasBattery: true,
+                batteryLevel: 0.7, batteryState: "discharging",
+                buttonCount: 14, axisCount: 6, supportsMotion: false,
+                hasTouchpad: false, hasMicroGamepad: false,
+                physicalButtonNames: xbox + ["Share"], brand: .xbox)
+        case "elite":
+            return ControllerInfo(
+                name: "Xbox Elite Wireless Controller Series 2", productCategory: "Xbox One",
+                hasExtendedGamepad: true, hasLight: false, hasBattery: true,
+                batteryLevel: 0.9, batteryState: "discharging",
+                buttonCount: 17, axisCount: 6, supportsMotion: false,
+                hasTouchpad: false, hasMicroGamepad: false,
+                physicalButtonNames: xbox + ["Paddle 1", "Paddle 2", "Paddle 3", "Paddle 4"], brand: .xbox)
+        case "switchpro":
+            return ControllerInfo(
+                name: "Pro Controller", productCategory: "Switch Pro Controller",
+                hasExtendedGamepad: true, hasLight: false, hasBattery: true,
+                batteryLevel: 0.75, batteryState: "discharging",
+                buttonCount: 15, axisCount: 6, supportsMotion: true,
+                hasTouchpad: false, hasMicroGamepad: false,
+                physicalButtonNames: ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Minus", "Plus", "Home", "L3", "R3", "Capture"],
+                brand: .switchPro)
+        case "access":
+            return ControllerInfo(
+                name: "Access Controller", productCategory: "Access Controller",
+                hasExtendedGamepad: true, hasLight: false, hasBattery: true,
+                batteryLevel: 0.95, batteryState: "discharging",
+                buttonCount: 8, axisCount: 2, supportsMotion: false,
+                hasTouchpad: false, hasMicroGamepad: false,
+                physicalButtonNames: ["1", "2", "3", "4", "5", "6", "7", "8"], brand: .accessController)
+        default:
+            return nil
+        }
+    }
+
+    /// Any HID device, held only so a synthetic RawHIDGamepad has one.
+    private static var marketingPlaceholderDevice: IOHIDDevice? {
+        let registry = HIDDeviceRegistry.shared
+        if registry.debugAnyDevice == nil { registry.rescan(); registry.rescan() }
+        return registry.debugAnyDevice
+    }
+
+    private static func marketingFakeRawPad(_ kind: String, slot: Int) -> RawHIDGamepad? {
+        guard let device = marketingPlaceholderDevice else { return nil }
+        func generic(_ name: String, _ vid: Int32, _ pid: Int32, buttons: Int, axes: Int) -> ControllerProfile {
+            let layout = ControllerProfile.GenericLayout(
+                buttonBitOffsets: Array(0..<buttons), axisByteOffsets: (0..<axes).map { 2 + $0 },
+                axisByteWidths: Array(repeating: 1, count: axes), axisIsSignedFlags: Array(repeating: false, count: axes),
+                axisUsages: Array([0x30, 0x31, 0x32, 0x35, 0x33, 0x34].prefix(axes)),
+                hatByteOffset: nil, triggerByteOffsets: [], reportSize: 2 + axes + 1, hasReportID: false)
+            return ControllerProfile(identifier: "generic-hid-\(vid)-\(pid)-fake\(slot)", displayName: name, vendorID: vid,
+                                     productMatches: [.exact(pid)], layout: .generic(layout),
+                                     physicalButtonNames: (1...buttons).map { "Button \($0)" })
+        }
+        let profile: ControllerProfile
+        var manufacturer: String?
+        switch kind {
+        case "usbpad": profile = generic("USB Gamepad", 0x0079, 0x0011, buttons: 12, axes: 4)
+        case "g29":
+            profile = generic("G29 Driving Force Racing Wheel", 0x046D, 0xC24F, buttons: 25, axes: 4)
+            manufacturer = "Logitech"
+        case "encoder1": profile = generic("Xin-Mo Dual Arcade (player 1)", 0x16C0, 0x05E1, buttons: 10, axes: 2)
+        case "encoder2": profile = generic("Xin-Mo Dual Arcade (player 2)", 0x16C0, 0x05E1, buttons: 10, axes: 2)
+        case "streamdeck":
+            guard let p = ControllerProfileDatabase.streamDeckProfiles.first(where: { $0.identifier == "elgato-stream-deck-0080" }) else { return nil }
+            profile = p
+            manufacturer = "Elgato"
+        case "steam2026":
+            guard let p = ControllerProfileDatabase.all.first(where: { $0.identifier == "valve-steam-controller-2026" }) else { return nil }
+            profile = p
+            manufacturer = "Valve"
+        default: return nil
+        }
+        var pid: Int32 = 0
+        if case .exact(let p)? = profile.productMatches.first { pid = p }
+        return RawHIDGamepad(device: device, id: 0xFA4E_0000 + UInt64(slot), vendorID: profile.vendorID, productID: pid,
+                             productName: profile.displayName, manufacturer: manufacturer, transport: "USB", profile: profile)
     }
 
     /// Marketing capture: swap the two synthetic pads' slots, so a preset
@@ -476,7 +606,7 @@ class GameControllerService: ObservableObject {
         // Marketing capture: the synthetic DualSense Edge in slot 0 lists the
         // extras a real Edge reports (mute, both paddles, both FN buttons), so
         // the visualizer shot shows the row a connected pad shows.
-        if marketingFakeActive && slot == 0 && cachedExtraButtons[slot] == nil {
+        if marketingFakeActive && controllerDetails[slot]?.productCategory == "DualSense Edge" && cachedExtraButtons[slot] == nil {
             return [15, 16, 17, 20, 21]
                 .map { ExtraButton(label: ButtonNames.playStation[$0] ?? "Button \($0)", index: $0, pressed: false) }
         }
@@ -3188,12 +3318,13 @@ class GameControllerService: ObservableObject {
         // Marketing capture: drive the sticks and triggers along a slow sweep
         // so calibration plots draw a full trail and the live readouts show
         // real numbers instead of a dead 0%. Never compiled into Release.
-        if marketingFakeActive, index <= 1, let fixed = Self.debugFixedAxes {
+        if marketingFakeActive, index < marketingFakeCount, let fixed = Self.debugFixedAxes {
             var st = ControllerState()
             for (axis, value) in fixed { st.axes[axis] = value }
+            if marketingFakePress { st.buttons[0] = 1.0; st.buttons[2] = 1.0 }
             return st
         }
-        if marketingFakeActive, index <= 1 {
+        if marketingFakeActive, index < marketingFakeCount {
             let t = CACurrentMediaTime()
             var st = ControllerState()
             st.axes[0] = Float(cos(t * 2.1)) * 0.93
@@ -3700,7 +3831,7 @@ class GameControllerService: ObservableObject {
         // editor's rows the way a real pad does, so a shot can show rows
         // firing.
         if marketingFakeActive, connectedControllers.isEmpty {
-            for i in 0...1 {
+            for i in 0..<marketingFakeCount {
                 guard let state = peekControllerState(at: i) else { continue }
                 scratchSnapshots[i] = state
                 accumulate(into: &scratchFreshlyActive, state: state)
@@ -4244,6 +4375,10 @@ class GameControllerService: ObservableObject {
     }
 
     private func syncRawHIDGamepadSlots() {
+        #if DEBUG
+        // The marketing capture's synthetic raw pads own the slots meanwhile.
+        if !marketingFakeRawSlots.isEmpty { return }
+        #endif
         let attached = RawHIDGamepadService.shared.connectedGamepads
         let baseIndex = connectedControllers.count + (steamControllerSlot != nil ? 1 : 0)
 

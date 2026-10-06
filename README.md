@@ -290,7 +290,7 @@ nothing.
 
 - macOS 14.0 or later
 - Accessibility permission (for keyboard and mouse simulation)
-- Tap the Mac needs an Apple silicon MacBook: desktop Macs and Intel Macs have no motion sensor, and some earlier models do not publish it
+- Tap the Mac needs an Apple silicon MacBook: desktop Macs and Intel Macs have no motion sensor, and some earlier models do not publish it. On macOS 27 the Mac App Store sandbox does not let InputConfig switch the motion sensor on, so taps are heard while the sensor is already on
 
 ## Building
 

@@ -4698,11 +4698,44 @@ private struct DebugToggleOptionsModifier: ViewModifier {
             for: Notification.Name("inputconfig.debug.toggleoptions"))) { note in
             if let n = Int(note.object as? String ?? ""), n == displayNumber { toggle() }
         }
+        // `post inputconfig.debug.scrollrow <row number>` scrolls the editor
+        // so that row sits at the top of the sheet, for article captures.
+        .background(DebugScrollRowAnchor(displayNumber: displayNumber))
         #else
         content
         #endif
     }
 }
+
+#if DEBUG
+struct DebugScrollRowAnchor: NSViewRepresentable {
+    let displayNumber: Int
+    final class Coordinator: NSObject {
+        weak var view: NSView?
+        var number = 0
+        var token: NSObjectProtocol?
+        deinit { if let token { DistributedNotificationCenter.default().removeObserver(token) } }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        let c = context.coordinator
+        c.view = v
+        c.number = displayNumber
+        c.token = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("inputconfig.debug.scrollrow"), object: nil, queue: .main) { [weak c] note in
+            guard let c, let v = c.view, Int(note.object as? String ?? "") == c.number,
+                  let scroll = v.enclosingScrollView, let doc = scroll.documentView else { return }
+            let rect = v.convert(v.bounds, to: doc)
+            let y = doc.isFlipped ? rect.minY - 64 : rect.maxY - scroll.contentView.bounds.height + 64   // clear of the title bar the list scrolls under
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.number = displayNumber }
+}
+#endif
 
 
 /// Scrolls the editor so the view it sits behind is in sight, once, when

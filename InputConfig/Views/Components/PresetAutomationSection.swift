@@ -57,6 +57,15 @@ struct PresetAutomationSection: View {
             )
             .spotlightAnchor(SpotlightID.automationPanel)
         }
+        #if DEBUG
+        // `post inputconfig.debug.automation` opens the section; `scrollrow 9999`
+        // then brings it to the top of the editor for the article screenshots.
+        .background(DebugScrollRowAnchor(displayNumber: 9999))
+        .onReceive({
+            DebugHookRelay.shared.ensure("inputconfig.debug.automation")
+            return NotificationCenter.default.publisher(for: Notification.Name("inputconfig.debug.automation"))
+        }()) { _ in expanded = true }
+        #endif
     }
 
     /// One-line collapsed summary so the section telegraphs what's on

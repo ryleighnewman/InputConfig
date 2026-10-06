@@ -74,6 +74,23 @@ struct DevicesMenuContent: View {
 
     @ViewBuilder
     private func deviceItem(_ entry: HIDDeviceRegistry.Entry) -> some View {
+        #if DEBUG
+        if let fake = registry.debugFakeStates[entry.id] {
+            switch fake {
+            case .reading: Toggle(isOn: .constant(true)) { Text(entry.name) }
+            case .listed: Text("\(entry.name) (\(entry.primaryKind.label))")
+            case .needsInputMonitoring: Button("\(entry.name) (needs Input Monitoring)\u{2026}") { }
+            }
+        } else {
+            realDeviceItem(entry)
+        }
+        #else
+        realDeviceItem(entry)
+        #endif
+    }
+
+    @ViewBuilder
+    private func realDeviceItem(_ entry: HIDDeviceRegistry.Entry) -> some View {
         let device = registry.adoptableDevice(for: entry)
         let interfaces = registry.devices(for: entry)
         let reading = gamepads.isReading(anyOf: interfaces)

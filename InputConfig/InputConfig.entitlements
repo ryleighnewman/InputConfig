@@ -10,9 +10,5 @@
 	<true/>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
-	<key>com.apple.security.temporary-exception.iokit-user-client-class</key>
-	<array>
-		<string>AppleSPUHIDDriver</string>
-	</array>
 </dict>
 </plist>

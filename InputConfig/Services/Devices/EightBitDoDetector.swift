@@ -63,7 +63,28 @@ final class EightBitDoDetector: ObservableObject {
     private var rescanTimer: Timer?
     private var gcObservers: [NSObjectProtocol] = []
 
+    #if DEBUG
+    /// Marketing capture: an 8BitDo pad in the given mode
+    /// (`post inputconfig.debug.fake8bitdo "XInput"`; empty removes it).
+    private var debugFake: EightBitDoDevice?
+    private var debugObserver: NSObjectProtocol?
+    #endif
+
     init() {
+        #if DEBUG
+        debugObserver = DistributedNotificationCenter.default().addObserver(
+            forName: .init("inputconfig.debug.fake8bitdo"), object: nil, queue: .main) { [weak self] note in
+            let raw = (note.object as? String) ?? ""
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let mode = EightBitDoMode(rawValue: raw)
+                self.debugFake = mode.map {
+                    EightBitDoDevice(id: 0xFA4E_8B1D, productID: 0x6012, productName: "8BitDo Pro 2", transport: "USB", mode: $0)
+                }
+                self.rescan()
+            }
+        }
+        #endif
         setupManager()
         startPolling()
         // GameController lists a controller a moment after IOKit reports
@@ -139,7 +160,11 @@ final class EightBitDoDetector: ObservableObject {
     func rescan() {
         guard let manager = manager else { return }
         guard let deviceSet = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
-            if !detectedDevices.isEmpty { detectedDevices = [] }
+            var none: [EightBitDoDevice] = []
+            #if DEBUG
+            if let fake = debugFake { none = [fake] }
+            #endif
+            if detectedDevices != none { detectedDevices = none }
             return
         }
 
@@ -172,6 +197,9 @@ final class EightBitDoDetector: ObservableObject {
 
         // Order by location for stable display
         newDevices.sort { $0.id < $1.id }
+        #if DEBUG
+        if let fake = debugFake { newDevices.append(fake) }
+        #endif
 
         // Only publish if something changed
         if newDevices != detectedDevices {

@@ -196,6 +196,55 @@ final class HIDDeviceRegistry: ObservableObject {
         refreshUnreadablePads()
     }
 
+    #if DEBUG
+    /// Any device the registry holds, for the marketing capture's
+    /// synthetic raw pads (never opened or written to).
+    var debugAnyDevice: IOHIDDevice? { interfaces.values.first?.first?.device }
+
+    enum DebugFakeState { case reading, listed, needsInputMonitoring }
+    /// Marketing capture: how the Devices menu shows each synthetic entry.
+    private(set) var debugFakeStates: [String: DebugFakeState] = [:]
+
+    /// Marketing capture: fills the Devices menu with a set of synthetic
+    /// devices (`post inputconfig.debug.fakedevices overview`); an empty
+    /// name puts the real devices back. The reasons are the menu's own.
+    func debugSetFake(_ scenario: String) {
+        guard !scenario.isEmpty else { debugFakeStates = [:]; rescan(); return }
+        let xusb = "Xbox 360 style pad: macOS cannot read it; if the pad has another mode (DInput, Switch) or Bluetooth, use that"
+        let gip = "Xbox One or Series pad: update to macOS 15 to use it over USB, or use Bluetooth"
+        var list: [Entry] = [], unreadable: [UnreadablePad] = [], states: [String: DebugFakeState] = [:]
+        func add(_ name: String, _ vid: Int32, _ pid: Int32, _ transport: Transport, _ kinds: [Kind], _ state: DebugFakeState) {
+            let id = "fake-\(list.count)"
+            list.append(Entry(id: id, name: name, vendorID: vid, productID: pid, transport: transport, kinds: kinds))
+            states[id] = state
+        }
+        func pad(_ name: String, _ reason: String) {
+            unreadable.append(UnreadablePad(id: UInt64(0xFA4E_0100 + unreadable.count), name: name, vendorID: 0x045E, productID: 0x028E, reason: reason))
+        }
+        let keyboard = { add("Magic Keyboard", 0x004C, 0x029C, .bluetooth, [.keyboard, .consumer], .listed) }
+        switch scenario {
+        case "basic":
+            keyboard(); add("USB Gamepad", 0x0079, 0x0011, .usb, [.gamepad], .reading)
+        case "overview":
+            keyboard(); add("MX Master 3S", 0x046D, 0xB034, .bluetooth, [.pointer, .vendor], .listed)
+            add("USB Gamepad", 0x0079, 0x0011, .usb, [.gamepad], .reading)
+            add("Arcade Stick", 0x0F0D, 0x0092, .usb, [.gamepad], .reading)
+            pad("Xbox 360 Controller", xusb)
+        case "xbox360": keyboard(); pad("Xbox 360 Controller", xusb)
+        case "xbox360pad": keyboard(); pad("Controller (XBOX 360 For Windows)", xusb)
+        case "xinputstick": keyboard(); pad("Arcade Fight Stick", xusb)
+        case "gip": keyboard(); pad("Xbox Wireless Controller", gip)
+        case "inputmonitoring": keyboard(); add("Arcade Stick", 0x0F0D, 0x0092, .usb, [.gamepad], .needsInputMonitoring)
+        case "wheel": keyboard(); add("G29 Driving Force Racing Wheel", 0x046D, 0xC24F, .usb, [.gamepad], .reading)
+        case "streamdeck": keyboard(); add("Stream Deck MK.2", 0x0FD9, 0x0080, .usb, [.vendor], .reading)
+        default: return
+        }
+        debugFakeStates = states
+        entries = list
+        unreadablePads = unreadable
+    }
+    #endif
+
     func entries(on transport: Transport) -> [Entry] {
         entries.filter { $0.transport == transport }
     }

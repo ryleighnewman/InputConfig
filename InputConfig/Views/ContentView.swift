@@ -1492,14 +1492,15 @@ struct ContentView: View {
             } else {
                 #if DEBUG
                 if controllerService.debugMarketingFakeActive {
-                    ForEach(controllerService.controllerDetails.keys.sorted(), id: \.self) { idx in
+                    ForEach(controllerService.controllerDetails.keys.sorted().filter { controllerService.rawHIDGamepadSlots[$0] == nil }, id: \.self) { idx in
                         ControllerChipView(
                             controller: nil, index: idx,
                             color: Self.controllerColors[idx % Self.controllerColors.count],
                             info: controllerService.controllerDetails[idx],
                             onSetLight: { _, _, _ in }, onSetBrightness: { _ in },
                             onToggleRGB: {}, isRGBActive: false, onRefresh: {},
-                            onOpenExample: {}, rgbSpeed: $controllerService.rgbCycleSpeed)
+                            onOpenExample: {}, rgbSpeed: $controllerService.rgbCycleSpeed,
+                            onDisconnect: { .disconnected })
                     }
                 }
                 #endif
@@ -6404,6 +6405,7 @@ struct DebugAutomationHooks: ViewModifier {
                 case "settings": settingsSheetTab = .general
                 case "about": settingsSheetTab = .about
                 case "advanced": settingsSheetTab = .advanced
+                case "devices": settingsSheetTab = .controllers
                 // Exercises the exact call the Help window's "here" link makes,
                 // so the cross-window path can be tested without pixel-clicking
                 // a link in a window that keeps losing front position.
@@ -6865,6 +6867,13 @@ struct DebugAutomationHooks: ViewModifier {
                 guard parts.count == 2 else { return }
                 InputSimulator.shared.moveMouse(deltaX: parts[0], deltaY: parts[1])
             }
+            .onReceive(dnc("inputconfig.debug.legacyalert")) { note in
+                let kind = (note.object as? String) ?? ""
+                DispatchQueue.main.async { LegacyRowCheck.shared.debugPreview(kind) }
+            }
+            .onReceive(dnc("inputconfig.debug.fakedevices")) { note in
+                HIDDeviceRegistry.shared.debugSetFake((note.object as? String) ?? "")
+            }
             .onReceive(dnc("inputconfig.debug.click")) { note in
                 let button = Int((note.object as? String) ?? "") ?? 0
                 InputSimulator.shared.mouseButtonDown(button)
@@ -6963,6 +6972,9 @@ final class DebugMarketing: ObservableObject {
     @Published var fakeController = false
     /// Each post of inputconfig.debug.fakeswap swaps the synthetic pads' slots.
     @Published var fakeSwaps = 0
+    /// `post inputconfig.debug.fakeset "dualsense,xbox"`: that synthetic set,
+    /// one controller per slot; an empty string removes them.
+    @Published var fakeSet: [String]?
     @Published var fakePress = false
     @Published var noFree = false
     @Published var vizScale: Double?
@@ -6979,6 +6991,10 @@ final class DebugMarketing: ObservableObject {
         }
         dnc.addObserver(forName: .init("inputconfig.debug.fakecontroller"), object: nil, queue: .main) { [weak self] _ in
             self?.fakeController.toggle()
+        }
+        dnc.addObserver(forName: .init("inputconfig.debug.fakeset"), object: nil, queue: .main) { [weak self] note in
+            let kinds = ((note.object as? String) ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            self?.fakeSet = kinds
         }
         dnc.addObserver(forName: .init("inputconfig.debug.fakeswap"), object: nil, queue: .main) { [weak self] _ in
             self?.fakeSwaps += 1
@@ -7081,6 +7097,7 @@ extension View {
         #if DEBUG
         onReceive(DebugMarketing.shared.$fakeController) { service.setMarketingFakeControllers($0) }
             .onReceive(DebugMarketing.shared.$fakeSwaps.dropFirst()) { _ in service.swapMarketingFakeControllers() }
+            .onReceive(DebugMarketing.shared.$fakeSet.compactMap { $0 }) { service.setMarketingFakeSet($0) }
         .onReceive(DebugMarketing.shared.$fakePress) { service.marketingFakePress = $0 }
         #else
         self

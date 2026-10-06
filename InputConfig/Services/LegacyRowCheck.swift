@@ -226,7 +226,7 @@ final class LegacyRowCheck {
             // common words ("Pro", "Generic") matched presets like Logic Pro.
             let skip: Set<String> = ["controller", "gamepad", "wireless", "joystick", "usb", "the", "and", "game", "pad",
                                      "generic", "wired", "mode", "input", "plus", "mini", "lite", "edition"]
-            let padWords = (rawPad?.name ?? "").lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+            let padWords = (padName ?? "").lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
                 .filter { $0.count >= 4 && !skip.contains($0) }
             return padWords.contains { Self.hasWord(words, $0) }
         case .switchedWheel:
@@ -385,7 +385,37 @@ final class LegacyRowCheck {
         retry?.tolerance = 1
     }
 
-    private func ask(_ kind: Kind, _ list: [(preset: Preset, groups: [UUID])]) {
+    /// The raw pad's name, for the alert's wording.
+    private var padName: String? {
+        #if DEBUG
+        if let debugPadName { return debugPadName }
+        #endif
+        return rawPad?.name
+    }
+
+    #if DEBUG
+    private var debugPadName: String?
+
+    /// Marketing capture: shows one kind's alert as it appears, over three
+    /// example presets, and changes nothing whatever is answered
+    /// (`post inputconfig.debug.legacyalert switchFaces`).
+    func debugPreview(_ name: String) {
+        guard let kind = Kind(rawValue: name), !asking else { return }
+        let names: [String]
+        switch kind {
+        case .switchFaces: names = ["Switch Pro Desktop", "Mario Kart 8 Deluxe", "Web Browsing"]
+        case .eightBitDoBack: names = ["8BitDo Couch Browsing", "Hollow Knight", "Media Controller"]
+        case .rawPads, .switchedWheel: names = ["Racing with the USB Gamepad", "Desktop Navigation", "Stardew Valley"]
+        }
+        debugPadName = kind == .rawPads ? "USB Gamepad" : nil
+        if kind == .switchedWheel { wheelName = "G29 Driving Force Racing Wheel" }
+        asking = true
+        ask(kind, names.map { (preset: Preset(name: $0), groups: [UUID]()) }, preview: true)
+        debugPadName = nil
+    }
+    #endif
+
+    private func ask(_ kind: Kind, _ list: [(preset: Preset, groups: [UUID])], preview: Bool = false) {
         defer { asking = false }
         let alert = NSAlert()
         let defaults = UserDefaults.standard
@@ -402,6 +432,7 @@ final class LegacyRowCheck {
             alert.informativeText = "InputConfig 1.6 switches \(wheel) to its own mode, as Logitech's software does: the pedals read 0 to 1 on their own axes and the buttons have new numbers. Rows recorded on it before 1.6 need to be scanned again in:\n\n" + list.map(\.preset.name).joined(separator: "\n")
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            if preview { return }
             markOffered()
             ActivityLog.shared.info("Presets", "Named the presets with \(wheel) rows from before 1.6 to rescan")
             return
@@ -416,7 +447,7 @@ final class LegacyRowCheck {
             alert.informativeText = "InputConfig 1.6 reads an 8BitDo controller's two back buttons as back buttons. Rows recorded on them before 1.6 used other numbers and no longer fire. Tick the presets you made on this controller to move those rows to the back buttons."
             alert.addButton(withTitle: "Move in Ticked Presets")
         case .rawPads, .switchedWheel:
-            let pad = rawPad?.name ?? "this controller"
+            let pad = padName ?? "this controller"
             alert.messageText = "Update rows for \(pad) in older presets?"
             alert.informativeText = "InputConfig 1.6 numbers the buttons and sticks of \(pad) the way it numbers other controllers, and pushing a stick up reads as up. Rows recorded on it before 1.6 would fire from other controls. Tick the presets you made on this controller to move their rows to the controls you pressed."
             alert.addButton(withTitle: "Update Ticked Presets")
@@ -460,6 +491,7 @@ final class LegacyRowCheck {
 
         let answer = alert.runModal()
         withExtendedLifetime(watcher) {}
+        if preview { return }
         // Answered: none of these is offered for this kind again, until
         // Check Older Presets Again in Settings.
         markOffered()

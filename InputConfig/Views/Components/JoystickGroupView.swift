@@ -656,7 +656,15 @@ struct JoystickGroupView: View {
     /// @MenuBuilder bodies stalls the Swift type-checker; computed
     /// properties give it a fixed shape to reason about.
     private var connectedControllerNames: [String] {
-        controllerService.connectedControllers.map { gc in
+        #if DEBUG
+        // The marketing capture's synthetic pads, which have no GCController.
+        if controllerService.debugMarketingFakeActive, controllerService.connectedControllers.isEmpty {
+            return controllerService.controllerDetails.keys.sorted()
+                .filter { controllerService.rawHIDGamepadSlots[$0] == nil }
+                .compactMap { controllerService.controllerDetails[$0]?.name }
+        }
+        #endif
+        return controllerService.connectedControllers.map { gc in
             gc.vendorName ?? gc.productCategory
         }
     }
