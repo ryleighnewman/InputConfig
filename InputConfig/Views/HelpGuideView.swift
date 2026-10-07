@@ -153,6 +153,14 @@ func helpMarkdown(_ text: String) -> AttributedString {
         ?? AttributedString(text)
 }
 
+/// The id the site gives a section heading ("If a pad does nothing" is
+/// "if-a-pad-does-nothing"), which is what a link to a section points at.
+func helpAnchor(_ heading: String) -> String {
+    heading.lowercased()
+        .split(whereSeparator: { !($0.isASCII && ($0.isLetter || $0.isNumber)) })
+        .joined(separator: "-")
+}
+
 private enum HelpLayout {
     static let column: CGFloat = 640
     static let sectionGap: CGFloat = 28
@@ -163,50 +171,70 @@ private enum HelpLayout {
 
 private struct HelpPageView: View {
     let guide: HelpGuide
+    /// The window's link handler (HelpGuideView), for every link this page
+    /// does not take itself.
+    @Environment(\.openURL) private var openInWindow
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // Title and intro, like the top of a System Settings pane.
-                Text(guide.title)
-                    .font(.system(size: 28, weight: .bold))
-                    .padding(.bottom, 8)
-                Text(helpMarkdown(guide.intro))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, HelpLayout.sectionGap)
-
-                ForEach(Array(guide.sections.enumerated()), id: \.offset) { index, section in
-                    if index > 0 {
-                        Divider()
-                            .padding(.bottom, HelpLayout.sectionGap - 6)
-                    }
-                    HelpSectionView(section: section)
-                        .padding(.bottom, HelpLayout.sectionGap - 6)
-                }
-
-                if !guide.related.isEmpty {
-                    Divider()
-                        .padding(.bottom, 14)
-                    Text("Related")
-                        .font(.caption.weight(.semibold))
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Title and intro, like the top of a System Settings pane.
+                    Text(guide.title)
+                        .font(.system(size: 28, weight: .bold))
+                        .padding(.bottom, 8)
+                    Text(helpMarkdown(guide.intro))
+                        .font(.title3)
                         .foregroundStyle(.secondary)
-                        .padding(.bottom, 6)
-                    HelpChipRow(links: guide.related)
-                        .padding(.bottom, 20)
-                }
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, HelpLayout.sectionGap)
 
-                Text(helpMarkdown("This page on the web: [\(guide.url.replacingOccurrences(of: "https://", with: ""))](\(guide.url))"))
-                    .font(.caption)
-                    .foregroundStyle(.hint)
-                    .padding(.bottom, 24)
+                    ForEach(Array(guide.sections.enumerated()), id: \.offset) { index, section in
+                        if index > 0 {
+                            Divider()
+                                .padding(.bottom, HelpLayout.sectionGap - 6)
+                        }
+                        HelpSectionView(section: section)
+                            .padding(.bottom, HelpLayout.sectionGap - 6)
+                            .id(helpAnchor(section.heading))
+                    }
+
+                    if !guide.related.isEmpty {
+                        Divider()
+                            .padding(.bottom, 14)
+                        Text("Related")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 6)
+                        HelpChipRow(links: guide.related)
+                            .padding(.bottom, 20)
+                    }
+
+                    Text(helpMarkdown("This page on the web: [\(guide.url.replacingOccurrences(of: "https://", with: ""))](\(guide.url))"))
+                        .font(.caption)
+                        .foregroundStyle(.hint)
+                        // Always the browser. The window's handler reads this
+                        // page's own address as a link to the page already
+                        // showing, so the click did nothing.
+                        .environment(\.openURL, OpenURLAction { _ in .systemAction })
+                        .padding(.bottom, 24)
+                }
+                .frame(maxWidth: HelpLayout.column, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 36)
+                .padding(.top, 20)
             }
-            .frame(maxWidth: HelpLayout.column, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 36)
-            .padding(.top, 20)
+            // A link to a section of this page ("#if-a-pad-does-nothing")
+            // scrolls to it. Everything else goes to the window's handler.
+            .environment(\.openURL, OpenURLAction { url in
+                if url.scheme == nil, let anchor = url.fragment, !anchor.isEmpty {
+                    proxy.scrollTo(anchor, anchor: .top)
+                    return .handled
+                }
+                openInWindow(url)
+                return .handled
+            })
         }
     }
 }
