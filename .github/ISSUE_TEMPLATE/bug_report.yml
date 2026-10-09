@@ -1,0 +1,29 @@
+name: Bug report
+description: Something in InputConfig does not work as it should
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: InputConfig version
+      description: Shown in the About window, for example 1.6 (32)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a screen recording, or the device you were using

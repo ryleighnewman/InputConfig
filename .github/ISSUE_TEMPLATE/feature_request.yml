@@ -1,0 +1,14 @@
+name: Feature request
+description: An idea that would make InputConfig better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you are trying to do
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help

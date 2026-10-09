@@ -25,6 +25,6 @@ the report is credited in the release notes unless you would rather stay anonymo
 ## Scope
 
 InputConfig runs in the App Sandbox, collects no data, and makes no network requests of its own
-(see [PRIVACY.md](PRIVACY.md)). Reports that are most useful include anything that lets a preset
+(see [PRIVACY.md](../PRIVACY.md)). Reports that are most useful include anything that lets a preset
 file, a MIDI or HID device, or another app make InputConfig send input it was not set up to send,
 or escape the sandbox.
