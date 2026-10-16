@@ -408,19 +408,68 @@ enum HIDReportDecoder {
     }
 
     /// Elgato Stream Deck key states (see `StreamDeckFormat`). A report
-    /// that is not a key report (a Plus sends its dials and touch strip on
-    /// the same ID with another type byte) leaves the state alone.
+    /// that is not a key report leaves the keys alone: a Plus sends its
+    /// dials and touch strip on the same ID with another type byte, read by
+    /// `decodeStreamDeckDialsAndStrip`, and other models' are ignored.
     static func decodeStreamDeck(report: Data, format: ControllerProfile.StreamDeckFormat,
                                  into state: inout ControllerState) {
         let bytes = Array(report)
         guard bytes.first == 0x01, bytes.count >= format.keyOffset + format.keys else { return }
-        if format.keyOffset >= 4, bytes[1] != 0x00 { return }
+        if format.keyOffset >= 4, bytes[1] != 0x00 {
+            if format.dials > 0 || format.touchStrip { decodeStreamDeckDialsAndStrip(bytes, format: format, into: &state) }
+            return
+        }
         let cols = format.mirrorColumns
         for key in 0..<format.keys {
             let source = cols > 0 ? (key - key % cols) + (cols - 1 - key % cols) : key
             state.buttons[ControllerProfile.StreamDeckFormat.firstSlot + key] =
                 bytes[format.keyOffset + source] != 0 ? 1 : 0
         }
+        // A turn or a gesture lasts until the next report.
+        for slot in format.oneShotSlots { state.buttons[slot] = 0 }
+    }
+
+    /// The Stream Deck + dials (byte 1 = 3) and touch strip (byte 1 = 2),
+    /// per python-elgato-streamdeck's StreamDeckPlus. Byte 4 says what
+    /// happened. Dials: 0 is the four push states in bytes 5 to 8, 1 is a
+    /// turn, each of those bytes a signed count of steps, positive
+    /// clockwise. Touch strip: 1 a short tap, 2 a long press, 3 a swipe from
+    /// the x in bytes 6 and 7 to the x in bytes 10 and 11 (little endian).
+    /// A turn or gesture has no release of its own, so it is pressed for
+    /// this report only and every other report from the Plus lets it go;
+    /// the raw HID service turns it into a timed short press.
+    private static func decodeStreamDeckDialsAndStrip(_ bytes: [UInt8], format: ControllerProfile.StreamDeckFormat,
+                                                      into state: inout ControllerState) {
+        guard bytes.count >= 5 else { return }
+        var fired: Set<Int> = []
+        switch bytes[1] {
+        case 0x03 where format.dials > 0 && bytes.count >= 5 + format.dials:
+            for dial in 0..<format.dials {
+                let value = bytes[5 + dial]
+                if bytes[4] == 0x00 {
+                    state.buttons[format.dialPressSlot(dial)] = value != 0 ? 1 : 0
+                } else if bytes[4] == 0x01 {
+                    let steps = Int8(bitPattern: value)
+                    if steps < 0 { fired.insert(format.dialTurnSlot(dial, clockwise: false)) }
+                    if steps > 0 { fired.insert(format.dialTurnSlot(dial, clockwise: true)) }
+                }
+            }
+        case 0x02 where format.touchStrip:
+            switch bytes[4] {
+            case 1: fired.insert(format.stripSlot(.tap))
+            case 2: fired.insert(format.stripSlot(.longPress))
+            case 3 where bytes.count >= 12:
+                let start = Int(bytes[6]) | Int(bytes[7]) << 8
+                let end = Int(bytes[10]) | Int(bytes[11]) << 8
+                // A swipe that ends where it started went neither way.
+                if end < start { fired.insert(format.stripSlot(.swipeLeft)) }
+                if end > start { fired.insert(format.stripSlot(.swipeRight)) }
+            default: break
+            }
+        default:
+            return
+        }
+        for slot in format.oneShotSlots { state.buttons[slot] = fired.contains(slot) ? 1 : 0 }
     }
 
     /// One stick: 12-bit X from the first byte and the low half of the
@@ -429,9 +478,12 @@ enum HIDReportDecoder {
     private static func switch2Stick(_ b0: UInt8, _ b1: UInt8, _ b2: UInt8) -> (x: Float, y: Float) {
         let rawX = Int(b0) | (Int(b1 & 0x0F) << 8)
         let rawY = Int(b1 >> 4) | (Int(b2) << 4)
+        // Not clamped here: the pad's own rest is taken off next
+        // (RawHIDGamepad.removeStickRest, which clamps), so a stick resting
+        // off center still reaches full both ways.
         let x = Float(rawX - 2048) / 1650
         let y = Float(rawY - 2048) / 1650
-        return (max(-1, min(1, x)), max(-1, min(1, y)))
+        return (max(-1.2, min(1.2, x)), max(-1.2, min(1.2, y)))
     }
 
     // MARK: - Generic layout
@@ -465,7 +517,13 @@ enum HIDReportDecoder {
             guard let found = plan.reports.first else { return }
             entry = found
         }
-        guard bytes.count >= offset + entry.payloadSize else { return }
+        // Fields past the end of a short report are skipped one by one
+        // (readBits); only a hand-written layout needs the whole report.
+        if plan.requiresFullReport {
+            guard bytes.count >= offset + entry.payloadSize else { return }
+        } else {
+            guard bytes.count > offset else { return }
+        }
         let payloadCount = bytes.count - offset
 
         // Buttons
@@ -483,9 +541,19 @@ enum HIDReportDecoder {
             guard axis.logicalMax > axis.logicalMin,
                   let raw = readBits(bytes, offset, payloadCount, axis.bitOffset, axis.bitSize) else { continue }
             var v = Int(raw)
-            if axis.isSigned {
+            if axis.isSigned || axis.relative {
                 let signBit = 1 << (axis.bitSize - 1)
                 if v & signBit != 0 { v -= 1 << axis.bitSize }
+            }
+            if axis.relative {
+                // A knob reports how far it turned since the last report, so
+                // one detent is a delta of 1 out of a range of 255. Read as a
+                // position it moved the axis by 0.004 and then stayed there.
+                // It reads full tilt in the direction of the turn instead;
+                // RawHIDGamepad.updateState(_:pulsingAxes:) lets go after a
+                // moment, so each detent is a short push.
+                state.axes[axis.index] = v > 0 ? 1 : (v < 0 ? -1 : 0)
+                continue
             }
             let lo = axis.logicalMin, hi = axis.logicalMax
             var value: Float
@@ -514,11 +582,19 @@ enum HIDReportDecoder {
         // per value, so its direction doubles onto the 8-way table.
         for hat in entry.hats {
             // 8-bit hats keep the direction in the low nibble with
-            // padding above, so only the low 4 bits are read.
-            guard let raw = readBits(bytes, offset, payloadCount, hat.bitOffset, min(hat.bitSize, 4)) else { continue }
+            // padding above, so only the low 4 bits are read. A hat that
+            // reports an angle is read whole.
+            let angular = hat.directions > 16
+            guard let raw = readBits(bytes, offset, payloadCount, hat.bitOffset,
+                                     angular ? hat.bitSize : min(hat.bitSize, 4)) else { continue }
             var direction = Int(raw) - hat.logicalMin
             if hat.directions == 4 {
                 direction = (0...3).contains(direction) ? direction * 2 : -1
+            } else if angular {
+                // 0 is North, `directions` is a full turn, and a value past
+                // it is the centered state; rounded to the nearest of eight.
+                direction = (0..<hat.directions).contains(direction)
+                    ? Int((Double(direction) * 8 / Double(hat.directions)).rounded()) % 8 : -1
             }
             // Standard 8-direction encoding after normalization
             // (0=N, 1=NE, ..., 7=NW; anything else = center).
@@ -535,6 +611,20 @@ enum HIDReportDecoder {
             case 6: setHat(&state, i, x: -1, y: 0)              // W
             case 7: setHat(&state, i, x: -0.707, y: 0.707)      // NW
             default: setHat(&state, i, x: 0, y: 0)
+            }
+        }
+
+        // Array inputs: every button of the array is up unless an entry
+        // names it.
+        for array in entry.buttonArrays {
+            // A report too short to carry the array says nothing about it.
+            guard readBits(bytes, offset, payloadCount, array.bitOffset, array.bitSize) != nil else { continue }
+            for k in 0..<array.buttons { state.buttons[array.firstIndex + k] = 0 }
+            for n in 0..<array.count {
+                guard let raw = readBits(bytes, offset, payloadCount, array.bitOffset + n * array.bitSize, array.bitSize)
+                else { continue }
+                let k = Int(raw) - array.logicalMin
+                if (0..<array.buttons).contains(k) { state.buttons[array.firstIndex + k] = 1 }
             }
         }
 

@@ -74,12 +74,15 @@ final class EightBitDoDetector: ObservableObject {
         #if DEBUG
         debugObserver = DistributedNotificationCenter.default().addObserver(
             forName: .init("inputconfig.debug.fake8bitdo"), object: nil, queue: .main) { [weak self] note in
+            // "XInput" or "XInput|8BitDo Lite 2": the mode, and the model named.
             let raw = (note.object as? String) ?? ""
             MainActor.assumeIsolated {
                 guard let self else { return }
-                let mode = EightBitDoMode(rawValue: raw)
+                let parts = raw.split(separator: "|").map(String.init)
+                let mode = parts.first.flatMap(EightBitDoMode.init(rawValue:))
+                let name = parts.count > 1 ? parts[1] : "8BitDo Pro 2"
                 self.debugFake = mode.map {
-                    EightBitDoDevice(id: 0xFA4E_8B1D, productID: 0x6012, productName: "8BitDo Pro 2", transport: "USB", mode: $0)
+                    EightBitDoDevice(id: 0xFA4E_8B1D, productID: 0x6012, productName: name, transport: "USB", mode: $0)
                 }
                 self.rescan()
             }
@@ -102,6 +105,10 @@ final class EightBitDoDetector: ObservableObject {
     // MARK: - Setup
 
     private func setupManager() {
+        #if DEBUG
+        // A test run reads only its scripted pads, never the Mac's own.
+        if TestCapture.inTestRun { return }
+        #endif
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         guard let manager = manager else { return }
 

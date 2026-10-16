@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "يستخدم InputConfig البلوتوث (Bluetooth) فقط لفصل ذراع تحكم لاسلكي عندما تطلب ذلك.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "يستخدم InputConfig البلوتوث (Bluetooth) فقط لفصل ذراع تحكم لاسلكي عندما تطلب ذلك.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. جميع الحقوق محفوظة.";
+

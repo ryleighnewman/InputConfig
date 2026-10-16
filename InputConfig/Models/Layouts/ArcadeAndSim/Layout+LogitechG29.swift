@@ -64,7 +64,10 @@ extension ControllerLayout {
         // Compatibility mode 046D:C294 is left out on purpose: the
         // same ID is the old Driving Force EX, and its report is laid out
         // differently (13 buttons, hat in byte 2). The G923 for Xbox
-        // (C26E) and the G920 start in Xbox mode, which is not HID.
+        // (C26E) and the G920 start in Xbox mode, which is not HID; those
+        // are read through GCRacingWheel, numbered as this wheel
+        // (GameControllerService.racingWheelState), and drawn by
+        // logitechXboxWheel below.
         match: [[.vidPid(vendor: 0x046D, products: [0xC24F, 0xC266])]],
         matchPriority: 20,
         readability: .partial("Read with the switch on the wheel set to PS3: InputConfig switches it out of compatibility mode when it connects. Set to PS4 (046D:C260) it is not read. The shift lights and force feedback are not used"),
@@ -91,6 +94,49 @@ extension ControllerLayout {
     /// rim so the nonzero fill leaves them open; the horn ring runs the
     /// same way, so it only adds a line. Built in widths (the face is 1.26
     /// widths tall) and divided down to face coordinates.
+    /// The Logitech G920 and G923 for Xbox, read through GCRacingWheel and
+    /// numbered as the G29 (GameControllerService.racingWheelState), drawn
+    /// on the G29's rim and hub with the Xbox wheel's own labels: A, B, X
+    /// and Y, View, Menu, the Xbox button, LSB and RSB. The G920 has no
+    /// plus and minus, dial or Enter; the G923 for Xbox has them. Neither
+    /// has the G29's L2 and R2 beside the horn.
+    static let logitechXboxWheel: ControllerLayout = {
+        var l = logitechG29
+        l.id = .logitechXboxWheel
+        l.displayName = "Logitech G920 / G923 for Xbox"
+        l.modelNames = ButtonNames.ModelNames(renamed: [
+            0: "A", 1: "X", 2: "B", 3: "Y",
+            4: "Right paddle", 5: "Left paddle",
+            8: "View", 9: "Menu", 10: "RSB", 11: "LSB",
+            12: "Gear 1", 13: "Gear 2", 14: "Gear 3", 15: "Gear 4", 16: "Gear 5", 17: "Gear 6",
+            18: "Reverse", 19: "Plus", 20: "Minus",
+            21: "Dial clockwise", 22: "Dial counterclockwise", 23: "Enter", 24: "Xbox",
+        ])
+        l.variants = [
+            LayoutVariant(id: "g920", displayName: "G920", isDefault: true),
+            LayoutVariant(id: "g923x", displayName: "G923 for Xbox"),
+        ]
+        l.match = [[.gcProductCategoryContains(ControllerLayoutResolver.Facts.racingWheelCategory)]]
+        l.readability = .partial("Read through macOS racing wheel support and numbered as the G29, so G29 presets work on it. Buttons it names that the G29 has no place for are numbered from 25. Force feedback is not used")
+        let letters = ["cross": "A", "square": "X", "circle": "B", "triangle": "Y"]
+        let g923Only: Set<String> = ["plus", "minus", "dial-ccw", "enter", "dial-cw"]
+        l.controls = logitechG29Controls.compactMap { control -> PlacedControl? in
+            var c = control
+            if let letter = letters[c.id] { c.symbol = nil; c.printed = letter; return c }
+            switch c.id {
+            case "l2", "r2": return nil
+            case "l3": c.printed = "LSB"; c.tint = nil
+            case "r3": c.printed = "RSB"; c.tint = nil
+            case "share": c.symbol = "rectangle.on.rectangle"
+            case "ps": c.printed = nil; c.symbol = "logo.xbox"
+            default: break
+            }
+            if g923Only.contains(c.id) { c.variants = ["g923x"]; if c.tint == .psRed { c.tint = nil } }
+            return c
+        }
+        return l
+    }()
+
     static let logitechG29Front: [PathOp] = [
             // Rim, outer edge (round, about 26 cm across)
             .move(0.5, 0.0119),

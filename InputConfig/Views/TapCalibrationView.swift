@@ -13,6 +13,9 @@ import SwiftUI
 /// working while the sheet is open.
 struct TapCalibrationView: View {
     @Environment(\.dismiss) private var dismiss
+    /// Canvas text is drawn from Text values the app's font override never
+    /// sees, so the plot scales its own by the app's Text Size.
+    @Environment(\.appTextScale) private var textScale
 
     @State private var snapshot: ChassisTapService.Snapshot?
     @State private var threshold: Double = ChassisTapService.defaultMinPeak
@@ -72,12 +75,14 @@ struct TapCalibrationView: View {
                     Image(systemName: "questionmark.circle")
                 }
                 .buttonStyle(.solidSecondary)
+                .accessibilityLabel("Help")
                 .help("How to get a clean reading")
                 .popover(isPresented: $showingTips, arrowEdge: .top) { tips }
                 Spacer()
                 Button("Done") { dismiss() }
                     .buttonStyle(SolidButton(tint: .accentColor))
                     .keyboardShortcut(.defaultAction)
+                    .closesOnEscape { dismiss() }
             }
         }
         .padding(20)
@@ -94,6 +99,8 @@ struct TapCalibrationView: View {
             if let peak = s.strikes.map({ $0.1 }).max(), peak > strongest { strongest = peak }
             if let g = s.gestures.last, g.0 != lastGesture?.at {
                 lastGesture = (g.1, g.0)
+                // Said, so a knock can be judged without finding the readout.
+                AccessibilityNotification.Announcement(Self.gestureName(g.1)).post()
             }
             snapshot = s
         }
@@ -101,12 +108,12 @@ struct TapCalibrationView: View {
 
     static func gestureName(_ count: Int) -> String {
         switch count {
-        case 1: return "Single tap"
-        case 2: return "Double tap"
-        case 3: return "Triple tap"
-        case 4: return "Quadruple tap"
-        case 5: return "Quintuple tap"
-        default: return "\(count) taps"
+        case 1: return String(localized: "Single tap")
+        case 2: return String(localized: "Double tap")
+        case 3: return String(localized: "Triple tap")
+        case 4: return String(localized: "Quadruple tap")
+        case 5: return String(localized: "Quintuple tap")
+        default: return String(localized: "\(count) taps")
         }
     }
 
@@ -119,6 +126,7 @@ struct TapCalibrationView: View {
                 .foregroundStyle(.secondary)
             Text("Tap the Mac")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             statusChip
         }
@@ -134,13 +142,13 @@ struct TapCalibrationView: View {
 
     private var statusChip: some View {
         let (text, color): (String, Color) = {
-            guard let s = snapshot else { return ("Starting", .secondary) }
-            if !s.running { return (s.error ?? "Sensor not available on this Mac", .red) }
-            if isBlocked { return ("Blocked by macOS", .red) }
-            if s.notResponding { return ("Sensor not responding on this Mac", .red) }
-            if s.hz == 0 && s.silence < 1.5 { return ("Waking sensor", .orange) }
-            if s.parked { return ("Sensor parked, waking", .orange) }
-            return ("Listening", .green)
+            guard let s = snapshot else { return (String(localized: "Starting"), .secondary) }
+            if !s.running { return (s.error ?? String(localized: "Sensor not available on this Mac"), .red) }
+            if isBlocked { return (String(localized: "Blocked by macOS"), .red) }
+            if s.notResponding { return (String(localized: "Sensor not responding on this Mac"), .red) }
+            if s.hz == 0 && s.silence < 1.5 { return (String(localized: "Waking sensor"), .orange) }
+            if s.parked { return (String(localized: "Sensor parked, waking"), .orange) }
+            return (String(localized: "Listening"), .green)
         }()
         return HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)
@@ -156,15 +164,16 @@ struct TapCalibrationView: View {
                     .foregroundStyle(.green)
                     .contentTransition(.opacity)
             } else {
-                Text(ChassisTapService.shared.isAvailable ? "Knock to test" : "No motion sensor on this Mac")
+                Text(ChassisTapService.shared.isAvailable ? String(localized: "Knock to test") : String(localized: "No motion sensor on this Mac"))
                     .foregroundStyle(.hint)
             }
             Spacer()
             Text("strongest")
                 .foregroundStyle(.secondary)
-            Text(strongest > 0 ? String(format: "%.3f g", strongest) : "none yet")
+            Text(strongest > 0 ? String(format: "%.3f g", locale: .current, strongest) : String(localized: "none yet"))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(strongest > 0 ? String(localized: "\(strongest.formatted(.number.precision(.fractionLength(3)))) g-force", comment: "Tap strength read aloud, g as in gravity") : String(localized: "none yet"))
         }
         .font(.callout)
     }
@@ -189,18 +198,18 @@ struct TapCalibrationView: View {
                 let yy = y(g, in: rect)
                 var p = Path(); p.move(to: CGPoint(x: rect.minX, y: yy)); p.addLine(to: CGPoint(x: rect.maxX, y: yy))
                 ctx.stroke(p, with: .color(.white.opacity(0.08)), lineWidth: 1)
-                ctx.draw(Text(g >= 1 ? "1 g" : String(format: "%.2g g", g)).font(.caption2).foregroundStyle(.secondary),
+                ctx.draw(Text(g >= 1 ? "1 g" : String(format: "%.2g g", g)).font(FontScaler.scale(.caption2, by: textScale)).foregroundStyle(.secondary),
                          at: CGPoint(x: rect.minX + 4, y: g >= 1 ? yy + 9 : yy - 8), anchor: .leading)
             }
 
             guard let s = snapshot, s.running else {
-                let waiting = ChassisTapService.shared.isAvailable ? "Waiting for the sensor" : "This Mac has no motion sensor"
-                ctx.draw(Text(waiting).font(.callout).foregroundStyle(.secondary),
+                let waiting = ChassisTapService.shared.isAvailable ? String(localized: "Waiting for the sensor") : String(localized: "This Mac has no motion sensor")
+                ctx.draw(Text(waiting).font(FontScaler.scale(.callout, by: textScale)).foregroundStyle(.secondary),
                          at: CGPoint(x: rect.midX, y: rect.midY))
                 return
             }
             if s.wakeDenied && s.samples.isEmpty {
-                ctx.draw(Text("macOS isn't letting InputConfig turn on the motion sensor").font(.callout).foregroundStyle(.secondary),
+                ctx.draw(Text("macOS isn't letting InputConfig turn on the motion sensor").font(FontScaler.scale(.callout, by: textScale)).foregroundStyle(.secondary),
                          at: CGPoint(x: rect.midX, y: rect.midY))
                 return
             }
@@ -265,7 +274,7 @@ struct TapCalibrationView: View {
             let ty = y(s.threshold, in: rect)
             var thr = Path(); thr.move(to: CGPoint(x: rect.minX, y: ty)); thr.addLine(to: CGPoint(x: rect.maxX, y: ty))
             ctx.stroke(thr, with: .color(.orange), lineWidth: 1.5)
-            ctx.draw(Text(String(format: "threshold %.3f g", s.threshold)).font(.caption2).foregroundStyle(.orange),
+            ctx.draw(Text("threshold \(String(format: "%.3f", locale: .current, s.threshold)) g").font(FontScaler.scale(.caption2, by: textScale)).foregroundStyle(.orange),
                      at: CGPoint(x: rect.maxX - 6, y: ty - 8), anchor: .trailing)
 
             // Strike markers with verdict color.
@@ -273,9 +282,10 @@ struct TapCalibrationView: View {
                 let color: Color = verdict.hasPrefix("TAP") ? .green : verdict == "typing" ? .yellow : verdict == "refrac" ? .red : .gray
                 let px = x(t), py = y(peak, in: rect)
                 let r: CGFloat = verdict.hasPrefix("TAP") ? 4 : 2.5
-                ctx.fill(Path(ellipseIn: CGRect(x: px - r, y: py - r, width: r * 2, height: r * 2)), with: .color(color))
+                // A shape of its own per verdict too, not only a color.
+                ctx.fill(Self.markerPath(verdict, at: CGPoint(x: px, y: py), r: r), with: .color(color))
                 if verdict.hasPrefix("TAP") {
-                    ctx.draw(Text(verdict.replacingOccurrences(of: "TAP ", with: "")).font(.caption2).foregroundStyle(.green),
+                    ctx.draw(Text(verdict.replacingOccurrences(of: "TAP ", with: "")).font(FontScaler.scale(.caption2, by: textScale)).foregroundStyle(.green),
                              at: CGPoint(x: px, y: py - 9), anchor: .bottom)
                 }
             }
@@ -285,7 +295,7 @@ struct TapCalibrationView: View {
                 let px = x(t)
                 var p = Path(); p.move(to: CGPoint(x: px, y: rect.minY)); p.addLine(to: CGPoint(x: px, y: rect.minY + 14))
                 ctx.stroke(p, with: .color(.green), lineWidth: 2)
-                ctx.draw(Text("\(count)").font(.caption2).foregroundStyle(.green),
+                ctx.draw(Text("\(count)").font(FontScaler.scale(.caption2, by: textScale)).foregroundStyle(.green),
                          at: CGPoint(x: px + 4, y: rect.minY + 2), anchor: .topLeading)
             }
         }
@@ -294,21 +304,39 @@ struct TapCalibrationView: View {
 
     private var legend: some View {
         HStack(spacing: 14) {
-            legendItem(.green, "Counted as a tap")
-            legendItem(.gray, "Ring-down or handling")
-            legendItem(.red, "Too soon after a tap")
-            legendItem(.yellow, "Ignored: typing or clicking")
+            legendItem(.green, "Counted as a tap", verdict: "TAP")
+            legendItem(.gray, "Ring-down or handling", verdict: "ring")
+            legendItem(.red, "Too soon after a tap", verdict: "refrac")
+            legendItem(.yellow, "Ignored: typing or clicking", verdict: "typing")
             Spacer()
         }
         .font(.caption)
         .foregroundStyle(.secondary)
     }
 
-    private func legendItem(_ color: Color, _ text: String) -> some View {
+    private func legendItem(_ color: Color, _ text: LocalizedStringKey, verdict: String) -> some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 7, height: 7)
+            Canvas { ctx, size in
+                ctx.fill(Self.markerPath(verdict, at: CGPoint(x: size.width / 2, y: size.height / 2), r: 3.5), with: .color(color))
+            }
+            .frame(width: 8, height: 8)
+            .accessibilityHidden(true)
             Text(text)
         }
+    }
+
+    /// A tap is a circle, typing a square, too soon a diamond, ring-down a
+    /// small circle: the plot and its legend tell them apart without color.
+    static func markerPath(_ verdict: String, at p: CGPoint, r: CGFloat) -> Path {
+        let box = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+        if verdict == "typing" { return Path(box) }
+        if verdict == "refrac" {
+            var d = Path()
+            d.move(to: CGPoint(x: p.x, y: p.y - r * 1.2)); d.addLine(to: CGPoint(x: p.x + r * 1.2, y: p.y))
+            d.addLine(to: CGPoint(x: p.x, y: p.y + r * 1.2)); d.addLine(to: CGPoint(x: p.x - r * 1.2, y: p.y)); d.closeSubpath()
+            return d
+        }
+        return Path(ellipseIn: box)
     }
 
     // MARK: - Threshold
@@ -329,11 +357,14 @@ struct TapCalibrationView: View {
             ), in: log10(0.02)...log10(0.6))
             .labelsHidden()
             .accessibilityLabel("Tap threshold")
-            .accessibilityValue(String(format: "%.3f g", threshold))
-            Text(String(format: "%.3f g", threshold))
+            // "g" alone is read as grams.
+            .accessibilityValue(String(localized: "\(threshold.formatted(.number.precision(.fractionLength(3)))) g-force", comment: "Tap strength read aloud, g as in gravity"))
+            Text(String(format: "%.3f g", locale: .current, threshold))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 56, alignment: .trailing)
+                // The slider says the same value in words.
+                .accessibilityHidden(true)
         }
         .font(.callout)
     }

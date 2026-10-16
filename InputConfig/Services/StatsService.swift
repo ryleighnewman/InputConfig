@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 /// Persistent usage telemetry for InputConfig. Tracks how much time the
 /// user spends with controllers connected, which presets they activate
@@ -82,11 +83,49 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         load()
         stats.launchCount += 1
         startFlushTimer()
+        // Time asleep is not use: the clocks are rolled up to the moment
+        // of sleep and start again at wake, or a night with the lid closed
+        // was booked as engine, preset and controller time.
+        let center = NSWorkspace.shared.notificationCenter
+        sleepObservers = [
+            center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+                StatsService.shared.flushSynchronously()
+                StatsService.shared.asleep = true
+            },
+            center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+                StatsService.shared.restartClocks()
+                StatsService.shared.asleep = false
+            },
+        ]
+    }
+
+    private var sleepObservers: [NSObjectProtocol] = []
+    /// Between sleep and wake: the periodic flush can run on wake before
+    /// the wake notice, and must not book the nap.
+    private var asleep = false
+
+    /// Every running clock starts again from now.
+    private func restartClocks() {
+        let now = Date()
+        if connectedSince != nil { connectedSince = now }
+        if engineRunningSince != nil { engineRunningSince = now }
+        if activePresetStartedAt != nil { activePresetStartedAt = now }
+        for (name, clock) in controllerClocks { controllerClocks[name] = (clock.count, now) }
     }
 
     // MARK: - Recording API
 
+    /// A connect or disconnect while asleep (a Bluetooth pad dropping as
+    /// the Mac sleeps) or on wake before the wake notice: the clocks start
+    /// from now first, or the night was booked as use. Still asleep after,
+    /// so the periodic flush waits for the wake notice.
+    private func wakeIfAsleep() {
+        guard asleep else { return }
+        restartClocks()
+    }
+
     func controllerConnected(name: String) {
+        wakeIfAsleep()
         if connectedSince == nil { connectedSince = Date() }
         rollControllerClocks()
         var clock = controllerClocks[name] ?? (0, Date())
@@ -101,6 +140,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         // Each controller's own time, counted from when it connected (or
         // the last flush). Before, only the seconds since the last flush
         // reached one name, the last to disconnect.
+        wakeIfAsleep()
         rollControllerClocks()
         if var clock = controllerClocks[name] {
             clock.count -= 1
@@ -139,6 +179,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     }
 
     func engineStopped() {
+        wakeIfAsleep()
         if let s = engineRunningSince {
             stats.totalEngineRunningTime += Date().timeIntervalSince(s)
             engineRunningSince = nil
@@ -238,11 +279,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         // Zero the totals but keep the clocks running from now: a
         // controller that is still connected, or a preset still running,
         // went on counting nothing until it was reconnected or restarted.
-        let now = Date()
-        if connectedSince != nil { connectedSince = now }
-        if engineRunningSince != nil { engineRunningSince = now }
-        if activePresetStartedAt != nil { activePresetStartedAt = now }
-        for (name, clock) in controllerClocks { controllerClocks[name] = (clock.count, now) }
+        restartClocks()
         flushNow()
         // Publish right away so the open Statistics sheet shows the zeros
         // instead of waiting for the next dirty flush.
@@ -285,7 +322,12 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     }()
 
     private func flushIfDirty() {
-        guard dirty else { return }
+        guard !asleep else { return }
+        // Connected time is rolled at least once a minute even with no
+        // presses, so an idle night is not all booked to the next morning
+        // (and a crash keeps it).
+        let rollConnected = connectedSince.map { Date().timeIntervalSince($0) > 60 } ?? false
+        guard dirty || rollConnected else { return }
         // Roll up any in-flight time so a crash before disconnect doesn't
         // throw away the session. The same delta has to land in the daily
         // bucket too, otherwise connected time that is flushed before the
@@ -364,8 +406,17 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     }
 
     private func recordDailyConnection(delta: TimeInterval) {
-        let key = Self.dailyKeyFormatter.string(from: Date())
-        stats.dailyConnectedSeconds[key, default: 0] += delta
+        // Split at each midnight the span crosses, so each day gets its own.
+        let end = Date()
+        var cursor = end.addingTimeInterval(-max(0, delta))
+        let calendar = Calendar.current
+        while cursor < end {
+            let nextMidnight = calendar.startOfDay(for: cursor).addingTimeInterval(86_400)
+            let pieceEnd = min(end, calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: cursor)) ?? nextMidnight)
+            let key = Self.dailyKeyFormatter.string(from: cursor)
+            stats.dailyConnectedSeconds[key, default: 0] += pieceEnd.timeIntervalSince(cursor)
+            cursor = pieceEnd
+        }
         // Keep a trailing window so the map can't grow one key per day forever;
         // readers use at most the last 14 days.
         if stats.dailyConnectedSeconds.count > 90 {

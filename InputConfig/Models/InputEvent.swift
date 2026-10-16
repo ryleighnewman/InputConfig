@@ -44,6 +44,12 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     /// A physical tap on the Mac's own chassis, read from the built-in
     /// accelerometer. `index` carries the tap count, 1 to 5.
     case chassisTap = "cht"
+    /// A gesture made with a stick: one or more flicks (out past a set
+    /// reach, then back to the middle) in chosen directions or into stick
+    /// zones, such as pulling the stick straight back twice. `index` is the
+    /// stick (0 left, 1 right), `gestureSteps` the flicks in order. Fires
+    /// like a quick button press when the last flick lands.
+    case stickGesture = "sgs"
     /// A message from an external MIDI device (keyboard, pad controller,
     /// knob box). Notes and pads behave like buttons; CC knobs, pitch
     /// bend, and aftertouch behave like analog axes. `index` carries the
@@ -55,18 +61,19 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .button: return "Button"
-        case .axis: return "Axis"
-        case .hat: return "Hat"
-        case .touchpad: return "Touchpad"
-        case .touchpadRegion: return "Touchpad zone"
-        case .motion: return "Motion"
-        case .extKey: return "Keyboard Key"
-        case .extMouse: return "Mouse"
-        case .cursorRegion: return "Screen region"
-        case .stickRegion: return "Stick zone"
-        case .touchpadGesture: return "Touchpad Gesture"
-        case .chassisTap: return "Tap the Mac"
+        case .button: return String(localized: "Button")
+        case .axis: return String(localized: "Axis")
+        case .hat: return String(localized: "Hat")
+        case .touchpad: return String(localized: "Touchpad")
+        case .touchpadRegion: return String(localized: "Touchpad region")
+        case .motion: return String(localized: "Motion")
+        case .extKey: return String(localized: "Keyboard Key")
+        case .extMouse: return String(localized: "Mouse")
+        case .cursorRegion: return String(localized: "Screen region")
+        case .stickRegion: return String(localized: "Stick region")
+        case .stickGesture: return String(localized: "Stick gesture")
+        case .touchpadGesture: return String(localized: "Touchpad Gesture")
+        case .chassisTap: return String(localized: "Tap the Mac")
         case .midi: return "MIDI"
         }
     }
@@ -93,9 +100,9 @@ enum TouchpadGestureKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .twoFingerTap: return "Two-finger tap"
-        case .oneFingerTap: return "Touchpad tap (one finger)"
-        case .doubleTap: return "Touchpad double tap"
+        case .twoFingerTap: return String(localized: "Two-finger tap")
+        case .oneFingerTap: return String(localized: "Touchpad tap (one finger)")
+        case .doubleTap: return String(localized: "Touchpad double tap")
         }
     }
 }
@@ -123,21 +130,21 @@ enum MIDIInputKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .note:          return "Note"
-        case .cc:            return "Control Change"
-        case .pitchBend:     return "Pitch Bend"
-        case .programChange: return "Program Change"
-        case .aftertouch:    return "Aftertouch"
-        case .transport:     return "Transport"
+        case .note:          return String(localized: "Note")
+        case .cc:            return String(localized: "Control Change")
+        case .pitchBend:     return String(localized: "Pitch Bend")
+        case .programChange: return String(localized: "Program Change")
+        case .aftertouch:    return String(localized: "Aftertouch")
+        case .transport:     return String(localized: "Transport")
         }
     }
 
     /// Start, Continue, or Stop for a transport status byte.
     static func transportName(_ status: Int) -> String {
         switch status {
-        case 0xFB: return "Continue"
-        case 0xFC: return "Stop"
-        default:   return "Start"
+        case 0xFB: return String(localized: "Continue")
+        case 0xFC: return String(localized: "Stop")
+        default:   return String(localized: "Start")
         }
     }
 
@@ -183,9 +190,9 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .threshold: return "Switch (past halfway)"
-        case .centered:  return "Dial (speed from center)"
-        case .relative:  return "Turn (nudge per step)"
+        case .threshold: return String(localized: "Switch (past halfway)")
+        case .centered:  return String(localized: "Dial (speed from center)")
+        case .relative:  return String(localized: "Turn (nudge per step)")
         }
     }
 
@@ -193,8 +200,8 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
     var badge: String? {
         switch self {
         case .threshold: return nil
-        case .centered:  return "Dial"
-        case .relative:  return "Turn"
+        case .centered:  return String(localized: "Dial")
+        case .relative:  return String(localized: "Turn")
         }
     }
 }
@@ -226,15 +233,15 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .button:  return "Button"
-        case .moveX:   return "Move X"
-        case .moveY:   return "Move Y"
-        case .scrollX: return "Scroll X"
-        case .scrollY: return "Scroll Y"
-        case .pressure: return "Pressure (Force Touch)"
-        case .deepPress: return "Deep Press"
-        case .doubleClick: return "Double click"
-        case .scrollGesture: return "Scroll gesture"
+        case .button:  return String(localized: "Button")
+        case .moveX:   return String(localized: "Move X")
+        case .moveY:   return String(localized: "Move Y")
+        case .scrollX: return String(localized: "Scroll X")
+        case .scrollY: return String(localized: "Scroll Y")
+        case .pressure: return String(localized: "Pressure (Force Touch)")
+        case .deepPress: return String(localized: "Deep Press")
+        case .doubleClick: return String(localized: "Double click")
+        case .scrollGesture: return String(localized: "Scroll gesture")
         }
     }
 }
@@ -267,15 +274,15 @@ enum MotionChannel: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .gyroX:      return "Gyro X"
-        case .gyroY:      return "Gyro Y"
-        case .gyroZ:      return "Gyro Z"
-        case .accelX:     return "Accel X"
-        case .accelY:     return "Accel Y"
-        case .accelZ:     return "Accel Z"
-        case .rollAngle:  return "Roll angle"
-        case .pitchAngle: return "Pitch angle"
-        case .yawAngle:   return "Yaw angle"
+        case .gyroX:      return String(localized: "Gyro X")
+        case .gyroY:      return String(localized: "Gyro Y")
+        case .gyroZ:      return String(localized: "Gyro Z")
+        case .accelX:     return String(localized: "Accel X")
+        case .accelY:     return String(localized: "Accel Y")
+        case .accelZ:     return String(localized: "Accel Z")
+        case .rollAngle:  return String(localized: "Roll angle")
+        case .pitchAngle: return String(localized: "Pitch angle")
+        case .yawAngle:   return String(localized: "Yaw angle")
         }
     }
 
@@ -283,9 +290,9 @@ enum MotionChannel: String, Codable, CaseIterable, Identifiable {
     /// label stays short but the menu items remain self-explanatory.
     var menuDescription: String {
         switch self {
-        case .gyroX:      return "Gyro X (pitch rate)"
-        case .gyroY:      return "Gyro Y (sideways tilt)"
-        case .gyroZ:      return "Gyro Z (turn)"
+        case .gyroX:      return String(localized: "Gyro X (pitch rate)")
+        case .gyroY:      return String(localized: "Gyro Y (sideways tilt)")
+        case .gyroZ:      return String(localized: "Gyro Z (turn)")
         default:          return displayName
         }
     }
@@ -301,8 +308,8 @@ enum TouchpadAxis: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .x: return "X (left/right)"
-        case .y: return "Y (up/down)"
+        case .x: return String(localized: "X (left/right)")
+        case .y: return String(localized: "Y (up/down)")
         }
     }
 }
@@ -320,6 +327,15 @@ enum AxisDirection: String, Codable, CaseIterable, Identifiable {
         case .negative: return "-"
         }
     }
+
+    /// As VoiceOver says it: a voice drops a lone "-", so both halves of a
+    /// stick sounded the same.
+    var spokenName: String {
+        switch self {
+        case .positive: return String(localized: "plus")
+        case .negative: return String(localized: "minus")
+        }
+    }
 }
 
 /// Direction for hat (D-pad) inputs
@@ -333,10 +349,10 @@ enum HatDirection: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .up: return "Up"
-        case .right: return "Right"
-        case .down: return "Down"
-        case .left: return "Left"
+        case .up: return String(localized: "Up")
+        case .right: return String(localized: "Right")
+        case .down: return String(localized: "Down")
+        case .left: return String(localized: "Left")
         }
     }
 }
@@ -400,86 +416,97 @@ struct InputEvent: Codable, Hashable, Identifiable {
     /// second (a Steam Controller's left trackpad). Serialized as a
     /// trailing " s1" only for surface 1, so every older row is unchanged.
     var touchpadSurface: Int? = nil
+    /// The flicks of a `.stickGesture`, in order.
+    var gestureSteps: [GestureStep]? = nil
 
     var displayName: String {
         switch type {
         case .button:
-            return "Button \(index)"
+            return String(localized: "Button \(index)")
         case .axis:
             let dir = axisDirection?.displayName ?? "+"
-            return "Axis \(index) \(dir)"
+            return String(localized: "Axis \(index) \(dir)")
         case .hat:
-            let dir = hatDirection?.displayName ?? "Up"
-            return "Hat \(index) \(dir)"
+            let dir = hatDirection?.displayName ?? String(localized: "Up")
+            return String(localized: "Hat \(index) \(dir)")
         case .touchpad:
             let finger = min(max(touchpadFinger ?? 0, 0), 9) + 1
             let axis = touchpadAxis?.rawValue.uppercased() ?? "X"
             let dir = axisDirection?.displayName ?? "+"
-            return (touchpadSurface == 1 ? "Left trackpad" : "Touchpad") + " F\(finger) \(axis) \(dir)"
+            return touchpadSurface == 1
+                ? String(localized: "Left trackpad F\(finger) \(axis) \(dir)")
+                : String(localized: "Touchpad F\(finger) \(axis) \(dir)")
         case .touchpadRegion:
             // The region name lives in TouchpadService; we resolve it where
             // we have access (BindingRowView). The serialized id is enough
             // for storage but not human-friendly, so just show "Region".
-            return "Touchpad zone"
+            return String(localized: "Touchpad region")
         case .motion:
-            let ch = motionChannel?.displayName ?? "Motion"
+            let ch = motionChannel?.displayName ?? String(localized: "Motion")
             let dir = axisDirection?.displayName ?? "+"
             return "\(ch) \(dir)"
         case .extKey:
-            return "Key \(index)"
+            // What the keycap shows under the current layout, or the key's
+            // name in the app's language.
+            return KeyCodeMap.name(for: index)
         case .extMouse:
-            let kind = extMouseKind?.displayName ?? "Button"
+            let kind = extMouseKind?.displayName ?? String(localized: "Button")
             switch extMouseKind ?? .button {
             case .button:
-                return "Mouse Button \(index)"
+                return String(localized: "Mouse Button \(index &+ 1)")  // counted from 1, as the row and mouse map do
             case .moveX, .moveY, .scrollX, .scrollY:
                 let dir = axisDirection?.displayName ?? "+"
-                return "Mouse \(kind) \(dir)"
+                return String(localized: "Mouse \(kind) \(dir)")
             case .pressure:
-                return "Trackpad Pressure"
+                return String(localized: "Trackpad Pressure")
             case .deepPress:
-                return "Trackpad Deep Press"
+                return String(localized: "Trackpad Deep Press")
             case .doubleClick:
-                return "Mouse Double Click \(index)"
+                return String(localized: "Mouse Double Click \(index &+ 1)")
             case .scrollGesture:
-                return "Scroll Gesture"
+                return String(localized: "Scroll Gesture")
             }
         case .cursorRegion:
             // Like `.touchpadRegion`, the human name lives in the
             // CursorRegionService and is resolved in the binding row.
-            return "Screen region"
+            return String(localized: "Screen region")
         case .stickRegion:
-            let stick = index == 1 ? "Right" : "Left"
-            return "\(stick) stick zone"
+            if StickRegionService.isBandKey(index) {
+                return String(localized: "\(StickRegionService.axisDisplayName(index - StickRegionService.bandKeyBase)) region")
+            }
+            return index == 1 ? String(localized: "Right stick region") : String(localized: "Left stick region")
+        case .stickGesture:
+            let stick = index == 1 ? String(localized: "Right stick") : String(localized: "Left stick")
+            return String(localized: "\(stick) gesture: \(GestureStep.describe(gestureSteps ?? []))")
         case .touchpadGesture:
-            return touchpadGestureKind?.displayName ?? "Touchpad Gesture"
+            return touchpadGestureKind?.displayName ?? String(localized: "Touchpad Gesture")
         case .chassisTap:
             switch index {
-            case 2:  return "Double tap the Mac"
-            case 3:  return "Triple tap the Mac"
-            case 4:  return "Quadruple tap the Mac"
-            case 5:  return "Quintuple tap the Mac"
-            default: return "Tap the Mac"
+            case 2:  return String(localized: "Double tap the Mac")
+            case 3:  return String(localized: "Triple tap the Mac")
+            case 4:  return String(localized: "Quadruple tap the Mac")
+            case 5:  return String(localized: "Quintuple tap the Mac")
+            default: return String(localized: "Tap the Mac")
             }
         case .midi:
             let kind = midiKind ?? .note
-            let chan = midiChannel.map { "ch\($0)" } ?? "any ch"
+            let chan = midiChannel.map { String(localized: "ch\($0)") } ?? String(localized: "any ch")
             switch kind {
             case .note:
-                return "MIDI \(MIDIService.noteName(index)) (\(chan))"
+                return String(localized: "MIDI \(MIDIService.noteName(index)) (\(chan))")
             case .cc:
                 let dir = axisDirection.map { " \($0.displayName)" } ?? ""
                 let mode = (midiCCMode?.badge).map { " \($0)" } ?? ""
-                return "MIDI CC \(index)\(mode)\(dir) (\(chan))"
+                return String(localized: "MIDI CC \(index)\(mode)\(dir) (\(chan))")
             case .programChange:
-                return "MIDI Program \(index) (\(chan))"
+                return String(localized: "MIDI Program \(index) (\(chan))")
             case .pitchBend:
                 let dir = axisDirection.map { " \($0.displayName)" } ?? ""
-                return "MIDI Pitch Bend\(dir) (\(chan))"
+                return String(localized: "MIDI Pitch Bend\(dir) (\(chan))")
             case .aftertouch:
-                return "MIDI Aftertouch (\(chan))"
+                return String(localized: "MIDI Aftertouch (\(chan))")
             case .transport:
-                return "MIDI \(MIDIInputKind.transportName(index))"
+                return String(localized: "MIDI \(MIDIInputKind.transportName(index))")
             }
         }
     }
@@ -504,7 +531,9 @@ struct InputEvent: Codable, Hashable, Identifiable {
             // to keep the binding key short. Missing IDs serialize to all-zeros.
             let raw = (touchpadRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
                 .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-            return "tpr \(raw)"
+            // A Steam Controller's left trackpad, as touchpad rows mark it;
+            // an older build reads the region and ignores the mark.
+            return "tpr \(raw)" + (touchpadSurface == 1 ? " s1" : "")
         case .motion:
             let ch = motionChannel?.rawValue ?? "gyroY"
             let dir = axisDirection?.rawValue ?? "+"
@@ -531,6 +560,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let raw = (stickRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
                 .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             return "srg \(index) \(raw)"
+        case .stickGesture:
+            // "sgs <stick> <step>.<step>" e.g. "sgs 0 d.d", pulled back twice
+            let steps = (gestureSteps ?? []).map(\.token).joined(separator: ".")
+            return "sgs \(index) \(steps.isEmpty ? "-" : steps)"
         case .touchpadGesture:
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")" + (touchpadSurface == 1 ? " s1" : "")
@@ -588,8 +621,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
             guard raw.count == 32 else { return nil }
             let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
             guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
-            return InputEvent(type: .touchpadRegion, index: 0,
-                              touchpadRegionID: uuid)
+            var event = InputEvent(type: .touchpadRegion, index: 0,
+                                   touchpadRegionID: uuid)
+            if parts.count >= 3, parts[2] == "s1" { event.touchpadSurface = 1 }
+            return event
         case "mtn":
             guard parts.count >= 3,
                   let channel = MotionChannel(rawValue: parts[1]) else { return nil }
@@ -632,6 +667,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
             guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
             return InputEvent(type: .stickRegion, index: stickIdx,
                               stickRegionID: uuid)
+        case "sgs":
+            guard parts.count >= 3, let stick = Int(parts[1]), (0...1).contains(stick) else { return nil }
+            let steps = parts[2].split(separator: ".").compactMap { GestureStep(token: String($0)) }
+            return InputEvent(type: .stickGesture, index: stick, gestureSteps: Array(steps.prefix(GestureStep.maxSteps)))
         case "tpg":
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             guard parts.count >= 2,
@@ -704,6 +743,10 @@ struct InputEvent: Codable, Hashable, Identifiable {
         InputEvent(type: .stickRegion, index: stickIndex, stickRegionID: id)
     }
 
+    static func stickGesture(stick: Int, _ steps: [GestureStep]) -> InputEvent {
+        InputEvent(type: .stickGesture, index: stick, gestureSteps: steps)
+    }
+
     static func touchpadGesture(_ kind: TouchpadGestureKind) -> InputEvent {
         InputEvent(type: .touchpadGesture, index: 0, touchpadGestureKind: kind)
     }
@@ -745,5 +788,187 @@ struct InputEvent: Codable, Hashable, Identifiable {
                    axisDirection: direction,
                    extDeviceID: deviceID,
                    extMouseKind: kind)
+    }
+}
+
+// MARK: - Stick gestures
+
+/// The eight directions a stick can be flicked.
+enum StickDirection: String, Codable, CaseIterable, Identifiable {
+    case up = "u", down = "d", left = "l", right = "r"
+    case upLeft = "ul", upRight = "ur", downLeft = "dl", downRight = "dr"
+
+    var id: String { rawValue }
+
+    /// Degrees counterclockwise from right, up is 90.
+    var degrees: Double {
+        switch self {
+        case .right: return 0
+        case .upRight: return 45
+        case .up: return 90
+        case .upLeft: return 135
+        case .left: return 180
+        case .downLeft: return 225
+        case .down: return 270
+        case .downRight: return 315
+        }
+    }
+
+    var isDiagonal: Bool { [.upLeft, .upRight, .downLeft, .downRight].contains(self) }
+
+    /// How far off its line a flick can land and still count: a straight
+    /// direction takes its whole quarter, a diagonal the eighth around it.
+    var tolerance: Double { isDiagonal ? 22.5 : 45 }
+
+    var displayName: String {
+        switch self {
+        case .up: return String(localized: "Up")
+        case .down: return String(localized: "Down")
+        case .left: return String(localized: "Left")
+        case .right: return String(localized: "Right")
+        case .upLeft: return String(localized: "Up left")
+        case .upRight: return String(localized: "Up right")
+        case .downLeft: return String(localized: "Down left")
+        case .downRight: return String(localized: "Down right")
+        }
+    }
+
+    /// An arrow for the compact row label.
+    var arrow: String {
+        switch self {
+        case .up: return "\u{2191}"
+        case .down: return "\u{2193}"
+        case .left: return "\u{2190}"
+        case .right: return "\u{2192}"
+        case .upLeft: return "\u{2196}"
+        case .upRight: return "\u{2197}"
+        case .downLeft: return "\u{2199}"
+        case .downRight: return "\u{2198}"
+        }
+    }
+
+    /// Whether a flick whose farthest point was at this angle counts.
+    func matches(degrees angle: Double) -> Bool {
+        var d = (angle - degrees).truncatingRemainder(dividingBy: 360)
+        if d > 180 { d -= 360 } else if d < -180 { d += 360 }
+        return abs(d) <= tolerance
+    }
+}
+
+/// One flick of a stick gesture: toward a direction, or into a stick zone.
+struct GestureStep: Codable, Hashable {
+    var direction: StickDirection?
+    var zone: UUID?
+
+    static let maxSteps = 8
+
+    init(direction: StickDirection) { self.direction = direction; self.zone = nil }
+    init(zone: UUID) { self.direction = nil; self.zone = zone }
+
+    /// "u", "dl", or "z" and the zone's id as 32 hex digits.
+    var token: String {
+        if let direction { return direction.rawValue }
+        let raw = (zone ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))).uuidString
+            .lowercased().replacingOccurrences(of: "-", with: "")
+        return "z" + raw
+    }
+
+    init?(token: String) {
+        if let d = StickDirection(rawValue: token) { self.init(direction: d); return }
+        guard token.hasPrefix("z") else { return nil }
+        let raw = String(token.dropFirst())
+        guard raw.count == 32 else { return nil }
+        let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
+        guard let id = UUID(uuidString: dashed.uppercased()) else { return nil }
+        self.init(zone: id)
+    }
+
+    /// "Down, Down" or with zone names where they are known (on the main
+    /// thread, where the zones live).
+    static func describe(_ steps: [GestureStep]) -> String {
+        if steps.isEmpty { return String(localized: "no flicks yet") }
+        return steps.map { step in
+            if let d = step.direction { return d.displayName }
+            if let id = step.zone, Thread.isMainThread,
+               let name = MainActor.assumeIsolated({ StickRegionService.shared.region(with: id)?.region.shownName }) {
+                return name
+            }
+            return String(localized: "a region")
+        }.joined(separator: ", ")
+    }
+}
+
+/// Recognizes stick gestures from the stick's position, frame by frame. A
+/// flick starts when the stick passes the reach and ends when it comes
+/// back near the middle; a flick held out longer than the limit is a push,
+/// not a flick, and starts the gesture over (so driving or pointing with
+/// the stick held back never counts).
+struct StickGestureRecognizer {
+    /// Settings, from the row.
+    var reach: Double = 0.8
+    var windowMs: Int = 600
+    var maxFlickMs: Int = 400
+
+    private(set) var progress = 0
+    private var out = false
+    private var outStart: Double = 0
+    private var peak = (x: 0.0, y: 0.0, m: 0.0)
+    private var heldTooLong = false
+    private var lastStepAt: Double = 0
+
+    /// Distance from the middle that counts as back at rest.
+    var restRadius: Double { min(0.35, reach * 0.5) }
+
+    /// One frame. `x` runs left to right and `y` top to bottom, -1...1, as
+    /// the app reads a stick. Returns true on the frame the last flick of
+    /// `steps` lands. `matches` decides whether a flick's farthest point
+    /// fits a step.
+    mutating func feed(x: Double, y: Double, now: Double, steps: [GestureStep],
+                       matches: (GestureStep, Double, Double) -> Bool) -> Bool {
+        guard !steps.isEmpty, x.isFinite, y.isFinite else { return false }
+        let m = hypot(x, y)
+        if progress > 0, !out, now - lastStepAt > Double(windowMs) / 1000 { progress = 0 }
+        if !out {
+            if m >= reach {
+                out = true; outStart = now; peak = (x, y, m); heldTooLong = false
+            }
+            return false
+        }
+        if m > peak.m { peak = (x, y, m) }
+        if maxFlickMs > 0, now - outStart > Double(maxFlickMs) / 1000 {
+            heldTooLong = true
+            progress = 0
+        }
+        guard m <= restRadius else { return false }
+        out = false
+        if heldTooLong { return false }
+        if matches(steps[progress], peak.x, peak.y) {
+            progress += 1
+            lastStepAt = now
+            if progress >= steps.count { progress = 0; return true }
+        } else {
+            // A wrong flick starts over, and may itself be the first step.
+            progress = matches(steps[0], peak.x, peak.y) ? 1 : 0
+            lastStepAt = now
+            if progress >= steps.count { progress = 0; return true }
+        }
+        return false
+    }
+
+    /// Forget a gesture under way.
+    mutating func reset() { progress = 0; out = false; heldTooLong = false }
+
+    /// Whether a flick's farthest point fits a step: a direction by angle,
+    /// a zone by the zone's own shape.
+    @MainActor
+    static func stepMatches(_ step: GestureStep, x: Double, y: Double, stick: Int? = nil) -> Bool {
+        if let d = step.direction {
+            return d.matches(degrees: atan2(-y, x) * 180 / .pi)
+        }
+        if let id = step.zone, let found = StickRegionService.shared.region(with: id),
+           !StickRegionService.isBandKey(found.stickIndex), stick == nil || found.stickIndex == stick {
+            return found.region.contains(normalizedX: (x + 1) / 2, y: (y + 1) / 2)
+        }
+        return false
     }
 }

@@ -52,136 +52,147 @@ struct KeyCodeMap {
 
     static let allKeys: [KeyEntry] = {
         var keys: [KeyEntry] = []
+        // Section names are shown in the key menus; entries stay grouped by the same string.
+        let groupLetterKeys = String(localized: "Letter Keys")
+        let groupNumberKeys = String(localized: "Number Keys")
+        let groupOtherCharacters = String(localized: "Other Characters")
+        let groupArrowKeys = String(localized: "Arrow Keys")
+        let groupModifierKeys = String(localized: "Modifier Keys")
+        let groupOtherKeys = String(localized: "Other Keys")
+        let groupFunctionKeys = String(localized: "Function Keys")
+        let groupKeypadKeys = String(localized: "Keypad Keys")
+        let groupInternationalKeys = String(localized: "International Keys")
+        let groupSpecialKeys = String(localized: "Special Keys")
 
         // Letter Keys
         let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         for (i, char) in letters.enumerated() {
-            keys.append(KeyEntry(code: 4 + i, name: String(char), group: "Letter Keys"))
+            keys.append(KeyEntry(code: 4 + i, name: String(char), group: groupLetterKeys))
         }
 
         // Number Keys
         for i in 1...9 {
-            keys.append(KeyEntry(code: 29 + i, name: "\(i)", group: "Number Keys"))
+            keys.append(KeyEntry(code: 29 + i, name: "\(i)", group: groupNumberKeys))
         }
-        keys.append(KeyEntry(code: 39, name: "0", group: "Number Keys"))
+        keys.append(KeyEntry(code: 39, name: "0", group: groupNumberKeys))
 
         // Other Characters
         keys.append(contentsOf: [
-            KeyEntry(code: 45, name: "-", group: "Other Characters"),
-            KeyEntry(code: 46, name: "=", group: "Other Characters"),
-            KeyEntry(code: 47, name: "[", group: "Other Characters"),
-            KeyEntry(code: 48, name: "]", group: "Other Characters"),
-            KeyEntry(code: 49, name: "\\", group: "Other Characters"),
-            KeyEntry(code: 50, name: "# ~ (ISO, next to Return)", group: "Other Characters"),
-            KeyEntry(code: 51, name: ";", group: "Other Characters"),
-            KeyEntry(code: 52, name: "'", group: "Other Characters"),
-            KeyEntry(code: 53, name: "`", group: "Other Characters"),
-            KeyEntry(code: 54, name: ",", group: "Other Characters"),
-            KeyEntry(code: 55, name: ".", group: "Other Characters"),
-            KeyEntry(code: 56, name: "/", group: "Other Characters"),
+            KeyEntry(code: 45, name: "-", group: groupOtherCharacters),
+            KeyEntry(code: 46, name: "=", group: groupOtherCharacters),
+            KeyEntry(code: 47, name: "[", group: groupOtherCharacters),
+            KeyEntry(code: 48, name: "]", group: groupOtherCharacters),
+            KeyEntry(code: 49, name: "\\", group: groupOtherCharacters),
+            KeyEntry(code: 50, name: "# ~ (ISO, next to Return)", group: groupOtherCharacters),
+            KeyEntry(code: 51, name: ";", group: groupOtherCharacters),
+            KeyEntry(code: 52, name: "'", group: groupOtherCharacters),
+            KeyEntry(code: 53, name: "`", group: groupOtherCharacters),
+            KeyEntry(code: 54, name: ",", group: groupOtherCharacters),
+            KeyEntry(code: 55, name: ".", group: groupOtherCharacters),
+            KeyEntry(code: 56, name: "/", group: groupOtherCharacters),
         ])
 
         // Arrow Keys
         keys.append(contentsOf: [
-            KeyEntry(code: 79, name: "Right", group: "Arrow Keys"),
-            KeyEntry(code: 80, name: "Left", group: "Arrow Keys"),
-            KeyEntry(code: 81, name: "Down", group: "Arrow Keys"),
-            KeyEntry(code: 82, name: "Up", group: "Arrow Keys"),
+            KeyEntry(code: 79, name: "Right", group: groupArrowKeys),
+            KeyEntry(code: 80, name: "Left", group: groupArrowKeys),
+            KeyEntry(code: 81, name: "Down", group: groupArrowKeys),
+            KeyEntry(code: 82, name: "Up", group: groupArrowKeys),
         ])
 
         // Modifier Keys
         keys.append(contentsOf: [
-            KeyEntry(code: 227, name: "Command (Left)", group: "Modifier Keys"),
-            KeyEntry(code: 231, name: "Command (Right)", group: "Modifier Keys"),
-            KeyEntry(code: 225, name: "Shift (Left)", group: "Modifier Keys"),
-            KeyEntry(code: 229, name: "Shift (Right)", group: "Modifier Keys"),
-            KeyEntry(code: 226, name: "Alt / Option (Left)", group: "Modifier Keys"),
-            KeyEntry(code: 230, name: "Alt / Option (Right)", group: "Modifier Keys"),
-            KeyEntry(code: 224, name: "Ctrl (Left)", group: "Modifier Keys"),
-            KeyEntry(code: 228, name: "Ctrl (Right)", group: "Modifier Keys"),
-            KeyEntry(code: KeyCodeMap.globeFnCode, name: "fn / Globe (hold)", group: "Modifier Keys"),
+            KeyEntry(code: 227, name: "Command (Left)", group: groupModifierKeys),
+            KeyEntry(code: 231, name: "Command (Right)", group: groupModifierKeys),
+            KeyEntry(code: 225, name: "Shift (Left)", group: groupModifierKeys),
+            KeyEntry(code: 229, name: "Shift (Right)", group: groupModifierKeys),
+            KeyEntry(code: 226, name: "Alt / Option (Left)", group: groupModifierKeys),
+            KeyEntry(code: 230, name: "Alt / Option (Right)", group: groupModifierKeys),
+            KeyEntry(code: 224, name: "Ctrl (Left)", group: groupModifierKeys),
+            KeyEntry(code: 228, name: "Ctrl (Right)", group: groupModifierKeys),
+            KeyEntry(code: KeyCodeMap.globeFnCode, name: "fn / Globe (hold)", group: groupModifierKeys),
         ])
 
         // Other Keys
         keys.append(contentsOf: [
-            KeyEntry(code: 44, name: "Space", group: "Other Keys"),
-            KeyEntry(code: 40, name: "Return", group: "Other Keys"),
-            KeyEntry(code: 41, name: "Escape", group: "Other Keys"),
-            KeyEntry(code: 42, name: "Backspace", group: "Other Keys"),
-            KeyEntry(code: 43, name: "Tab", group: "Other Keys"),
-            KeyEntry(code: 73, name: "Insert", group: "Other Keys"),
-            KeyEntry(code: 74, name: "Home", group: "Other Keys"),
-            KeyEntry(code: 75, name: "PageUp", group: "Other Keys"),
-            KeyEntry(code: 76, name: "Delete", group: "Other Keys"),
-            KeyEntry(code: 77, name: "End", group: "Other Keys"),
-            KeyEntry(code: 78, name: "PageDown", group: "Other Keys"),
-            KeyEntry(code: 57, name: "Caps Lock", group: "Other Keys"),
-            KeyEntry(code: 70, name: "PrintScreen (F13)", group: "Other Keys"),
-            KeyEntry(code: 101, name: "Application", group: "Other Keys"),
+            KeyEntry(code: 44, name: "Space", group: groupOtherKeys),
+            KeyEntry(code: 40, name: "Return", group: groupOtherKeys),
+            KeyEntry(code: 41, name: "Escape", group: groupOtherKeys),
+            KeyEntry(code: 42, name: "Backspace", group: groupOtherKeys),
+            KeyEntry(code: 43, name: "Tab", group: groupOtherKeys),
+            KeyEntry(code: 73, name: "Insert", group: groupOtherKeys),
+            KeyEntry(code: 74, name: "Home", group: groupOtherKeys),
+            KeyEntry(code: 75, name: "PageUp", group: groupOtherKeys),
+            KeyEntry(code: 76, name: "Delete", group: groupOtherKeys),
+            KeyEntry(code: 77, name: "End", group: groupOtherKeys),
+            KeyEntry(code: 78, name: "PageDown", group: groupOtherKeys),
+            KeyEntry(code: 57, name: "Caps Lock", group: groupOtherKeys),
+            KeyEntry(code: 70, name: "PrintScreen (F13)", group: groupOtherKeys),
+            KeyEntry(code: 101, name: "Application", group: groupOtherKeys),
         ])
 
         // Function Keys
         for i in 1...12 {
-            keys.append(KeyEntry(code: 57 + i, name: "F\(i)", group: "Function Keys"))
+            keys.append(KeyEntry(code: 57 + i, name: "F\(i)", group: groupFunctionKeys))
         }
         // F21 to F24 have no macOS key code, so they are left out of the
         // pickers; see `unavailableKeys` for presets that stored them.
         for i in 13...20 {
-            keys.append(KeyEntry(code: 91 + i, name: "F\(i)", group: "Function Keys"))
+            keys.append(KeyEntry(code: 91 + i, name: "F\(i)", group: groupFunctionKeys))
         }
 
         // Keypad Keys
         keys.append(contentsOf: [
-            KeyEntry(code: 83, name: "Numlock", group: "Keypad Keys"),
-            KeyEntry(code: 84, name: "Keypad /", group: "Keypad Keys"),
-            KeyEntry(code: 85, name: "Keypad *", group: "Keypad Keys"),
-            KeyEntry(code: 86, name: "Keypad -", group: "Keypad Keys"),
-            KeyEntry(code: 87, name: "Keypad +", group: "Keypad Keys"),
-            KeyEntry(code: 88, name: "Keypad Enter", group: "Keypad Keys"),
-            KeyEntry(code: 89, name: "Keypad 1", group: "Keypad Keys"),
-            KeyEntry(code: 90, name: "Keypad 2", group: "Keypad Keys"),
-            KeyEntry(code: 91, name: "Keypad 3", group: "Keypad Keys"),
-            KeyEntry(code: 92, name: "Keypad 4", group: "Keypad Keys"),
-            KeyEntry(code: 93, name: "Keypad 5", group: "Keypad Keys"),
-            KeyEntry(code: 94, name: "Keypad 6", group: "Keypad Keys"),
-            KeyEntry(code: 95, name: "Keypad 7", group: "Keypad Keys"),
-            KeyEntry(code: 96, name: "Keypad 8", group: "Keypad Keys"),
-            KeyEntry(code: 97, name: "Keypad 9", group: "Keypad Keys"),
-            KeyEntry(code: 98, name: "Keypad 0", group: "Keypad Keys"),
-            KeyEntry(code: 99, name: "Keypad .", group: "Keypad Keys"),
-            KeyEntry(code: 103, name: "Keypad =", group: "Keypad Keys"),
-            KeyEntry(code: 133, name: "Keypad ,", group: "Keypad Keys"),
+            KeyEntry(code: 83, name: "Numlock", group: groupKeypadKeys),
+            KeyEntry(code: 84, name: "Keypad /", group: groupKeypadKeys),
+            KeyEntry(code: 85, name: "Keypad *", group: groupKeypadKeys),
+            KeyEntry(code: 86, name: "Keypad -", group: groupKeypadKeys),
+            KeyEntry(code: 87, name: "Keypad +", group: groupKeypadKeys),
+            KeyEntry(code: 88, name: "Keypad Enter", group: groupKeypadKeys),
+            KeyEntry(code: 89, name: "Keypad 1", group: groupKeypadKeys),
+            KeyEntry(code: 90, name: "Keypad 2", group: groupKeypadKeys),
+            KeyEntry(code: 91, name: "Keypad 3", group: groupKeypadKeys),
+            KeyEntry(code: 92, name: "Keypad 4", group: groupKeypadKeys),
+            KeyEntry(code: 93, name: "Keypad 5", group: groupKeypadKeys),
+            KeyEntry(code: 94, name: "Keypad 6", group: groupKeypadKeys),
+            KeyEntry(code: 95, name: "Keypad 7", group: groupKeypadKeys),
+            KeyEntry(code: 96, name: "Keypad 8", group: groupKeypadKeys),
+            KeyEntry(code: 97, name: "Keypad 9", group: groupKeypadKeys),
+            KeyEntry(code: 98, name: "Keypad 0", group: groupKeypadKeys),
+            KeyEntry(code: 99, name: "Keypad .", group: groupKeypadKeys),
+            KeyEntry(code: 103, name: "Keypad =", group: groupKeypadKeys),
+            KeyEntry(code: 133, name: "Keypad ,", group: groupKeypadKeys),
         ])
 
         // ISO and Japanese keyboard keys. Without these they scanned as
         // nothing at all.
         keys.append(contentsOf: [
-            KeyEntry(code: 100, name: "\u{00A7} (ISO)", group: "International Keys"),
-            KeyEntry(code: 137, name: "Yen (JIS)", group: "International Keys"),
-            KeyEntry(code: 135, name: "Underscore (JIS)", group: "International Keys"),
-            KeyEntry(code: 145, name: "Eisu (JIS)", group: "International Keys"),
-            KeyEntry(code: 144, name: "Kana (JIS)", group: "International Keys"),
+            KeyEntry(code: 100, name: "\u{00A7} (ISO)", group: groupInternationalKeys),
+            KeyEntry(code: 137, name: "Yen (JIS)", group: groupInternationalKeys),
+            KeyEntry(code: 135, name: "Underscore (JIS)", group: groupInternationalKeys),
+            KeyEntry(code: 145, name: "Eisu (JIS)", group: groupInternationalKeys),
+            KeyEntry(code: 144, name: "Kana (JIS)", group: groupInternationalKeys),
         ])
 
         // Special / Media Keys
         keys.append(contentsOf: [
-            KeyEntry(code: 71, name: "Brightness Down", group: "Special Keys"),
-            KeyEntry(code: 72, name: "Brightness Up", group: "Special Keys"),
-            KeyEntry(code: 303, name: "Dashboard/Launchpad", group: "Special Keys"),
-            KeyEntry(code: 304, name: "Mission Control", group: "Special Keys"),
-            KeyEntry(code: 305, name: "Keyboard Light Down", group: "Special Keys"),
-            KeyEntry(code: 306, name: "Keyboard Light Up", group: "Special Keys"),
-            KeyEntry(code: KeyCodeMap.globeKeyCode, name: "Globe Key (Emoji)", group: "Special Keys"),
-            KeyEntry(code: 307, name: "Previous Track / Rewind", group: "Special Keys"),
-            KeyEntry(code: 308, name: "Play / Pause", group: "Special Keys"),
-            KeyEntry(code: 309, name: "Next Track / Fast Forward", group: "Special Keys"),
-            KeyEntry(code: 310, name: "Mute Sound", group: "Special Keys"),
-            KeyEntry(code: 311, name: "Volume Up", group: "Special Keys"),
-            KeyEntry(code: 312, name: "Volume Down", group: "Special Keys"),
-            KeyEntry(code: 313, name: "Eject", group: "Special Keys"),
-            KeyEntry(code: KeyCodeMap.spotlightKeyCode, name: "Spotlight Key", group: "Special Keys"),
-            KeyEntry(code: KeyCodeMap.dictationKeyCode, name: "Dictation Key", group: "Special Keys"),
-            KeyEntry(code: KeyCodeMap.focusKeyCode, name: "Focus / Do Not Disturb Key", group: "Special Keys"),
+            KeyEntry(code: 71, name: "Brightness Down", group: groupSpecialKeys),
+            KeyEntry(code: 72, name: "Brightness Up", group: groupSpecialKeys),
+            KeyEntry(code: 303, name: "Dashboard/Launchpad", group: groupSpecialKeys),
+            KeyEntry(code: 304, name: "Mission Control", group: groupSpecialKeys),
+            KeyEntry(code: 305, name: "Keyboard Light Down", group: groupSpecialKeys),
+            KeyEntry(code: 306, name: "Keyboard Light Up", group: groupSpecialKeys),
+            KeyEntry(code: KeyCodeMap.globeKeyCode, name: "Globe Key (Emoji)", group: groupSpecialKeys),
+            KeyEntry(code: 307, name: "Previous Track / Rewind", group: groupSpecialKeys),
+            KeyEntry(code: 308, name: "Play / Pause", group: groupSpecialKeys),
+            KeyEntry(code: 309, name: "Next Track / Fast Forward", group: groupSpecialKeys),
+            KeyEntry(code: 310, name: "Mute Sound", group: groupSpecialKeys),
+            KeyEntry(code: 311, name: "Volume Up", group: groupSpecialKeys),
+            KeyEntry(code: 312, name: "Volume Down", group: groupSpecialKeys),
+            KeyEntry(code: 313, name: "Eject", group: groupSpecialKeys),
+            KeyEntry(code: KeyCodeMap.spotlightKeyCode, name: "Spotlight Key", group: groupSpecialKeys),
+            KeyEntry(code: KeyCodeMap.dictationKeyCode, name: "Dictation Key", group: groupSpecialKeys),
+            KeyEntry(code: KeyCodeMap.focusKeyCode, name: "Focus / Do Not Disturb Key", group: groupSpecialKeys),
         ])
 
         return keys
@@ -209,18 +220,75 @@ struct KeyCodeMap {
     /// Kept out of every picker, but still named so a preset that stored
     /// one shows what it is instead of a bare number.
     static let unavailableKeys: [KeyEntry] = (21...24).map {
-        KeyEntry(code: 91 + $0, name: "F\($0) (not available on Mac)", group: "Function Keys")
+        KeyEntry(code: 91 + $0, name: String(localized: "F\($0) (not available on Mac)"), group: String(localized: "Function Keys"))
     }
 
     private static let codeToName: [Int: String] = {
         Dictionary(uniqueKeysWithValues: (allKeys + unavailableKeys).map { ($0.code, $0.name) })
     }()
 
+    /// What a key is called. A key that types a character is named for what
+    /// it types under the person's keyboard layout (the key US keyboards call
+    /// A is Q on AZERTY and Ф on Russian), so menus and summaries match the
+    /// keycaps in front of them; every other key keeps its own name. Rows
+    /// store the key's position, so this never changes what a row does.
     static func name(for code: Int) -> String {
-        if let name = codeToName[code] { return name }
-        if code >= unknownSystemKeyBase { return "Special key \(code - unknownSystemKeyBase)" }
-        if code >= unknownKeyBase { return "Key code \(code - unknownKeyBase)" }
-        return "Key \(code)"
+        // The ISO key by Return and the JIS keypad comma share a key code with
+        // backslash and comma, so they keep names of their own.
+        // The JIS Yen and underscore keys too, unless the keyboard is JIS:
+        // another layout's characters on them ("^" and "<" on German)
+        // repeat its own keys' names in the menus.
+        let jisOnly: Set<Int> = [135, 137]
+        if code != 50, code != 133, !jisOnly.contains(code) || KeyLabelCache.isJIS,
+           let vk = hidToVirtualKeyCode[code], printableVirtualKeys.contains(vk),
+           let label = KeyLabelCache.label(forVirtualKey: vk) {
+            // A label the table's own name starts with keeps the fuller
+            // name: "§ (ISO)" on a US layout says the key is ISO only.
+            if let base = codeToName[code], base != label, base.hasPrefix(label + " ") {
+                return String(localized: String.LocalizationValue(base), table: "KeyNames")
+            }
+            return label
+        }
+        // The rest by their names in the app's language (Escape, Keypad 1, Mission
+        // Control); the English names stay the table's keys.
+        // From a table of their own, KeyNames, so the Home key never takes
+        // the translation of a controller's Home button.
+        if let name = codeToName[code] { return String(localized: String.LocalizationValue(name), table: "KeyNames") }
+        if code >= unknownSystemKeyBase { return String(localized: "Special key \(code - unknownSystemKeyBase)") }
+        if code >= unknownKeyBase { return String(localized: "Key code \(code - unknownKeyBase)") }
+        return String(localized: "Key \(code)")
+    }
+
+    /// The keys `name(for:)` asks the layout about.
+    private static let printableVirtualKeys = Set(KeyboardLayoutService.printableKeys)
+
+    /// The English name a key has on a US keyboard, whatever the layout.
+    /// Command and Control, left and right: in a chord with one of them a
+    /// key is sent as a shortcut (InputSimulator.virtualCode).
+    static let shortcutModifierCodes: Set<Int> = [224, 227, 228, 231]
+
+    /// Whether a key output is sent as the character it types on a US
+    /// keyboard rather than by its position: letters and punctuation in a
+    /// Command or Control shortcut (macOS matches shortcuts by character,
+    /// so Undo is Command Z on every layout), and with Keys follow the
+    /// keyboard layout on, plain letters, digits and punctuation too.
+    static func sendsUSCharacter(_ code: Int, inShortcut: Bool) -> Bool {
+        let letterOrMark = (4...29).contains(code) || [45, 46, 47, 48, 49, 51, 52, 54, 55, 56].contains(code)
+        if inShortcut { return letterOrMark }
+        return (letterOrMark || (30...39).contains(code))
+            && UserDefaults.standard.bool(forKey: InputSimulator.followLayoutKey)
+    }
+
+    /// A key's name as an output: what pressing it will do. A key sent by
+    /// its character is named by that character ("Z" in Command Z on a
+    /// German keyboard); a key sent by position by its keycap, like inputs.
+    static func outputName(for code: Int, inShortcut: Bool) -> String {
+        sendsUSCharacter(code, inShortcut: inShortcut) && InputSimulator.sendsByCharacter(code, inShortcut: inShortcut)
+            ? (codeToName[code] ?? name(for: code)) : name(for: code)
+    }
+
+    static func usName(for code: Int) -> String {
+        codeToName[code] ?? name(for: code)
     }
 
     static func code(for name: String) -> Int? {

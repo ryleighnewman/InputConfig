@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig, Bluetooth’u yalnızca siz istediğinizde kablosuz bir kumandanın bağlantısını kesmek için kullanır.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig, Bluetooth’u yalnızca siz istediğinizde kablosuz bir kumandanın bağlantısını kesmek için kullanır.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Telif Hakkı © 2026 Ryleigh Newman. Tüm hakları saklıdır.";
+

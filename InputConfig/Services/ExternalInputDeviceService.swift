@@ -55,6 +55,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     enum Kind: String, Codable {
         case keyboard, mouse, keypad
+
+        /// "Any keyboard" and so on, a whole phrase per kind for the device menus.
+        var anyDevice: String {
+            switch self {
+            case .keyboard: return String(localized: "Any keyboard")
+            case .mouse: return String(localized: "Any mouse")
+            case .keypad: return String(localized: "Any keypad")
+            }
+        }
     }
 
     struct Device: Identifiable, Hashable {
@@ -296,6 +305,14 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
 
     /// Fold one event into the live picture. Called for every event the
     /// monitors deliver, on the main run loop.
+    #if DEBUG
+    /// Tests only: an event as the keyboard or mouse monitors deliver it.
+    func debugInject(_ e: Event) {
+        noteLive(e)
+        events.send(e)
+    }
+    #endif
+
     private func noteLive(_ e: Event) {
         let soon = Date().addingTimeInterval(Self.momentaryWindow)
         switch e {
@@ -840,8 +857,17 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// A scroll event's movement: dx from a tilt wheel or a sideways swipe,
     /// dy from the wheel itself.
     static func scrollDeltas(of event: CGEvent) -> (dx: Int, dy: Int) {
-        (Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
-         Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)))
+        // A slow trackpad or Magic Mouse scroll moves a few points with no
+        // whole line, so the line delta is 0: the point delta's direction
+        // counts as one step then. A notched wheel always has a line delta.
+        func axis(_ line: CGEventField, _ point: CGEventField) -> Int {
+            let l = Int(event.getIntegerValueField(line))
+            if l != 0 { return l }
+            let p = event.getIntegerValueField(point)
+            return p > 0 ? 1 : (p < 0 ? -1 : 0)
+        }
+        return (axis(.scrollWheelEventDeltaAxis2, .scrollWheelEventPointDeltaAxis2),
+                axis(.scrollWheelEventDeltaAxis1, .scrollWheelEventPointDeltaAxis1))
     }
 
     /// Keys and buttons already noted this session, so an unusual one is
@@ -1068,6 +1094,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         // flagsChanged is logged for the record and otherwise ignored.
         if ev.type == .flagsChanged { return }
         let vk = Int(ev.keyCode)
+        KeyboardLayoutService.noteKeyEvent()
         let hid = Self.inputCode(forVirtualKeyCode: vk)
         if hid >= KeyCodeMap.unknownKeyBase, ev.type == .keyDown, !ev.isARepeat {
             Self.noteUnfamiliar("Keyboard", id: "vk\(vk)",

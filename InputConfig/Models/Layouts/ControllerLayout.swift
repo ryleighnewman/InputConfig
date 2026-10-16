@@ -86,6 +86,7 @@ extension ControllerModelID {
     static let logitechExtreme3D = ControllerModelID("logitech-extreme-3d")
     static let thrustmasterT16000M = ControllerModelID("thrustmaster-t16000m")
     static let logitechG29 = ControllerModelID("logitech-g29")
+    static let logitechXboxWheel = ControllerModelID("logitech-xbox-wheel")
     static let logitechWheel = ControllerModelID("logitech-wheel")
     static let thrustmasterT300 = ControllerModelID("thrustmaster-t300")
     static let unrecognizedHID = ControllerModelID("unrecognized-hid")
@@ -103,9 +104,9 @@ enum Maker: String, CaseIterable, Sendable {
         case .valve: return "Valve"
         case .google: return "Google"
         case .eightBitDo: return "8BitDo"
-        case .phoneGrip: return "Phone grips"
-        case .arcadeAndSim: return "Arcade, flight and racing"
-        case .generic: return "Other"
+        case .phoneGrip: return String(localized: "Phone grips")
+        case .arcadeAndSim: return String(localized: "Arcade, flight and racing")
+        case .generic: return String(localized: "Other")
         }
     }
 }

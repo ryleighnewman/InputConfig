@@ -37,10 +37,10 @@ enum ControllerLayoutResolver {
             // pad connected: the menu refused the change while one was
             // plugged in. Automatic (no model) draws the pad as itself.
             if let chosen = chosenID, let chosenLayout, chosen.base != matched?.id {
-                let here = matched?.displayName ?? service.controllerDetails[slot]?.name ?? "controller"
+                let here = matched?.shownName ?? service.controllerDetails[slot]?.name ?? String(localized: "controller")
                 return ResolvedLayout(layout: chosenLayout, variant: chosenLayout.known(chosen.variant) ?? chosenLayout.defaultVariant,
                                       readPath: path, source: .groupChoice,
-                                      note: "Drawn as the \(chosenLayout.displayName) chosen for this group; the connected \(here) lights it. Choose Automatic to draw the connected controller.")
+                                      note: String(localized: "Drawn as the \(chosenLayout.shownName) chosen for this group; the connected \(here) lights it. Choose Automatic to draw the connected controller."))
             }
             // A preset made for one controller (FPS (Xbox) with a DualSense
             // plugged in) is drawn as that controller, lit by the pad that is
@@ -48,16 +48,28 @@ enum ControllerLayoutResolver {
             // between pads that number their controls the same way.
             if chosenID == nil, let group, let targetID = target(group: group, preset: preset),
                let target = ControllerLayoutCatalog.layout(targetID), matched?.id != target.id,
-               !sameKind(matched, target), matched?.family?.isSteam != true, matched?.family != .gameCube {
-                let here = matched?.displayName ?? service.controllerDetails[slot]?.name ?? "controller"
+               !sameKind(matched, target), matched?.family?.isSteam != true, matched?.family != .gameCube,
+               // Only a pad that numbers its controls the standard way: a
+               // wheel, a flight stick or a pad read from its descriptor drew
+               // as an Xbox pad lit by its raw numbering.
+               path == .gameController || path == .rawSDL,
+               matched == nil || matched?.family != nil {
+                let here = matched?.shownName ?? service.controllerDetails[slot]?.name ?? String(localized: "controller")
                 return ResolvedLayout(layout: target, variant: target.defaultVariant, readPath: path, source: .inferred,
-                                      note: "Drawn as the \(target.displayName) this preset is made for; the connected \(here) lights it. Pick it under Controllers to draw it as itself.")
+                                      note: String(localized: "Drawn as the \(target.shownName) this preset is made for; the connected \(here) lights it. Pick it under Controllers to draw it as itself."))
+            }
+            // A pad read from its own descriptor that no catalog model
+            // matches, on a group set to no model: the grid built from what it
+            // reports, not Xbox widgets on controls it does not have.
+            if matched == nil, chosenLayout == nil, path == .rawDescriptor || path == .rawSDL,
+               let pad = service.rawHIDGamepadSlots[slot], case .generic? = pad.profile?.layout {
+                return ResolvedLayout(layout: generatedGrid(for: pad), readPath: path, source: .connected, note: nil)
             }
             guard let layout = matched ?? (path == .gameController ? ControllerLayoutCatalog.layout(.genericGamepad) : chosenLayout)
             else { return nil }
-            var note: String? = matched == nil ? "Model not recognized; showing a standard gamepad." : nil
+            var note: String? = matched == nil ? String(localized: "Model not recognized; showing a standard gamepad.") : nil
             if matched == nil, path != .gameController, let chosenLayout {
-                note = "Model not recognized; showing the \(chosenLayout.displayName), the controller this group is set to."
+                note = String(localized: "Model not recognized; showing the \(chosenLayout.shownName), the controller this group is set to.")
             }
             let facts = Facts(service: service, slot: slot)
             let variant = (chosenID?.base == layout.id ? chosenID?.variant : nil)
@@ -67,11 +79,11 @@ enum ControllerLayoutResolver {
         }
         if let chosen = chosenID, let layout = ControllerLayoutCatalog.layout(chosen) {
             return ResolvedLayout(layout: layout, variant: layout.known(chosen.variant) ?? layout.defaultVariant, source: .groupChoice,
-                                  note: "Not connected. Showing the \(layout.displayName), the controller this group is set to.")
+                                  note: String(localized: "Not connected. Showing the \(layout.shownName), the controller this group is set to."))
         }
         if let group, let id = infer(group: group, preset: preset), let layout = ControllerLayoutCatalog.layout(id) {
             return ResolvedLayout(layout: layout, variant: layout.defaultVariant, source: .inferred,
-                                  note: "Not connected. Showing the \(layout.displayName), from this preset's rows.")
+                                  note: String(localized: "Not connected. Showing the \(layout.shownName), from this preset's rows."))
         }
         return nil
     }
@@ -87,7 +99,22 @@ enum ControllerLayoutResolver {
             }
             return .rawProfile
         }
+        // A wheel read through GCRacingWheel is numbered as the G29 read
+        // from its descriptor, so it reads the controls that path does.
+        if service.racingWheelSlots[slot] != nil { return .rawDescriptor }
         return .gameController
+    }
+
+    /// The grid drawn for a connected descriptor pad, kept per device so a
+    /// redraw does not read its descriptor again.
+    private static var gridCache: [String: ControllerLayout] = [:]
+    private static func generatedGrid(for pad: RawHIDGamepad) -> ControllerLayout {
+        let key = "\(pad.id)|\(pad.profile?.identifier ?? "")"
+        if let hit = gridCache[key] { return hit }
+        let grid = ControllerLayout.generatedUnrecognizedHID(for: pad)
+        if gridCache.count > 16 { gridCache.removeAll() }
+        gridCache[key] = grid
+        return grid
     }
 
     /// `match`, remembered per slot and device, for callers that ask often
@@ -102,6 +129,21 @@ enum ControllerLayoutResolver {
         let found = match(service: service, slot: slot)
         if matchCache.count > 64 { matchCache.removeAll() }
         matchCache[key] = found?.id
+        return found
+    }
+
+    /// `cachedMatch` with hidden experimental drawings included, for rules
+    /// that depend on what the pad is rather than how it is drawn (the
+    /// emergency hold on pads with no Back button, whose drawings are hidden
+    /// in Release builds).
+    private static var hiddenMatchCache: [String: ControllerModelID?] = [:]
+    static func cachedMatchIncludingHidden(service: GameControllerService, slot: Int) -> ControllerModelID? {
+        let pad = slot < service.connectedControllers.count ? ObjectIdentifier(service.connectedControllers[slot]).hashValue : 0
+        let key = "\(slot)|\(service.controllerDetails[slot]?.name ?? "")|\(service.rawHIDGamepadSlots[slot]?.id ?? 0)|\(slot == service.steamControllerSlot)|\(pad)"
+        if let hit = hiddenMatchCache[key] { return hit }
+        let found = matchIncludingHidden(facts: Facts(service: service, slot: slot))?.id
+        if hiddenMatchCache.count > 64 { hiddenMatchCache.removeAll() }
+        hiddenMatchCache[key] = found
         return found
     }
 
@@ -177,6 +219,11 @@ enum ControllerLayoutResolver {
                 product = Int(pad.productID)
                 vendorName = pad.manufacturer ?? ""
                 productCategory = pad.productName
+            } else if let wheel = service.racingWheelSlots[slot] {
+                // GCRacingWheel gives no USB IDs; the G29 layout's match
+                // rule for the Xbox wheels looks for this category.
+                productCategory = Self.racingWheelCategory
+                vendorName = wheel.vendorName ?? ""
             } else if slot < service.connectedControllers.count {
                 let c = service.connectedControllers[slot]
                 productCategory = c.productCategory
@@ -195,6 +242,9 @@ enum ControllerLayoutResolver {
                 isGameController = true
             }
         }
+
+        /// What a wheel read through GCRacingWheel is matched by.
+        nonisolated static let racingWheelCategory = "GCRacingWheel"
 
         static func layoutName(_ layout: ControllerProfile.ReportLayout) -> String {
             switch layout {

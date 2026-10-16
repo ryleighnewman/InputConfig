@@ -8,7 +8,7 @@ struct PresetSearchHit: Identifiable {
     let inputSerialized: String
     /// "A / Cross  →  Space"
     let title: String
-    /// Where it lives and what the note says: "Input device 0 › Buttons · Jump".
+    /// Where it lives and what the note says: "Input device 0 › Buttons, Jump".
     let detail: String
     let searchText: String
 }
@@ -18,7 +18,7 @@ enum PresetSearch {
     /// Extra words a row should match on, so a control found under one name
     /// is found under every name people use for it. Searching is the only
     /// consumer: none of this is shown anywhere.
-    static func aliases(for binding: BindingModel) -> String {
+    static func aliases(for binding: BindingModel, presetName: ((UUID) -> String?)? = nil) -> String {
         var words: [String] = []
         func add(_ s: String...) { words.append(contentsOf: s) }
         switch binding.input.type {
@@ -91,16 +91,22 @@ enum PresetSearch {
             add("screen region", "corner", "hot corner", "pointer area", "display", "monitor", "cursor region")
         case .stickRegion:
             add("stick zone", "stick region", "thumbstick area")
+        case .stickGesture:
+            add("stick gesture", "flick", "double flick", "snap", "stick swipe")
         }
         // Outputs people name differently from the menu wording.
         for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) {
             switch o.type {
             case .mouseButton:
                 add("click", "mouse")
+                // The picker's own words too, so a row found by what it shows.
                 switch o.mouseButtonIndex ?? 0 {
-                case 0: add("left click", "primary click")
-                case 1: add("right click", "secondary click", "context menu")
-                case 2: add("middle click")
+                case 0: add("left click", "primary click", "main click", String(localized: "0: Main Click"))
+                case 1: add("right click", "secondary click", "context menu", "secondary", String(localized: "1: Secondary"))
+                case 2: add("middle click", "middle", String(localized: "2: Middle"))
+                case 3: add("back", String(localized: "3: Back"))
+                case 4: add("forward", String(localized: "4: Forward"))
+                case 5: add("extra", String(localized: "5: Extra"))
                 default: break
                 }
             case .mouseMotion: add("pointer", "cursor", "move the mouse")
@@ -114,6 +120,14 @@ enum PresetSearch {
             case .lightBar: add("light bar", "rgb", "color", "led", "rainbow")
             }
         }
+        // What the row shows in full, not its short previews: a macro's
+        // steps, the whole text a Type Text output types, a system action's
+        // parameter, and the preset an Activate Preset output starts.
+        for step in binding.macroSteps ?? [] { add(OutputAction.names(step.pressedActions).joined(separator: " ")) }
+        for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) {
+            if let text = o.text, !text.isEmpty { add(text) }
+            if let target = o.targetPresetID, let name = presetName?(target) { add(name) }
+        }
         if binding.turboEnabled == true { add("turbo", "rapid fire", "repeat") }
         if binding.toggleMode == true { add("toggle", "sticky", "latch") }
         if binding.macroSteps?.isEmpty == false { add("macro", "sequence", "chain") }
@@ -125,26 +139,37 @@ enum PresetSearch {
     /// `naming` gives each group's family and model names, the editor's
     /// own; without it, the preset's Buttons choice.
     static func index(_ preset: Preset,
-                      naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil) -> [PresetSearchHit] {
+                      naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil,
+                      presetName: ((UUID) -> String?)? = nil) -> [PresetSearchHit] {
         var out: [PresetSearchHit] = []
         for (g, joystick) in preset.joysticks.enumerated() {
             let names = naming?(g) ?? (family: preset.buttonFamily, model: .none)
             for (i, b) in joystick.bindings.enumerated() {
-                let outputs = b.outputs.isEmpty ? "nothing bound" : b.outputs.map(\.displayName).joined(separator: " + ")
+                let outputs = b.outputs.isEmpty ? String(localized: "nothing bound") : OutputAction.names(b.outputs).joined(separator: " + ")
                 var parts: [String] = []
-                if let hold = b.holdOutputs, !hold.isEmpty { parts.append("hold: " + hold.map(\.displayName).joined(separator: " + ")) }
-                if let dbl = b.doubleTapOutputs, !dbl.isEmpty { parts.append("double tap: " + dbl.map(\.displayName).joined(separator: " + ")) }
-                if let steps = b.macroSteps, !steps.isEmpty { parts.append("macro, \(steps.count) steps") }
-                if !b.modifiers.isEmpty { parts.append("while holding " + b.modifiers.map(\.displayName).joined(separator: " + ")) }
+                if let hold = b.holdOutputs, !hold.isEmpty {
+                    let names = OutputAction.names(hold).joined(separator: " + ")
+                    parts.append(String(localized: "hold: \(names)"))
+                }
+                if let dbl = b.doubleTapOutputs, !dbl.isEmpty {
+                    let names = OutputAction.names(dbl).joined(separator: " + ")
+                    parts.append(String(localized: "double tap: \(names)"))
+                }
+                if let steps = b.macroSteps, !steps.isEmpty { parts.append((steps.count == 1 ? String(localized: "macro, 1 step") : String(localized: "macro, \(steps.count) steps"))) }
+                if !b.modifiers.isEmpty {
+                    let held = b.modifiers.map { ButtonNames.inputName($0, family: names.family, model: names.model) }
+                        .joined(separator: " + ")
+                    parts.append(String(localized: "while holding \(held)"))
+                }
                 let inputName = ButtonNames.inputName(b.input, family: names.family, model: names.model)
-                var title = "\(inputName)  \u{2192}  \(outputs)"
+                var title = String(localized: "\(inputName)  →  \(outputs)")
                 if !parts.isEmpty { title += "  (" + parts.joined(separator: "; ") + ")" }
-                var place = ["Input device \(g)"]
-                if let s = b.section, !s.isEmpty { place.append(s) }
+                var place = [String(localized: "Input device \(g)")]
+                if let s = b.section, !s.isEmpty { place.append(ControllerScaffold.shownSection(s)) }
                 var detail = place.joined(separator: " \u{203A} ")
-                if let note = b.note, !note.isEmpty { detail += " \u{00B7} " + note }
+                if let note = b.note, !note.isEmpty { detail += ", " + ShippedText.t(note) }
                 let text = (title + " " + detail + " " + b.input.serialized + " " + b.input.displayName + " "
-                            + aliases(for: b)).lowercased()
+                            + aliases(for: b, presetName: presetName)).lowercased()
                 out.append(PresetSearchHit(id: b.id, joystickIndex: g, rowNumber: i + 1,
                                            inputSerialized: b.input.serialized,
                                            title: title, detail: detail, searchText: text))
@@ -155,7 +180,7 @@ enum PresetSearch {
 
     /// Every word typed must appear in the row's text.
     static func matches(_ hits: [PresetSearchHit], query: String) -> [PresetSearchHit] {
-        let words = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        let words = query.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
         guard !words.isEmpty else { return [] }
         return hits.filter { h in words.allSatisfy { h.searchText.contains($0) } }
     }
@@ -165,19 +190,39 @@ enum PresetSearch {
 /// this preset list underneath with what each one does, click one and the
 /// editor scrolls to it. Up and Down move the highlight, Return goes.
 struct PresetSearchBar: View {
+    @Environment(\.appTextScale) private var textScale
     let preset: Preset
     var naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil
+    /// Names the preset an Activate Preset output starts.
+    var presetName: ((UUID) -> String?)? = nil
     let onGo: (PresetSearchHit) -> Void
 
     @State private var query = ""
     @State private var highlighted = 0
+    /// The match count, said once typing pauses rather than on every key.
+    @State private var countAnnouncement: DispatchWorkItem?
+    /// Set while typing resets the highlight, which is not worth saying.
+    @State private var highlightResetByTyping = false
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
+    /// Clears the open search, for the editor's Cancel: Escape is its
+    /// shortcut, taken before the field hears the key. True when a search
+    /// was cleared.
+    static var clearActiveSearch: (() -> Bool)?
+
     var body: some View {
-        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(PresetSearch.index(preset, naming: naming), query: trimmed)
+        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(PresetSearch.index(preset, naming: naming, presetName: presetName), query: trimmed)
         VStack(alignment: .leading, spacing: 6) {
             searchField(hits)
+                .onAppear {
+                    Self.clearActiveSearch = {
+                        guard !query.isEmpty else { return false }
+                        query = ""
+                        return true
+                    }
+                }
+                .onDisappear { Self.clearActiveSearch = nil }
             if !trimmed.isEmpty {
                 // Same left edge as the text field, not the magnifier.
                 results(hits)
@@ -194,16 +239,23 @@ struct PresetSearchBar: View {
             TextField("Search this preset: a button, a key, a note, anything in a row", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: query) { _, _ in
+                    if highlighted != 0 { highlightResetByTyping = true }
                     highlighted = 0
-                    // Spoken, since the list is otherwise silent.
+                    // Spoken, since the list is otherwise silent: once, half
+                    // a second after the last key, not over the typing echo.
+                    countAnnouncement?.cancel()
+                    guard !trimmed.isEmpty else { return }
                     let n = hits.count
-                    if !trimmed.isEmpty {
-                        AccessibilityNotification.Announcement(n == 0 ? "No matching rows" : "\(n) matching row\(n == 1 ? "" : "s")").post()
+                    let work = DispatchWorkItem {
+                        AccessibilityNotification.Announcement(n == 0 ? String(localized: "No matching rows") : n == 1 ? String(localized: "1 matching row") : String(localized: "\(n) matching rows")).post()
                     }
+                    countAnnouncement = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
                 }
                 .onChange(of: highlighted) { _, i in
+                    if highlightResetByTyping { highlightResetByTyping = false; return }
                     if hits.indices.contains(i) {
-                        AccessibilityNotification.Announcement("Row \(hits[i].rowNumber), \(hits[i].title)").post()
+                        AccessibilityNotification.Announcement(String(localized: "Row \(hits[i].rowNumber), \(HotKeySpec.spokenMarks(in: hits[i].title))")).post()
                     }
                 }
                 .onSubmit { if hits.indices.contains(highlighted) { go(hits[highlighted]) } }
@@ -235,10 +287,12 @@ struct PresetSearchBar: View {
                     .foregroundStyle(.secondary)
                     .padding(12)
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(hits.enumerated()), id: \.element.id) { i, h in
                             row(h, highlighted: i == highlighted)
+                                .id(i)
                                 .onTapGesture { go(h) }
                                 // Deferred: the results list appears under the
                                 // cursor as you type, so this hover can arrive
@@ -251,7 +305,11 @@ struct PresetSearchBar: View {
                         }
                     }
                 }
-                .frame(maxHeight: min(CGFloat(hits.count), 8) * 48 + 4)
+                // Each row grows with Text Size, so its slot does too.
+                .frame(maxHeight: min(CGFloat(hits.count), 8) * 48 * max(1, textScale) + 4)
+                // The arrow keys' highlight stays in view (and where Zoom looks).
+                .onChange(of: highlighted) { _, i in proxy.scrollTo(i) }
+                }
             }
         }
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
@@ -265,7 +323,7 @@ struct PresetSearchBar: View {
             Text("#\(h.rowNumber)")
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 34 * max(1, textScale), alignment: .trailing)
             VStack(alignment: .leading, spacing: 2) {
                 Text(h.title).lineLimit(1)
                 Text(h.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)

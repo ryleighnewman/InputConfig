@@ -63,8 +63,11 @@ final class SCDeviceCtx {
     /// once it reports connected or sends state. Empty dongle slots get no
     /// lizard commands.
     var active = false
-    /// Lizard mode is currently off on this device (we turned it off).
-    var lizardOff = false
+    /// Lizard mode may be off on this device: we turned it off, or, at
+    /// first, a helper before this one did and was killed or crashed. A
+    /// controller keeps that until told, so the first check with no preset
+    /// running turns it back on once.
+    var lizardOff = true
 
     init(device: IOHIDDevice, pid: Int32) {
         self.device = device
@@ -215,6 +218,8 @@ let inputCallback: IOHIDReportCallback = { context, _, _, reportType, reportID, 
         ctx.active = connected
         applyLizardMode(ctx)
         if connected {
+            // A controller that just paired starts with its IMU off.
+            sendEnableIMU(ctx.device)
             if primary == nil { primary = ctx }
             if primary === ctx { emit("W 1") }
         } else if primary === ctx {
@@ -224,7 +229,7 @@ let inputCallback: IOHIDReportCallback = { context, _, _, reportType, reportID, 
         return
     }
     guard let snap = parseSCReport(report, len: reportLength) else { return }
-    if !ctx.active { ctx.active = true; applyLizardMode(ctx) }
+    if !ctx.active { ctx.active = true; applyLizardMode(ctx); sendEnableIMU(ctx.device) }
     if primary == nil { primary = ctx }
     guard primary === ctx else { return }
 
@@ -265,10 +270,20 @@ func sendSCFeature(_ device: IOHIDDevice, _ cmd: [UInt8], label: String) -> IORe
 /// Values are UInt16 LE, so each setting is reg, lo, hi.
 func sendDisableLizardMode(_ device: IOHIDDevice) {
     sendSCFeature(device, [0x81], label: "clear digital mappings")
-    sendSCFeature(device, [0x87, 0x06,
+    sendSCFeature(device, [0x87, 0x09,
                            0x07, 0x07, 0x00,
-                           0x08, 0x07, 0x00],
+                           0x08, 0x07, 0x00,
+                           0x30, 0x18, 0x00],
                   label: "disable trackpad mouse")
+}
+
+/// Ask for the raw gyroscope and accelerometer in every input report, as
+/// SDL does: SETTING_IMU_MODE (48) = SETTING_GYRO_MODE_SEND_RAW_ACCEL (0x08)
+/// | SETTING_GYRO_MODE_SEND_RAW_GYRO (0x10). Off, the report's motion bytes
+/// stay zero. Loading the default settings turns it off again, so it is sent
+/// after that too.
+func sendEnableIMU(_ device: IOHIDDevice) {
+    sendSCFeature(device, [0x87, 0x03, 0x30, 0x18, 0x00], label: "raw gyro and accelerometer")
 }
 
 /// Turn lizard mode back on, with Valve's commands as SDL sends them:
@@ -276,17 +291,21 @@ func sendDisableLizardMode(_ device: IOHIDDevice) {
 func sendEnableLizardMode(_ device: IOHIDDevice) {
     sendSCFeature(device, [0x85], label: "default digital mappings")
     sendSCFeature(device, [0x8E], label: "default settings")
+    sendEnableIMU(device)
 }
 
 /// Lizard mode off while the app wants it and a controller is there, on
 /// again otherwise.
 func applyLizardMode(_ ctx: SCDeviceCtx) {
     let wantOff = lizardOffWanted && ctx.active && ctx === primary
-    if wantOff && !ctx.lizardOff {
+    // Off by this helper: its heartbeat runs. A controller that arrives
+    // while a preset runs starts with lizardOff unknown (true), so the
+    // heartbeat, not that flag, says whether it was turned off here.
+    if wantOff && ctx.heartbeat == nil {
         sendDisableLizardMode(ctx.device)
         startHeartbeat(ctx)
         ctx.lizardOff = true
-    } else if !wantOff && ctx.lizardOff {
+    } else if !wantOff && ctx.lizardOff && ctx.active {
         ctx.heartbeat?.cancel()
         ctx.heartbeat = nil
         sendEnableLizardMode(ctx.device)
@@ -348,6 +367,7 @@ func openSteamController(_ device: IOHIDDevice) {
 
     // Lizard mode goes off only while a preset runs (see applyLizardMode).
     applyLizardMode(ctx)
+    sendEnableIMU(device)
     // A dongle whose controller was already on says so only when asked
     // (Valve's ID_DONGLE_GET_WIRELESS_STATE), with a 0x03 event.
     if pid == scDonglePID { sendSCFeature(device, [0xB4], label: "wireless state") }

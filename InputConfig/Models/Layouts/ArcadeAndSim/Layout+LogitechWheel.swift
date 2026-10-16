@@ -67,6 +67,8 @@ extension ControllerLayout {
         func with(_ test: ((id: String, name: String, buttons: Int, clutch: Bool, hat: Bool)) -> Bool) -> Set<String> {
             Set(models.filter(test).map(\.id))
         }
+        // The models whose pedals share one axis (LogitechWheel.combinedPedalProducts).
+        let combined: Set<String> = ["momo", "momof", "fv", "formula"]
         var list: [PlacedControl] = [
             PlacedControl(id: "rim", kind: .wheel, center: CGPoint(x: 0.5, y: 0.36), size: 0.56, shape: .circle,
                           printed: "Wheel", inputs: ControlInputs(axes: [.x(0)]),
@@ -78,10 +80,15 @@ extension ControllerLayout {
                           note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { $0.clutch }),
             PlacedControl(id: "brake", kind: .pedal, center: CGPoint(x: 0.5, y: 0.87), size: 0.09, height: 0.15,
                           shape: .roundedRect(corner: 0.18), printed: "Brake", inputs: ControlInputs(axes: [.analog(4)]),
-                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
+                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { !combined.contains($0.id) }),
             PlacedControl(id: "gas", kind: .pedal, center: CGPoint(x: 0.62, y: 0.87), size: 0.09, height: 0.15,
                           shape: .roundedRect(corner: 0.18), printed: "Gas", inputs: ControlInputs(axes: [.analog(5)]),
-                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
+                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { !combined.contains($0.id) }),
+            // The older wheels send both pedals on one centered axis.
+            PlacedControl(id: "pedals", kind: .dial, center: CGPoint(x: 0.56, y: 0.87), size: 0.24, height: 0.05,
+                          shape: .capsule(angleDegrees: 0), printed: "Pedals", inputs: ControlInputs(axes: [.x(1)]),
+                          note: "Both pedals on one axis: gas one way, brake the other", callout: .below,
+                          variants: with { combined.contains($0.id) }),
         ]
         // The buttons in report order, odd numbers down the left edge and
         // even down the right, so each has its own level line in the key

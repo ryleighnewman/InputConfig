@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig verwendet Bluetooth nur, um einen kabellosen Controller zu trennen, wenn du darum bittest.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig verwendet Bluetooth nur, um einen kabellosen Controller zu trennen, wenn du darum bittest.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle Rechte vorbehalten.";
+

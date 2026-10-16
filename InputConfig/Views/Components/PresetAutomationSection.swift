@@ -18,6 +18,13 @@ struct PresetAutomationSection: View {
     @State private var expanded: Bool = false
     @State private var showingAppPicker: Bool = false
     @State private var showingAutoSwitchAppPicker: Bool = false
+    /// Live slider values while dragging. The sliders write the preset on
+    /// release: each drag tick was its own undo step and pushed every
+    /// earlier edit out of the history.
+    @State private var liveBuffer: Double?
+    @State private var liveRecenter: Double?
+    @State private var liveSensitivity: Double?
+    @Environment(\.appTextScale) private var textScale
     @AppStorage(FrontmostAppWatcher.enabledDefaultsKey)
     private var autoSwitchGloballyEnabled: Bool = false
 
@@ -35,27 +42,37 @@ struct PresetAutomationSection: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "slider.horizontal.3")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.purple)
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Automation & Gaming Utilities")
                             .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
                         Text(summaryLine)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    Spacer(minLength: 0)
                 }
+                // The whole header opens and closes it, not only the arrow.
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() } }
             }
             .padding(12)
+            // The light purple card it had in 1.2.
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.06))
+                    .fill(Color.purple.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                    .stroke(Color.purple.opacity(0.25), lineWidth: 1)
             )
             .spotlightAnchor(SpotlightID.automationPanel)
+        }
+        // The Quick Start tour scrolls here and opens it.
+        .onReceive(NotificationCenter.default.publisher(for: .inputConfigScrollToAutomation)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) { expanded = true }
         }
         #if DEBUG
         // `post inputconfig.debug.automation` opens the section; `scrollrow 9999`
@@ -75,23 +92,23 @@ struct PresetAutomationSection: View {
         if !automation.launchAppPath.isEmpty {
             let path = automation.launchAppPath
             let last = (path as NSString).lastPathComponent
-            parts.append("launches \(last.isEmpty ? path : last)")
+            parts.append(String(localized: "launches \(last.isEmpty ? path : last)"))
         }
         if let apps = automation.autoActivateBundleIDs, !apps.isEmpty {
-            parts.append("auto for \(apps.count) \(apps.count == 1 ? "app" : "apps")")
+            parts.append(apps.count == 1 ? String(localized: "auto for 1 app") : String(localized: "auto for \(apps.count) apps"))
         }
-        if automation.confineCursor { parts.append("confine cursor") }
-        if automation.autoRecenterCursor { parts.append("auto-recenter") }
-        if automation.hideCursorWhileActive { parts.append("hide cursor") }
+        if automation.confineCursor { parts.append(String(localized: "confine cursor")) }
+        if automation.autoRecenterCursor { parts.append(String(localized: "auto-recenter")) }
+        if automation.hideCursorWhileActive { parts.append(String(localized: "hide cursor")) }
         if automation.sensitivityMultiplier != 1.0 {
-            parts.append(String(format: "sensitivity ×%.2f", automation.sensitivityMultiplier))
+            parts.append(String(format: String(localized: "sensitivity ×%.2f"), locale: .current, automation.sensitivityMultiplier))
         }
         if automation.scrollMultiplier != 1.0 {
-            parts.append(String(format: "scroll ×%.2f", automation.scrollMultiplier))
+            parts.append(String(format: String(localized: "scroll ×%.2f"), locale: .current, automation.scrollMultiplier))
         }
         return parts.isEmpty
-            ? "Optional extras: auto-launch an app, confine, recenter, or hide the cursor. Expand to set up."
-            : parts.joined(separator: " · ")
+            ? String(localized: "Optional extras: auto-launch an app, confine, recenter, or hide the cursor. Expand to set up.")
+            : parts.joined(separator: ", ")
     }
 
     // MARK: - Auto launch
@@ -109,6 +126,7 @@ struct PresetAutomationSection: View {
                 TextField("/Applications/Steam.app or com.valvesoftware.steam",
                           text: $automation.launchAppPath)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("App to launch")
                 Button {
                     showingAppPicker = true
                 } label: {
@@ -131,6 +149,7 @@ struct PresetAutomationSection: View {
             TextField("Optional deep link, e.g. steam://run/730",
                       text: $automation.launchURL)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Deep link to open")
             Text("Both fields run on activation. Leave blank to disable. The app can be an .app bundle or a bundle identifier such as com.valvesoftware.steam.")
                 .font(.caption2)
                 .foregroundStyle(.hint)
@@ -143,6 +162,8 @@ struct PresetAutomationSection: View {
                 automation.launchAppPath = url.path
             }
         }
+        // Said by VoiceOver, so the two app pickers can be told apart.
+        .fileDialogMessage(Text("Choose the app this preset opens when it starts"))
     }
 
     // MARK: - Auto switch by frontmost app
@@ -223,6 +244,7 @@ struct PresetAutomationSection: View {
                 }
             }
         }
+        .fileDialogMessage(Text("Choose an app that switches to this preset when it comes to the front"))
     }
 
     private func displayName(forBundleID bundleID: String) -> String {
@@ -243,10 +265,23 @@ struct PresetAutomationSection: View {
                 Text("Cursor while active")
                     .font(.subheadline.weight(.semibold))
             }
-            Text("These only run while this preset is the active one. If it lists apps above, they run only while one of those is in front; otherwise they pause only while InputConfig or the Finder is in front. Stopping the engine restores the system cursor.")
-                .font(.caption2)
-                .foregroundStyle(.hint)
+            Text("Only while this preset runs, and paused whenever InputConfig or the Finder is in front.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // Turned on while the preset runs: it is on, but waits while
+            // this window is in front, so say so rather than seem to do
+            // nothing, and how to stop it.
+            if (automation.confineCursor || automation.autoRecenterCursor || automation.hideCursorWhileActive),
+               MappingEngine.current?.isRunning == true {
+                Label {
+                    Text("On now. It starts when you switch to another app; stop it any time with \(EmergencyStopService.shared.spec.displayString).")
+                } icon: {
+                    Image(systemName: "info.circle.fill").foregroundStyle(.purple)
+                }
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            }
 
             Toggle(isOn: $automation.confineCursor) {
                 Label("Confine cursor away from screen edges",
@@ -255,13 +290,15 @@ struct PresetAutomationSection: View {
             if automation.confineCursor {
                 HStack {
                     Text("Buffer:").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: $automation.confineBufferPx, in: 1...200, step: 1)
-                        .accessibilityLabel("Cursor confine buffer")
-                        .accessibilityValue("\(Int(automation.confineBufferPx)) pixels")
-                    Text("\(Int(automation.confineBufferPx)) px")
+                    ThrottledSlider("Cursor confine buffer", value: $automation.confineBufferPx, in: 1...200, step: 1,
+                                    onLiveChange: { liveBuffer = $0 })
+                        // The stored value moved (release, Undo): it is shown again.
+                        .onChange(of: automation.confineBufferPx) { _, _ in liveBuffer = nil }
+                        .accessibilityValue("\(Int(liveBuffer ?? automation.confineBufferPx)) pixels")
+                    Text("\(Int(liveBuffer ?? automation.confineBufferPx)) px")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .frame(width: 56, alignment: .trailing)
+                        .frame(width: 56 * max(1, textScale), alignment: .trailing)
                 }
             }
 
@@ -272,13 +309,14 @@ struct PresetAutomationSection: View {
             if automation.autoRecenterCursor {
                 HStack {
                     Text("Interval:").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: $automation.autoRecenterIntervalMs, in: 50...2000, step: 10)
-                        .accessibilityLabel("Auto-recenter interval")
-                        .accessibilityValue("\(Int(automation.autoRecenterIntervalMs)) milliseconds")
-                    Text("\(Int(automation.autoRecenterIntervalMs)) ms")
+                    ThrottledSlider("Auto-recenter interval", value: $automation.autoRecenterIntervalMs, in: 50...2000, step: 10,
+                                    onLiveChange: { liveRecenter = $0 })
+                        .onChange(of: automation.autoRecenterIntervalMs) { _, _ in liveRecenter = nil }
+                        .accessibilityValue("\(Int(liveRecenter ?? automation.autoRecenterIntervalMs)) milliseconds")
+                    Text("\(Int(liveRecenter ?? automation.autoRecenterIntervalMs)) ms")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .frame(width: 64, alignment: .trailing)
+                        .frame(width: 64 * max(1, textScale), alignment: .trailing)
                 }
             }
 
@@ -291,13 +329,14 @@ struct PresetAutomationSection: View {
                 Label("Sensitivity multiplier",
                       systemImage: "speedometer")
                 Spacer()
-                Text(String(format: "×%.2f", automation.sensitivityMultiplier))
+                Text(String(format: "×%.2f", locale: .current, liveSensitivity ?? automation.sensitivityMultiplier))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Slider(value: $automation.sensitivityMultiplier, in: 0.1...5.0, step: 0.05)
-                .accessibilityLabel("Sensitivity multiplier")
-                .accessibilityValue(String(format: "times %.2f", automation.sensitivityMultiplier))
+            ThrottledSlider("Sensitivity multiplier", value: $automation.sensitivityMultiplier, in: 0.1...5.0, step: 0.05,
+                            onLiveChange: { liveSensitivity = $0 })
+                .onChange(of: automation.sensitivityMultiplier) { _, _ in liveSensitivity = nil }
+                .accessibilityValue(String(format: String(localized: "times %.2f"), locale: .current, liveSensitivity ?? automation.sensitivityMultiplier))
         }
     }
 }
@@ -309,30 +348,31 @@ struct PresetAutomationSection: View {
 /// existing Xcode target alongside the other per-preset section.
 struct DriveModeSection: View {
     @SwiftUI.Binding var driveConfig: DriveConfig?
+    /// The preset's groups, so the readout follows a group set to one
+    /// controller the way the engine does.
+    var groups: [JoystickMapping] = []
     @State private var expanded: Bool = false
     @EnvironmentObject private var controllerService: GameControllerService
-    @EnvironmentObject private var mappingEngine: MappingEngine
-    @ObservedObject private var telemetry = DriveTelemetry.shared
+    /// Read, not observed: published 15 times a second while a drive preset
+    /// runs, it redrew this whole section, every slider block, on each, and
+    /// the editor's frame rate dropped. The live readout observes it alone
+    /// (`DriveLiveReadout`); the test car reads it on its own timer.
+    private var telemetry: DriveTelemetry { .shared }
+    @Environment(\.appTextScale) private var textScale
+    @State private var liveDrive: [String: Double] = [:]
 
-    /// Live axis values for the configured slot, refreshed while the panel is
-    /// open so the user can see which axis moves and confirm their mapping.
-    @State private var axisValues: [Int: Float] = [:]
+    /// The live stick readings and the test car, in an object this section
+    /// holds but does not watch: they change up to 30 times a second, and
+    /// kept on the section itself every change redrew each slider block,
+    /// which dropped the editor's frame rate while scrolling. Only the arena
+    /// and the axis meters watch it.
+    @State private var live = DriveLive()
     private let axisTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
-
-    /// Test-drive sandbox state: a demo vehicle in a logical arena that obeys
-    /// the exact drive parameters configured above, stepped on the same timer.
-    private static let arenaSize = CGSize(width: 560, height: 200)
-    @State private var carPos = CGPoint(x: 280, y: 100)
-    @State private var carHeading: Double = -Double.pi / 2
-    @State private var carSpeed: Double = 0
-    @State private var lastPhysicsTick: Date?
-    @State private var virtualStick: CGSize = .zero
-    @State private var trail: [CGPoint] = []
 
     enum StickChoice: String, CaseIterable, Identifiable {
         case left, right, custom
         var id: String { rawValue }
-        var label: String { self == .left ? "Left stick" : self == .right ? "Right stick" : "Custom" }
+        var label: String { self == .left ? String(localized: "Left stick") : self == .right ? String(localized: "Right stick") : String(localized: "Custom") }
     }
 
     /// Non-optional working binding; reads a default when nil.
@@ -392,8 +432,8 @@ struct DriveModeSection: View {
                 HStack(spacing: 8) {
                     Image(systemName: "steeringwheel").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("One-Stick Driving").font(.headline)
-                        Text(driveConfig?.enabled == true ? driveSummary : "Wheelchair-style driving from one joystick")
+                        Text("One-Stick Driving").font(.headline).accessibilityAddTraits(.isHeader)
+                        Text(driveConfig?.enabled == true ? driveSummary : String(localized: "Wheelchair-style driving from one joystick"))
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
@@ -406,6 +446,9 @@ struct DriveModeSection: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // The whole header opens and closes it, not only the arrow.
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() } }
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
@@ -417,91 +460,30 @@ struct DriveModeSection: View {
             // view dirty, and in a large editor each re-layout can outlast the
             // tick interval - the main thread never drains and the app hangs.
             guard expanded, driveConfig?.enabled == true else {
-                if lastPhysicsTick != nil { lastPhysicsTick = nil }
+                live.lastPhysicsTick = nil
                 return
             }
-            let axes = controllerService.peekControllerState(at: cfg.wrappedValue.slot)?.axes ?? [:]
-            if axes != axisValues { axisValues = axes }
-            stepCar()
+            // To the nearest hundredth, so a resting stick's noise does not
+            // count as movement.
+            let axes = (controllerService.peekControllerState(at: readSlot)?.axes ?? [:])
+                .mapValues { ($0 * 100).rounded() / 100 }
+            live.ingest(axes, slot: cfg.wrappedValue.slot)
+            live.step(cfg.wrappedValue, engine: telemetry.state)
         }
         .debugOneStick(expanded: $expanded, enable: isOn)
     }
 
     // MARK: - Live feedback (while actually driving)
-    @ViewBuilder private var liveFeedback: some View {
-        if let s = telemetry.state {
-            HStack(spacing: 10) {
-                Text(s.reverse ? "Reverse" : "Drive")
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(Capsule().fill((s.reverse ? Color.orange : Color.green).opacity(0.18)))
-                    .foregroundStyle(s.reverse ? .orange : .green)
-                miniBar("Power", Double(s.throttle), s.reverse ? .orange : .green)
-                miniBar("Brake", Double(s.brake), .red)
-                miniBar("Steer", Double(abs(s.steer)), .blue)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.04)))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Live drive state: \(s.reverse ? "reverse" : "drive"), power \(Int(s.throttle * 100)) percent")
-        }
-    }
+    private var liveFeedback: some View { DriveLiveReadout() }
 
     // MARK: - Test drive sandbox
 
-    /// Whether the demo vehicle is currently in reverse: the real processor's
-    /// gear when the engine is running, otherwise inferred from motion.
-    private var demoReversing: Bool {
-        if let s = telemetry.state { return s.reverse }
-        return carSpeed < -2
-    }
-
     /// Live 2D sandbox: a vehicle that obeys the exact parameters configured
-    /// below, so deadzone, curve, and coast-brake changes can be felt the
-    /// moment they're made. Driven by the real stick (or the true drive
-    /// engine when the preset is running); the on-screen virtual stick covers
-    /// testing with no controller connected.
+    /// below. Its moving parts are a view of their own that watches `live`.
     @ViewBuilder private var testDriveBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             blockTitle("Test Drive", "car.fill")
-            HStack(alignment: .top, spacing: 12) {
-                arenaCanvas
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 170)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
-                    .accessibilityLabel("Test drive arena")
-                    .accessibilityValue(demoReversing ? "Reversing" : "Driving, speed \(Int(min(100, abs(carSpeed) / 1.5))) percent")
-
-                VStack(spacing: 10) {
-                    Text(demoReversing ? "Reverse" : "Drive")
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Capsule().fill((demoReversing ? Color.orange : Color.green).opacity(0.18)))
-                        .foregroundStyle(demoReversing ? .orange : .green)
-
-                    VStack(spacing: 2) {
-                        Text("\(Int(min(100, abs(carSpeed) / 1.5)))%")
-                            .font(.callout.monospacedDigit().weight(.semibold))
-                        Text("Speed")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    virtualStickPad
-
-                    Button("Reset") {
-                        carPos = CGPoint(x: Self.arenaSize.width / 2, y: Self.arenaSize.height / 2)
-                        carHeading = -Double.pi / 2
-                        carSpeed = 0
-                        trail.removeAll()
-                    }
-                    .buttonStyle(.solidSecondaryCompact)
-                    .accessibilityHint("Puts the demo vehicle back in the middle of the arena.")
-                }
-                .frame(width: 92)
-            }
+            DriveTestDrive(live: live)
             Text("Move your stick to drive the demo vehicle. No controller? Drag the virtual stick. Parameter changes below apply instantly.")
                 .font(.caption2)
                 .foregroundStyle(.hint)
@@ -509,171 +491,7 @@ struct DriveModeSection: View {
         }
     }
 
-    private var arenaCanvas: some View {
-        Canvas { context, size in
-            let s = min(size.width / Self.arenaSize.width, size.height / Self.arenaSize.height)
-            context.translateBy(x: (size.width - Self.arenaSize.width * s) / 2,
-                                y: (size.height - Self.arenaSize.height * s) / 2)
-            context.scaleBy(x: s, y: s)
-
-            // Floor grid so motion is visible even mid-arena.
-            var grid = Path()
-            for x in stride(from: 70.0, to: Self.arenaSize.width, by: 70) {
-                grid.move(to: CGPoint(x: x, y: 0))
-                grid.addLine(to: CGPoint(x: x, y: Self.arenaSize.height))
-            }
-            for y in stride(from: 50.0, to: Self.arenaSize.height, by: 50) {
-                grid.move(to: CGPoint(x: 0, y: y))
-                grid.addLine(to: CGPoint(x: Self.arenaSize.width, y: y))
-            }
-            context.stroke(grid, with: .color(.secondary.opacity(0.12)), lineWidth: 0.5)
-
-            // Fading tire trail.
-            if trail.count > 1 {
-                var path = Path()
-                path.move(to: trail[0])
-                for p in trail.dropFirst() { path.addLine(to: p) }
-                context.stroke(path, with: .color((demoReversing ? Color.orange : Color.green).opacity(0.3)),
-                               style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            }
-
-            // The vehicle: rounded body + windshield, nose along +x.
-            var car = context
-            car.translateBy(x: carPos.x, y: carPos.y)
-            car.rotate(by: Angle(radians: carHeading))
-            let bodyColor: Color = demoReversing ? .orange : .accentColor
-            car.fill(Path(roundedRect: CGRect(x: -16, y: -9, width: 32, height: 18), cornerRadius: 6),
-                     with: .color(bodyColor))
-            car.fill(Path(roundedRect: CGRect(x: 3, y: -6, width: 8, height: 12), cornerRadius: 2),
-                     with: .color(.white.opacity(0.75)))
-        }
-    }
-
-    /// Draggable stand-in stick for testing with no controller connected.
-    private var virtualStickPad: some View {
-        ZStack {
-            Circle().fill(Color.secondary.opacity(0.1))
-            Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-            Circle()
-                .fill(Color.accentColor.opacity(0.9))
-                .frame(width: 24, height: 24)
-                .offset(x: virtualStick.width * 22, y: virtualStick.height * 22)
-        }
-        .frame(width: 70, height: 70)
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { g in
-                    virtualStick = CGSize(width: max(-1, min(1, g.translation.width / 30)),
-                                          height: max(-1, min(1, g.translation.height / 30)))
-                }
-                .onEnded { _ in
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
-                        virtualStick = .zero
-                    }
-                }
-        )
-        .accessibilityLabel("Virtual test stick")
-        .accessibilityHint("Drag to drive the demo vehicle when no controller is connected.")
-    }
-
-    /// One physics tick. Prefers the REAL drive engine's output (when the
-    /// preset is running) so the demo matches what a game would receive;
-    /// otherwise shapes raw stick input through the same deadzone and curve
-    /// parameters the engine uses.
-    private func stepCar() {
-        let now = Date()
-        guard let last = lastPhysicsTick else {
-            lastPhysicsTick = now
-            return
-        }
-        let dt = min(now.timeIntervalSince(last), 0.08)
-        guard dt > 0 else { return }
-        let c = cfg.wrappedValue
-
-        var steer: Double = 0
-        var accel: Double = 0   // -1 full reverse ... +1 full power
-        var brake: Double = 0
-        if let s = telemetry.state {
-            steer = Double(s.steer)
-            accel = (s.reverse ? -1 : 1) * Double(s.throttle)
-            brake = Double(s.brake)
-        } else {
-            var x = Double(axisValues[c.steerAxis] ?? 0)
-            var fwd: Double
-            if c.throttleIsTrigger {
-                // Triggers rest at 0 (0...1), matching the engine. The old
-                // (v+1)/2 remap left the preview idling forward at ~43%.
-                fwd = max(0, Double(axisValues[c.throttleAxis] ?? 0))
-            } else {
-                fwd = -Double(axisValues[c.throttleAxis] ?? 0)
-            }
-            if c.invertSteer { x = -x }
-            if c.invertThrottle { fwd = -fwd }
-            // Fall back to the on-screen stick when the controller is idle.
-            if abs(x) < 0.04 && abs(fwd) < 0.04 {
-                x = Double(virtualStick.width)
-                fwd = -Double(virtualStick.height)
-            }
-            steer = shapedAxis(x, deadzone: c.deadzone, curve: c.steerCurve)
-            accel = shapedAxis(fwd, deadzone: c.deadzone, curve: c.throttleCurve)
-        }
-        #if DEBUG
-        // The marketing shot (oneStick hook): the demo car drives a steady
-        // loop forward instead of following the synthetic controller's jitter.
-        if DebugMarketing.shared.oneStick { steer = 0.47; accel = 0.7; brake = 0 }
-        #endif
-
-        // Fully idle (no command, car at rest, trail drained): skip every
-        // write so an open-but-untouched panel does zero re-render work.
-        // The dt clamp above absorbs the stale tick stamp when motion resumes.
-        if steer == 0 && accel == 0 && brake == 0 && carSpeed == 0 && trail.isEmpty {
-            return
-        }
-        lastPhysicsTick = now
-
-        // Speed: ease toward the commanded speed. Coast-brake makes the
-        // centered-stick stop noticeably firmer, like a power wheelchair.
-        let maxForward = 150.0, maxReverse = 70.0
-        let target = accel >= 0 ? accel * maxForward : accel * maxReverse
-        let centered = abs(accel) < 0.02
-        var rate = centered ? (c.coastBrake ? 2.0 + 3.0 * c.coastBrakeStrength : 0.7) : 2.4
-        if brake > 0.02 { rate += 4.0 * brake }
-        carSpeed += ((brake > 0.5 ? 0 : target) - carSpeed) * min(1, rate * dt)
-        if centered && abs(carSpeed) < 0.5 { carSpeed = 0 }
-
-        // Heading: turn rate scales with speed so it steers like a vehicle,
-        // and flips while reversing, like a real car.
-        let speedFrac = max(-1, min(1, carSpeed / maxForward * 3))
-        carHeading += steer * 3.2 * speedFrac * dt
-
-        var p = carPos
-        p.x += CGFloat(cos(carHeading) * carSpeed * dt)
-        p.y += CGFloat(sin(carHeading) * carSpeed * dt)
-        let margin: CGFloat = 18
-        if p.x < margin { p.x = margin; carSpeed *= -0.25 }
-        if p.x > Self.arenaSize.width - margin { p.x = Self.arenaSize.width - margin; carSpeed *= -0.25 }
-        if p.y < margin { p.y = margin; carSpeed *= -0.25 }
-        if p.y > Self.arenaSize.height - margin { p.y = Self.arenaSize.height - margin; carSpeed *= -0.25 }
-        carPos = p
-
-        if abs(carSpeed) > 2 {
-            trail.append(p)
-            if trail.count > 90 { trail.removeFirst(trail.count - 90) }
-        } else if !trail.isEmpty && carSpeed == 0 {
-            // Let the trail fade out once stopped.
-            trail.removeFirst()
-        }
-    }
-
-    /// Deadzone + response-curve shaping, matching the engine's semantics:
-    /// remap past the deadzone to 0-1, then apply the curve exponent.
-    private func shapedAxis(_ v: Double, deadzone: Double, curve: Double) -> Double {
-        let a = abs(v)
-        guard a > deadzone, deadzone < 1 else { return 0 }
-        let n = min(1, (a - deadzone) / (1 - deadzone))
-        return (v < 0 ? -1 : 1) * pow(n, max(0.1, curve))
-    }
+    // MARK: - Test drive sandbox
 
     // MARK: - Stick
     private var stickBlock: some View {
@@ -684,7 +502,7 @@ struct DriveModeSection: View {
             }
             .pickerStyle(.segmented).controlSize(.small)
             .accessibilityLabel("Which stick drives")
-            Stepper("Controller slot: \(cfg.wrappedValue.slot + 1)", value: cfg.slot, in: 0...3)
+            Stepper("Controller slot: \(cfg.wrappedValue.slot)", value: cfg.slot, in: 0...slotLimit)
                 .controlSize(.small)
             if stickChoice.wrappedValue == .custom {
                 Stepper("Steer axis: \(cfg.wrappedValue.steerAxis)", value: cfg.steerAxis, in: 0...11)
@@ -692,20 +510,9 @@ struct DriveModeSection: View {
                 Stepper("Throttle axis: \(cfg.wrappedValue.throttleAxis)", value: cfg.throttleAxis, in: 0...11)
                     .controlSize(.small)
             }
-            // Live readout so the user can confirm which axis is which.
-            axisReadout("Steer axis \(cfg.wrappedValue.steerAxis)", cfg.wrappedValue.steerAxis)
-            axisReadout("Throttle axis \(cfg.wrappedValue.throttleAxis)", cfg.wrappedValue.throttleAxis)
-            HStack(spacing: 8) {
-                Button("Set steering to most-moved axis") { if let m = mostDeflected() { cfg.wrappedValue.steerAxis = m } }
-                    .buttonStyle(.solidSecondaryCompact)
-                    .disabled(mostDeflected() == nil)
-                    .accessibilityHint("Push and hold the stick in one direction first. Disabled until the stick is moved far enough.")
-                Button("Set throttle to most-moved axis") { if let m = mostDeflected() { cfg.wrappedValue.throttleAxis = m } }
-                    .buttonStyle(.solidSecondaryCompact)
-                    .disabled(mostDeflected() == nil)
-                    .accessibilityHint("Push and hold the stick in one direction first. Disabled until the stick is moved far enough.")
-            }
-            .controlSize(.small).font(.caption)
+            // Live readout so the user can confirm which axis is which: a
+            // view of its own, the only part that redraws as the stick moves.
+            DriveAxisMeters(live: live, cfg: cfg)
             Text("Move the stick and watch the bars; or hold it in one direction and tap the matching button.")
                 .font(.caption2).foregroundStyle(.secondary)
             Toggle("Invert steering", isOn: cfg.invertSteer).controlSize(.small)
@@ -728,10 +535,10 @@ struct DriveModeSection: View {
             } else {
                 HStack {
                     Text("Left key").font(.caption)
-                    KeyCodePicker(selectedCode: cfg.steerLeftKey).accessibilityLabel("Steer left key")
+                    KeyCodePicker(selectedCode: cfg.steerLeftKey, voiceRole: "Steer left key").accessibilityLabel("Steer left key")
                     Spacer()
                     Text("Right key").font(.caption)
-                    KeyCodePicker(selectedCode: cfg.steerRightKey).accessibilityLabel("Steer right key")
+                    KeyCodePicker(selectedCode: cfg.steerRightKey, voiceRole: "Steer right key").accessibilityLabel("Steer right key")
                 }
             }
             sliderRow("Steering curve", cfg.steerCurve, 1, 3, "%.1fx", 1, "Steering response curve")
@@ -746,10 +553,10 @@ struct DriveModeSection: View {
             blockTitle("Throttle and brake", "gauge.with.dots.needle.67percent")
             HStack {
                 Text("Accelerate").font(.caption)
-                KeyCodePicker(selectedCode: cfg.accelKey).accessibilityLabel("Accelerate key")
+                KeyCodePicker(selectedCode: cfg.accelKey, voiceRole: "Accelerate key").accessibilityLabel("Accelerate key")
                 Spacer()
                 Text("Brake").font(.caption)
-                KeyCodePicker(selectedCode: cfg.brakeKey).accessibilityLabel("Brake key")
+                KeyCodePicker(selectedCode: cfg.brakeKey, voiceRole: "Brake key").accessibilityLabel("Brake key")
             }
             Toggle("Throttle axis is a trigger (rests at one end)", isOn: cfg.throttleIsTrigger)
                 .controlSize(.small)
@@ -792,7 +599,7 @@ struct DriveModeSection: View {
                         .font(.caption2).foregroundStyle(.secondary)
                     HStack {
                         Text("Reverse key").font(.caption)
-                        KeyCodePicker(selectedCode: cfg.reverseKey).accessibilityLabel("Reverse key")
+                        KeyCodePicker(selectedCode: cfg.reverseKey, voiceRole: "Reverse key").accessibilityLabel("Reverse key")
                         Spacer()
                     }
                     Text("Push fully forward to return to Drive.")
@@ -806,51 +613,434 @@ struct DriveModeSection: View {
     private var driveSummary: String {
         let c = cfg.wrappedValue
         let stick = stickChoice.wrappedValue.label
-        let steer = c.steerMode == .mouse ? "mouse steering" : "key steering"
-        let rev = (c.reverseGestureEnabled && !c.throttleIsTrigger) ? ", reverse gesture" : ""
-        return "On: \(stick), \(steer)\(rev)"
+        let mouse = c.steerMode == .mouse
+        let rev = c.reverseGestureEnabled && !c.throttleIsTrigger
+        switch (mouse, rev) {
+        case (true, true): return String(localized: "On: \(stick), mouse steering, reverse gesture")
+        case (true, false): return String(localized: "On: \(stick), mouse steering")
+        case (false, true): return String(localized: "On: \(stick), key steering, reverse gesture")
+        case (false, false): return String(localized: "On: \(stick), key steering")
+        }
     }
 
     // MARK: - Reusable bits
-    private func mostDeflected() -> Int? {
-        guard let m = axisValues.max(by: { abs($0.value) < abs($1.value) }), abs(m.value) > 0.3 else { return nil }
-        return m.key
+    /// Numbered from 0, as Input Device and Slot are everywhere else, up to
+    /// the preset's last group or the highest connected slot (a Steam or
+    /// raw pad sits at 4 and up).
+    private var slotLimit: Int {
+        max(3, groups.count - 1, controllerService.controllerDetails.keys.filter { $0 < GameControllerService.noSlot }.max() ?? 0)
     }
-    private func axisReadout(_ label: String, _ index: Int) -> some View {
-        let v = axisValues[index] ?? 0
-        return HStack(spacing: 8) {
-            Text(label).font(.caption2).frame(minWidth: 116, alignment: .leading)
-            ProgressView(value: Double(min(abs(v), 1)))
-                .frame(width: 84)
-            Text(String(format: "%+.2f", v))
-                .font(.caption2.monospacedDigit()).frame(width: 46, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) value \(String(format: "%.2f", v))")
+
+    /// The slot drive reads, as MappingEngine.driveReadSlot works it out.
+    private var readSlot: Int {
+        let slot = cfg.wrappedValue.slot
+        guard slot < groups.count, groups[slot].inputKind == .controller, groups[slot].customName != nil else { return slot }
+        return controllerService.effectiveSlots(for: groups)[slot] ?? slot
     }
-    private func miniBar(_ label: String, _ value: Double, _ color: Color) -> some View {
+    private func miniBar(_ label: LocalizedStringKey, _ value: Double, _ color: Color) -> some View {
         VStack(spacing: 1) {
             ProgressView(value: min(max(value, 0), 1)).tint(color).frame(width: 56)
             Text(label).font(.system(size: 8)).foregroundStyle(.secondary)
         }
     }
-    private func blockTitle(_ t: String, _ symbol: String) -> some View {
+    private func blockTitle(_ t: LocalizedStringKey, _ symbol: String) -> some View {
         HStack(spacing: 6) {
             IconView(name: symbol, glyphHeight: 9).font(.caption2).foregroundStyle(.hint)
             Text(t).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         }
         .accessibilityAddTraits(.isHeader)
     }
-    private func sliderRow(_ label: String, _ value: SwiftUI.Binding<Double>,
+    private func sliderRow(_ label: LocalizedStringKey, _ value: SwiftUI.Binding<Double>,
                            _ lo: Double, _ hi: Double, _ fmt: String, _ scale: Double,
-                           _ a11y: String) -> some View {
-        HStack(spacing: 8) {
+                           _ a11y: LocalizedStringKey) -> some View {
+        // The value while dragging, shown and spoken live; the preset is
+        // written on release.
+        // Named by the row too: two rows can share a range and format.
+        let liveKey = "\(String(describing: a11y))-\(lo)-\(hi)-\(fmt)-\(scale)"
+        let v = (liveDrive[liveKey] ?? value.wrappedValue) * scale
+        return HStack(spacing: 8) {
             Text(label).font(.caption).frame(minWidth: 120, alignment: .leading)
-            Slider(value: value, in: lo...hi).controlSize(.small)
-                .accessibilityLabel(a11y)
-                .accessibilityValue(String(format: fmt, value.wrappedValue * scale))
-            Text(String(format: fmt, value.wrappedValue * scale))
-                .font(.caption2.monospacedDigit()).frame(width: 52, alignment: .trailing)
+            // Writes on release: each drag tick was its own undo step.
+            ThrottledSlider(a11y, value: value, in: lo...hi, step: (hi - lo) / 1000,
+                            onLiveChange: { liveDrive[liveKey] = $0 }).controlSize(.small)
+                .onChange(of: value.wrappedValue) { _, _ in liveDrive[liveKey] = nil }
+                .accessibilityValue(Self.spokenValue(fmt, v))
+            Text(String(format: fmt, locale: .current, v))
+                .font(.caption2.monospacedDigit()).frame(width: 52 * max(1, textScale), alignment: .trailing)
         }
+    }
+
+    /// A slider's value read aloud in the app's language: units in words,
+    /// the local decimal mark.
+    private static func spokenValue(_ fmt: String, _ v: Double) -> String {
+        let whole = Int(v.rounded())
+        switch fmt {
+        case "%.0f%%": return String(localized: "\(whole) percent")
+        case "%.0f px": return String(localized: "\(whole) pixels")
+        case "%.0f ms": return String(localized: "\(whole) milliseconds")
+        case "%.1fx": return String(localized: "\(v.formatted(.number.precision(.fractionLength(1)))) times",
+                                    comment: "A multiplier read aloud, as in 1.5 times")
+        default: return String(format: fmt, locale: .current, v)
+        }
+    }
+}
+
+/// The live gear, power, brake and steer while a drive preset runs: the
+/// only view that observes the engine's drive telemetry, so its updates
+/// redraw this strip and nothing else.
+private struct DriveLiveReadout: View {
+    @ObservedObject private var telemetry = DriveTelemetry.shared
+
+    private func miniBar(_ label: LocalizedStringKey, _ value: Double, _ color: Color) -> some View {
+        VStack(spacing: 1) {
+            ProgressView(value: min(max(value, 0), 1)).tint(color).frame(width: 56)
+            Text(label).font(.system(size: 8)).foregroundStyle(.secondary)
+        }
+    }
+
+    var body: some View {
+        if let s = telemetry.state {
+            HStack(spacing: 10) {
+                Text(s.reverse ? String(localized: "Reverse") : String(localized: "Drive"))
+                    .font(.caption2.weight(.medium))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill((s.reverse ? Color.orange : Color.green).opacity(0.18)))
+                    .foregroundStyle(s.reverse ? .orange : .green)
+                miniBar("Power", Double(s.throttle), s.reverse ? .orange : .green)
+                miniBar("Brake", Double(s.brake), .red)
+                miniBar("Steer", Double(abs(s.steer)), .blue)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.04)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(s.reverse
+                    ? String(localized: "Live drive state: reverse, power \(Int(s.throttle * 100)) percent")
+                    : String(localized: "Live drive state: drive, power \(Int(s.throttle * 100)) percent"))
+            .accessibilityValue(String(localized: "Brake \(Int(s.brake * 100)) percent, steer \(Int(abs(s.steer) * 100)) percent"))
+        }
+    }
+}
+
+// MARK: - One-stick driving live state
+
+/// What moves while the One-Stick Driving panel is open: the configured
+/// slot's axis readings and the test-drive car. Kept apart from the panel so
+/// a stick's movement redraws the arena and the meters only.
+@MainActor
+final class DriveLive: ObservableObject {
+    /// Live axis values for the configured slot, so the user can see which
+    /// axis moves and confirm their mapping.
+    @Published var axisValues: [Int: Float] = [:]
+    /// Where each axis sat when first read (a pedal rests at -1), by slot,
+    /// so "most-moved" means moved from rest, not furthest from center.
+    var axisRest: [Int: Float] = [:]
+    var axisRestSlot: Int?
+
+    /// Test-drive sandbox: a demo vehicle in a logical arena that obeys the
+    /// exact drive parameters configured, stepped on the panel's timer.
+    static let arenaSize = CGSize(width: 560, height: 200)
+    @Published var carPos = CGPoint(x: 280, y: 100)
+    @Published var carHeading: Double = -Double.pi / 2
+    @Published var carSpeed: Double = 0
+    var lastPhysicsTick: Date?
+    @Published var virtualStick: CGSize = .zero
+    @Published var trail: [CGPoint] = []
+
+    func ingest(_ axes: [Int: Float], slot: Int) {
+        if axes != axisValues { axisValues = axes }
+        if axisRestSlot != slot {
+            axisRestSlot = slot
+            axisRest = axes
+        } else if axes.keys.contains(where: { axisRest[$0] == nil }) {
+            axisRest.merge(axes) { old, _ in old }
+        }
+    }
+
+    func mostDeflected() -> Int? {
+        func moved(_ e: (key: Int, value: Float)) -> Float { abs(e.value - (axisRest[e.key] ?? 0)) }
+        guard let m = axisValues.max(by: { moved($0) < moved($1) }), moved(m) > 0.3 else { return nil }
+        return m.key
+    }
+    /// One physics tick. Prefers the REAL drive engine's output (when the
+    /// preset is running) so the demo matches what a game would receive;
+    /// otherwise shapes raw stick input through the same deadzone and curve
+    /// parameters the engine uses.
+    func step(_ c: DriveConfig, engine state: DriveModeProcessor.LiveState?) {
+        let now = Date()
+        guard let last = lastPhysicsTick else {
+            lastPhysicsTick = now
+            return
+        }
+        let dt = min(now.timeIntervalSince(last), 0.08)
+        guard dt > 0 else { return }
+
+        var steer: Double = 0
+        var accel: Double = 0   // -1 full reverse ... +1 full power
+        var brake: Double = 0
+        if let s = state {
+            steer = Double(s.steer)
+            accel = (s.reverse ? -1 : 1) * Double(s.throttle)
+            brake = Double(s.brake)
+        } else {
+            var x = Double(axisValues[c.steerAxis] ?? 0)
+            var fwd: Double
+            if c.throttleIsTrigger {
+                // Triggers rest at 0 (0...1), matching the engine. The old
+                // (v+1)/2 remap left the preview idling forward at ~43%.
+                fwd = max(0, Double(axisValues[c.throttleAxis] ?? 0))
+            } else {
+                fwd = -Double(axisValues[c.throttleAxis] ?? 0)
+            }
+            if c.invertSteer { x = -x }
+            if c.invertThrottle { fwd = -fwd }
+            // Fall back to the on-screen stick when the controller is idle.
+            if abs(x) < 0.04 && abs(fwd) < 0.04 {
+                x = Double(virtualStick.width)
+                fwd = -Double(virtualStick.height)
+            }
+            steer = Self.shapedAxis(x, deadzone: c.deadzone, curve: c.steerCurve)
+            accel = Self.shapedAxis(fwd, deadzone: c.deadzone, curve: c.throttleCurve)
+        }
+        #if DEBUG
+        // The marketing shot (oneStick hook): the demo car drives a steady
+        // loop forward instead of following the synthetic controller's jitter.
+        if DebugMarketing.shared.oneStick { steer = 0.47; accel = 0.7; brake = 0 }
+        #endif
+
+        // Fully idle (no command, car at rest, trail drained): skip every
+        // write so an open-but-untouched panel does zero re-render work.
+        // The dt clamp above absorbs the stale tick stamp when motion resumes.
+        if steer == 0 && accel == 0 && brake == 0 && carSpeed == 0 && trail.isEmpty {
+            return
+        }
+        lastPhysicsTick = now
+
+        // Speed: ease toward the commanded speed. Coast-brake makes the
+        // centered-stick stop noticeably firmer, like a power wheelchair.
+        let maxForward = 150.0, maxReverse = 70.0
+        let target = accel >= 0 ? accel * maxForward : accel * maxReverse
+        let centered = abs(accel) < 0.02
+        var rate = centered ? (c.coastBrake ? 2.0 + 3.0 * c.coastBrakeStrength : 0.7) : 2.4
+        if brake > 0.02 { rate += 4.0 * brake }
+        carSpeed += ((brake > 0.5 ? 0 : target) - carSpeed) * min(1, rate * dt)
+        if centered && abs(carSpeed) < 0.5 { carSpeed = 0 }
+
+        // Heading: turn rate scales with speed so it steers like a vehicle,
+        // and flips while reversing, like a real car.
+        let speedFrac = max(-1, min(1, carSpeed / maxForward * 3))
+        carHeading += steer * 3.2 * speedFrac * dt
+
+        var p = carPos
+        p.x += CGFloat(cos(carHeading) * carSpeed * dt)
+        p.y += CGFloat(sin(carHeading) * carSpeed * dt)
+        let margin: CGFloat = 18
+        if p.x < margin { p.x = margin; carSpeed *= -0.25 }
+        if p.x > DriveLive.arenaSize.width - margin { p.x = DriveLive.arenaSize.width - margin; carSpeed *= -0.25 }
+        if p.y < margin { p.y = margin; carSpeed *= -0.25 }
+        if p.y > DriveLive.arenaSize.height - margin { p.y = DriveLive.arenaSize.height - margin; carSpeed *= -0.25 }
+        carPos = p
+
+        if abs(carSpeed) > 2 {
+            trail.append(p)
+            if trail.count > 90 { trail.removeFirst(trail.count - 90) }
+        } else if !trail.isEmpty && carSpeed == 0 {
+            // Let the trail fade out once stopped.
+            trail.removeFirst()
+        }
+    }
+
+    /// Deadzone + response-curve shaping, matching the engine's semantics:
+    /// remap past the deadzone to 0-1, then apply the curve exponent.
+    static func shapedAxis(_ v: Double, deadzone: Double, curve: Double) -> Double {
+        let a = abs(v)
+        guard a > deadzone, deadzone < 1 else { return 0 }
+        let n = min(1, (a - deadzone) / (1 - deadzone))
+        return (v < 0 ? -1 : 1) * pow(n, max(0.1, curve))
+    }
+
+}
+
+/// The test-drive arena, the virtual stick and the speed readout: the only
+/// part of the panel that redraws as the car moves.
+struct DriveTestDrive: View {
+    @ObservedObject var live: DriveLive
+    /// Only the engine's gear is followed, not every telemetry tick: the
+    /// gear changes (or the engine stops) while the car sits still too.
+    @State private var engineReverse: Bool?
+
+    /// Whether the demo vehicle is currently in reverse: the real processor's
+    /// gear when the engine is running, otherwise inferred from motion.
+    private var demoReversing: Bool {
+        if let engineReverse { return engineReverse }
+        return live.carSpeed < -2
+    }
+
+    var body: some View {
+            HStack(alignment: .top, spacing: 12) {
+                arenaCanvas
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 170)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 0.5))
+                    .accessibilityLabel("Test drive arena")
+                    .onReceive(DriveTelemetry.shared.$state.map { $0?.reverse }.removeDuplicates()) { engineReverse = $0 }
+                    .accessibilityValue(demoReversing ? String(localized: "Reversing") : String(localized: "Driving, speed \(Int(min(100, abs(live.carSpeed) / 1.5))) percent"))
+
+                VStack(spacing: 10) {
+                    Text(demoReversing ? String(localized: "Reverse") : String(localized: "Drive"))
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill((demoReversing ? Color.orange : Color.green).opacity(0.18)))
+                        .foregroundStyle(demoReversing ? .orange : .green)
+
+                    VStack(spacing: 2) {
+                        Text("\(Int(min(100, abs(live.carSpeed) / 1.5)))%")
+                            .font(.callout.monospacedDigit().weight(.semibold))
+                        Text("Speed")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    virtualStickPad
+
+                    Button("Reset") {
+                        live.carPos = CGPoint(x: DriveLive.arenaSize.width / 2, y: DriveLive.arenaSize.height / 2)
+                        live.carHeading = -Double.pi / 2
+                        live.carSpeed = 0
+                        live.trail.removeAll()
+                    }
+                    .buttonStyle(.solidSecondaryCompact)
+                    .accessibilityHint("Puts the demo vehicle back in the middle of the arena.")
+                }
+                .frame(width: 92)
+            }
+    }
+
+    /// The arena the virtual stick steers, unmirrored like the stick.
+    private var arenaCanvas: some View { arenaCanvasDrawing.environment(\.layoutDirection, .leftToRight) }
+
+    private var arenaCanvasDrawing: some View {
+        Canvas { context, size in
+            let s = min(size.width / DriveLive.arenaSize.width, size.height / DriveLive.arenaSize.height)
+            context.translateBy(x: (size.width - DriveLive.arenaSize.width * s) / 2,
+                                y: (size.height - DriveLive.arenaSize.height * s) / 2)
+            context.scaleBy(x: s, y: s)
+
+            // Floor grid so motion is visible even mid-arena.
+            var grid = Path()
+            for x in stride(from: 70.0, to: DriveLive.arenaSize.width, by: 70) {
+                grid.move(to: CGPoint(x: x, y: 0))
+                grid.addLine(to: CGPoint(x: x, y: DriveLive.arenaSize.height))
+            }
+            for y in stride(from: 50.0, to: DriveLive.arenaSize.height, by: 50) {
+                grid.move(to: CGPoint(x: 0, y: y))
+                grid.addLine(to: CGPoint(x: DriveLive.arenaSize.width, y: y))
+            }
+            context.stroke(grid, with: .color(.secondary.opacity(0.12)), lineWidth: 0.5)
+
+            // Fading tire live.trail.
+            if live.trail.count > 1 {
+                var path = Path()
+                path.move(to: live.trail[0])
+                for p in live.trail.dropFirst() { path.addLine(to: p) }
+                context.stroke(path, with: .color((demoReversing ? Color.orange : Color.green).opacity(0.3)),
+                               style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+
+            // The vehicle: rounded body + windshield, nose along +x.
+            var car = context
+            car.translateBy(x: live.carPos.x, y: live.carPos.y)
+            car.rotate(by: Angle(radians: live.carHeading))
+            let bodyColor: Color = demoReversing ? .orange : .accentColor
+            car.fill(Path(roundedRect: CGRect(x: -16, y: -9, width: 32, height: 18), cornerRadius: 6),
+                     with: .color(bodyColor))
+            car.fill(Path(roundedRect: CGRect(x: 3, y: -6, width: 8, height: 12), cornerRadius: 2),
+                     with: .color(.white.opacity(0.75)))
+        }
+    }
+
+    /// Draggable stand-in stick for testing with no controller connected.
+    /// Drawn in the stick's own coordinates: right is right in every language.
+    private var virtualStickPad: some View { virtualStickPadDrawing.environment(\.layoutDirection, .leftToRight) }
+
+    private var virtualStickPadDrawing: some View {
+        ZStack {
+            Circle().fill(Color.secondary.opacity(0.1))
+            Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+            Circle()
+                .fill(Color.accentColor.opacity(0.9))
+                .frame(width: 24, height: 24)
+                .offset(x: live.virtualStick.width * 22, y: live.virtualStick.height * 22)
+        }
+        .frame(width: 70, height: 70)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    live.virtualStick = CGSize(width: max(-1, min(1, g.translation.width / 30)),
+                                          height: max(-1, min(1, g.translation.height / 30)))
+                }
+                .onEnded { _ in
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
+                        live.virtualStick = .zero
+                    }
+                }
+        )
+        .accessibilityLabel("Virtual test stick")
+        .accessibilityHint("Drag to drive the demo vehicle when no controller is connected.")
+        // Without a drag: push the stick a moment in one direction, then
+        // it springs back, as letting go of a drag does.
+        .accessibilityAction(named: "Forward") { pushVirtualStick(CGSize(width: 0, height: -1)) }
+        .accessibilityAction(named: "Reverse") { pushVirtualStick(CGSize(width: 0, height: 1)) }
+        .accessibilityAction(named: "Steer left") { pushVirtualStick(CGSize(width: -1, height: 0)) }
+        .accessibilityAction(named: "Steer right") { pushVirtualStick(CGSize(width: 1, height: 0)) }
+    }
+
+    private func pushVirtualStick(_ to: CGSize) {
+        live.virtualStick = to
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) { live.virtualStick = .zero }
+        }
+    }
+
+}
+
+/// The steer and throttle meters and the buttons that pick the most-moved
+/// axis: they redraw as the stick moves, the rest of the panel does not.
+struct DriveAxisMeters: View {
+    @ObservedObject var live: DriveLive
+    @SwiftUI.Binding var cfg: DriveConfig
+    @Environment(\.appTextScale) private var textScale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            axisReadout(String(localized: "Steer axis \(cfg.steerAxis)"), cfg.steerAxis)
+            axisReadout(String(localized: "Throttle axis \(cfg.throttleAxis)"), cfg.throttleAxis)
+            HStack(spacing: 8) {
+                Button("Set steering to most-moved axis") { if let m = live.mostDeflected() { cfg.steerAxis = m } }
+                    .buttonStyle(.solidSecondaryCompact)
+                    .disabled(live.mostDeflected() == nil)
+                    .accessibilityHint("Push and hold the stick in one direction first. Disabled until the stick is moved far enough.")
+                Button("Set throttle to most-moved axis") { if let m = live.mostDeflected() { cfg.throttleAxis = m } }
+                    .buttonStyle(.solidSecondaryCompact)
+                    .disabled(live.mostDeflected() == nil)
+                    .accessibilityHint("Push and hold the stick in one direction first. Disabled until the stick is moved far enough.")
+            }
+            .controlSize(.small).font(.caption)
+        }
+    }
+
+    private func axisReadout(_ label: String, _ index: Int) -> some View {
+        let v = live.axisValues[index] ?? 0
+        return HStack(spacing: 8) {
+            Text(label).font(.caption2).frame(minWidth: 116, alignment: .leading)
+            ProgressView(value: Double(min(abs(v), 1)))
+                .frame(width: 84)
+            Text(String(format: "%+.2f", locale: .current, v))
+                .font(.caption2.monospacedDigit()).frame(width: 46 * max(1, textScale), alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) value \(String(format: "%.2f", locale: .current, v))")
     }
 }

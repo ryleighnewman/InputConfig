@@ -31,6 +31,8 @@ struct StatDetail: Identifiable {
 /// main window toolbar. Everything shown here is local; no telemetry leaves
 /// the device.
 struct StatsView: View {
+    /// The donut grows with Text Size, so its total fits in the hole.
+    @Environment(\.appTextScale) private var appTextScale
     @StateObject private var service: StatsServiceRef = StatsServiceRef()
     @Environment(\.dismiss) private var dismiss
     @State private var showResetConfirmation = false
@@ -64,7 +66,7 @@ struct StatsView: View {
                         glassCard("Output mix") { outputsChart }
                     }
                     .fixedSize(horizontal: false, vertical: true)
-                    glassCard("This session", trailing: "Energy is an estimate") { powerSection }
+                    glassCard("This session", trailing: String(localized: "Energy is an estimate")) { powerSection }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 8)
@@ -89,7 +91,9 @@ struct StatsView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 14)
         }
-        .frame(width: 780, height: 740)
+        // Shorter on a small screen: the cards scroll, so the Reset and
+        // Close row stays above the Dock.
+        .frame(width: 780, height: Metrics.sheetHeight(ideal: 740, floor: 480))
         // The app's layered icon look, set here too so every icon in the
         // sheet and its popovers draws its secondary layers translucent.
         .symbolRenderingMode(.hierarchical)
@@ -155,7 +159,7 @@ struct StatsView: View {
         let last14 = service.last14DaysConnected.map(\.seconds)
         let activeMinutes = s.totalEngineRunningTime / 60
         func perMinute(_ n: Int) -> String {
-            activeMinutes >= 1 ? "\(bigNumber(Int(Double(n) / activeMinutes))) per active minute" : "per active minute soon"
+            activeMinutes >= 1 ? String(localized: "\(bigNumber(Int(Double(n) / activeMinutes))) per active minute") : String(localized: "per active minute soon")
         }
         let meters = Double(s.totalMouseMotionPixels) / 96.0 * 0.0254
 
@@ -163,44 +167,44 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "gamecontroller.fill", tint: .blue,
                 value: timeShort(s.totalConnectedTime),
-                label: "Time with a controller",
-                explanation: "Cumulative time any controller has been plugged in or paired since you first launched the app.",
+                label: String(localized: "Time with a controller"),
+                explanation: String(localized: "Cumulative time any controller has been plugged in or paired since you first launched the app."),
                 related: [
-                    ("Days tracked", "\(service.daysTracked)"),
-                    ("Average per day", service.daysTracked > 0
+                    (String(localized: "Days tracked"), "\(service.daysTracked)"),
+                    (String(localized: "Average per day"), service.daysTracked > 0
                         ? timeShort(s.totalConnectedTime / Double(service.daysTracked))
                         : "-")
                 ],
                 topControllers: topCtrls,
                 last14Days: last14),
-                subline: service.daysTracked > 0 ? "\(timeShort(s.totalConnectedTime / Double(service.daysTracked))) a day on average" : "",
+                subline: service.daysTracked > 0 ? String(localized: "\(timeShort(s.totalConnectedTime / Double(service.daysTracked))) a day on average") : "",
                 count: s.totalConnectedTime, alwaysShown: true),
             TileSpec(detail: StatDetail(
                 icon: "play.fill", tint: .green,
                 value: timeShort(s.totalEngineRunningTime),
-                label: "Time with a preset active",
-                explanation: "Total time the mapping engine has been running with a preset active and firing outputs.",
+                label: String(localized: "Time with a preset active"),
+                explanation: String(localized: "Total time the mapping engine has been running with a preset active and firing outputs."),
                 related: [
-                    ("Activations", "\(s.presetActivationCount)"),
-                    ("Average per activation", s.presetActivationCount > 0
+                    (String(localized: "Activations"), "\(s.presetActivationCount)"),
+                    (String(localized: "Average per activation"), s.presetActivationCount > 0
                         ? timeShort(s.totalEngineRunningTime / Double(s.presetActivationCount))
                         : "-"),
-                    ("Connected vs active",
+                    (String(localized: "Connected vs active"),
                         s.totalConnectedTime > 0
-                        ? String(format: "%.1f%%", min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100))
+                        ? String(format: "%.1f%%", locale: .current, min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100))
                         : "-")
                 ],
                 topPresets: topPresets),
                 subline: s.totalConnectedTime > 0
-                    ? "\(Int(min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100).rounded()))% of connected time" : "",
+                    ? String(localized: "\(Int(min(100, s.totalEngineRunningTime / s.totalConnectedTime * 100).rounded()))% of connected time") : "",
                 count: s.totalEngineRunningTime, alwaysShown: true),
             TileSpec(detail: StatDetail(
                 icon: "hand.point.up.left.fill", tint: .orange,
                 value: bigNumber(s.totalButtonPresses),
-                label: "Button presses",
-                explanation: "Every controller button press counts, across every preset and every controller. Hat / D-pad direction changes count too.",
+                label: String(localized: "Button presses"),
+                explanation: String(localized: "Every controller button press counts, across every preset and every controller. Hat / D-pad direction changes count too."),
                 related: [
-                    ("Average per minute (active)", s.totalEngineRunningTime > 60
+                    (String(localized: "Average per minute (active)"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalButtonPresses) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ],
@@ -210,22 +214,22 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "arrowtriangle.up.fill", tint: .red,
                 value: "\(s.presetActivationCount)",
-                label: "Preset activations",
-                explanation: "Number of distinct times you've turned a preset on. Toggling off then back on counts as a fresh activation.",
+                label: String(localized: "Preset activations"),
+                explanation: String(localized: "Number of distinct times you've turned a preset on. Toggling off then back on counts as a fresh activation."),
                 topPresets: topPresets),
-                subline: service.topPresets.first.map { "Most often \($0.name)" } ?? "",
+                subline: service.topPresets.first.map { String(localized: "Most often \(ShippedText.t($0.name))") } ?? "",
                 count: Double(s.presetActivationCount), alwaysShown: true),
             TileSpec(detail: StatDetail(
                 icon: "keyboard.fill", tint: .indigo,
                 value: bigNumber(s.totalKeyPresses),
-                label: "Keystrokes sent",
-                explanation: "Number of key outputs the engine has fired. A press and its release count once; a row with several keys counts each one.",
+                label: String(localized: "Keystrokes sent"),
+                explanation: String(localized: "Number of key outputs the engine has fired. A press and its release count once; a row with several keys counts each one."),
                 related: [
-                    ("Per minute active", s.totalEngineRunningTime > 60
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalKeyPresses) / (s.totalEngineRunningTime / 60)))
                         : "-"),
-                    ("Per button press", s.totalButtonPresses > 0
-                        ? String(format: "%.2fx", Double(s.totalKeyPresses) / Double(s.totalButtonPresses))
+                    (String(localized: "Per button press"), s.totalButtonPresses > 0
+                        ? String(format: "%.2fx", locale: .current, Double(s.totalKeyPresses) / Double(s.totalButtonPresses))
                         : "-")
                 ]),
                 subline: perMinute(s.totalKeyPresses),
@@ -233,10 +237,10 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "cursorarrow.click.2", tint: .pink,
                 value: bigNumber(s.totalMouseClicks),
-                label: "Mouse clicks sent",
-                explanation: "Mouse-button outputs the engine has fired: left, right, middle, and other buttons. A press and its release count once.",
+                label: String(localized: "Mouse clicks sent"),
+                explanation: String(localized: "Mouse-button outputs the engine has fired: left, right, middle, and other buttons. A press and its release count once."),
                 related: [
-                    ("Per minute active", s.totalEngineRunningTime > 60
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalMouseClicks) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ]),
@@ -244,25 +248,28 @@ struct StatsView: View {
                 count: Double(s.totalMouseClicks), alwaysShown: false),
             TileSpec(detail: StatDetail(
                 icon: "cursorarrow.motionlines", tint: .teal,
-                value: meters >= 1000 ? String(format: "%.2f km", meters / 1000) : String(format: "%.1f m", meters),
-                label: "Pointer travel",
-                explanation: "How far the engine has moved the cursor, measured as pixels on a 96 dpi screen. Stick aim, gyro aim, and touchpad mouse all contribute.",
+                // The unit in the app's language, as energy is.
+                value: meters >= 1000
+                    ? Measurement(value: meters / 1000, unit: UnitLength.kilometers).formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(2))))
+                    : Measurement(value: meters, unit: UnitLength.meters).formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(1)))),
+                label: String(localized: "Pointer travel"),
+                explanation: String(localized: "How far the engine has moved the cursor, measured as pixels on a 96 dpi screen. Stick aim, gyro aim, and touchpad mouse all contribute."),
                 related: [
-                    ("Pixels", bigNumber(s.totalMouseMotionPixels)),
-                    ("Inches (96 dpi)", String(format: "%.1f\"", Double(s.totalMouseMotionPixels) / 96.0)),
-                    ("Per minute active", s.totalEngineRunningTime > 60
-                        ? bigNumber(Int(Double(s.totalMouseMotionPixels) / (s.totalEngineRunningTime / 60))) + " px"
+                    (String(localized: "Pixels"), bigNumber(s.totalMouseMotionPixels)),
+                    (String(localized: "Inches (96 dpi)"), String(format: "%.1f\"", locale: .current, Double(s.totalMouseMotionPixels) / 96.0)),
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
+                        ? String(localized: "\(bigNumber(Int(Double(s.totalMouseMotionPixels) / (s.totalEngineRunningTime / 60)))) px")
                         : "-")
                 ]),
-                subline: "\(bigNumber(s.totalMouseMotionPixels)) pixels at 96 dpi",
+                subline: String(localized: "\(bigNumber(s.totalMouseMotionPixels)) pixels at 96 dpi"),
                 count: Double(s.totalMouseMotionPixels), alwaysShown: false),
             TileSpec(detail: StatDetail(
                 icon: "scroll.fill", tint: .mint,
                 value: bigNumber(s.totalScrollTicks),
-                label: "Scroll ticks",
-                explanation: "Vertical and horizontal scroll steps the engine has sent.",
+                label: String(localized: "Scroll ticks"),
+                explanation: String(localized: "Vertical and horizontal scroll steps the engine has sent."),
                 related: [
-                    ("Per minute active", s.totalEngineRunningTime > 60
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalScrollTicks) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ]),
@@ -271,10 +278,10 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "music.note", tint: .purple,
                 value: bigNumber(s.totalMidiEvents),
-                label: "MIDI events sent",
-                explanation: "Note-on, note-off, CC, pitch-bend, program change: every event sent to the virtual MIDI source counts.",
+                label: String(localized: "MIDI events sent"),
+                explanation: String(localized: "Note-on, note-off, CC, pitch-bend, program change: every event sent to the virtual MIDI source counts."),
                 related: [
-                    ("Per minute active", s.totalEngineRunningTime > 60
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalMidiEvents) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ]),
@@ -283,10 +290,10 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "rectangle.and.hand.point.up.left.fill", tint: .cyan,
                 value: bigNumber(s.totalTouchpadFingerEvents),
-                label: "Touchpad finger updates",
-                explanation: "Each new finger position reported by a DualSense or DualShock 4 touchpad counts as one update. Long sliding gestures generate many.",
+                label: String(localized: "Touchpad finger updates"),
+                explanation: String(localized: "Each new finger position reported by a DualSense or DualShock 4 touchpad counts as one update. Long sliding gestures generate many."),
                 related: [
-                    ("Per minute active", s.totalEngineRunningTime > 60
+                    (String(localized: "Per minute active"), s.totalEngineRunningTime > 60
                         ? bigNumber(Int(Double(s.totalTouchpadFingerEvents) / (s.totalEngineRunningTime / 60)))
                         : "-")
                 ]),
@@ -295,15 +302,15 @@ struct StatsView: View {
             TileSpec(detail: StatDetail(
                 icon: "bolt.fill", tint: .yellow,
                 value: bigNumber(s.totalMacroExecutions),
-                label: "Macros run",
-                explanation: "Number of times a macro binding has fired. Each macro chain counts once regardless of how many steps it contains.",
+                label: String(localized: "Macros run"),
+                explanation: String(localized: "Number of times a macro binding has fired. Each macro chain counts once regardless of how many steps it contains."),
                 related: [
-                    ("Per activation", s.presetActivationCount > 0
-                        ? String(format: "%.2f", Double(s.totalMacroExecutions) / Double(s.presetActivationCount))
+                    (String(localized: "Per activation"), s.presetActivationCount > 0
+                        ? String(format: "%.2f", locale: .current, Double(s.totalMacroExecutions) / Double(s.presetActivationCount))
                         : "-")
                 ]),
                 subline: s.presetActivationCount > 0
-                    ? String(format: "%.1f per activation", Double(s.totalMacroExecutions) / Double(s.presetActivationCount)) : "",
+                    ? String(format: String(localized: "%.1f per activation"), locale: .current, Double(s.totalMacroExecutions) / Double(s.presetActivationCount)) : "",
                 count: Double(s.totalMacroExecutions), alwaysShown: false),
         ]
     }
@@ -311,7 +318,7 @@ struct StatsView: View {
     // MARK: - Cards / Sections
 
     /// A section on its own glass card, the app's one card surface.
-    private func glassCard<Content: View>(_ title: String, trailing: String? = nil,
+    private func glassCard<Content: View>(_ title: LocalizedStringKey, trailing: String? = nil,
                                           @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -343,7 +350,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 7) {
                 ForEach(Array(top.enumerated()), id: \.element.name) { i, row in
                     leaderboardRow(rank: i + 1, icon: nil, iconColor: .green,
-                                   label: row.name, count: row.count,
+                                   label: ShippedText.t(row.name), count: row.count,
                                    maxCount: maxCount, barTint: .green)
                 }
             }
@@ -379,7 +386,7 @@ struct StatsView: View {
         HStack(alignment: .center, spacing: 8) {
             Text("\(rank)")
                 .font(.caption.weight(.semibold).monospacedDigit())
-                .foregroundStyle(rank == 1 ? AnyShapeStyle(barTint) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(rank == 1 ? AnyShapeStyle(barTint) : AnyShapeStyle(.hint))
                 .frame(width: 14, alignment: .trailing)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -408,9 +415,11 @@ struct StatsView: View {
                 .accessibilityHidden(true)
             }
         }
+        // The whole name on hover, since a long one is cut to one line.
+        .help("\(label): \(count)\u{00D7}")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Number \(rank), \(label)")
-        .accessibilityValue("\(count) times")
+        .accessibilityValue(count == 1 ? String(localized: "1 time") : String(localized: "\(count) times"))
     }
 
     @ViewBuilder
@@ -430,6 +439,7 @@ struct StatsView: View {
                             Text(row.name)
                                 .font(.callout)
                                 .lineLimit(1)
+                                .help(row.name)
                             Spacer(minLength: 4)
                             Text(timeShort(row.time))
                                 .font(.callout.monospacedDigit())
@@ -444,7 +454,7 @@ struct StatsView: View {
                                 }
                             }
                             .frame(height: 4)
-                            Text("\(conns) connection\(conns == 1 ? "" : "s")")
+                            Text(conns == 1 ? String(localized: "1 connection") : String(localized: "\(conns) connections"))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.hint)
                                 .fixedSize()
@@ -453,7 +463,9 @@ struct StatsView: View {
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(row.name)
-                    .accessibilityValue("\(timeShort(row.time)), \(Int((share * 100).rounded())) percent, \(conns) connection\(conns == 1 ? "" : "s")")
+                    .accessibilityValue(conns == 1
+                        ? String(localized: "\(timeShort(row.time)), \(Int((share * 100).rounded())) percent, 1 connection")
+                        : String(localized: "\(timeShort(row.time)), \(Int((share * 100).rounded())) percent, \(conns) connections"))
                 }
             }
         }
@@ -463,7 +475,7 @@ struct StatsView: View {
     private var busiestDayText: String? {
         guard let best = service.last14DaysConnected.max(by: { $0.seconds < $1.seconds }),
               best.seconds > 0 else { return nil }
-        return "Busiest: \(best.date.formatted(.dateTime.month(.abbreviated).day())), \(timeShort(best.seconds))"
+        return String(localized: "Busiest: \(best.date.formatted(.dateTime.month(.abbreviated).day())), \(timeShort(best.seconds))")
     }
 
     @ViewBuilder
@@ -483,6 +495,9 @@ struct StatsView: View {
                 .foregroundStyle(day.seconds > 0
                                  ? Color.accentColor.opacity(0.8)
                                  : Color.primary.opacity(0.1))
+                // Each day for VoiceOver's chart navigation and Audio Graph.
+                .accessibilityLabel(day.date.formatted(.dateTime.month().day()))
+                .accessibilityValue(timeShort(day.seconds))
                 .cornerRadius(4)
             }
             if activeDays > 1 {
@@ -496,13 +511,20 @@ struct StatsView: View {
                     }
             }
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Controller connection over the last 14 days")
-        .accessibilityValue("\(timeShort(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeShort(peak))")
+        .accessibilityValue(activeDays == 1
+                            ? String(localized: "\(timeShort(total)) total across 1 active day, busiest day \(timeShort(peak))")
+                            : String(localized: "\(timeShort(total)) total across \(activeDays) active days, busiest day \(timeShort(peak))"))
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: 2)) { _ in
-                AxisValueLabel(format: .dateTime.day().month(.abbreviated), centered: true)
-                    .font(.caption2)
+            AxisMarks(values: .stride(by: .day, count: 2)) { value in
+                // A Text, so the app's Text Size reaches the dates too.
+                AxisValueLabel(centered: true) {
+                    if let day = value.as(Date.self) {
+                        Text(day, format: .dateTime.day().month(.abbreviated))
+                            .font(.caption2)
+                    }
+                }
             }
         }
         .chartYAxis {
@@ -523,11 +545,11 @@ struct StatsView: View {
     private var outputsChart: some View {
         let s = service.stats
         let slices: [(name: String, count: Int, color: Color)] = [
-            ("Keystrokes",       s.totalKeyPresses,        .indigo),
-            ("Mouse clicks",     s.totalMouseClicks,       .pink),
-            ("MIDI events",      s.totalMidiEvents,        .purple),
-            ("Scroll ticks",     s.totalScrollTicks,       .mint),
-            ("Macros",           s.totalMacroExecutions,   .yellow),
+            (String(localized: "Keystrokes"),       s.totalKeyPresses,        .indigo),
+            (String(localized: "Mouse clicks"),     s.totalMouseClicks,       .pink),
+            (String(localized: "MIDI events"),      s.totalMidiEvents,        .purple),
+            (String(localized: "Scroll ticks"),     s.totalScrollTicks,       .mint),
+            (String(localized: "Macros"),           s.totalMacroExecutions,   .yellow),
         ]
         let nonZero = slices.filter { $0.count > 0 }
         if nonZero.isEmpty {
@@ -554,11 +576,11 @@ struct StatsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .frame(width: 104, height: 104)
+                .frame(width: 104 * max(1, appTextScale), height: 104 * max(1, appTextScale))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Output mix")
                 .accessibilityValue(nonZero
-                    .map { "\($0.name) \(Int(Double($0.count) / Double(total) * 100)) percent" }
+                    .map { String(localized: "\($0.name) \(Self.share($0.count, of: total))") }
                     .joined(separator: ", "))
 
                 // Legend with raw counts.
@@ -574,10 +596,11 @@ struct StatsView: View {
                                 .font(.callout.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        .help("\(slice.count) \(slice.name.lowercased())")
+                        // "Keystrokes: 1,234": the label keeps its own case in every language.
+                        .help(String(localized: "\(slice.name): \(slice.count.formatted())"))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(slice.name)
-                        .accessibilityValue("\(slice.count), \(Int(Double(slice.count) / Double(total) * 100)) percent")
+                        .accessibilityValue("\(slice.count), \(Self.share(slice.count, of: total))")
                     }
                 }
             }
@@ -594,10 +617,9 @@ struct StatsView: View {
         return "\(Int(pct.rounded()))%"
     }
 
+    /// 12.3K, 1.2M in English; the app's language's own short forms.
     private func bigNumber(_ n: Int) -> String {
-        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
-        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
-        return "\(n)"
+        Double(n).formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
     }
 
     /// Live power and energy for this session, one compact row. The how of
@@ -607,32 +629,32 @@ struct StatsView: View {
         let p = sysStats.power
         return HStack(alignment: .top, spacing: 10) {
             powerTile(label: "Uptime", value: timeShort(c.sessionUptime), icon: "clock",
-                      tint: .secondary, hint: "Time the engine and stats panel have been polling.")
+                      tint: .secondary, hint: String(localized: "Time the engine and stats panel have been polling."))
             powerTile(label: "Energy", value: formatEnergy(c.estimatedEnergyJoules), icon: "bolt.fill",
-                      tint: .yellow, hint: "Coarse estimate: CPU percent times time times a 5 W package.")
-            powerTile(label: "Avg CPU", value: String(format: "%.1f%%", c.averageCpuPercent), icon: "cpu",
-                      tint: cpuTint(for: c.averageCpuPercent), hint: "Running mean since session start.")
-            powerTile(label: "Peak CPU", value: String(format: "%.1f%%", c.peakCpuPercent), icon: "speedometer",
-                      tint: cpuTint(for: c.peakCpuPercent), hint: "Highest single sample this session.")
+                      tint: .yellow, hint: String(localized: "Coarse estimate: CPU percent times time times a 5 W package."))
+            powerTile(label: "Avg CPU", value: String(format: "%.1f%%", locale: .current, c.averageCpuPercent), icon: "cpu",
+                      tint: cpuTint(for: c.averageCpuPercent), hint: String(localized: "Running mean since session start."))
+            powerTile(label: "Peak CPU", value: String(format: "%.1f%%", locale: .current, c.peakCpuPercent), icon: "speedometer",
+                      tint: cpuTint(for: c.peakCpuPercent), hint: String(localized: "Highest single sample this session."))
             if let pct = p.batteryPercent {
                 powerTile(label: "Battery", value: "\(pct)%", icon: batteryIcon(for: pct),
                           tint: batteryTint(for: pct),
-                          hint: [p.source, p.batteryState].compactMap { $0 }.joined(separator: ", "))
+                          hint: [p.source.map(PowerText.source), p.batteryState.map(PowerText.state)].compactMap { $0 }.joined(separator: ", "))
             } else if let source = p.source {
-                powerTile(label: "Power", value: source, icon: "powerplug.fill",
-                          tint: .green, hint: "Where this Mac is drawing power from.")
+                powerTile(label: "Power", value: PowerText.source(source), icon: "powerplug.fill",
+                          tint: .green, hint: String(localized: "Where this Mac is drawing power from."))
             }
             if abs(p.batteryDeltaPercent) >= 0.5 {
                 let delta = -p.batteryDeltaPercent
-                powerTile(label: "This session", value: String(format: "%+.0f%%", delta),
+                powerTile(label: "This session", value: String(format: "%+.0f%%", locale: .current, delta),
                           icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
                           tint: delta < 0 ? .orange : .green,
-                          hint: "Battery change since the panel opened.")
+                          hint: String(localized: "Battery change since the panel opened."))
             }
         }
     }
 
-    private func powerTile(label: String, value: String, icon: String,
+    private func powerTile(label: LocalizedStringKey, value: String, icon: String,
                            tint: Color, hint: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -640,7 +662,8 @@ struct StatsView: View {
                 Text(label)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(value)
                 .font(.title3.weight(.medium).monospacedDigit())
@@ -657,8 +680,12 @@ struct StatsView: View {
     }
 
     private func formatEnergy(_ joules: Double) -> String {
-        if joules < 1000 { return String(format: "%.0f J", joules) }
-        return String(format: "%.1f kJ", joules / 1000.0)
+        // The unit in the app's language ("Дж" in Russian).
+        let m = Measurement(value: joules, unit: UnitEnergy.joules)
+        return joules < 1000
+            ? m.formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(0))))
+            : m.converted(to: .kilojoules).formatted(.measurement(width: .abbreviated, usage: .asProvided,
+                                                                  numberFormatStyle: .number.precision(.fractionLength(1))))
     }
 
     private func cpuTint(for v: Double) -> Color {
@@ -681,15 +708,9 @@ struct StatsView: View {
         return "battery.0"
     }
 
-    private func timeShort(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
-        if s < 60 { return "\(s)s" }
-        if s < 3600 { return "\(s / 60)m" }
-        if s < 86400 { return "\(s / 3600)h \((s % 3600) / 60)m" }
-        return "\(s / 86400)d \((s % 86400) / 3600)h"
-    }
+    private func timeShort(_ seconds: TimeInterval) -> String { DurationText.short(seconds) }
 
-    private func emptyHint(_ text: String) -> some View {
+    private func emptyHint(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.hint)
@@ -804,7 +825,10 @@ struct StatTileView: View {
     var subline: String = ""
     @State private var hovering: Bool = false
     @State private var showingDetail: Bool = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The system setting or the app's own Reduce motion switch.
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         // Stays lit while its popover is open, so it is clear which tile
@@ -817,7 +841,7 @@ struct StatTileView: View {
                 HStack(alignment: .center) {
                     StatIconBadge(icon: detail.icon, tint: detail.tint, diameter: 28)
                     Spacer()
-                    Image(systemName: "chevron.right")
+                    Image(systemName: "chevron.forward")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.hint)
                         .opacity(lit ? 1 : 0)
@@ -829,16 +853,20 @@ struct StatTileView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
+                    // Two lines: long translations ("Aggiornamenti della
+                    // posizione del dito sul touchpad") keep the words that
+                    // tell the counters apart.
                     Text(detail.label)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     if !subline.isEmpty {
                         Text(subline)
                             .font(.caption2)
                             .foregroundStyle(.hint)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -865,6 +893,8 @@ struct StatTileView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(detail.label): \(detail.value)")
         .accessibilityValue(subline)
+        // Voice Control answers to the label alone, not the changing number.
+        .accessibilityInputLabels([Text(detail.label)])
         .accessibilityHint("Opens details")
         .accessibilityAddTraits(.isButton)
         // Last, so the tile's accessibility grouping above never reaches
@@ -923,7 +953,7 @@ struct StatDetailPopover: View {
 
             if let presets = detail.topPresets, !presets.isEmpty {
                 section("Top presets") {
-                    leaderboard(presets.map { (label: $0.name,
+                    leaderboard(presets.map { (label: ShippedText.t($0.name),
                                                value: "\($0.count)\u{00D7}",
                                                weight: Double($0.count)) })
                 }
@@ -960,7 +990,8 @@ struct StatDetailPopover: View {
                 Text(detail.label)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
@@ -971,7 +1002,7 @@ struct StatDetailPopover: View {
     }
 
     /// One section: a caption title over its content in a quiet well.
-    private func section<Content: View>(_ title: String,
+    private func section<Content: View>(_ title: LocalizedStringKey,
                                         @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -997,6 +1028,7 @@ struct StatDetailPopover: View {
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.tail)
+                            .help("\(row.label): \(row.value)")
                         Spacer(minLength: 4)
                         Text(row.value)
                             .font(.callout.monospacedDigit())
@@ -1038,16 +1070,12 @@ struct StatDetailPopover: View {
         .frame(height: height, alignment: .bottom)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Last 14 days")
-        .accessibilityValue("\(timeStr(total)) total across \(activeDays) active \(activeDays == 1 ? "day" : "days"), busiest day \(timeStr(peak))")
+        .accessibilityValue(activeDays == 1
+                            ? String(localized: "\(timeStr(total)) total across 1 active day, busiest day \(timeStr(peak))")
+                            : String(localized: "\(timeStr(total)) total across \(activeDays) active days, busiest day \(timeStr(peak))"))
     }
 
-    private func timeStr(_ s: TimeInterval) -> String {
-        let i = Int(s)
-        if i < 60 { return "\(i)s" }
-        if i < 3600 { return "\(i / 60)m" }
-        if i < 86400 { return "\(i / 3600)h \((i % 3600) / 60)m" }
-        return "\(i / 86400)d \((i % 86400) / 3600)h"
-    }
+    private func timeStr(_ s: TimeInterval) -> String { DurationText.short(s) }
 
     private func prettyInputLabel(_ key: String) -> String {
         StatsView.friendlyNames[key] ?? InputEvent.parse(key)?.displayName ?? key

@@ -36,9 +36,9 @@ enum SensitivityCurve: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .linear: return "Linear"
-        case .exponential: return "Smooth"
-        case .aggressive: return "Aggressive"
+        case .linear: return String(localized: "Linear")
+        case .exponential: return String(localized: "Smooth")
+        case .aggressive: return String(localized: "Aggressive")
         }
     }
 
@@ -65,9 +65,9 @@ enum MacroStepKind: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .tap: return "Tap"
-        case .down: return "Hold down"
-        case .up: return "Release"
+        case .tap: return String(localized: "Tap")
+        case .down: return String(localized: "Hold down")
+        case .up: return String(localized: "Release")
         }
     }
 }
@@ -108,8 +108,8 @@ enum SpeechDestination: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .mac: return "Mac Speakers"
-        case .controller: return "Controller Speaker"
+        case .mac: return String(localized: "Mac Speakers")
+        case .controller: return String(localized: "Controller Speaker")
         }
     }
 }
@@ -183,6 +183,26 @@ struct BindingModel: Identifiable, Codable, Hashable {
     var doubleTapOutputs: [OutputAction]?
     var doubleTapWindowMs: Int?
 
+    /// Stick gesture rows: how far out a flick has to go (0.5 to 1, default
+    /// 0.8), the most time between one flick and the next (default 600 ms),
+    /// and the longest a flick may stay out (default 400 ms; 0 for any
+    /// length). nil keeps the defaults.
+    var gestureReach: Double?
+    var gestureWindowMs: Int?
+    var gestureFlickMs: Int?
+
+    /// Stick zone rows: false makes the zone take over its stick, so only it
+    /// fires while the stick is inside it. nil or true: the stick's direction
+    /// rows keep firing too, as every zone did before 1.7 (a build that drops
+    /// the field falls back to sharing, never to taking over).
+    var zoneSharesStick: Bool?
+
+    /// Stick and trigger direction rows: fires only while the stick (or the
+    /// trigger) is also inside this region of its own, the way Second
+    /// control waits for a button. nil fires anywhere past the deadzone.
+    /// Absent in files written before 1.7.
+    var onlyInRegion: UUID?
+
     /// Short, human-readable note describing what this binding does, shown in
     /// the editor row beneath the mapping (e.g. "Jump", "Sprint / hold to run").
     /// The Smart Preset Maker fills this in per-binding from the preset profile
@@ -211,6 +231,15 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// InputSimulator). nil = off, as for every preset before 1.6; true
     /// turns it on for this row.
     var keyRepeat: Bool?
+    /// Axis rows only: the control rests at one end (a pedal, a throttle, a
+    /// lever), so the row reads its whole travel, 0 at rest to full at the
+    /// far end, instead of only the half past the middle. Scan sets it when
+    /// the control was resting at an end. nil = off, as before 1.7.
+    var fullTravel: Bool?
+    /// Tilt angle rows only: measured from where the controller was held
+    /// when the preset started or was last re-zeroed, not from lying flat,
+    /// so a normal grip reads as level. nil = from flat, as before 1.7.
+    var fromNeutral: Bool?
     /// Chords with more than one held control. A row can require up to three
     /// controls held together; `modifierInput` stays as the first of them so
     /// presets written before this field still load and still save readably.
@@ -301,6 +330,14 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// added later cannot be missed. The field-by-field version dropped
     /// whatever its list lacked (the chord's second button once, then
     /// Block original and key repeat in 1.6).
+    /// This row in another row's place: its id, so the editor keeps the
+    /// row (and keyboard and VoiceOver focus on it) while its contents change.
+    func takingPlace(of other: BindingModel) -> BindingModel {
+        var copy = self
+        copy.id = other.id
+        return copy
+    }
+
     func duplicated() -> BindingModel {
         var copy = self
         copy.id = UUID()
@@ -323,16 +360,53 @@ enum SlotInputKind: String, Codable, Hashable, CaseIterable {
 }
 
 extension JoystickMapping {
+    /// The group's name as shown. Picking This Mac's keyboard, mouse or
+    /// displays saves the English word, which also matches devices by
+    /// name, so it is translated here rather than on disk; a built-in
+    /// preset's group name goes through the shipped table.
+    var shownCustomName: String? {
+        guard let name = customName else { return nil }
+        switch name {
+        case "Keyboard": return String(localized: "Keyboard")
+        case "Mouse": return String(localized: "Mouse")
+        case "Screen": return String(localized: "Screen")
+        default: return ShippedText.t(name)
+        }
+    }
+
     /// What a group reads when that is not a game controller: the kind it
     /// is set to, or on Automatic the Mac input every row comes from.
     /// nil for a controller group. Headers and chips name this instead of
     /// whichever pad happens to be plugged in.
     var macInputName: String? {
+        guard let ordered = macInputKinds else { return nil }
+        switch ordered.joined(separator: "+") {
+        case "Keyboard": return String(localized: "Keyboard")
+        case "Mouse": return String(localized: "Mouse")
+        case "Screen": return String(localized: "Screen")
+        case "MIDI": return String(localized: "MIDI")
+        case "Keyboard+Mouse": return String(localized: "Keyboard and mouse")
+        case "Keyboard+Screen": return String(localized: "Keyboard and screen")
+        case "Keyboard+MIDI": return String(localized: "Keyboard and MIDI")
+        case "Mouse+Screen": return String(localized: "Mouse and screen")
+        case "Mouse+MIDI": return String(localized: "Mouse and MIDI")
+        case "Screen+MIDI": return String(localized: "Screen and MIDI")
+        case "Keyboard+Mouse+Screen": return String(localized: "Keyboard, mouse and screen")
+        case "Keyboard+Mouse+MIDI": return String(localized: "Keyboard, mouse and MIDI")
+        case "Keyboard+Screen+MIDI": return String(localized: "Keyboard, screen and MIDI")
+        case "Mouse+Screen+MIDI": return String(localized: "Mouse, screen and MIDI")
+        default: return String(localized: "Keyboard, mouse, screen and MIDI")
+        }
+    }
+
+    /// The Mac inputs behind `macInputName` as fixed English keys, in
+    /// display order; nil for a controller group.
+    private var macInputKinds: [String]? {
         switch inputKind {
-        case .keyboard: return "Keyboard"
-        case .mouse: return "Mouse"
-        case .screen: return "Screen"
-        case .midi: return "MIDI"
+        case .keyboard: return ["Keyboard"]
+        case .mouse: return ["Mouse"]
+        case .screen: return ["Screen"]
+        case .midi: return ["MIDI"]
         case .controller, .touchpad: return nil
         case .auto: break
         }
@@ -350,16 +424,12 @@ extension JoystickMapping {
             if !kinds.contains(kind) { kinds.append(kind) }
         }
         let ordered = ["Keyboard", "Mouse", "Screen", "MIDI"].filter(kinds.contains)
-        guard let first = ordered.first else { return nil }
-        if ordered.count == 1 { return first }
-        let rest = ordered.dropFirst().map { $0 == "MIDI" ? $0 : $0.lowercased() }
-        return rest.count == 1 ? "\(first) and \(rest[0])"
-            : "\(first), " + rest.dropLast().joined(separator: ", ") + " and \(rest.last!)"
+        return ordered.isEmpty ? nil : ordered
     }
 
     /// The symbol for `macInputName`.
     var macInputSymbol: String {
-        switch macInputName {
+        switch macInputKinds?.joined(separator: "+") {
         case "Mouse"?: return "computermouse"
         case "Screen"?: return "display"
         case "MIDI"?: return "pianokeys"
@@ -370,7 +440,9 @@ extension JoystickMapping {
 
 /// A joystick mapping group (one physical controller's bindings)
 struct JoystickMapping: Identifiable, Codable, Hashable {
-    let id: UUID
+    /// Settable in this file only, so a group pasted twice in a hand-edited
+    /// file can be given its own id on load.
+    fileprivate(set) var id: UUID
     var tag: String
     var bindings: [BindingModel]
     var isExpanded: Bool
@@ -406,6 +478,12 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
     /// exactly as they were and written back after `bindings`, so saving
     /// the preset here does not delete them.
     var unreadableRows: [JSONValue] = []
+    /// Row fields this build has no key for (written by a newer version),
+    /// by row id, written back into that row so saving here keeps them.
+    var rowExtraFields: [UUID: [String: JSONValue]] = [:]
+    /// A slot kind a newer build wrote that this one reads as Auto: written
+    /// back while the group is still Auto, so saving here keeps it.
+    var unknownInputKind: String?
 
     init(tag: String = "", bindings: [BindingModel] = [], isExpanded: Bool = true,
          customName: String? = nil, inputKind: SlotInputKind = .auto) {
@@ -438,12 +516,16 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         // does not advance the container, so looping on it never ended and
         // the file hung the app on every launch.
         var rows: [BindingModel] = []
+        // Each row's newer-build fields, beside it: keyed by id here, two
+        // rows sharing an id took each other's.
+        var rowExtras: [[String: JSONValue]] = []
         var kept: [JSONValue] = []
         var dropped = 0
         if var list = try? c.nestedUnkeyedContainer(forKey: .bindings) {
             while !list.isAtEnd {
-                if let row = try? list.decode(BindingModel.self) {
-                    rows.append(row)
+                if let read = try? list.decode(RowWithExtras.self) {
+                    rows.append(read.row)
+                    rowExtras.append(read.extras)
                 } else if let raw = try? list.decode(JSONValue.self) {
                     // A hand-written row may leave out its ids (Help invites
                     // editing the files); given new ones it reads fine.
@@ -451,6 +533,7 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
                        let data = try? JSONEncoder().encode(minted),
                        let row = try? JSONDecoder().decode(BindingModel.self, from: data) {
                         rows.append(row)
+                        rowExtras.append([:])
                     } else {
                         kept.append(raw)
                     }
@@ -466,6 +549,7 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         for i in rows.indices where !seenIDs.insert(rows[i].id).inserted {
             rows[i].id = UUID()
         }
+        for i in rows.indices where !rowExtras[i].isEmpty { rowExtraFields[rows[i].id] = rowExtras[i] }
         self.bindings = rows
         self.unreadableRows = kept
         if !kept.isEmpty { Self.keptRowsDuringDecode += kept.count }
@@ -474,6 +558,10 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         self.customName = try? c.decodeIfPresent(String.self, forKey: .customName)
         // try?: a slot kind added by a newer build must not make the preset unreadable.
         self.inputKind = (try? c.decodeIfPresent(SlotInputKind.self, forKey: .inputKind)) ?? .auto
+        if inputKind == .auto, let raw = try? c.decodeIfPresent(String.self, forKey: .inputKind),
+           SlotInputKind(rawValue: raw) == nil {
+            unknownInputKind = raw
+        }
         self.deviceFingerprint = try? c.decodeIfPresent(String.self, forKey: .deviceFingerprint)
         self.controllerModel = try? c.decodeIfPresent(String.self, forKey: .controllerModel)
         let known = Set(CodingKeys.allCases.map(\.stringValue))
@@ -489,11 +577,21 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         try c.encode(id, forKey: .id)
         try c.encode(tag, forKey: .tag)
         var list = c.nestedUnkeyedContainer(forKey: .bindings)
-        for row in bindings { try list.encode(row) }
+        for row in bindings {
+            if let extras = rowExtraFields[row.id], !extras.isEmpty {
+                try list.encode(RowWithExtras(row: row, extras: extras))
+            } else {
+                try list.encode(row)
+            }
+        }
         for raw in unreadableRows { try list.encode(raw) }
         try c.encode(isExpanded, forKey: .isExpanded)
         try c.encodeIfPresent(customName, forKey: .customName)
-        try c.encode(inputKind, forKey: .inputKind)
+        if inputKind == .auto, let raw = unknownInputKind {
+            try c.encode(raw, forKey: .inputKind)
+        } else {
+            try c.encode(inputKind, forKey: .inputKind)
+        }
         try c.encodeIfPresent(deviceFingerprint, forKey: .deviceFingerprint)
         try c.encodeIfPresent(controllerModel, forKey: .controllerModel)
         if !extraFields.isEmpty {
@@ -562,6 +660,114 @@ enum JSONValue: Codable, Hashable, Sendable {
     }
 }
 
+/// A row read with the fields this build does not know, so they can be
+/// written back. The row's own fields are its stored properties, since
+/// BindingModel's coding is synthesized.
+struct RowWithExtras: Codable {
+    var row: BindingModel
+    /// What the file held that this build does not write: unknown fields
+    /// on the row, and inside its input, outputs and macro steps (a newer
+    /// build's field one level down was dropped on save). Known keys hold
+    /// only the nested part that differs.
+    var extras: [String: JSONValue]
+
+    init(row: BindingModel, extras: [String: JSONValue]) {
+        self.row = row
+        self.extras = extras
+    }
+
+    init(from decoder: Decoder) throws {
+        row = try BindingModel(from: decoder)
+        let raw = try JSONValue(from: decoder)
+        guard case .object(let file) = raw,
+              let data = try? JSONEncoder().encode(row),
+              case .object(let written)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            extras = [:]
+            return
+        }
+        extras = Self.difference(file, written)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard !extras.isEmpty,
+              let data = try? JSONEncoder().encode(row),
+              case .object(var written)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            try row.encode(to: encoder)
+            return
+        }
+        Self.merge(extras, into: &written)
+        try JSONValue.object(written).encode(to: encoder)
+    }
+
+    /// The part of `file` that `written` lacks: keys it does not have, and
+    /// for keys both have, the nested difference of objects and of arrays
+    /// of the same length (an entry with no difference is null).
+    static func difference(_ file: [String: JSONValue], _ written: [String: JSONValue]) -> [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        for (key, value) in file {
+            guard let mine = written[key] else {
+                if value != .null { out[key] = value }
+                continue
+            }
+            if let nested = nestedDifference(value, mine) { out[key] = nested }
+        }
+        return out
+    }
+
+    private static func nestedDifference(_ file: JSONValue, _ written: JSONValue) -> JSONValue? {
+        switch (file, written) {
+        case (.object(let a), .object(let b)):
+            let d = difference(a, b)
+            return d.isEmpty ? nil : .object(d)
+        case (.array(let a), .array(let b)) where a.count == b.count:
+            let parts = zip(a, b).map { nestedDifference($0, $1) ?? .null }
+            return parts.contains(where: { $0 != .null }) ? .array(parts) : nil
+        default:
+            return nil
+        }
+    }
+
+    static func merge(_ extras: [String: JSONValue], into written: inout [String: JSONValue]) {
+        for (key, value) in extras {
+            guard let mine = written[key] else { written[key] = value; continue }
+            written[key] = merged(value, into: mine)
+        }
+    }
+
+    private static func merged(_ extra: JSONValue, into mine: JSONValue) -> JSONValue {
+        switch (extra, mine) {
+        case (.object(let e), .object(var m)):
+            merge(e, into: &m)
+            return .object(m)
+        case (.array(let e), .array(let m)) where e.count == m.count:
+            return .array(zip(e, m).map { $0 == .null ? $1 : merged($0, into: $1) })
+        default:
+            return mine
+        }
+    }
+}
+
+extension JSONValue {
+    /// The fields of a keyed container this build has no key for, kept so
+    /// a save here writes them back instead of deleting them.
+    static func unknownFields(from decoder: Decoder, known: Set<String>) -> [String: JSONValue] {
+        var out: [String: JSONValue] = [:]
+        if let all = try? decoder.container(keyedBy: AnyCodingKey.self) {
+            for key in all.allKeys where !known.contains(key.stringValue) {
+                if let value = try? all.decode(JSONValue.self, forKey: key) { out[key.stringValue] = value }
+            }
+        }
+        return out
+    }
+
+    /// Writes kept fields back beside the ones this build knows.
+    static func encodeUnknownFields(_ extras: [String: JSONValue], to encoder: Encoder) throws {
+        guard !extras.isEmpty else { return }
+        var c = encoder.container(keyedBy: AnyCodingKey.self)
+        for (key, value) in extras { try c.encode(value, forKey: AnyCodingKey(key)) }
+    }
+}
+
 /// A coding key for field names not known at compile time.
 struct AnyCodingKey: CodingKey {
     var stringValue: String
@@ -620,15 +826,35 @@ struct PresetAutomation: Codable, Hashable {
     /// once (Copy and Cut, a page and a tab). Optional so older files and
     /// presets that never set it are unchanged; nil is off.
     var dpadOneDirection: Bool?
+
+    /// Automation fields this build has no key for (written by a newer
+    /// version), kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
 }
 
 extension PresetAutomation {
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case launchAppPath, launchURL, confineCursor, confineBufferPx
         case autoRecenterCursor, autoRecenterIntervalMs, hideCursorWhileActive
         case sensitivityMultiplier, autoActivateBundleIDs
         case scrollMultiplier
         case dpadOneDirection
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(launchAppPath, forKey: .launchAppPath)
+        try c.encode(launchURL, forKey: .launchURL)
+        try c.encode(confineCursor, forKey: .confineCursor)
+        try c.encode(confineBufferPx, forKey: .confineBufferPx)
+        try c.encode(autoRecenterCursor, forKey: .autoRecenterCursor)
+        try c.encode(autoRecenterIntervalMs, forKey: .autoRecenterIntervalMs)
+        try c.encode(hideCursorWhileActive, forKey: .hideCursorWhileActive)
+        try c.encode(sensitivityMultiplier, forKey: .sensitivityMultiplier)
+        try c.encode(scrollMultiplier, forKey: .scrollMultiplier)
+        try c.encodeIfPresent(autoActivateBundleIDs, forKey: .autoActivateBundleIDs)
+        try c.encodeIfPresent(dpadOneDirection, forKey: .dpadOneDirection)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 
     /// Lenient decode: each field falls back to its default when missing.
@@ -651,6 +877,7 @@ extension PresetAutomation {
         a.scrollMultiplier = try c.decodeIfPresent(Double.self, forKey: .scrollMultiplier) ?? a.scrollMultiplier
         a.autoActivateBundleIDs = try c.decodeIfPresent([String].self, forKey: .autoActivateBundleIDs) ?? a.autoActivateBundleIDs
         a.dpadOneDirection = try c.decodeIfPresent(Bool.self, forKey: .dpadOneDirection)
+        a.extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = a
     }
 }
@@ -684,7 +911,7 @@ struct DriveConfig: Codable, Hashable {
     enum SteerMode: String, Codable, CaseIterable, Identifiable {
         case mouse, keys
         var id: String { rawValue }
-        var displayName: String { self == .mouse ? "Mouse (analog)" : "Keys (A / D)" }
+        var displayName: String { self == .mouse ? String(localized: "Mouse (analog)") : String(localized: "Keys (A / D)") }
     }
     /// Steering output: analog mouse-X (smooth) or left/right keys (pulsed).
     var steerMode: SteerMode = .mouse
@@ -727,15 +954,48 @@ struct DriveConfig: Codable, Hashable {
     var reverseTapCount: Int = 2
     var reverseWindowMs: Int = 700
     var gestureThreshold: Double = 0.85
+
+    /// Drive mode fields this build has no key for (written by a newer
+    /// version), kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
 }
 
 extension DriveConfig {
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case enabled, slot, steerAxis, throttleAxis, invertSteer, invertThrottle
         case deadzone, steerMode, steerMouseSpeed, steerLeftKey, steerRightKey
         case accelKey, brakeKey, reverseKey, throttleCurve, pwmPeriodTicks
         case reverseGestureEnabled, reverseTapCount, reverseWindowMs, gestureThreshold
         case steerCurve, throttleIsTrigger, coastBrake, coastBrakeStrength
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(slot, forKey: .slot)
+        try c.encode(steerAxis, forKey: .steerAxis)
+        try c.encode(throttleAxis, forKey: .throttleAxis)
+        try c.encode(invertSteer, forKey: .invertSteer)
+        try c.encode(invertThrottle, forKey: .invertThrottle)
+        try c.encode(deadzone, forKey: .deadzone)
+        try c.encode(steerMode, forKey: .steerMode)
+        try c.encode(steerMouseSpeed, forKey: .steerMouseSpeed)
+        try c.encode(steerLeftKey, forKey: .steerLeftKey)
+        try c.encode(steerRightKey, forKey: .steerRightKey)
+        try c.encode(accelKey, forKey: .accelKey)
+        try c.encode(brakeKey, forKey: .brakeKey)
+        try c.encode(reverseKey, forKey: .reverseKey)
+        try c.encode(throttleCurve, forKey: .throttleCurve)
+        try c.encode(pwmPeriodTicks, forKey: .pwmPeriodTicks)
+        try c.encode(reverseGestureEnabled, forKey: .reverseGestureEnabled)
+        try c.encode(reverseTapCount, forKey: .reverseTapCount)
+        try c.encode(reverseWindowMs, forKey: .reverseWindowMs)
+        try c.encode(gestureThreshold, forKey: .gestureThreshold)
+        try c.encode(steerCurve, forKey: .steerCurve)
+        try c.encode(throttleIsTrigger, forKey: .throttleIsTrigger)
+        try c.encode(coastBrake, forKey: .coastBrake)
+        try c.encode(coastBrakeStrength, forKey: .coastBrakeStrength)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 
     /// Lenient decode: every field falls back to its default when missing.
@@ -772,6 +1032,7 @@ extension DriveConfig {
         d.throttleIsTrigger = try c.decodeIfPresent(Bool.self, forKey: .throttleIsTrigger) ?? d.throttleIsTrigger
         d.coastBrake = try c.decodeIfPresent(Bool.self, forKey: .coastBrake) ?? d.coastBrake
         d.coastBrakeStrength = try c.decodeIfPresent(Double.self, forKey: .coastBrakeStrength) ?? d.coastBrakeStrength
+        d.extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = d
     }
 }
@@ -902,7 +1163,10 @@ struct Preset: Identifiable, Codable, Hashable {
     /// 2 from 1.6: a file with less was written before 1.6, so an import
     /// gets the 1.6 upgrades and the Switch and 8BitDo row check. 1.5
     /// reads a newer version as far as it understands it.
-    static let currentFormatVersion = 2
+    /// 3 from 1.7: a stick zone takes over its stick's direction rows unless
+    /// it shares the stick; zone rows in a file with less keep sharing, so a
+    /// 1.6 preset behaves as it did.
+    static let currentFormatVersion = 3
 
     /// Custom Codable init so older preset files without `notes`,
     /// `lightBarColor`, or `lightBarBrightness` keys still decode cleanly
@@ -934,9 +1198,19 @@ struct Preset: Identifiable, Codable, Hashable {
         // per-row state by id alone, so a slot copied by hand shared its
         // toggles and held keys with the slot it came from.
         var seenRowIDs = Set<UUID>()
+        // Group ids too: the views tell groups apart by id.
+        var seenGroupIDs = Set<UUID>()
+        for g in groups.indices where !seenGroupIDs.insert(groups[g].id).inserted {
+            groups[g].id = UUID()
+        }
         for g in groups.indices {
             for r in groups[g].bindings.indices where !seenRowIDs.insert(groups[g].bindings[r].id).inserted {
+                // The row's newer-build fields follow it to its new id.
+                let old = groups[g].bindings[r].id
                 groups[g].bindings[r].id = UUID()
+                if let extras = groups[g].rowExtraFields.removeValue(forKey: old) {
+                    groups[g].rowExtraFields[groups[g].bindings[r].id] = extras
+                }
             }
         }
         self.joysticks = groups
@@ -978,9 +1252,42 @@ struct Preset: Identifiable, Codable, Hashable {
         self.driveConfig = (try? c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)) ?? nil
         self.activateHotKey = (try? c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)) ?? nil
         self.sortOrder = (try? c.decodeIfPresent(Int.self, forKey: .sortOrder)) ?? nil
-        self.touchpadRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .touchpadRegions) ?? []
-        self.cursorRegions = try c.decodeIfPresent([TouchpadRegion].self, forKey: .cursorRegions) ?? []
-        self.stickRegions = try c.decodeIfPresent([String: [TouchpadRegion]].self, forKey: .stickRegions) ?? [:]
+        // One region at a time: a region missing a field drops only itself,
+        // not the whole preset.
+        func regions(_ key: CodingKeys) -> [TouchpadRegion] {
+            guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return [] }
+            var out: [TouchpadRegion] = []
+            while !list.isAtEnd {
+                if let r = try? list.decode(TouchpadRegion.self) { out.append(r) }
+                else if (try? list.decode(JSONValue.self)) == nil { break }
+            }
+            return out
+        }
+        self.touchpadRegions = regions(.touchpadRegions)
+        self.cursorRegions = regions(.cursorRegions)
+        if let byStick = try? c.nestedContainer(keyedBy: AnyKey.self, forKey: .stickRegions) {
+            var out: [String: [TouchpadRegion]] = [:]
+            for k in byStick.allKeys {
+                guard var list = try? byStick.nestedUnkeyedContainer(forKey: k) else { continue }
+                var rs: [TouchpadRegion] = []
+                while !list.isAtEnd {
+                    if let r = try? list.decode(TouchpadRegion.self) { rs.append(r) }
+                    else if (try? list.decode(JSONValue.self)) == nil { break }
+                }
+                out[k.stringValue] = rs
+            }
+            self.stickRegions = out
+        } else {
+            self.stickRegions = [:]
+        }
+        if version < 3 {
+            for g in joysticks.indices {
+                for r in joysticks[g].bindings.indices where joysticks[g].bindings[r].input.type == .stickRegion
+                    && joysticks[g].bindings[r].zoneSharesStick == nil {
+                    joysticks[g].bindings[r].zoneSharesStick = true
+                }
+            }
+        }
         // try?: a family written by a newer build must not stop the preset loading.
         self.buttonFamily = (try? c.decodeIfPresent(FaceLetters.self, forKey: .buttonFamily)) ?? nil
         // Kept as written, so saving here does not drop it; a family picked
@@ -1075,7 +1382,10 @@ struct Preset: Identifiable, Codable, Hashable {
         }
         touchpadRegions = TouchpadService.shared.allRegions()
         cursorRegions = CursorRegionService.shared.allRegions()
-        var keyed: [String: [TouchpadRegion]] = [:]
+        // Keys the service does not load (a newer build's, a hand-edited
+        // file's) stay as they were, and empty lists are left out.
+        let held = Set(StickRegionService.shared.regionsByStick.keys.map { "\($0)" })
+        var keyed = stickRegions.filter { !held.contains($0.key) && !$0.value.isEmpty }
         for (i, list) in StickRegionService.shared.regionsByStick where !list.isEmpty { keyed["\(i)"] = list }
         stickRegions = keyed
     }
@@ -1090,6 +1400,27 @@ struct Preset: Identifiable, Codable, Hashable {
             if let id = b.input.stickRegionID { st.insert(id) }
         } }
         return (t, c, st)
+    }
+
+    /// Hands this preset the app-wide zones (kept before 1.5) its rows refer
+    /// to and it does not carry yet: a backup from before 1.5 restored
+    /// after the first-launch migration ran. True when any was added.
+    mutating func adoptLegacyRegions(touchpad: [TouchpadRegion], cursor: [TouchpadRegion],
+                                     stick: [Int: [TouchpadRegion]]) -> Bool {
+        let refs = referencedRegionIDs
+        var changed = false
+        for r in touchpad where refs.touchpad.contains(r.id) && !touchpadRegions.contains(where: { $0.id == r.id }) {
+            touchpadRegions.append(r); changed = true
+        }
+        for r in cursor where refs.cursor.contains(r.id) && !cursorRegions.contains(where: { $0.id == r.id }) {
+            cursorRegions.append(r); changed = true
+        }
+        for (index, zones) in stick {
+            for r in zones where refs.stick.contains(r.id) && !(stickRegions["\(index)"] ?? []).contains(where: { $0.id == r.id }) {
+                stickRegions["\(index)", default: []].append(r); changed = true
+            }
+        }
+        return changed
     }
 
     static func generateFilename() -> String {
@@ -1169,6 +1500,7 @@ struct Preset: Identifiable, Codable, Hashable {
         case .extMouse:        return 8
         case .cursorRegion:    return 9
         case .stickRegion:     return 10
+        case .stickGesture:    return 10
         case .midi:            return 11
         case .chassisTap:      return 12
         }
@@ -1204,6 +1536,9 @@ extension OutputAction {
     /// and a few keys opens any app.
     var opensSomething: Bool {
         if type == .typeText { return true }
+        // The Spotlight and Launchpad keys open what their System Functions
+        // open, so they count the same.
+        if type == .key, let code = keyCode, code == KeyCodeMap.spotlightKeyCode || code == 303 { return true }
         // A light bar color (and everything else outside System Functions)
         // opens nothing.
         guard type == .systemAction, let kind = systemActionKind else { return false }
@@ -1229,12 +1564,24 @@ extension OutputAction {
             .trimmingCharacters(in: .whitespaces)
         switch type {
         case .typeText:
-            return detail.isEmpty ? "Types text" : "Types text: \(detail)"
+            return detail.isEmpty ? String(localized: "Types text") : String(localized: "Types text: \(detail)")
         case .systemAction where systemActionKind == .openURL:
-            let host = URL(string: (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))?.host ?? "no host"
-            return "Opens website on \(host): \(detail)"
+            // Said for what the link really does: a file:// or shortcuts://
+            // link read as "Opens website", and was left in.
+            let url = URL(string: (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+            guard let url, let scheme = url.scheme?.lowercased(), !scheme.isEmpty else {
+                return String(localized: "A link with no scheme, which opens nothing: \(detail)")
+            }
+            if !SystemActionService.opensLink(url) {
+                return String(localized: "Not opened, \(scheme): links are blocked: \(detail)")
+            }
+            if scheme == "http" || scheme == "https" {
+                let host = url.host ?? String(localized: "no host")
+                return String(localized: "Opens website on \(host): \(detail)")
+            }
+            return String(localized: "Opens a \(scheme): link: \(detail)")
         default:
-            let what = type == .systemAction ? (systemActionKind?.displayName ?? "Action") : displayName
+            let what = type == .systemAction ? (systemActionKind?.displayName ?? String(localized: "Action")) : displayName
             return detail.isEmpty ? what : "\(what): \(detail)"
         }
     }
@@ -1245,11 +1592,14 @@ extension OutputAction {
 enum SpotlightChord {
     static let command: Set<Int> = [227, 231]
     static let space = 44
-    static func inOutputs(_ outputs: [OutputAction]) -> Bool {
+    /// `spotlightKey: false` counts only a real Command Space chord.
+    static func inOutputs(_ outputs: [OutputAction], spotlightKey: Bool = true) -> Bool {
         let keys = Set(outputs.filter { $0.type == .key }.compactMap(\.keyCode))
-        return keys.contains(space) && !keys.isDisjoint(with: command)
+        return (keys.contains(space) && !keys.isDisjoint(with: command)) || (spotlightKey && keys.contains(KeyCodeMap.spotlightKeyCode))
     }
-    static func inMacro(_ steps: [MacroStep]) -> Bool {
+    static func inMacro(_ steps: [MacroStep], spotlightKey: Bool = true) -> Bool {
+        // The Spotlight key alone opens it too.
+        if spotlightKey, steps.contains(where: { $0.action.type == .key && $0.action.keyCode == KeyCodeMap.spotlightKeyCode }) { return true }
         let commandStep = steps.contains { $0.action.type == .key && command.contains($0.action.keyCode ?? -1) }
         return steps.contains { step in
             step.action.type == .key && step.action.keyCode == space
@@ -1280,7 +1630,8 @@ extension Preset {
     /// actions that work by posting a key), any Mac keyboard or mouse
     /// input, which is read through the same permission, and drive mode.
     var needsAccessibility: Bool {
-        let quiet: Set<SystemActionKind> = [.openApp, .openURL, .runShortcut, .volumeUp, .volumeDown,
+        // Mute writes the audio device directly, as the volume steps do.
+        let quiet: Set<SystemActionKind> = [.openApp, .openURL, .runShortcut, .volumeUp, .volumeDown, .muteToggle,
                                             .missionControl, .launchpad]
         let postsEvents = allOutputs.contains { output in
             switch output.type {
@@ -1310,11 +1661,16 @@ extension Preset {
     static let importTextLimit = 10_000
 
     /// Whether any row sends the Spotlight chord (row outputs or a macro).
-    var hasSpotlightChord: Bool {
+    var hasSpotlightChord: Bool { opensSpotlight(spotlightKey: true) }
+    /// Only Command Space, for the review line that names those keys; the
+    /// Spotlight key itself is listed with the other opening outputs.
+    var hasCommandSpaceChord: Bool { opensSpotlight(spotlightKey: false) }
+
+    private func opensSpotlight(spotlightKey k: Bool) -> Bool {
         joysticks.contains { g in
             g.bindings.contains { r in
-                SpotlightChord.inOutputs(r.outputs) || SpotlightChord.inOutputs(r.holdOutputs ?? [])
-                    || SpotlightChord.inOutputs(r.doubleTapOutputs ?? []) || SpotlightChord.inMacro(r.macroSteps ?? [])
+                SpotlightChord.inOutputs(r.outputs, spotlightKey: k) || SpotlightChord.inOutputs(r.holdOutputs ?? [], spotlightKey: k)
+                    || SpotlightChord.inOutputs(r.doubleTapOutputs ?? [], spotlightKey: k) || SpotlightChord.inMacro(r.macroSteps ?? [], spotlightKey: k)
             }
         }
     }
@@ -1325,12 +1681,18 @@ extension Preset {
             g.bindings.compactMap { r -> String? in
                 guard let steps = r.macroSteps, !steps.isEmpty else { return nil }
                 let list = steps.map { step -> String in
-                    let mods = (step.modifiers ?? []).map { KeyCodeMap.name(for: $0) }
-                    let name = step.action.type == .typeText || step.action.type == .systemAction
-                        ? step.action.importReviewLine : step.action.displayName
-                    return (mods + [name]).joined(separator: " ")
+                    if step.action.type == .typeText || step.action.type == .systemAction {
+                        let mods = (step.modifiers ?? []).map { KeyCodeMap.name(for: $0) }
+                        return (mods + [step.action.importReviewLine]).joined(separator: " ")
+                    }
+                    // Named as the engine sends the chord: Command Z is Undo
+                    // on every layout.
+                    return OutputAction.names(step.pressedActions).joined(separator: " ")
                 }
-                return "Macro on \(r.input.displayName), \(steps.count) steps: " + list.joined(separator: ", ")
+                let inputName = r.input.displayName
+                let heading = steps.count == 1 ? String(localized: "Macro on \(inputName), 1 step: ")
+                    : String(localized: "Macro on \(inputName), \(steps.count) steps: ")
+                return heading + list.joined(separator: ", ")
             }
         }
     }
@@ -1338,16 +1700,17 @@ extension Preset {
     /// What the preset does to the pointer and drive mode, for the review.
     var importPointerLine: String? {
         var parts: [String] = []
-        if automation.hideCursorWhileActive { parts.append("hides the pointer") }
-        if automation.confineCursor { parts.append("keeps the pointer away from the screen edges") }
+        if automation.hideCursorWhileActive { parts.append(String(localized: "hides the pointer")) }
+        if automation.confineCursor { parts.append(String(localized: "keeps the pointer away from the screen edges")) }
         if automation.autoRecenterCursor {
-            parts.append("moves the pointer to the middle of the screen every \(Int(automation.autoRecenterIntervalMs)) ms")
+            parts.append(String(localized: "moves the pointer to the middle of the screen every \(Int(automation.autoRecenterIntervalMs)) ms"))
         }
-        if automation.sensitivityMultiplier != 1 { parts.append(String(format: "sets pointer speed to %.2fx", automation.sensitivityMultiplier)) }
-        if automation.scrollMultiplier != 1 { parts.append(String(format: "sets scroll speed to %.2fx", automation.scrollMultiplier)) }
-        if driveConfig?.enabled == true { parts.append("turns on drive mode, which holds keys from a stick") }
+        if automation.sensitivityMultiplier != 1 { parts.append(String(format: String(localized: "sets pointer speed to %.2fx"), locale: .current, automation.sensitivityMultiplier)) }
+        if automation.scrollMultiplier != 1 { parts.append(String(format: String(localized: "sets scroll speed to %.2fx"), locale: .current, automation.scrollMultiplier)) }
+        if driveConfig?.enabled == true { parts.append(String(localized: "turns on drive mode, which holds keys from a stick")) }
         guard !parts.isEmpty else { return nil }
-        return "While running it " + parts.joined(separator: ", ") + "."
+        let list = LocalizedList.and(parts)
+        return String(localized: "While running it \(list).")
     }
 
     /// A preset from a file, made safe to add to the library: never marked
@@ -1355,6 +1718,15 @@ extension Preset {
     /// app comes to the front, no place in the sidebar order yet, and,
     /// when asked, without outputs that open apps, URLs, or Shortcuts.
     /// The preset's own hotkey is checked against the library by the store.
+    /// For a file that leaves this Mac (Share, Export): a screen region's
+    /// pinned display carries the monitor's serial and name, which match no
+    /// other Mac's screens, so the region applies to every display instead.
+    func withoutDisplayPins() -> Preset {
+        var p = self
+        p.cursorRegions = p.cursorRegions.map { var r = $0; r.display = nil; return r }
+        return p
+    }
+
     func sanitizedForImport(removingOpeners: Bool, removingPointerSettings: Bool = false) -> Preset {
         var p = self
         // Typed text has no use past a few pages, and posting a huge one
@@ -1404,9 +1776,15 @@ extension Preset {
         for g in p.joysticks.indices {
             p.joysticks[g].unreadableRows = []
             p.joysticks[g].extraFields = [:]
+            p.joysticks[g].rowExtraFields = [:]
         }
         p.unreadableJoysticks = []
         p.extraFields = [:]
+        p.automation.extraFields = [:]
+        p.driveConfig?.extraFields = [:]
+        p.touchpadRegions = p.touchpadRegions.map { var r = $0; r.extraFields = [:]; return r }
+        p.cursorRegions = p.cursorRegions.map { var r = $0; r.extraFields = [:]; return r }
+        p.stickRegions = p.stickRegions.mapValues { $0.map { var r = $0; r.extraFields = [:]; return r } }
         if removingOpeners {
             for g in p.joysticks.indices {
                 for r in p.joysticks[g].bindings.indices {
@@ -1418,9 +1796,10 @@ extension Preset {
                     row.outputs = noSpotlight(row.outputs.filter { !$0.opensSomething })
                     row.holdOutputs = row.holdOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
                     row.doubleTapOutputs = row.doubleTapOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
-                    row.macroSteps?.removeAll(where: { $0.action.opensSomething })
-                    // A macro that opens Spotlight and types goes whole.
+                    // A macro that opens Spotlight and types goes whole,
+                    // checked before its Spotlight key step is taken out.
                     if let steps = row.macroSteps, SpotlightChord.inMacro(steps) { row.macroSteps = nil }
+                    row.macroSteps?.removeAll(where: { $0.action.opensSomething })
                     // No steps left is no macro: an empty list pressed the
                     // row's output and never let it go.
                     if row.macroSteps?.isEmpty == true { row.macroSteps = nil }
@@ -1447,7 +1826,7 @@ extension Preset {
             return nil
         }
 
-        let name = json["name"] as? String ?? "Imported Preset"
+        let name = json["name"] as? String ?? String(localized: "Imported Preset").withoutRTLMark
         let tag = json["tag"] as? String ?? "No tag"
 
         var joystickMappings: [JoystickMapping] = []
@@ -1503,6 +1882,9 @@ enum ControllerType: String, CaseIterable, Identifiable {
     case generic = "Generic"
 
     var id: String { rawValue }
+
+    /// The name shown for the type; the brand names read the same everywhere.
+    var displayName: String { self == .generic ? String(localized: "Generic") : rawValue }
 
     /// The family a preset converted to this type names its buttons in.
     var buttonFamily: FaceLetters? {
@@ -1743,6 +2125,7 @@ extension InputEvent {
         e.touchpadSurface = e.touchpadSurface?.clamped(0...1)
         e.midiChannel = e.midiChannel?.clamped(1...16)
         e.midiTurnStep = e.midiTurnStep?.clamped(1...32)
+        if let steps = e.gestureSteps { e.gestureSteps = Array(steps.prefix(GestureStep.maxSteps)) }
         return e
     }
 }
@@ -1755,6 +2138,11 @@ extension TouchpadRegion {
         if r.minX > r.maxX { swap(&r.minX, &r.maxX) }
         if r.minY > r.maxY { swap(&r.minY, &r.maxY) }
         r.colorIndex = r.colorIndex.clamped(0...1000)
+        if let ring = r.ring {
+            r.ring = ring.clamped()
+            let box = r.ring!.boundingBox
+            r.minX = box.minX; r.maxX = box.maxX; r.minY = box.minY; r.maxY = box.maxY
+        }
         return r
     }
 }
@@ -1804,6 +2192,9 @@ extension Preset {
             b.hapticDurationMs = b.hapticDurationMs?.clamped(0...10_000)
             b.holdThresholdMs = b.holdThresholdMs?.clamped(50...5000)
             b.doubleTapWindowMs = b.doubleTapWindowMs?.clamped(100...2000)
+            b.gestureReach = b.gestureReach.map { finite($0, 0.3...1, 0.8) }
+            b.gestureWindowMs = b.gestureWindowMs?.clamped(150...3000)
+            b.gestureFlickMs = b.gestureFlickMs?.clamped(0...3000)
             b.outputs = b.outputs.map { $0.clampedValues() }
             b.holdOutputs = b.holdOutputs?.map { $0.clampedValues() }
             b.doubleTapOutputs = b.doubleTapOutputs?.map { $0.clampedValues() }
@@ -1845,4 +2236,114 @@ extension Preset {
             driveConfig = d
         }
     }
+}
+
+/// A coding key for a dictionary's own keys (stick region lists).
+private struct AnyKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
+/// Ready-made motion rows, added from any motion row's Set Up Full Gyro
+/// menu, for someone who does not know which channel does what.
+enum MotionSetup: CaseIterable, Identifiable {
+    /// The pointer follows the controller (the shipped Gyro Aim rows).
+    case gyroAim
+    /// Tilt to move: the arrow keys follow how far the controller leans.
+    case tilt
+    /// One row per jab, shake or lift, with the output left to choose.
+    case shake
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .gyroAim: return String(localized: "Gyro Aim (moves the pointer)")
+        case .tilt: return String(localized: "Tilt to Move (arrow keys)")
+        case .shake: return String(localized: "Shake and Jab Rows (choose the outputs)")
+        }
+    }
+
+    /// Section names stay English on disk, as every built-in heading does.
+    var section: String {
+        switch self {
+        case .gyroAim: return "Gyro aim"
+        case .tilt: return "Tilt"
+        case .shake: return "Shake"
+        }
+    }
+
+    var rows: [BindingModel] {
+        var rows: [BindingModel]
+        var notes: [String]
+        switch self {
+        case .gyroAim:
+            // As the Gyro Aim preset, checked by hand on a DualSense: a
+            // positive gyro X is nose up and screen Y grows downward, so the
+            // pitch rows are crossed.
+            rows = [
+                BindingModel(input: .motion(.gyroY, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .positive, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroY, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .horizontal, mouseDirection: .negative, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroX, direction: .positive),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .negative, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+                BindingModel(input: .motion(.gyroX, direction: .negative),
+                             outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
+                             deadzone: 0.05, variableSensitivity: true),
+            ]
+            notes = [String(localized: "Tilt right: aim right"), String(localized: "Tilt left: aim left"),
+                     String(localized: "Tilt up: aim up"), String(localized: "Tilt down: aim down")]
+        case .tilt:
+            // Angles, so a lean holds the key for as long as it lasts.
+            rows = [
+                // Roll reads 1 at half a turn and pitch at a quarter, so the
+                // roll rows' 0.075 is the same 13.5 degree lean.
+                BindingModel(input: .motion(.rollAngle, direction: .positive),
+                             outputs: [OutputAction(type: .key, keyCode: 79)], deadzone: 0.075),
+                BindingModel(input: .motion(.rollAngle, direction: .negative),
+                             outputs: [OutputAction(type: .key, keyCode: 80)], deadzone: 0.075),
+                BindingModel(input: .motion(.pitchAngle, direction: .positive),
+                             outputs: [OutputAction(type: .key, keyCode: 82)], deadzone: 0.15),
+                BindingModel(input: .motion(.pitchAngle, direction: .negative),
+                             outputs: [OutputAction(type: .key, keyCode: 81)], deadzone: 0.15),
+            ]
+            notes = [String(localized: "Lean right"), String(localized: "Lean left"),
+                     String(localized: "Lean back (nose up)"), String(localized: "Lean forward (nose down)")]
+        case .shake:
+            rows = [
+                BindingModel(input: .motion(.accelX, direction: .positive), outputs: []),
+                BindingModel(input: .motion(.accelX, direction: .negative), outputs: []),
+                BindingModel(input: .motion(.accelY, direction: .positive), outputs: []),
+                BindingModel(input: .motion(.accelY, direction: .negative), outputs: []),
+                BindingModel(input: .motion(.accelZ, direction: .positive), outputs: []),
+                BindingModel(input: .motion(.accelZ, direction: .negative), outputs: []),
+            ]
+            // Movement reads against its direction on these channels, as
+            // GameController reports it (the force holding the pad up, less
+            // gravity): a jab right starts on accel X minus, and the 0.2 s
+            // lockout then keeps the slow-down from firing the other row.
+            notes = [String(localized: "Jab left"), String(localized: "Jab right"),
+                     String(localized: "Pull back"), String(localized: "Push forward"),
+                     String(localized: "Push down"), String(localized: "Lift up")]
+        }
+        for i in rows.indices {
+            rows[i].note = notes[i]
+            rows[i].section = section
+            // A lean is measured from the grip, not from lying flat.
+            if self == .tilt { rows[i].fromNeutral = true }
+        }
+        return rows
+    }
+}
+
+/// The editor's handler for a row's Set Up Full Gyro menu: the row it was
+/// picked on, and which setup.
+enum MotionSetupAction {
+    @MainActor static var perform: ((UUID, MotionSetup) -> Void)?
 }

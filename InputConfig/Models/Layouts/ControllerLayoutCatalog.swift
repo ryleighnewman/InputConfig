@@ -45,6 +45,7 @@ enum ControllerLayoutCatalog {
         .logitechExtreme3D,
         .thrustmasterT16000M,
         .logitechG29,
+        .logitechXboxWheel,
         .logitechWheel,
         .thrustmasterT300,
         .unrecognizedHID,
@@ -63,7 +64,7 @@ enum ControllerLayoutCatalog {
         .eightBitDoUltimate, .eightBitDoPro3, .eightBitDoMicro, .eightBitDoLite, .eightBitDoLiteSE, .eightBitDoArcade,
         .backboneOne, .razerKishiV2, .gameSirG8,
         .arcadeStick, .leverless, .logitechExtreme3D, .thrustmasterT16000M,
-        .logitechWheel, .thrustmasterT300,
+        .logitechWheel, .thrustmasterT300, .logitechXboxWheel,
     ]
 
     /// The hidden setting that shows experimental drawings in a Release

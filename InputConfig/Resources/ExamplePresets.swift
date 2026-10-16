@@ -83,6 +83,7 @@ struct ExamplePresets {
         "Tap the Mac":            GroupName.showcase,
         "Touchpad Zones":         GroupName.showcase,
         "Cursor Regions":         GroupName.showcase,
+        "Stick Zones & Gestures": GroupName.showcase,
         "Hold & Double-Tap":      GroupName.showcase,
         "Keyboard & Mouse Input": GroupName.showcase,
         "Shortcuts & Apps":       GroupName.showcase,
@@ -158,18 +159,19 @@ struct ExamplePresets {
         "Presentation Remote": "Keynote, PowerPoint, and Google Slides. A goes to the next slide, B to the previous one, X starts or advances with Space, Y blanks the screen (B in Keynote and PowerPoint). Left stick moves the pointer for a laser-pointer effect, bumpers click. Back is Escape to leave the show, Start sends F5 to start a PowerPoint show.",
         "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows cover the buttons: handbrake, horn, boost, reset, gears, camera, and rewind. On an Access Controller's base profile only Cross (the center button), Circle (socket 5) and Options (socket 7) send; give the other sockets buttons in a profile made on a PS5. Change the letters on each row to match the game's own key list.",
         "Racing Game": "Any racing game that takes keyboard input. Left stick steers with A and D, right trigger is the throttle (W), left trigger the brake (S). A is the handbrake, B shifts up with Shift, X sends E, Y sends R for reset, bumpers send Q and F. Right stick looks around. Back is Tab, Start is Escape.\n\nChange the letters on each row to match the game's own key list; most racers let you rebind.",
-        "Spoken Feedback": "A showcase for Speak. Each face button types its letter and says a phrase out loud. Speak is an option on every row; the voice is chosen in Settings, Accessibility (System voice follows the Mac's Spoken Content setting).",
+        "Spoken Feedback": "A showcase for Speak. Each face button types its letter and says a phrase out loud. Speak is an option on every row; the voice is chosen in Settings, General, Spoken feedback voice (System voice follows the Mac's Spoken Content setting).",
         "Stacked Outputs": "A showcase for several outputs on one row, fired together. A presses Space, right-clicks, plays a MIDI note, speaks, and vibrates, all at once. B presses Command and 4 together, which is a stacked shortcut. Add outputs to any row with the plus button; for a sequence with delays, use a macro instead.",
         "Steam Controller": "The original Steam Controller from 2015, wired or with its dongle (the 2026 model has its own preset). The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
         "Steam Controller (2026)": "Valve's 2026 Steam Controller, on a cable, over Bluetooth, or through its Puck (experimental). The right trackpad moves the pointer like a Mac trackpad, and a tap or a press on it clicks. The right trigger clicks, the left trigger right-clicks. The left trackpad and the right stick scroll. A is Return, B is Escape, X is Tab, Y is Space. The bumpers send Command [ and Command ], the Steam button opens Spotlight, and the back buttons L4 and R4 hold Shift and Option. Quit Steam first, since it takes the controller over while it runs.",
         "Access Controller": "Built for the PlayStation Access Controller. Out of the box its base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick: the stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight. The other rows wait for Square, Triangle, L1, R1, L2, R2 and Create, which reach the Mac once a profile made on a PS5 gives them to sockets: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control. The PS button is kept by macOS and never reaches an app, so nothing is bound to it. If your profile puts buttons elsewhere, Scan a row and press the socket you mean.\n\nTo stop everything at once, hold socket 7 (Options) for the emergency stop's hold time; the usual Create hold cannot reach the Mac from the base profile. Settings, General, Emergency stop sets the time.\n\nIf the pointer drifts, raise the Deadzone in the stick rows' Options (Adjust live shows the stick as you set it). Change Speed on those rows if it feels too fast or slow.",
-        "Touchpad Zones": "The DualSense or DualShock 4 touchpad divided into four zones, each a soft button: touch the top-left corner to undo, top-right to redo, bottom-left to copy, bottom-right to paste. Each zone gives a short pulse so you can feel that it landed. The press is still a left click and a two-finger tap is a right click.\n\nThe four zones belong to this preset. Open Calibrate Touchpad in any touchpad row's Options to resize them, rename them, or draw your own; a new zone becomes a Touchpad Region input on any row, and every preset has zones of its own.",
+        "Touchpad Zones": "The DualSense or DualShock 4 touchpad divided into four regions, each a soft button: touch the top-left corner to undo, top-right to redo, bottom-left to copy, bottom-right to paste. Each region gives a short pulse so you can feel that it landed. The press is still a left click and a two-finger tap is a right click.\n\nThe four regions belong to this preset. Pick Touchpad in the editor's Regions card to resize them, rename them, or draw your own; a new region becomes a Touchpad Region input on any row, and every preset has regions of its own.",
         "Cursor Regions": "Three corners of the screen are the inputs: put the pointer in the top-left corner for Mission Control, the top-right for Spotlight, the bottom-right for Launchpad. No controller is involved, though a controller moving the pointer fires them just the same.\n\nThe regions belong to this preset. Resize them, move them, or add more in the preset's own region editor, and the same corner can mean something different in another preset.",
+        "Stick Zones & Gestures": "The left stick walks with W, A, S and D, and pushed all the way up it also holds Shift to sprint: that ring shares the stick with the walking rows. The right stick is a four-way menu of rings, one arrow key each; it has no direction rows, so each ring fires on its own. The left trigger has two bands, a half pull for 1 and a full pull for 2. Pull the left stick straight back twice for Escape, and flick it right twice for Tab (each flick also takes a step).\n\nThe regions belong to this preset. Choose Edit regions in a stick row's direction menu to resize them or draw your own; a region can take over its stick, so only it fires there, or share it with the direction rows.",
         "Hold & Double-Tap": "One control, three outputs. A / Cross clicks, held it right-clicks, tapped twice it presses Return. B / Circle is Space, held it is Escape. LB is Tab, tapped twice it is Shift Tab.\n\nThe thresholds are in each row's Options: the hold time and the double-tap window. Longer windows suit a hand that moves slowly; shorter ones feel snappier.",
         "Keyboard & Mouse Input": "The Mac's own keyboard and mouse as inputs, not just as outputs. F13, F14, and F15 run Mission Control, Spotlight, and play / pause; the two side buttons on a mouse go back and forward.\n\nThose keys were chosen because nothing else needs them, so running this preset never takes a key away from you. Scan any row and press the key or button you would rather use.",
         "Shortcuts & Apps": "Outputs that run something instead of pressing a key: Cross opens Safari, Circle opens inputconfig.com, Square and Triangle are Mission Control and Spotlight, and LB is set to Run Shortcut.\n\nOpen that row's menu to pick one of your own Shortcuts; the list is read from the Shortcuts app. Open App takes an app name, a bundle id, or a path, and Open URL takes anything the Mac has a handler for.",
         "Gyro Aim": "Aim by tilting: the pointer follows the controller's tilt, up and down and side to side, and the triggers click. Tilting back to level brings the pointer back to where it started.\n\nHold the left bumper (L1 or LB) to pause the motion while you swing the controller back to a comfortable angle, the way you lift a mouse off the desk, then let go and carry on. Press the right bumper (R1 or RB) to make the current tilt the new neutral and center the pointer. Both are App Action outputs, so you can move them to any control. Speed on the motion rows sets how far the pointer travels per degree of tilt.",
-        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Tested on M4 MacBooks; the calibrator shows whether your MacBook's sensor is listening.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
+        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Works only on some MacBooks: tested on M4 MacBooks; it did not work on an M1 Pro in our testing. The calibrator shows whether your MacBook's sensor is listening.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
         "Toggle Mode": "A showcase for Toggle: press once to hold a key, press again to release it. A holds Shift, B holds Command, X holds F10 (mute in many apps), Y holds W for auto-run in games. The row vibrates when it latches. Toggle is an option on every row.",
         "Touchpad Mouse": "The DualSense or DualShock 4 touchpad as a trackpad. One finger moves the pointer, a second finger scrolls, pressing the touchpad clicks. Cross clicks too, Circle right-clicks.\n\nTouchpad rows have their own sensitivity; open Calibrate on a touchpad row to see your finger live and set the speed. Regions and swipe gestures can be added from the touchpad row's options.",
         "Variable Sensitivity": "A showcase for response curves. Both sticks move the pointer; the right stick uses a smooth curve (slow near center, fast at the edge) and the left an aggressive one. Push each the same amount and compare. The curve is on every stick row under its options. A clicks.",
@@ -635,17 +637,29 @@ struct ExamplePresets {
     /// notes below never appeared; a copy still holding that line exactly
     /// is treated as empty.
     private static let supersededNotes: [String: String] = [
+        // 1.6 called them zones and sent people to Calibrate Touchpad, which 1.7 removes.
+        "Touchpad Zones": "The DualSense or DualShock 4 touchpad divided into four zones, each a soft button: touch the top-left corner to undo, top-right to redo, bottom-left to copy, bottom-right to paste. Each zone gives a short pulse so you can feel that it landed. The press is still a left click and a two-finger tap is a right click.\n\nThe four zones belong to this preset. Open Calibrate Touchpad in any touchpad row's Options to resize them, rename them, or draw your own; a new zone becomes a Touchpad Region input on any row, and every preset has zones of its own.",
+        "Stick Zones & Gestures": "The left stick walks with W, A, S and D, and pushed all the way up it also holds Shift to sprint: that ring shares the stick with the walking rows. The right stick is a four-way menu of rings, one arrow key each; it has no direction rows, so each ring fires on its own. The left trigger has two bands, a half pull for 1 and a full pull for 2. Pull the left stick straight back twice for Escape, and flick it right twice for Tab (each flick also takes a step).\n\nThe zones belong to this preset. Choose Edit zones in a stick row's direction menu to resize them or draw your own; a zone can take over its stick, so only it fires there, or share it with the direction rows.",
+        // 1.6 sent people to a Settings tab named Accessibility, which does not exist.
+        "Spoken Feedback": "A showcase for Speak. Each face button types its letter and says a phrase out loud. Speak is an option on every row; the voice is chosen in Settings, Accessibility (System voice follows the Mac's Spoken Content setting).",
         "One-Stick Driving": "The whole car from one joystick, for the PlayStation Access Controller, the Xbox Adaptive Controller, or any single stick. The stick is not bound to rows here: the One-Stick Driving section at the bottom of this editor owns it. Push forward to accelerate, pull back to brake, left and right to steer, and snap the stick back twice to shift into Reverse (push forward to shift back to Drive). Let go and the car slows on its own, the way a power chair stops when you release the stick.\n\nEverything about the driving lives in that section: which stick and controller slot, the deadzone, the steering and throttle curves, keys or mouse steering, the coast brake, and the reverse gesture. Use the Test Drive arena to feel a change before you race. The rows above only cover the eight sockets: handbrake, horn, boost, reset, gears, camera, and rewind. Change the letters on each row to match the game's own key list.",
         // 1.5 shipped this Media Deck note, pointing to a menu with no device list.
         "MIDI: Media Deck": "A MIDI controller as a media remote. CC 7 is the Mac's volume fader, CC 71 steps volume, CC 74 steps brightness, pads 36 to 41 are play, next, previous, mute, Mission Control, and an app. Pick your MIDI device in the slot's input kind menu.",
         "Anki": "Anki's default shortcuts. If you changed them in Anki's Preferences, Scan the row and press the new key.",
+        // 1.7 builds before the MacBook note.
+        "Tap the Mac": "No controller needed: knock on the MacBook. A double tap opens Mission Control, a triple tap starts or stops Dictation. Tested on M4 MacBooks; the calibrator shows whether your MacBook's sensor is listening.\n\nMac settings: for the triple tap, Dictation must be on in System Settings, Keyboard, Dictation. Open Calibrate Taps in the editor to set how firm a tap has to be.",
         "Steam Controller": "Valve's Steam Controller, wired or with its dongle. The app reads it directly and turns off its own keyboard emulation while a preset runs. Right trackpad moves the pointer, right trigger clicks, left trigger right-clicks, pressing the right trackpad clicks too. A is Return, B is Escape, X is Tab, Y is Space. Bumpers send Command [ and Command ], the Steam button opens Spotlight. The grips hold Shift and Option.",
     ]
 
     /// The preset and group descriptions 1.5 shipped where 1.6 reworded
     /// them, so a backup's copy still holding them counts as untouched.
     static let tags15: [String: (preset: String, groups: [String])] = [
+        // 1.6's wording, before zones were called regions.
+        "Touchpad Zones": (preset: "The DualSense touchpad as four soft buttons", groups: ["Four zones on the pad send Undo, Redo, Copy, and Paste with a pulse; the press clicks and a two-finger tap right-clicks"]),
         "Access Controller": (preset: "One stick and eight buttons for the whole desktop", groups: ["Stick = pointer; sockets click, scroll, Return, Space, and hold Command; Options and PS open Mission Control and Spotlight"]),
+        // 1.7: the tag said Apple mode while the notes, Help and the
+        // drawing all say to set the switch to D.
+        "FPS (8BitDo)": (preset: "8BitDo Pro 2, Ultimate, SN30 Pro+ in Apple mode", groups: ["FPS layout tuned for 8BitDo triggers"]),
         "Deadzone Calibration": (preset: "Right stick wide deadzone + outer saturation, left stick tight", groups: ["Open Advanced > Calibrate on any axis row to see the live ring visualizer"]),
         "Gyro Aim": (preset: "Tilt the controller to aim; triggers fire and ADS", groups: ["Tilt to aim: sideways tilt → mouse X, forward tilt → mouse Y. LB pauses motion while held, RB re-zeros and centres the pointer"]),
         "MIDI: Drum Pad": (preset: "Finger-drumming pads with turbo for rolls", groups: ["Face buttons = drum kit pieces with turbo (hold for rolls), triggers = cymbals"]),
@@ -660,6 +674,13 @@ struct ExamplePresets {
     /// Row notes 1.5 wrote that 1.6 reworded, so a row still holding the
     /// 1.5 text counts as untouched when a backup is restored.
     static let rowNotes15: [String: [String: String]] = [
+        // 1.6's wording, before zones were called regions.
+        "Touchpad Zones": [
+            "tpr 5a1e0001000040008000000000000001": "Top-left zone: Undo (Cmd Z)",
+            "tpr 5a1e0001000040008000000000000002": "Top-right zone: Redo (Cmd Shift Z)",
+            "tpr 5a1e0001000040008000000000000003": "Bottom-left zone: Copy (Cmd C)",
+            "tpr 5a1e0001000040008000000000000004": "Bottom-right zone: Paste (Cmd V)",
+        ],
         "Access Controller": [
             "btn 0": "Socket 1 (Cross): left click",
             "btn 1": "Socket 2 (Circle): right click",
@@ -765,6 +786,13 @@ struct ExamplePresets {
 
     /// Whether `text` is notes this app wrote for the preset, in this
     /// version or an earlier one.
+    /// Whether the notes are exactly a text a later version replaced (not
+    /// 1.5's, which described rows a copy the person changed may still have).
+    static func isSupersededNotes(_ text: String, for name: String) -> Bool {
+        guard let old = supersededNotes[name] else { return false }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) == old.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func isShippedNotes(_ text: String, for name: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         func norm(_ s: String?) -> String? {
@@ -911,6 +939,7 @@ struct ExamplePresets {
         "hold_double_tap":      "Hold & Double-Tap",
         "app_auto_switch":      "Anki",
         "cursor_regions":       "Cursor Regions",
+        "stick_zones":          "Stick Zones & Gestures",
         "light_bar":            "FPS (PS5 DualSense)",
         "keyboard_mouse":       "Desktop Navigation",
     ]
@@ -996,6 +1025,7 @@ struct ExamplePresets {
             showcaseChassisTap,
             showcaseTouchpadZones,
             showcaseCursorRegions,
+            showcaseStickZones,
             showcaseHoldDoubleTap,
             showcaseKeyboardMouseInput,
             showcaseShortcutsAndApps,
@@ -1565,7 +1595,7 @@ struct ExamplePresets {
         parse("""
         {
             "name": "FPS (8BitDo)",
-            "tag": "8BitDo Pro 2, Ultimate, SN30 Pro+ in Apple mode",
+            "tag": "8BitDo Pro 2, Ultimate, SN30 Pro+ in D mode",
             "joysticks": [{
                 "tag": "FPS layout tuned for 8BitDo triggers",
                 "binds": {
@@ -1638,22 +1668,45 @@ struct ExamplePresets {
         }
         """)
         // The legacy JSON parser doesn't carry automation, so we inject
-        // it here. Mirrors what the Minecraft walkthrough teaches: the
-        // launcher app fires on activate, the cursor confines + auto-
-        // recenters + hides so the camera doesn't catch on the screen
-        // edge. Survival-grass green light bar.
+        // it here: the launcher app fires on activate, and the cursor is
+        // kept off the screen edges, so a full-screen game never brings up
+        // the Dock or the menu bar. Not recentered or hidden (1.7):
+        // Minecraft locks and hides the mouse itself while playing and reads
+        // the movement InputConfig sends, so both did nothing in play, and
+        // in the inventory and menus recentering pulled the pointer back to
+        // the middle four times a second and hiding took it away. Survival-
+        // grass green light bar.
         preset.automation = PresetAutomation(
             launchAppPath: "/Applications/Minecraft.app",
             launchURL: "",
             confineCursor: true,
             confineBufferPx: 24,
-            autoRecenterCursor: true,
+            autoRecenterCursor: false,
             autoRecenterIntervalMs: 250,
-            hideCursorWhileActive: true,
+            hideCursorWhileActive: false,
             sensitivityMultiplier: 1.0
         )
         preset.lightBarColor = RGBLightColor(r: 60, g: 200, b: 80)
+        let (ring, row) = minecraftSprintRing
+        preset.joysticks[0].bindings.append(row)
+        preset.stickRegions["0"] = [ring]
         return preset
+    }
+
+    /// Pushed all the way forward the left stick sprints, as Minecraft on a
+    /// console does at full push (Control, Java's sprint key), while W keeps
+    /// walking under it. Flicking forward twice sprints too, as Java's double
+    /// tap of W. Added in 1.7; a library from before is offered it
+    /// (BuiltInUpdate.minecraftSprint).
+    static let minecraftSprintID = UUID(uuidString: "5A1E0004-0000-4000-8000-000000000001")!
+    static var minecraftSprintRing: (TouchpadRegion, BindingModel) {
+        var ring = TouchpadRegion.ring(name: "Sprint", SmartPresetGenerator.sprintRing, colorIndex: 3)
+        ring.id = minecraftSprintID
+        var row = BindingModel(input: .stickRegion(stickIndex: 0, id: minecraftSprintID),
+                               outputs: [OutputAction(type: .key, keyCode: 224)],
+                               note: "All the way up: Control to sprint, as well as W (this ring shares the stick)")
+        row.zoneSharesStick = true
+        return (ring, row)
     }
 
     static var fortnite: Preset {
@@ -2167,13 +2220,13 @@ struct ExamplePresets {
             BindingModel(input: .button(13), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
             BindingModel(input: .touchpadGesture(.twoFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
         ]
-        let notes = ["Top-left zone: Undo (Cmd Z)", "Top-right zone: Redo (Cmd Shift Z)", "Bottom-left zone: Copy (Cmd C)", "Bottom-right zone: Paste (Cmd V)", "Touchpad press: left click", "Two-finger tap: right click"]
-        for i in bindings.indices { bindings[i].note = notes[i]; bindings[i].section = i < 4 ? "Zones" : "Touchpad" }
+        let notes = ["Top-left region: Undo (Cmd Z)", "Top-right region: Redo (Cmd Shift Z)", "Bottom-left region: Copy (Cmd C)", "Bottom-right region: Paste (Cmd V)", "Touchpad press: left click", "Two-finger tap: right click"]
+        for i in bindings.indices { bindings[i].note = notes[i]; bindings[i].section = i < 4 ? "Regions" : "Touchpad" }
         for i in 0..<4 { bindings[i].hapticEnabled = true; bindings[i].hapticIntensity = 0.35 }
         var preset = makePreset(
             name: "Touchpad Zones",
             tag: "The DualSense touchpad as four soft buttons",
-            joystickTag: "Four zones on the pad send Undo, Redo, Copy, and Paste with a pulse; the press clicks and a two-finger tap right-clicks",
+            joystickTag: "Four regions on the pad send Undo, Redo, Copy, and Paste with a pulse; the press clicks and a two-finger tap right-clicks",
             bindings: bindings,
             light: RGBLightColor(r: 255, g: 120, b: 40))
         preset.touchpadRegions = z.map {
@@ -2215,6 +2268,69 @@ struct ExamplePresets {
             TouchpadRegion(id: $0.id, name: $0.name, minX: $0.minX, maxX: $0.maxX,
                            minY: $0.minY, maxY: $0.maxY, colorIndex: $0.color)
         }
+        return preset
+    }
+
+    /// Showcase: stick zones as rings, trigger bands, and stick gestures.
+    static let stickZoneIDs: [String: UUID] = [
+        "Sprint": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000001")!,
+        "Up": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000002")!,
+        "Right": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000003")!,
+        "Down": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000004")!,
+        "Left": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000005")!,
+        "Half pull": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000006")!,
+        "Full pull": UUID(uuidString: "5A1E0003-0000-4000-8000-000000000007")!,
+    ]
+
+    static var showcaseStickZones: Preset {
+        let id = stickZoneIDs
+        func zone(_ key: Int, _ name: String) -> InputEvent { .stickRegion(stickIndex: key, id: id[name]!) }
+        var rows: [(BindingModel, String)] = []
+        func add(_ input: InputEvent, _ out: [Int], _ note: String, _ section: String) {
+            var b = BindingModel(input: input, outputs: out.map { OutputAction(type: .key, keyCode: $0) }, note: note)
+            b.section = section
+            rows.append((b, section))
+        }
+        add(.axis(1, direction: .negative), [26], "Left stick up: W, walk forward", "Left stick")
+        add(.axis(1, direction: .positive), [22], "Left stick down: S, walk back", "Left stick")
+        add(.axis(0, direction: .negative), [4], "Left stick left: A", "Left stick")
+        add(.axis(0, direction: .positive), [7], "Left stick right: D", "Left stick")
+        add(zone(0, "Sprint"), [225], "All the way up: Shift to sprint, as well as W (this ring shares the stick)", "Left stick")
+        add(zone(1, "Up"), [82], "Right stick up ring: Up arrow", "Right stick menu")
+        add(zone(1, "Right"), [79], "Right stick right ring: Right arrow", "Right stick menu")
+        add(zone(1, "Down"), [81], "Right stick down ring: Down arrow", "Right stick menu")
+        add(zone(1, "Left"), [80], "Right stick left ring: Left arrow", "Right stick menu")
+        add(zone(104, "Half pull"), [30], "Left trigger half pulled: 1", "Left trigger")
+        add(zone(104, "Full pull"), [31], "Left trigger pulled all the way: 2", "Left trigger")
+        add(.stickGesture(stick: 0, [GestureStep(direction: .down), GestureStep(direction: .down)]), [41],
+            "Pull the left stick straight back twice: Escape", "Gestures")
+        add(.stickGesture(stick: 0, [GestureStep(direction: .right), GestureStep(direction: .right)]), [43],
+            "Flick the left stick right twice: Tab (each flick also steps right with D)", "Gestures")
+        var bindings = rows.map(\.0)
+        // The menu's rings take over the right stick; the sprint ring shares
+        // the left stick with the walking rows.
+        for i in bindings.indices where bindings[i].input.type == .stickRegion { bindings[i].zoneSharesStick = false }
+        bindings[4].zoneSharesStick = true
+        var preset = makePreset(
+            name: "Stick Zones & Gestures",
+            tag: "Rings, trigger bands and flicks as buttons",
+            joystickTag: "Works with any controller: walk on the left stick, a four-way menu on the right, two pulls on the left trigger, and two gestures",
+            bindings: bindings)
+        func ring(_ name: String, _ inner: Double, _ outer: Double, _ start: Double, _ end: Double, _ color: Int) -> TouchpadRegion {
+            var r = TouchpadRegion.ring(name: name, RingSector(inner: inner, outer: outer, start: start, end: end), colorIndex: color)
+            r = TouchpadRegion(id: id[name]!, name: r.name, minX: r.minX, maxX: r.maxX, minY: r.minY, maxY: r.maxY, colorIndex: color)
+            r.ring = RingSector(inner: inner, outer: outer, start: start, end: end)
+            return r
+        }
+        func band(_ name: String, _ from: Double, _ to: Double, _ color: Int) -> TouchpadRegion {
+            TouchpadRegion(id: id[name]!, name: name, minX: 0, maxX: 0, minY: from, maxY: to, colorIndex: color)
+        }
+        preset.stickRegions = [
+            "0": [ring("Sprint", 0.9, 1, 60, 120, 3)],
+            "1": [ring("Up", 0.5, 1, 45, 135, 0), ring("Right", 0.5, 1, 315, 45, 1),
+                  ring("Down", 0.5, 1, 225, 315, 2), ring("Left", 0.5, 1, 135, 225, 5)],
+            "104": [band("Half pull", 0.3, 0.7, 4), band("Full pull", 0.7, 1, 6)],
+        ]
         return preset
     }
 
@@ -2320,8 +2436,9 @@ struct ExamplePresets {
     /// the Live Visualizer draws them as the keyboard and mouse.
     /// Raised whenever a built-in preset is added, so existing libraries
     /// pick it up at the next launch even without a new build number
-    /// (PresetStore.reseedExamplePresets). 2: the Auto Clicker.
-    static let seedRevision = 2
+    /// (PresetStore.reseedExamplePresets). 2: the Auto Clicker. 3: the Stick
+    /// Zones & Gestures showcase.
+    static let seedRevision = 3
 
     static var autoClicker: Preset {
         func click(_ input: String, button: Int, note: String, toggle: Bool, intervalMs: Int,
@@ -2882,16 +2999,16 @@ struct SmartPresetProfile: Codable, Identifiable, Hashable {
         var id: String { rawValue }
         var displayName: String {
             switch self {
-            case .game: return "Game"
-            case .app: return "App"
-            case .workflow: return "Workflow"
+            case .game: return String(localized: "Game")
+            case .app: return String(localized: "App")
+            case .workflow: return String(localized: "Workflow")
             }
         }
         var pluralPrompt: String {
             switch self {
-            case .game: return "Pick a game"
-            case .app: return "Pick an app"
-            case .workflow: return "Pick a workflow"
+            case .game: return String(localized: "Pick a game")
+            case .app: return String(localized: "Pick an app")
+            case .workflow: return String(localized: "Pick a workflow")
             }
         }
         var systemImage: String {
@@ -2991,7 +3108,7 @@ enum SmartPresetLibrary {
         "subtitle": "Move, look, mine, place, hotbar",
         "appPath": "/Applications/Minecraft.app", "launchURL": "",
         "light": {"r": 60, "g": 200, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right"},
@@ -3069,7 +3186,7 @@ enum SmartPresetLibrary {
         "subtitle": "Move, jump, and look: default third-person controls",
         "appPath": "/Applications/Roblox.app", "launchURL": "",
         "light": {"r": 225, "g": 55, "b": 55},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right"},
@@ -3096,7 +3213,7 @@ enum SmartPresetLibrary {
         "subtitle": "Shoot and move (keyboard-and-mouse layout)",
         "appPath": "", "launchURL": "",
         "light": {"r": 130, "g": 80, "b": 235},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right"},
@@ -3120,14 +3237,14 @@ enum SmartPresetLibrary {
           {"input": "btn 9", "outputs": ["key 41"], "note": "Menu (Esc)"},
           {"input": "btn 8", "outputs": ["key 16"], "note": "Map (M)"}
         ],
-        "tips": ["Building pieces vary by your binds. Set wall/floor/stair/roof in the editor to match yours.", "Aim feels best with confine + hidden cursor in fullscreen."]
+        "tips": ["Building pieces vary by your binds. Set wall/floor/stair/roof in the editor to match yours.", "Aim feels best in fullscreen, with the pointer kept off the screen edges."]
       },
       {
         "id": "elden-ring", "category": "game", "displayName": "Elden Ring",
         "subtitle": "Action RPG: attack, dodge, and explore",
         "appPath": "", "launchURL": "steam://run/1245620",
         "light": {"r": 200, "g": 160, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right"},
@@ -3283,7 +3400,7 @@ enum SmartPresetLibrary {
         "subtitle": "On-foot and driving: move, aim, shoot",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 180, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move / steer left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move / steer right"},
@@ -3309,7 +3426,7 @@ enum SmartPresetLibrary {
         "subtitle": "First-person RPG: shoot, aim, hack",
         "appPath": "", "launchURL": "steam://run/1091500",
         "light": {"r": 245, "g": 220, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right"},
@@ -3330,7 +3447,7 @@ enum SmartPresetLibrary {
           {"input": "btn 8", "outputs": ["key 12"], "note": "Backpack (I)"},
           {"input": "btn 9", "outputs": ["key 41"], "note": "Pause (Esc)"}
         ],
-        "tips": ["Cyberpunk's keyboard binds are extensive. Match its defaults in-game or rebind here with Scan.", "Confine + hidden cursor keeps mouse-look locked in fullscreen."]
+        "tips": ["Cyberpunk's keyboard binds are extensive. Match its defaults in-game or rebind here with Scan.", "Keeping the pointer off the screen edges keeps mouse-look steady in fullscreen; the game hides the pointer itself."]
       },
       {
         "id": "hollow-knight", "category": "game", "displayName": "Hollow Knight",
@@ -3390,7 +3507,7 @@ enum SmartPresetLibrary {
         "subtitle": "Roguelike action: attack, dash, cast",
         "appPath": "/Applications/Hades.app", "launchURL": "steam://run/1145360",
         "light": {"r": 200, "g": 60, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right"},
@@ -3488,7 +3605,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS: move, aim, shoot, buy, swap weapons",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 236, "g": 137, "b": 42},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3520,7 +3637,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS: move, aim, abilities, ultimate",
         "appPath": "", "launchURL": "",
         "light": {"r": 255, "g": 70, "b": 85},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3538,6 +3655,7 @@ enum SmartPresetLibrary {
           {"input": "btn 3", "outputs": ["key 9"], "note": "Pick up / interact (F)"},
           {"input": "btn 4", "outputs": ["key 20"], "note": "Ability (Q)"},
           {"input": "btn 5", "outputs": ["key 8"], "note": "Signature ability (E)"},
+          {"input": "btn 11", "outputs": ["key 225"], "note": "Walk quietly (hold)"},
           {"input": "hat 0 U", "outputs": ["key 6"], "note": "Ability (C)"},
           {"input": "hat 0 D", "outputs": ["key 27"], "note": "Ultimate (X)"},
           {"input": "hat 0 L", "outputs": ["key 30"], "note": "Primary weapon (1)"},
@@ -3552,7 +3670,7 @@ enum SmartPresetLibrary {
         "subtitle": "Battle-royale FPS: move, aim, tactical, ultimate",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 218, "g": 55, "b": 42},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3586,7 +3704,7 @@ enum SmartPresetLibrary {
         "subtitle": "Hero shooter: move, aim, abilities, ultimate",
         "appPath": "", "launchURL": "",
         "light": {"r": 244, "g": 128, "b": 33},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3616,7 +3734,7 @@ enum SmartPresetLibrary {
         "subtitle": "FPS battle royale: move, aim, sprint, equipment",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 140, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3704,7 +3822,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action RPG: move, camera, attacks, signs",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 200, "g": 200, "b": 210},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3735,7 +3853,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open-world RPG: move, look, attack, block, menus",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 150, "g": 140, "b": 110},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3825,7 +3943,7 @@ enum SmartPresetLibrary {
         "subtitle": "Fast FPS: move, aim, dash, weapons, glory kill",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 200, "g": 60, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3857,7 +3975,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: move, look, attack, block, hotbar",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 90, "g": 150, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -3940,7 +4058,7 @@ enum SmartPresetLibrary {
         "subtitle": "Underwater survival: swim, look, tools, quickslots",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 40, "g": 150, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Swim left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Swim right (D)"},
@@ -4261,7 +4379,7 @@ enum SmartPresetLibrary {
           {"input": "btn 9", "outputs": ["key 22"], "note": "Study deck (S)"},
           {"input": "btn 11", "outputs": ["key 225", "key 37"], "note": "Mark / unmark (*)"},
           {"input": "btn 12", "outputs": ["key 45"], "note": "Bury card (-)"},
-          {"input": "btn 13", "outputs": ["key 8"], "note": "Edit card (E)"},
+          {"input": "btn 13", "outputs": ["key 8"], "note": "Edit card (E)", "needs": "touchpad"},
           {"input": "axi 0 -", "outputs": ["mou 0 - 16"], "note": "Pointer left"},
           {"input": "axi 0 +", "outputs": ["mou 0 + 16"], "note": "Pointer right"},
           {"input": "axi 1 -", "outputs": ["mou 1 - 16"], "note": "Pointer up"},
@@ -4550,7 +4668,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival FPS: move, aim, build, hotbar, inventory",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 180, "g": 80, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4583,7 +4701,7 @@ enum SmartPresetLibrary {
         "subtitle": "Pirate FPS: move, aim, interact, equipment wheel",
         "appPath": "", "launchURL": "",
         "light": {"r": 40, "g": 160, "b": 170},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4614,7 +4732,7 @@ enum SmartPresetLibrary {
         "subtitle": "Looter FPS: move, aim, abilities, super",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 120, "g": 130, "b": 240},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4646,7 +4764,7 @@ enum SmartPresetLibrary {
         "subtitle": "Ninja FPS: move, aim, abilities, sprint",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 60, "g": 180, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4679,7 +4797,7 @@ enum SmartPresetLibrary {
         "subtitle": "RPG FPS: move, aim, VATS, Pip-Boy",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 120, "g": 200, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4711,7 +4829,7 @@ enum SmartPresetLibrary {
         "subtitle": "Space RPG: move, aim, boost, scan, menus",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 90, "g": 110, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4743,7 +4861,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open-world FPS: move, aim, gadgets, weapons",
         "appPath": "", "launchURL": "",
         "light": {"r": 230, "g": 150, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4775,7 +4893,7 @@ enum SmartPresetLibrary {
         "subtitle": "Looter shooter: move, aim, action skill, grenade",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 230, "g": 130, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4808,7 +4926,7 @@ enum SmartPresetLibrary {
         "subtitle": "Classic FPS: move, aim, gravity gun, weapons",
         "appPath": "/Applications/Steam.app", "launchURL": "steam://rungameid/220",
         "light": {"r": 235, "g": 150, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4839,7 +4957,7 @@ enum SmartPresetLibrary {
         "subtitle": "Puzzle FPS: move, place portals, jump, use",
         "appPath": "/Applications/Steam.app", "launchURL": "steam://rungameid/620",
         "light": {"r": 60, "g": 150, "b": 230},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4863,7 +4981,7 @@ enum SmartPresetLibrary {
         "subtitle": "Class FPS: move, aim, weapons, taunt",
         "appPath": "/Applications/Steam.app", "launchURL": "steam://rungameid/440",
         "light": {"r": 190, "g": 70, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4893,7 +5011,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op FPS: move, aim, heal, melee, items",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 150, "g": 30, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4923,7 +5041,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op mining FPS: move, mine, tools, gadgets",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 240, "g": 190, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -4955,7 +5073,7 @@ enum SmartPresetLibrary {
         "subtitle": "Roguelite shooter: move, aim, four skills, sprint",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 90, "g": 130, "b": 230},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -5063,7 +5181,7 @@ enum SmartPresetLibrary {
         "subtitle": "First-person factory: move, build, interact",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 240, "g": 130, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -5095,7 +5213,7 @@ enum SmartPresetLibrary {
         "subtitle": "Space survival: move, aim, scan, tech, menus",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 80, "g": 90, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -5127,7 +5245,7 @@ enum SmartPresetLibrary {
         "subtitle": "Creature survival: move, aim, throw, hotbar",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 70, "g": 150, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -5160,7 +5278,7 @@ enum SmartPresetLibrary {
         "subtitle": "Dino survival: move, aim, gather, hotbar",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 120, "g": 170, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -5383,7 +5501,7 @@ enum SmartPresetLibrary {
         "subtitle": "Twin-stick roguelite: move, aim, dodge, reload",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 140, "g": 90, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": false,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -5502,7 +5620,7 @@ enum SmartPresetLibrary {
         "subtitle": "Roguelite action: move, attack, special, dash, cast",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 140, "g": 70, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": false,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -5528,7 +5646,7 @@ enum SmartPresetLibrary {
         "subtitle": "Top-down action: move, aim, attack, lock-on",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 230, "g": 60, "b": 140},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": false,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -5639,7 +5757,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action + management: move, attack, dodge, interact",
         "appPath": "/Applications/Steam.app", "launchURL": "",
         "light": {"r": 200, "g": 70, "b": 150},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": false,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -5661,7 +5779,7 @@ enum SmartPresetLibrary {
         "subtitle": "Party platformer: move, jump, dive, grab",
         "appPath": "", "launchURL": "",
         "light": {"r": 255, "g": 130, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -6405,7 +6523,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op squad shooter, stratagems on the d-pad",
         "appPath": "", "launchURL": "",
         "light": {"r": 255, "g": 200, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6439,7 +6557,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open-world western, third-person on foot",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 30, "b": 25},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6473,7 +6591,7 @@ enum SmartPresetLibrary {
         "subtitle": "Posture-based action, deflect and prosthetics",
         "appPath": "", "launchURL": "",
         "light": {"r": 190, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6507,7 +6625,7 @@ enum SmartPresetLibrary {
         "subtitle": "Belle Epoque soulslike, guard and Fable Arts",
         "appPath": "", "launchURL": "",
         "light": {"r": 80, "g": 140, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6541,7 +6659,7 @@ enum SmartPresetLibrary {
         "subtitle": "Third-person soulslike shooter, co-op",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 80, "b": 190},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6575,7 +6693,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action hunting, draw weapon and combo",
         "appPath": "", "launchURL": "",
         "light": {"r": 70, "g": 160, "b": 120},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -6609,7 +6727,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op scrap-scavenging horror",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 200, "b": 120},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -6642,7 +6760,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op ghost hunting",
         "appPath": "", "launchURL": "",
         "light": {"r": 70, "g": 130, "b": 180},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -6675,7 +6793,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival crafting horror",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 150, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -6708,7 +6826,7 @@ enum SmartPresetLibrary {
         "subtitle": "Ocean survival crafting",
         "appPath": "", "launchURL": "",
         "light": {"r": 60, "g": 170, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -6740,7 +6858,7 @@ enum SmartPresetLibrary {
         "subtitle": "Backyard survival adventure",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 190, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -6957,7 +7075,7 @@ enum SmartPresetLibrary {
         "subtitle": "First-person factory automation",
         "appPath": "", "launchURL": "",
         "light": {"r": 240, "g": 190, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Left stick up: walk forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Left stick down: walk back (S)"},
@@ -6982,7 +7100,7 @@ enum SmartPresetLibrary {
           {"input": "btn 11", "outputs": ["key 225"], "note": "L3: walk faster / sprint (Shift)"},
           {"input": "btn 12", "outputs": ["key 21"], "note": "R3: rotate building / change direction (R)"}
         ],
-        "tips": ["Left stick walks your mecha and the right stick looks around in first person.", "RT places buildings and LT cancels or removes; E opens your inventory and F the replicator.", "A jumps and engages flight while B descends (Left Alt); Start opens the tech tree (T).", "Mouse-look is active here, so cursor confine, recenter, and hide are all on."]
+        "tips": ["Left stick walks your mecha and the right stick looks around in first person.", "RT places buildings and LT cancels or removes; E opens your inventory and F the replicator.", "A jumps and engages flight while B descends (Left Alt); Start opens the tech tree (T).", "Mouse-look is active here, so the pointer is kept off the screen edges; the game hides it while you play."]
       },
       {
         "id": "path-of-exile", "category": "game", "displayName": "Path of Exile",
@@ -7023,7 +7141,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival action RPG",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 90, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -7920,7 +8038,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS with leaning and gadgets",
         "appPath": "", "launchURL": "steam://run/359550",
         "light": {"r": 255, "g": 120, "b": 0},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -7954,7 +8072,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open-world action with skills and bursts",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 200, "b": 255},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -7987,7 +8105,7 @@ enum SmartPresetLibrary {
         "subtitle": "2023 Remake, survival horror",
         "appPath": "", "launchURL": "steam://run/2050650",
         "light": {"r": 178, "g": 30, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8020,7 +8138,7 @@ enum SmartPresetLibrary {
         "subtitle": "2018, Norse action",
         "appPath": "", "launchURL": "steam://run/1593500",
         "light": {"r": 200, "g": 60, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8052,7 +8170,7 @@ enum SmartPresetLibrary {
         "subtitle": "Remastered, web-swing action",
         "appPath": "", "launchURL": "steam://run/1817070",
         "light": {"r": 200, "g": 30, "b": 45},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8086,7 +8204,7 @@ enum SmartPresetLibrary {
         "subtitle": "Complete Edition, bow action",
         "appPath": "", "launchURL": "steam://run/1151640",
         "light": {"r": 220, "g": 120, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8120,7 +8238,7 @@ enum SmartPresetLibrary {
         "subtitle": "Wizarding-world action RPG",
         "appPath": "", "launchURL": "steam://run/990080",
         "light": {"r": 180, "g": 140, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8154,7 +8272,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike staff action",
         "appPath": "", "launchURL": "steam://run/2358720",
         "light": {"r": 190, "g": 140, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8189,7 +8307,7 @@ enum SmartPresetLibrary {
         "subtitle": "Mech combat with four-weapon loadout and boost",
         "appPath": "", "launchURL": "steam://run/1888160",
         "light": {"r": 232, "g": 92, "b": 24},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -8222,7 +8340,7 @@ enum SmartPresetLibrary {
         "subtitle": "Lightsaber combat with Force powers and traversal",
         "appPath": "", "launchURL": "steam://run/1774580",
         "light": {"r": 60, "g": 150, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -8288,7 +8406,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action-RPG with ATB ability menu and party swap",
         "appPath": "", "launchURL": "steam://run/1462040",
         "light": {"r": 30, "g": 120, "b": 170},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -8320,7 +8438,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action combat with Pod fire and program abilities",
         "appPath": "", "launchURL": "steam://run/524220",
         "light": {"r": 196, "g": 188, "b": 158},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -8353,7 +8471,7 @@ enum SmartPresetLibrary {
         "subtitle": "Stylish action with melee, guns, and Devil Trigger",
         "appPath": "", "launchURL": "steam://run/601150",
         "light": {"r": 200, "g": 30, "b": 36},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -8386,7 +8504,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/1446780",
         "light": {"r": 200, "g": 60, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8418,7 +8536,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/2054970",
         "light": {"r": 150, "g": 30, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8450,7 +8568,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/1240440",
         "light": {"r": 60, "g": 130, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8484,7 +8602,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/1237970",
         "light": {"r": 230, "g": 120, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8516,7 +8634,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/2221490",
         "light": {"r": 235, "g": 110, "b": 20},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8549,7 +8667,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapped to the PC keyboard and mouse defaults",
         "appPath": "", "launchURL": "steam://run/381210",
         "light": {"r": 130, "g": 20, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -8580,7 +8698,7 @@ enum SmartPresetLibrary {
         "subtitle": "Hero shooter controller layout",
         "appPath": "", "launchURL": "steam://run/2767030",
         "light": {"r": 239, "g": 59, "b": 59},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8613,7 +8731,7 @@ enum SmartPresetLibrary {
         "subtitle": "Destructive arena FPS layout",
         "appPath": "", "launchURL": "steam://run/2073850",
         "light": {"r": 214, "g": 41, "b": 110},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8647,7 +8765,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op melee and ranged layout",
         "appPath": "", "launchURL": "steam://run/1361210",
         "light": {"r": 200, "g": 162, "b": 74},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8681,7 +8799,7 @@ enum SmartPresetLibrary {
         "subtitle": "Third-person Astartes combat layout",
         "appPath": "", "launchURL": "steam://run/2183900",
         "light": {"r": 31, "g": 79, "b": 160},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8715,7 +8833,7 @@ enum SmartPresetLibrary {
         "subtitle": "Space exploration and jetpack layout",
         "appPath": "", "launchURL": "steam://run/753640",
         "light": {"r": 224, "g": 138, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe / thrust left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe / thrust right (D)"},
@@ -8748,7 +8866,7 @@ enum SmartPresetLibrary {
         "subtitle": "Cat adventure controller layout",
         "appPath": "", "launchURL": "steam://run/1332010",
         "light": {"r": 232, "g": 149, "b": 74},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8780,7 +8898,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapping for Control (PC): third-person action with telekinesis",
         "appPath": "", "launchURL": "steam://run/870780",
         "light": {"r": 196, "g": 30, "b": 58},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8811,7 +8929,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapping for Alan Wake 2 (PC): survival horror with flashlight focus",
         "appPath": "", "launchURL": "",
         "light": {"r": 240, "g": 196, "b": 64},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8842,7 +8960,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapping for Sifu (PC): kung-fu brawler with parry and dodge",
         "appPath": "", "launchURL": "steam://run/2138710",
         "light": {"r": 214, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -8873,7 +8991,7 @@ enum SmartPresetLibrary {
         "subtitle": "Controller mapping for Ghostrunner (PC): first-person parkour and one-hit combat",
         "appPath": "", "launchURL": "steam://run/1139900",
         "light": {"r": 224, "g": 36, "b": 96},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9120,7 +9238,7 @@ enum SmartPresetLibrary {
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger left-click"},
           {"input": "axi 4 +", "outputs": ["key 43"], "note": "Tab / indent"}
         ],
-        "tips": ["Tap Back twice maps to double-Shift for Search Everywhere.", "Right bumper runs the app; left bumper starts the debugger."]
+        "tips": ["Press Back once for double-Shift, which opens Search Everywhere.", "Right bumper runs the app; left bumper starts the debugger."]
       },
       {
         "id": "microsoft-edge", "category": "app", "displayName": "Microsoft Edge",
@@ -9190,7 +9308,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open-world action with mouse-look combat",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 200, "b": 210},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left moves with A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right moves with D"},
@@ -9224,7 +9342,7 @@ enum SmartPresetLibrary {
         "subtitle": "Fast action brawler with a follow camera",
         "appPath": "", "launchURL": "",
         "light": {"r": 240, "g": 220, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left moves with A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right moves with D"},
@@ -9291,7 +9409,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action combat with Eikon abilities",
         "appPath": "", "launchURL": "",
         "light": {"r": 200, "g": 60, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left moves with A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right moves with D"},
@@ -9356,7 +9474,7 @@ enum SmartPresetLibrary {
         "subtitle": "Turn-based RPG, confirm, cancel, run, camera, field actions",
         "appPath": "", "launchURL": "steam://run/2072450",
         "light": {"r": 220, "g": 30, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9390,7 +9508,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action RPG, attack, artes, evade, boost attacks, lock-on",
         "appPath": "", "launchURL": "steam://run/740130",
         "light": {"r": 70, "g": 130, "b": 230},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9424,7 +9542,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action RPG, light/heavy, abilities, dodge, block, ability wheel",
         "appPath": "", "launchURL": "steam://run/1845910",
         "light": {"r": 180, "g": 40, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9458,7 +9576,7 @@ enum SmartPresetLibrary {
         "subtitle": "Third-person, shoot, aim, melee, dodge, cover, Nix",
         "appPath": "", "launchURL": "",
         "light": {"r": 235, "g": 120, "b": 20},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9492,7 +9610,7 @@ enum SmartPresetLibrary {
         "subtitle": "Stealth action, attack, tools, assassinate, parkour, focus",
         "appPath": "", "launchURL": "steam://run/3035570",
         "light": {"r": 235, "g": 215, "b": 170},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -9526,7 +9644,7 @@ enum SmartPresetLibrary {
         "subtitle": "FPS, fire, ADS, reload, sprint, crouch, prone, grenades",
         "appPath": "", "launchURL": "steam://run/2519060",
         "light": {"r": 40, "g": 200, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -9560,7 +9678,7 @@ enum SmartPresetLibrary {
         "subtitle": "All-out warfare FPS",
         "appPath": "", "launchURL": "",
         "light": {"r": 232, "g": 91, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger fires the weapon, left mouse"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger aims down sights, right mouse"},
@@ -9595,7 +9713,7 @@ enum SmartPresetLibrary {
         "subtitle": "Dual-realm soulslike",
         "appPath": "", "launchURL": "steam://run/1501750",
         "light": {"r": 120, "g": 70, "b": 160},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "btn 5", "outputs": ["mbt 0"], "note": "Right bumper is a light attack, left mouse"},
           {"input": "axi 5 +", "outputs": ["mbt 1"], "note": "Right trigger is a heavy attack, right mouse"},
@@ -9629,7 +9747,7 @@ enum SmartPresetLibrary {
         "subtitle": "Three Kingdoms soulslike",
         "appPath": "", "launchURL": "steam://run/1448440",
         "light": {"r": 200, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "btn 5", "outputs": ["mbt 0"], "note": "Right bumper is a normal attack, left mouse"},
           {"input": "axi 5 +", "outputs": ["key 225", "mbt 0"], "note": "Right trigger is a Spirit attack, Shift plus left mouse"},
@@ -9698,7 +9816,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op melee survival",
         "appPath": "", "launchURL": "steam://run/552500",
         "light": {"r": 150, "g": 30, "b": 25},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger attacks, hold for a charged or heavy attack, left mouse"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger blocks and aims ranged weapons, right mouse"},
@@ -9732,7 +9850,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op survival horror",
         "appPath": "", "launchURL": "steam://run/1304930",
         "light": {"r": 40, "g": 110, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "btn 11", "outputs": ["key 225"], "note": "Left stick click sprints, Left Shift"},
           {"input": "btn 1", "outputs": ["key 224"], "note": "B holds crouch, Left Ctrl"},
@@ -10381,7 +10499,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike action RPG",
         "appPath": "", "launchURL": "steam://run/374320",
         "light": {"r": 178, "g": 34, "b": 34},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -10414,7 +10532,7 @@ enum SmartPresetLibrary {
         "subtitle": "Open world survival shooter",
         "appPath": "", "launchURL": "steam://run/2139460",
         "light": {"r": 124, "g": 92, "b": 196},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -10447,7 +10565,7 @@ enum SmartPresetLibrary {
         "subtitle": "Party based action RPG",
         "appPath": "", "launchURL": "steam://run/881020",
         "light": {"r": 64, "g": 156, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -10482,7 +10600,7 @@ enum SmartPresetLibrary {
         "subtitle": "Battle royale: move, aim, loot, survive",
         "appPath": "", "launchURL": "",
         "light": {"r": 210, "g": 170, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10515,7 +10633,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS: breach, clear, command",
         "appPath": "", "launchURL": "",
         "light": {"r": 40, "g": 80, "b": 140},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10549,7 +10667,7 @@ enum SmartPresetLibrary {
         "subtitle": "Rip and tear: move, shoot, glory kill",
         "appPath": "", "launchURL": "",
         "light": {"r": 180, "g": 40, "b": 30},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10683,7 +10801,7 @@ enum SmartPresetLibrary {
         "subtitle": "MMORPG: explore, fight, loot",
         "appPath": "", "launchURL": "",
         "light": {"r": 60, "g": 120, "b": 160},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10716,7 +10834,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: gather, build, fight",
         "appPath": "", "launchURL": "",
         "light": {"r": 170, "g": 110, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10748,7 +10866,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival FPS: scavenge, build, defend",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 100, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10781,7 +10899,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: explore, craft, endure",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 90, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10814,7 +10932,7 @@ enum SmartPresetLibrary {
         "subtitle": "Jungle survival: forage, craft, endure",
         "appPath": "", "launchURL": "",
         "light": {"r": 40, "g": 120, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -10847,7 +10965,7 @@ enum SmartPresetLibrary {
         "subtitle": "Dive, explore, craft, survive",
         "appPath": "", "launchURL": "",
         "light": {"r": 40, "g": 150, "b": 190},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Swim left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Swim right (D)"},
@@ -10878,7 +10996,7 @@ enum SmartPresetLibrary {
         "subtitle": "First-person RPG: fight, cast, explore",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 70, "b": 170},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -10911,7 +11029,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival horror: explore, aim, fight",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 90, "b": 100},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11265,7 +11383,7 @@ enum SmartPresetLibrary {
         "subtitle": "Heart of Chornobyl: move, look, shoot, survive",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 140, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11299,7 +11417,7 @@ enum SmartPresetLibrary {
         "subtitle": "Bounty hunting: move, aim, loot, extract",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 70, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11333,7 +11451,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS: move, lean, fire, advance",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 120, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11367,7 +11485,7 @@ enum SmartPresetLibrary {
         "subtitle": "Arena FPS: strafe, jump, frag",
         "appPath": "", "launchURL": "",
         "light": {"r": 140, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11401,7 +11519,7 @@ enum SmartPresetLibrary {
         "subtitle": "Explore, terraform, and build",
         "appPath": "", "launchURL": "",
         "light": {"r": 220, "g": 150, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11431,7 +11549,7 @@ enum SmartPresetLibrary {
         "subtitle": "Adventure: explore, whip, brawl",
         "appPath": "", "launchURL": "",
         "light": {"r": 170, "g": 120, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -11893,7 +12011,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action RPG: move, attack, ability",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 160, "b": 210},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Left stick left moves with A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Left stick right moves with D"},
@@ -11924,7 +12042,7 @@ enum SmartPresetLibrary {
         "subtitle": "Hunt: move, attack, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 140, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -11990,7 +12108,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: move, aim, craft",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 120, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12023,7 +12141,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action: move, strike, parry",
         "appPath": "", "launchURL": "",
         "light": {"r": 200, "g": 80, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12055,7 +12173,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action RPG: move, aim, hunt",
         "appPath": "", "launchURL": "",
         "light": {"r": 210, "g": 120, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12089,7 +12207,7 @@ enum SmartPresetLibrary {
         "subtitle": "Swing, fight, web",
         "appPath": "", "launchURL": "",
         "light": {"r": 200, "g": 40, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12123,7 +12241,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action: move, axe, rage",
         "appPath": "", "launchURL": "",
         "light": {"r": 170, "g": 60, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12155,7 +12273,7 @@ enum SmartPresetLibrary {
         "subtitle": "Brawler: move, attack, grab",
         "appPath": "", "launchURL": "",
         "light": {"r": 210, "g": 150, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -12479,7 +12597,7 @@ enum SmartPresetLibrary {
         "subtitle": "WW1 shooter: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 120, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger fires the weapon, left mouse"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger aims down sights, right mouse"},
@@ -12514,7 +12632,7 @@ enum SmartPresetLibrary {
         "subtitle": "WW2 shooter: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 130, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 5 +", "outputs": ["mbt 0"], "note": "Right trigger fires the weapon, left mouse"},
           {"input": "axi 4 +", "outputs": ["mbt 1"], "note": "Left trigger aims down sights, right mouse"},
@@ -12549,7 +12667,7 @@ enum SmartPresetLibrary {
         "subtitle": "Tactical FPS: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 130, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -12582,7 +12700,7 @@ enum SmartPresetLibrary {
         "subtitle": "RPG: explore, fight, talk",
         "appPath": "", "launchURL": "",
         "light": {"r": 210, "g": 140, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -12614,7 +12732,7 @@ enum SmartPresetLibrary {
         "subtitle": "Wasteland RPG: explore, aim, build",
         "appPath": "", "launchURL": "",
         "light": {"r": 180, "g": 180, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -12646,7 +12764,7 @@ enum SmartPresetLibrary {
         "subtitle": "Cover shooter RPG: aim, fire, power",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 120, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -12679,7 +12797,7 @@ enum SmartPresetLibrary {
         "subtitle": "RPG: explore, fight, parry",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 120, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -12712,7 +12830,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, block, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 100, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -12745,7 +12863,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, block, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 90, "b": 110},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -12778,7 +12896,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: stance, attack, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 160, "g": 60, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -12950,7 +13068,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: gather, build, fight",
         "appPath": "", "launchURL": "",
         "light": {"r": 60, "g": 130, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -13034,7 +13152,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op horror: explore, film, flee",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 160, "b": 160},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -13067,7 +13185,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival crafter: explore, build, fight",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 120, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13517,7 +13635,7 @@ enum SmartPresetLibrary {
         "subtitle": "Retro FPS: move, shoot, melee",
         "appPath": "", "launchURL": "",
         "light": {"r": 160, "g": 90, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13669,7 +13787,7 @@ enum SmartPresetLibrary {
         "subtitle": "Arena FPS: move, shoot, portal",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 150, "b": 220},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move back (S)"},
@@ -13703,7 +13821,7 @@ enum SmartPresetLibrary {
         "subtitle": "Mil-sim FPS: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 120, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13736,7 +13854,7 @@ enum SmartPresetLibrary {
         "subtitle": "Mil-sim: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 100, "g": 110, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13770,7 +13888,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival: explore, craft, fight",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 160, "b": 150},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13952,7 +14070,7 @@ enum SmartPresetLibrary {
         "subtitle": "Fast FPS: move, shoot, dash",
         "appPath": "", "launchURL": "",
         "light": {"r": 180, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -13984,7 +14102,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, block, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 160, "b": 180},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -14370,7 +14488,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, drain, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 170, "g": 50, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -14403,7 +14521,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, harden, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 110, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -14494,7 +14612,7 @@ enum SmartPresetLibrary {
         "subtitle": "RPG: explore, fight, talk",
         "appPath": "", "launchURL": "",
         "light": {"r": 220, "g": 150, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -14644,7 +14762,7 @@ enum SmartPresetLibrary {
         "subtitle": "WW2 shooter: move, aim, fire",
         "appPath": "", "launchURL": "",
         "light": {"r": 110, "g": 110, "b": 70},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -14678,7 +14796,7 @@ enum SmartPresetLibrary {
         "subtitle": "Fast FPS: move, shoot, dash",
         "appPath": "", "launchURL": "",
         "light": {"r": 230, "g": 150, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15091,7 +15209,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, guard, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 180, "g": 140, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -15124,7 +15242,7 @@ enum SmartPresetLibrary {
         "subtitle": "Soulslike: attack, claw, dodge",
         "appPath": "", "launchURL": "",
         "light": {"r": 120, "g": 100, "b": 110},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left, A"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right, D"},
@@ -15157,7 +15275,7 @@ enum SmartPresetLibrary {
         "subtitle": "Fast FPS: move, shoot, slow time",
         "appPath": "", "launchURL": "",
         "light": {"r": 180, "g": 60, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15189,7 +15307,7 @@ enum SmartPresetLibrary {
         "subtitle": "Retro FPS: move, shoot, cover",
         "appPath": "", "launchURL": "",
         "light": {"r": 200, "g": 90, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15337,7 +15455,7 @@ enum SmartPresetLibrary {
         "light": {"r": 140, "g": 90, "b": 220},
         "confineCursor": false, "autoRecenter": false, "hideCursor": false,
         "bindings": [
-          {"input": "btn 0", "outputs": ["key 62"], "note": "Start / stop dictation (F5)"},
+          {"input": "btn 0", "outputs": ["sys dct"], "note": "Start / stop dictation"},
           {"input": "btn 1", "outputs": ["key 41"], "note": "Cancel (Escape)"},
           {"input": "btn 9", "outputs": ["key 40"], "note": "Confirm (Return)"},
           {"input": "btn 2", "outputs": ["key 42"], "note": "Delete back"},
@@ -15354,7 +15472,7 @@ enum SmartPresetLibrary {
           {"input": "btn 4", "outputs": ["key 226", "key 80"], "note": "Previous word"},
           {"input": "btn 5", "outputs": ["key 226", "key 79"], "note": "Next word"}
         ],
-        "tips": ["The bottom face button starts and stops macOS dictation (set the Dictation shortcut to F5 in System Settings, Keyboard).", "Shoulders jump by word; the D-pad moves by character and line."]
+        "tips": ["The bottom face button presses the Mac's dictation key; switch Dictation on in System Settings, Keyboard.", "Shoulders jump by word; the D-pad moves by character and line."]
       },
       {
         "id": "window-tiling", "category": "workflow", "displayName": "Window Tiling (Rectangle)",
@@ -15412,7 +15530,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op soulslike: fight, dodge, survive the night",
         "appPath": "", "launchURL": "",
         "light": {"r": 190, "g": 160, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right"},
@@ -15472,7 +15590,7 @@ enum SmartPresetLibrary {
         "subtitle": "Shield saw, shoot, shred",
         "appPath": "", "launchURL": "",
         "light": {"r": 140, "g": 40, "b": 40},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15504,7 +15622,7 @@ enum SmartPresetLibrary {
         "subtitle": "Stealth action: climb, hide, strike",
         "appPath": "", "launchURL": "",
         "light": {"r": 60, "g": 80, "b": 110},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -15591,7 +15709,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op horror: grab, haul, run",
         "appPath": "", "launchURL": "",
         "light": {"r": 220, "g": 60, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -15624,7 +15742,7 @@ enum SmartPresetLibrary {
         "subtitle": "Puzzle exploration: walk, inspect, draft",
         "appPath": "", "launchURL": "",
         "light": {"r": 70, "g": 110, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15691,7 +15809,7 @@ enum SmartPresetLibrary {
         "subtitle": "Action: slash, dash, ultimate",
         "appPath": "", "launchURL": "",
         "light": {"r": 160, "g": 40, "b": 90},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 1 -", "outputs": ["key 26"], "note": "Move forward (W)"},
           {"input": "axi 1 +", "outputs": ["key 22"], "note": "Move backward (S)"},
@@ -15724,7 +15842,7 @@ enum SmartPresetLibrary {
         "subtitle": "Extraction shooter: loot, fight, escape",
         "appPath": "", "launchURL": "",
         "light": {"r": 210, "g": 140, "b": 50},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -15758,7 +15876,7 @@ enum SmartPresetLibrary {
         "subtitle": "Hero shooter MOBA: move, shoot, abilities",
         "appPath": "", "launchURL": "",
         "light": {"r": 150, "g": 110, "b": 60},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15788,7 +15906,7 @@ enum SmartPresetLibrary {
         "subtitle": "Survival action: explore, fight, barter",
         "appPath": "", "launchURL": "",
         "light": {"r": 130, "g": 150, "b": 80},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Strafe left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Strafe right (D)"},
@@ -15820,7 +15938,7 @@ enum SmartPresetLibrary {
         "subtitle": "Co-op action: run, jump, gadgets",
         "appPath": "", "launchURL": "",
         "light": {"r": 90, "g": 80, "b": 200},
-        "confineCursor": true, "autoRecenter": true, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "axi 0 -", "outputs": ["key 4"], "note": "Move left (A)"},
           {"input": "axi 0 +", "outputs": ["key 7"], "note": "Move right (D)"},
@@ -16049,7 +16167,7 @@ enum SmartPresetLibrary {
         "subtitle": "Drive, steer, and shift gears from a single stick",
         "appPath": "", "launchURL": "",
         "light": {"r": 230, "g": 120, "b": 30},
-        "confineCursor": true, "autoRecenter": false, "hideCursor": true,
+        "confineCursor": true, "autoRecenter": false, "hideCursor": false,
         "bindings": [
           {"input": "btn 0", "outputs": ["key 44"], "note": "Handbrake (Space)"},
           {"input": "btn 3", "outputs": ["key 9"], "note": "Look back (F)"},
@@ -16115,10 +16233,77 @@ enum SmartPresetGenerator {
         /// Stick rows that move the pointer or the camera start slow and
         /// speed up while held (ramp-up), for landing on small targets.
         var pointerRamp: Bool = false
+        /// The left stick pushed all the way forward also holds the game's
+        /// sprint key, as console games run at full push and walk at a
+        /// light one. The walking rows keep working: the ring shares the stick.
+        var sprintAtFullPush: Bool = false
+        /// The other way round, for games where Shift walks quietly (CS2,
+        /// VALORANT): a light push of the left stick holds the walk key and
+        /// a full push runs, as a console's stick walks and runs.
+        var walkOnLightPush: Bool = false
     }
+
+    /// The ring that walks: any direction, from where the stick starts to
+    /// count to three quarters of the way out.
+    static let walkRing = RingSector(inner: 0.25, outer: 0.75, start: 0, end: 0)
+
+    /// The keys the profile walks quietly with, from its left-stick-click
+    /// row, when it moves with keys on the left stick.
+    static func walkKeys(_ profile: SmartPresetProfile) -> [OutputAction] {
+        let movesWithKeys = profile.bindings.contains { b in
+            b.input == "axi 1 -" && b.outputs.contains { $0.hasPrefix("key ") }
+        }
+        guard movesWithKeys,
+              let row = profile.bindings.first(where: {
+                  let n = $0.note.lowercased()
+                  // A held walk key only: a ring presses it on each entry,
+                  // which flips a toggle ("L3 toggles walk and run").
+                  return $0.input == "btn 11" && n.contains("walk") && !n.contains("sprint") && !n.contains("toggle")
+              })
+        else { return [] }
+        let keys = row.outputs.compactMap { OutputAction.parse($0) }
+        return !keys.isEmpty && keys.allSatisfy { $0.type == .key } ? keys : []
+    }
+
+    /// Walk on a light push only makes sense where the profile has a walk key.
+    static func canWalkOnLightPush(_ profile: SmartPresetProfile) -> Bool { !walkKeys(profile).isEmpty }
+
+    /// The ring at the top of the left stick that sprints: 90 percent of the
+    /// way out and further, within 30 degrees of straight up.
+    static let sprintRing = RingSector(inner: 0.9, outer: 1, start: 60, end: 120)
+
+    /// The keys the profile sprints with, from its left-stick-click row,
+    /// when it walks with keys on the left stick (W on up). None for a game
+    /// that walks with the mouse, has no sprint, or sprints with a click.
+    static func sprintKeys(_ profile: SmartPresetProfile) -> [OutputAction] {
+        let walksWithKeys = profile.bindings.contains { b in
+            b.input == "axi 1 -" && b.outputs.contains { $0.hasPrefix("key ") }
+        }
+        guard walksWithKeys,
+              let row = profile.bindings.first(where: {
+                  let n = $0.note.lowercased()
+                  return $0.input == "btn 11" && n.contains("sprint") && !n.contains("toggle")
+              })
+        else { return [] }
+        let keys = row.outputs.compactMap { OutputAction.parse($0) }
+        return !keys.isEmpty && keys.allSatisfy { $0.type == .key } ? keys : []
+    }
+
+    /// Sprint at full push only makes sense where the profile has a sprint key.
+    static func canSprintAtFullPush(_ profile: SmartPresetProfile) -> Bool { !sprintKeys(profile).isEmpty }
 
     /// Whether the profile turns the controller into a mouse-look game
     /// (any row sends mouse motion). Gyro fine aim only makes sense then.
+    /// Whether a trigger in this profile clicks a mouse button, the only
+    /// rows Rumble when a trigger clicks puts a rumble on. 130 of the
+    /// profiles have none, and the option still wrote its note.
+    static func canRumbleOnTriggers(_ profile: SmartPresetProfile) -> Bool {
+        profile.bindings.contains { b in
+            guard let input = InputEvent.parse(b.input), input.type == .axis, (4...5).contains(input.index) else { return false }
+            return b.outputs.compactMap { OutputAction.parse($0) }.contains { $0.type == .mouseButton }
+        }
+    }
+
     static func usesMouseLook(_ profile: SmartPresetProfile) -> Bool {
         profile.bindings.contains { b in b.outputs.contains { $0.hasPrefix("mou ") } }
     }
@@ -16139,8 +16324,8 @@ enum SmartPresetGenerator {
             let double = b.double?.compactMap { OutputAction.parse($0) }
             guard !outputs.isEmpty || hold?.isEmpty == false || double?.isEmpty == false else { continue }
             var bm = BindingModel(input: input, outputs: outputs)
-            let trimmed = Self.renamedNote(b.note.trimmingCharacters(in: .whitespacesAndNewlines),
-                                           input: b.input, brand: brand)
+            let trimmed = Self.localizedNote(b.note.trimmingCharacters(in: .whitespacesAndNewlines),
+                                             input: b.input, brand: brand)
             bm.note = trimmed.isEmpty ? nil : trimmed
             if let hold, !hold.isEmpty { bm.holdOutputs = hold; bm.holdThresholdMs = b.holdMs ?? 300 }
             if let double, !double.isEmpty { bm.doubleTapOutputs = double; bm.doubleTapWindowMs = b.doubleMs ?? 300 }
@@ -16188,9 +16373,13 @@ enum SmartPresetGenerator {
                 BindingModel(input: .touchpadGesture(.oneFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 0)]),
                 BindingModel(input: .touchpadGesture(.twoFingerTap), outputs: [OutputAction(type: .mouseButton, mouseButtonIndex: 1)]),
             ]
-            let notes = ["One finger: pointer right", "One finger: pointer left", "One finger: pointer down", "One finger: pointer up",
-                         "Two fingers: scroll down", "Two fingers: scroll up",
-                         "Press the pad: click", "Tap: click", "Two-finger tap: right click"]
+            // Written in the app's language, like the preset's notes; the
+            // section stays the English key the editor groups by.
+            let notes = [String(localized: "One finger: pointer right"), String(localized: "One finger: pointer left"),
+                         String(localized: "One finger: pointer down"), String(localized: "One finger: pointer up"),
+                         String(localized: "Two fingers: scroll down"), String(localized: "Two fingers: scroll up"),
+                         String(localized: "Press the pad: click"), String(localized: "Tap: click"),
+                         String(localized: "Two-finger tap: right click")]
             for i in rows.indices { rows[i].note = notes[i]; rows[i].section = "Touchpad" }
             rows.forEach(add)
         }
@@ -16209,13 +16398,17 @@ enum SmartPresetGenerator {
                              outputs: [OutputAction(type: .mouseMotion, mouseAxis: .vertical, mouseDirection: .positive, speed: 10)],
                              deadzone: 0.05, variableSensitivity: true),
             ]
-            let notes = ["Tilt right: aim right", "Tilt left: aim left", "Tilt up: aim up", "Tilt down: aim down"]
+            let notes = [String(localized: "Tilt right: aim right"), String(localized: "Tilt left: aim left"),
+                         String(localized: "Tilt up: aim up"), String(localized: "Tilt down: aim down")]
             for i in rows.indices { rows[i].note = notes[i]; rows[i].section = "Gyro aim" }
             rows.forEach(add)
         }
         if options.backPaddles, brand.supports("paddles") {
             // See paddlePairs for which button numbers they are.
-            let kind = brand == .xbox ? "Paddle" : "Back button"
+            let kind = brand == .xbox ? String(localized: "smart.paddle", defaultValue: "Paddle",
+                                                       comment: "A paddle on the back of an Xbox Elite controller")
+                : String(localized: "smart.backButton", defaultValue: "Back button",
+                         comment: "A button on the back of the controller, not the Back (View) button")
             for (paddle, face) in Self.paddlePairs(for: brand) {
                 guard let src = bindingModels.first(where: { $0.input.type == .button && $0.input.index == face && $0.modifiers.isEmpty }) else { continue }
                 var row = src.duplicated()
@@ -16224,10 +16417,39 @@ enum SmartPresetGenerator {
                 // The family's name already says paddle or back button.
                 let name = label(for: "btn \(paddle)", brand: brand)
                 let lower = name.lowercased()
-                let named = lower.contains("paddle") || lower.contains("back") ? name : "\(kind) \(name)"
-                row.note = "\(named): same as \(faceName)" + (src.note.map { " (\($0))" } ?? "")
+                let named = lower.contains("paddle") || lower.contains("back") || lower.contains(kind.lowercased())
+                    ? name : String(localized: "\(kind) \(name)")
+                row.note = String(localized: "\(named): same as \(faceName)") + (src.note.map { " (\($0))" } ?? "")
                 row.section = brand == .xbox ? "Paddles" : "Back buttons"
                 add(row)
+            }
+        }
+        var sprintRegion: TouchpadRegion?
+        if options.sprintAtFullPush {
+            let keys = sprintKeys(profile)
+            if !keys.isEmpty {
+                let region = TouchpadRegion.ring(name: String(localized: "Sprint"), Self.sprintRing, colorIndex: 3)
+                var row = BindingModel(input: .stickRegion(stickIndex: 0, id: region.id), outputs: keys)
+                // Sprinting adds to walking: W keeps walking under it.
+                row.zoneSharesStick = true
+                row.note = String(localized: "Left stick pushed all the way forward: sprint, while still walking")
+                row.section = "Left stick"
+                bindingModels.append(row)
+                sprintRegion = region
+            }
+        }
+        if options.walkOnLightPush, sprintRegion == nil {
+            let keys = walkKeys(profile)
+            if !keys.isEmpty {
+                let region = TouchpadRegion.ring(name: String(localized: "Walk"), Self.walkRing, colorIndex: 4)
+                var row = BindingModel(input: .stickRegion(stickIndex: 0, id: region.id), outputs: keys)
+                // Walking quietly is moving with the walk key held: the
+                // movement rows keep going under it.
+                row.zoneSharesStick = true
+                row.note = String(localized: "Left stick pushed lightly: walk quietly; push it all the way to run")
+                row.section = "Left stick"
+                bindingModels.append(row)
+                sprintRegion = region
             }
         }
         if options.pointerRamp {
@@ -16236,11 +16458,19 @@ enum SmartPresetGenerator {
                 bindingModels[i].rampMs = 400
             }
         }
-        let slot = JoystickMapping(tag: slotGuide(for: profile, brand: brand),
+        var slot = JoystickMapping(tag: slotGuide(for: profile, brand: brand),
                                    bindings: bindingModels)
+        // Made for the 2026 Steam Controller: read from it, as the built-in
+        // Steam presets are. On Auto-detect it read slot 0, which is any
+        // other pad connected, since raw pads sit after GameController's.
+        if brand == .steamController {
+            slot.customName = ExamplePresets.steamTarget2026
+            slot.inputKind = .controller
+        }
         var preset = Preset(name: options.name, tag: profile.subtitle,
                             joysticks: [slot], filename: Preset.generateFilename())
         preset.sortBindings()
+        if let sprintRegion { preset.stickRegions["0"] = [sprintRegion] }
         preset.groupID = options.groupID
         // Made for this brand, so shown as its family.
         preset.buttonFamily = family(for: brand)
@@ -16248,7 +16478,10 @@ enum SmartPresetGenerator {
         var auto = PresetAutomation()
         if options.autoLaunchApp {
             auto.launchAppPath = options.appPathOverride ?? profile.appPath
-            auto.launchURL = profile.launchURL
+            // An app chosen in the maker replaces the Steam launch; with
+            // both, the game started twice.
+            auto.launchURL = options.appPathOverride == nil ? profile.launchURL : ""
+
         }
         auto.confineCursor = options.confineCursor
         auto.confineBufferPx = 24
@@ -16274,7 +16507,7 @@ enum SmartPresetGenerator {
     /// Compact "Label = action" summary for the slot subtitle.
     private static func slotGuide(for profile: SmartPresetProfile, brand: ControllerBrand) -> String {
         profile.bindings.prefix(6)
-            .map { "\(label(for: $0.input, brand: brand)) = \(action(of: $0.note))" }
+            .map { "\(label(for: $0.input, brand: brand)) = \(localizedAction(of: $0.note))" }
             .joined(separator: ", ")
     }
 
@@ -16283,41 +16516,47 @@ enum SmartPresetGenerator {
     /// concise: a one-line intro, the first-run scan reminder, any hardware
     /// extras, and the profile's tips. No giant per-button dump.
     private static func buildNotes(for profile: SmartPresetProfile, brand: ControllerBrand, options: Options) -> String {
-        var out = "Smart preset for \(profile.displayName) on \(brand.displayName).\n"
-        out += "What each control does is noted right on its row in the binding editor. "
-        out += "If something doesn't respond, open the editor and use Scan to remap it (controllers vary).\n"
+        // Written in the app's language: the notes are the person's own once
+        // the preset exists.
+        var out = String(localized: "Smart preset for \(profile.displayName) on \(brand.displayName).") + "\n"
+        out += String(localized: "What each control does is noted right on its row in the binding editor.") + " "
+        out += String(localized: "If something doesn't respond, open the editor and use Scan to remap it (controllers vary).") + "\n"
         if brand.hasMotion || brand.hasTouchpad {
-            out += "\nYour \(brand.displayName) extras: \(brand.capabilitySummary).\n"
+            out += "\n" + String(localized: "Your \(brand.displayName) extras: \(brand.capabilitySummary).") + "\n"
             if brand.hasMotion {
                 if options.gyroFineAim, usesMouseLook(profile) {
-                    out += "Gyro aim is on: tilting the pad nudges the aim on top of the stick. Run Motion Calibration once (a row's Options, or the Calibrate menu) so a still pad is still.\n"
+                    out += String(localized: "Gyro aim is on: tilting the pad nudges the aim on top of the stick. Run Motion Calibration once (a row's Options, or Controller, Calibrate Motion / Gyro in the menu bar) so a still pad is still.") + "\n"
                 } else {
-                    out += "Motion: add a gyro fine-aim binding, then run Motion Calibration.\n"
+                    out += String(localized: "Motion: add a gyro fine-aim binding, then run Motion Calibration.") + "\n"
                 }
             }
             if brand.hasTouchpad {
                 if options.touchpadAsTrackpad {
-                    out += "The touchpad is a trackpad: one finger moves the pointer, two fingers scroll, a tap clicks, a two-finger tap right-clicks.\n"
+                    out += String(localized: "The touchpad is a trackpad: one finger moves the pointer, two fingers scroll, a tap clicks, a two-finger tap right-clicks.") + "\n"
                 } else {
-                    out += "Touchpad: add a Touchpad binding to use it as a trackpad.\n"
+                    out += String(localized: "Touchpad: add a Touchpad binding to use it as a trackpad.") + "\n"
                 }
             }
         }
-        if options.rumbleOnTriggers {
-            out += "The triggers rumble when they click.\n"
+        if options.rumbleOnTriggers, canRumbleOnTriggers(profile) {
+            out += String(localized: "The triggers rumble when they click.") + "\n"
         }
         if options.backPaddles, brand.supports("paddles") {
             let faces = Self.paddlePairs(for: brand).map { label(for: "btn \($0.face)", brand: brand) }
-            let list = faces.count > 2
-                ? faces.dropLast().joined(separator: ", ") + ", and " + (faces.last ?? "")
-                : faces.joined(separator: " and ")
-            out += (brand == .xbox ? "The back paddles repeat \(list).\n" : "The back buttons repeat \(list).\n")
+            let list = LocalizedList.and(faces)
+            out += (brand == .xbox ? String(localized: "The back paddles repeat \(list).") : String(localized: "The back buttons repeat \(list).")) + "\n"
+        }
+        if options.walkOnLightPush, canWalkOnLightPush(profile), !(options.sprintAtFullPush && canSprintAtFullPush(profile)) {
+            out += String(localized: "Walk on a light push is on: a light push of the left stick walks quietly, a full push runs. The ring is in the Regions section of the editor.") + "\n"
+        }
+        if options.sprintAtFullPush, canSprintAtFullPush(profile) {
+            out += String(localized: "Sprint at full push is on: the left stick pushed all the way forward sprints, a lighter push walks. The ring is in the Regions section of the editor.") + "\n"
         }
         if options.pointerRamp {
-            out += "Pointer ramp-up is on: a short push moves slowly, a held push speeds up. Change it in a stick row's Options.\n"
+            out += String(localized: "Pointer ramp-up is on: a short push moves slowly, a held push speeds up. Change it in a stick row's Options.") + "\n"
         }
         if !profile.tips.isEmpty {
-            out += "\nTips:\n" + profile.tips.map { "- \($0)" }.joined(separator: "\n")
+            out += "\n" + String(localized: "Tips:") + "\n" + profile.tips.map { "- \(ShippedText.t($0))" }.joined(separator: "\n")
         }
         return out
     }
@@ -16351,12 +16590,12 @@ enum SmartPresetGenerator {
         var out = note
         if let range = out.range(of: leadingName, options: .regularExpression) {
             out = label(for: input, brand: brand) + ": " + out[range.upperBound...]
-        } else if let range = out.range(of: #"^(B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide)(?= )|^A(?= = )"#,
+        } else if let range = out.range(of: #"^(B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide|Cross|Circle|Square|Triangle|L1|R1|L2|R2|Options)(?= )|^A(?= = )"#,
                                         options: .regularExpression),
                   isSameControl(String(out[range]), input) {
             out.replaceSubrange(range, with: label(for: input, brand: brand))
         }
-        guard let regex = try? NSRegularExpression(pattern: #"\b(hold|holding|press|pressing|tap) (LB|RB|LT|RT|A|B|X|Y)\b"#) else {
+        guard let regex = try? NSRegularExpression(pattern: #"\b(hold|holding|press|pressing|tap) (LB|RB|LT|RT|L1|R1|L2|R2|Cross|Circle|Square|Triangle|A|B|X|Y)\b"#) else {
             return out
         }
         let ns = out as NSString
@@ -16368,6 +16607,80 @@ enum SmartPresetGenerator {
         return out
     }
 
+    /// A catalog note in the app's language, named for this pad. A preset is
+    /// written in the language it is made in, like its notes: the English
+    /// catalog note goes through the shipped translation table, and the
+    /// button name in front ("A: jump", which translations keep as "A:
+    /// springen") becomes this pad's ("Kreuz: springen"). English, or a note
+    /// with no translation, takes the English renaming.
+    static func localizedNote(_ note: String, input: String, brand: ControllerBrand) -> String {
+        let shown = ShippedText.t(note)
+        guard shown != note else { return renamedNote(note, input: input, brand: brand) }
+        // Arabic and Hebrew notes may open with a right-to-left mark that
+        // sets their direction; the button name is found after it.
+        let rtlMark = shown.hasPrefix("\u{200F}")
+        let translated = rtlMark ? String(shown.dropFirst()) : shown
+        var out = translated
+        if note.range(of: leadingName, options: .regularExpression) != nil,
+           let action = actionAfterName(translated) {
+            out = String(localized: "\(label(for: input, brand: brand)): \(action)")
+        } else if let range = note.range(of: #"^(B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide|Cross|Circle|Square|Triangle|L1|R1|L2|R2|Options)(?= )|^A(?= = )"#,
+                                          options: .regularExpression),
+                  isSameControl(String(note[range]), input) {
+            // The same name at the start of the translation, which may carry
+            // a particle ("Bで", "B는") or a Hungarian article ("A B", "Az Y");
+            // a translation that translated the word ("Zurück = ...") is left.
+            let name = NSRegularExpression.escapedPattern(for: String(note[range]))
+            if let found = out.range(of: #"^(?:Az? )?"# + name + #"(?![A-Za-z0-9])"#, options: .regularExpression),
+               let word = out[found].range(of: String(note[range]), options: .backwards) {
+                out.replaceSubrange(word, with: label(for: input, brand: brand))
+            }
+        }
+        // The Xbox shoulder names mid-sentence ("halte RT") are this pad's;
+        // they never stand for anything else, unlike a lone A or X.
+        for token in ["LB", "RB", "LT", "RT", "L1", "R1", "L2", "R2"] {
+            guard let control = xboxControls[token], out.contains(token) else { continue }
+            out = out.replacingOccurrences(of: #"(?<![A-Za-z0-9])"# + token + #"(?![A-Za-z0-9])"#,
+                                           with: label(for: control, brand: brand), options: .regularExpression)
+        }
+        // A face letter after hold, press or tap in the English ("hold B"):
+        // the same lone letter in the translation, when it appears just once.
+        if let regex = try? NSRegularExpression(pattern: #"\b(?:hold|holding|press|pressing|tap) ([ABXY])\b"#) {
+            let ns = note as NSString
+            for match in regex.matches(in: note, range: NSRange(location: 0, length: ns.length)) {
+                let letter = ns.substring(with: match.range(at: 1))
+                guard let control = xboxControls[letter] else { continue }
+                let lone = #"(?<![A-Za-z0-9])"# + letter + #"(?![A-Za-z0-9])"#
+                let hits = (try? NSRegularExpression(pattern: lone))?.numberOfMatches(in: out, range: NSRange(out.startIndex..., in: out)) ?? 0
+                if hits == 1 {
+                    out = out.replacingOccurrences(of: lone, with: label(for: control, brand: brand), options: .regularExpression)
+                }
+            }
+        }
+        return rtlMark ? "\u{200F}" + out : out
+    }
+
+    /// The action part of a translated note, after its leading button name
+    /// and colon (a full-width colon in Chinese and Japanese, a space before
+    /// it in French), or nil when there is none near the start.
+    private static func actionAfterName(_ s: String) -> String? {
+        guard let colon = s.firstIndex(where: { $0 == ":" || $0 == "\u{FF1A}" }),
+              s.distance(from: s.startIndex, to: colon) <= 40 else { return nil }
+        let action = s[s.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        return action.isEmpty ? nil : action
+    }
+
+    /// `action(of:)` in the app's language.
+    static func localizedAction(of note: String) -> String {
+        var translated = ShippedText.t(note)
+        if translated.hasPrefix("\u{200F}") { translated.removeFirst() }
+        guard translated != note else { return action(of: note) }
+        if note.range(of: leadingName, options: .regularExpression) != nil, let action = actionAfterName(translated) {
+            return action
+        }
+        return translated
+    }
+
     /// A catalog note without its leading button name ("A: jump" is
     /// "jump"), for places that print the button name beside it.
     static func action(of note: String) -> String {
@@ -16375,18 +16688,23 @@ enum SmartPresetGenerator {
         return String(note[range.upperBound...])
     }
 
-    private static let leadingName = #"^(A|B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide|L3|R3)(\s*/\s*[A-Za-z0-9]+)?:\s*"#
+    private static let leadingName = #"^(A|B|X|Y|LB|RB|LT|RT|View|Menu|Back|Start|Guide|L3|R3|Cross|Circle|Square|Triangle|L1|R1|L2|R2|Options)(\s*/\s*[A-Za-z0-9]+)?:\s*"#
 
-    /// The catalog's Xbox names and the inputs they stand for.
+    /// The catalog's Xbox names and the inputs they stand for, and the
+    /// PlayStation names the fighting and racing profiles were written with,
+    /// so those notes name an Xbox, Switch or 8BitDo pad's buttons too.
     private static let xboxControls: [String: String] = [
         "A": "btn 0", "B": "btn 1", "X": "btn 2", "Y": "btn 3", "LB": "btn 4", "RB": "btn 5",
         "LT": "btn 6", "RT": "btn 7", "View": "btn 8", "Back": "btn 8", "Menu": "btn 9", "Start": "btn 9",
         "Guide": "btn 10", "L3": "btn 11", "R3": "btn 12",
+        "Cross": "btn 0", "Circle": "btn 1", "Square": "btn 2", "Triangle": "btn 3",
+        "L1": "btn 4", "R1": "btn 5", "L2": "btn 6", "R2": "btn 7", "Options": "btn 9",
     ]
 
     private static func isSameControl(_ name: String, _ input: String) -> Bool {
         if xboxControls[name] == input { return true }
-        return (name == "LT" && input.hasPrefix("axi 4")) || (name == "RT" && input.hasPrefix("axi 5"))
+        return ((name == "LT" || name == "L2") && input.hasPrefix("axi 4"))
+            || ((name == "RT" || name == "R2") && input.hasPrefix("axi 5"))
     }
 
     static func label(for input: String, brand: ControllerBrand) -> String {
@@ -16398,7 +16716,7 @@ enum SmartPresetGenerator {
         case "axi":
             return axisLabel(Int(parts.count > 1 ? parts[1] : "") ?? -1, brand: brand)
         case "hat":
-            return "D-pad " + dpadDir(parts.count > 2 ? parts[2] : "")
+            return String(localized: "D-pad \(dpadDir(parts.count > 2 ? parts[2] : ""))")
         default:
             return input
         }
@@ -16421,36 +16739,94 @@ enum SmartPresetGenerator {
             if let family, family != .xbox, let name = ButtonNames.name(index, family: family) { return name }
             if family == .xbox { return ButtonNames.label(index, family: .xbox, model: model) }
             let choice = FaceLetters.current
-            if choice == .playstation { return FaceLetters.genericName(index, choice: .playstation) ?? "Button \(index)" }
+            if choice == .playstation { return FaceLetters.genericName(index, choice: .playstation) ?? String(localized: "Button \(index)") }
             let nintendo = FaceLetters.nintendo(for: brand, choice: choice)
-            return ButtonNames.name(index, family: nintendo ? .nintendo : .xbox) ?? "Button \(index)"
+            return ButtonNames.name(index, family: nintendo ? .nintendo : .xbox) ?? String(localized: "Button \(index)")
         case 4...10:
             if let short = ButtonNames.short(index, family: family, model: model) { return short }
-            return "Button \(index)"
-        case 11: return "Left stick click (L3)"
-        case 12: return "Right stick click (R3)"
+            return String(localized: "Button \(index)")
+        case 11: return String(localized: "Left stick click (L3)")
+        case 12: return String(localized: "Right stick click (R3)")
         default:
-            return family.flatMap { ButtonNames.name(index, family: $0) } ?? (index == 13 ? "Touchpad" : "Button \(index)")
+            return family.flatMap { ButtonNames.name(index, family: $0) }
+                ?? (index == 13 ? String(localized: "Touchpad") : String(localized: "Button \(index)"))
         }
     }
 
     private static func axisLabel(_ index: Int, brand: ControllerBrand) -> String {
         switch index {
-        case 0, 1: return "Left stick"
-        case 2, 3: return "Right stick"
+        case 0, 1: return String(localized: "Left stick")
+        case 2, 3: return String(localized: "Right stick")
         case 4:    return buttonLabel(6, brand: brand)
         case 5:    return buttonLabel(7, brand: brand)
-        default:   return "Axis \(index)"
+        default:   return String(localized: "Axis \(index)")
         }
     }
 
     private static func dpadDir(_ d: String) -> String {
         switch d {
-        case "U": return "Up"
-        case "D": return "Down"
-        case "L": return "Left"
-        case "R": return "Right"
+        case "U": return String(localized: "Up")
+        case "D": return String(localized: "Down")
+        case "L": return String(localized: "Left")
+        case "R": return String(localized: "Right")
         default:  return d
         }
+    }
+}
+
+// MARK: - Updates to built-in presets
+
+/// A feature added to a built-in preset after it shipped, offered to a
+/// library that already has that preset. Only the addition is applied,
+/// never the rest of the shipped preset, so the person's own changes stay.
+/// In the editor it is an ordinary edit: Undo takes it back, and nothing is
+/// kept until Save.
+struct BuiltInUpdate: Identifiable {
+    let id: String
+    /// The built-in's name on disk (English), which the copy still has.
+    let presetName: String
+    let title: String
+    let detail: String
+    /// Already there: the copy has it, so nothing is offered.
+    let isApplied: (Preset) -> Bool
+    /// Adds the rows to the preset and returns the regions they read, by
+    /// stick key, for the region editors to hold until Save.
+    let apply: (inout Preset) -> [Int: [TouchpadRegion]]
+
+    static let declinedKey = "InputConfig.builtInUpdates.declined"
+
+    static var all: [BuiltInUpdate] { [minecraftSprint] }
+
+    static var minecraftSprint: BuiltInUpdate {
+        BuiltInUpdate(
+            id: "minecraft.sprintAtFullPush.17",
+            presetName: "Minecraft",
+            title: String(localized: "Sprint at full push"),
+            detail: String(localized: "New for this built-in preset: pushing the left stick all the way forward also sprints, while it keeps walking. Only this is added; your other changes stay."),
+            isApplied: { p in
+                p.joysticks.contains { $0.bindings.contains { $0.input.stickRegionID == ExamplePresets.minecraftSprintID } }
+            },
+            apply: { p in
+                guard !p.joysticks.isEmpty else { return [:] }
+                let (ring, row) = ExamplePresets.minecraftSprintRing
+                p.joysticks[0].bindings.append(row)
+                return [0: [ring]]
+            })
+    }
+
+    /// What this preset is offered: updates for its built-in, not yet in it,
+    /// and not turned down for this preset.
+    static func offers(for p: Preset) -> [BuiltInUpdate] {
+        let declined = Set(UserDefaults.standard.stringArray(forKey: declinedKey) ?? [])
+        return all.filter { u in
+            u.presetName == p.name && !u.isApplied(p) && !declined.contains("\(u.id)|\(p.id.uuidString)")
+        }
+    }
+
+    static func decline(_ u: BuiltInUpdate, for p: Preset) {
+        var list = UserDefaults.standard.stringArray(forKey: declinedKey) ?? []
+        let key = "\(u.id)|\(p.id.uuidString)"
+        if !list.contains(key) { list.append(key) }
+        UserDefaults.standard.set(list, forKey: declinedKey)
     }
 }

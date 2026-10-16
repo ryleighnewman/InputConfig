@@ -64,7 +64,7 @@ enum HIDDescriptorParser {
     /// Reports that add controls the main one lacks (a SpaceMouse) are not
     /// players and are merged as before.
     static func playerLayouts(_ descriptor: Data) -> [(reportID: Int, layout: ControllerProfile.GenericLayout)] {
-        let (fieldsByReport, cursorByReport) = collectFields(descriptor)
+        let (fieldsByReport, cursorByReport, arraysByReport) = collectFields(descriptor)
         let keys = fieldsByReport.keys.compactMap { $0 }.sorted()
         guard keys.count >= 2, fieldsByReport[nil] == nil else { return [] }
         func signature(_ fields: [Field]) -> [Int] {
@@ -80,7 +80,8 @@ enum HIDDescriptorParser {
         var players: [(Int, ControllerProfile.GenericLayout)] = []
         for key in keys where key != primary && signature(fieldsByReport[key] ?? []) == primarySignature {
             guard let extended = buildLayout(fieldsByReport: [key: fieldsByReport[key] ?? []],
-                                             cursorByReport: [key: cursorByReport[key] ?? 0]) else { continue }
+                                             cursorByReport: [key: cursorByReport[key] ?? 0],
+                                             arraysByReport: [key: arraysByReport[key] ?? []]) else { continue }
             var layout = extended.legacyLayout
             layout.extended = extended
             players.append((key, layout))
@@ -91,7 +92,7 @@ enum HIDDescriptorParser {
     /// True when two reports carry the same controls at the same bit
     /// offsets, so a plan for one reads the other by changing its ID.
     static func reportsShareLayout(_ descriptor: Data, _ a: Int, _ b: Int) -> Bool {
-        let (fieldsByReport, cursorByReport) = collectFields(descriptor)
+        let (fieldsByReport, cursorByReport, _) = collectFields(descriptor)
         func shape(_ id: Int) -> [[Int]] {
             (fieldsByReport[id] ?? []).filter { isControl($0) }
                 .map { [$0.usagePage, $0.usage, $0.bitOffset, $0.bitSize, $0.logicalMin, $0.logicalMax] }
@@ -100,20 +101,32 @@ enum HIDDescriptorParser {
         return !sa.isEmpty && sa == shape(b) && cursorByReport[a] == cursorByReport[b]
     }
 
-    /// Full decode plan for a descriptor.
-    static func parseExtended(_ descriptor: Data) -> HIDExtendedLayout? {
-        let (fieldsByReport, cursorByReport) = collectFields(descriptor)
-        return buildLayout(fieldsByReport: fieldsByReport, cursorByReport: cursorByReport)
+    /// Whether 1.6 could read this descriptor: some report has a control of
+    /// the kinds read before 1.7. A device it could not read, connected by
+    /// hand, was read bit by bit, and its presets use those bit numbers.
+    static func readableBefore17(_ descriptor: Data) -> Bool {
+        let (fieldsByReport, _, _) = collectFields(descriptor)
+        return fieldsByReport.values.contains { controlScore($0) > 0 }
     }
 
-    /// Every variable input field, per report ID, plus each report's bit length.
-    private static func collectFields(_ descriptor: Data) -> (fields: [Int?: [Field]], cursors: [Int?: Int]) {
+    /// Full decode plan for a descriptor.
+    static func parseExtended(_ descriptor: Data) -> HIDExtendedLayout? {
+        let (fieldsByReport, cursorByReport, arraysByReport) = collectFields(descriptor)
+        return buildLayout(fieldsByReport: fieldsByReport, cursorByReport: cursorByReport,
+                           arraysByReport: arraysByReport)
+    }
+
+    /// Every variable input field, per report ID, plus each report's bit
+    /// length, and the array inputs (a field holding which buttons are down)
+    /// on their own, so nothing that numbers the variable fields sees them.
+    private static func collectFields(_ descriptor: Data) -> (fields: [Int?: [Field]], cursors: [Int?: Int], arrays: [Int?: [ArrayInput]]) {
         var state = ParseState()
         var sequence = 0
         var globalStack: [GlobalState] = []
         // Key nil = device without REPORT_ID items.
         var fieldsByReport: [Int?: [Field]] = [:]
         var cursorByReport: [Int?: Int] = [:]
+        var arraysByReport: [Int?: [ArrayInput]] = [:]
 
         let bytes = Array(descriptor)
         var i = 0
@@ -183,6 +196,7 @@ enum HIDDescriptorParser {
                     let dataFlag = rawData
                     let isConstant = (dataFlag & 0x01) != 0
                     let isVariable = (dataFlag & 0x02) != 0
+                    let isRelative = (dataFlag & 0x04) != 0
                     let g = state.global
                     let bitsPerEntry = g.reportSize
 
@@ -206,6 +220,24 @@ enum HIDDescriptorParser {
                     }
                     let totalBits = mulResult
 
+                    // Input fields recorded before any REPORT_ID belong to
+                    // the first report that INPUT items are read under. Their
+                    // offsets are already payload-relative, so no shift.
+                    if let id = g.reportID {
+                        if let orphans = fieldsByReport[Int?.none], !orphans.isEmpty {
+                            fieldsByReport[id, default: []].append(contentsOf: orphans)
+                        }
+                        fieldsByReport[Int?.none] = nil
+                        if let orphans = arraysByReport[Int?.none], !orphans.isEmpty {
+                            arraysByReport[id, default: []].append(contentsOf: orphans)
+                        }
+                        arraysByReport[Int?.none] = nil
+                        if let orphanCursor = cursorByReport[Int?.none] {
+                            cursorByReport[id, default: 0] += orphanCursor
+                        }
+                        cursorByReport[Int?.none] = nil
+                    }
+
                     if !isConstant && isVariable {
                         // Distribute usages across the report count.
                         // If we have explicit usages they map 1:1; if
@@ -228,10 +260,28 @@ enum HIDDescriptorParser {
                                 rangeMin: range.min,
                                 rangeMax: range.max,
                                 isSigned: range.signed,
-                                sequence: sequence
+                                sequence: sequence,
+                                isRelative: isRelative
                             ))
                             sequence += 1
                         }
+                    }
+
+                    // An array input: each entry holds the number of a
+                    // control that is down (button boxes, some arcade
+                    // encoders, Android pads' Home and Back), not one bit
+                    // per control. Kept when its controls are buttons.
+                    if !isConstant && !isVariable,
+                       let usages = state.arrayUsages(logicalMin: g.logicalMin, logicalMax: g.logicalMax),
+                       bitsPerEntry <= 16 {
+                        let base = cursorByReport[g.reportID, default: 0]
+                        arraysByReport[g.reportID, default: []].append(ArrayInput(
+                            bitOffset: base,
+                            bitSize: bitsPerEntry,
+                            count: g.reportCount,
+                            logicalMin: g.logicalMin,
+                            usagePage: usages.page ?? g.usagePage,
+                            usages: usages.ids))
                     }
 
                     cursorByReport[g.reportID, default: 0] += totalBits
@@ -245,6 +295,12 @@ enum HIDDescriptorParser {
                     // decoder's size guard rejected every real report.
                     // (The old advance also multiplied unguarded, which
                     // a hostile descriptor could overflow.)
+                    // A REPORT_ID read for this item alone, after input items
+                    // without one, labels only the Output or Feature report:
+                    // later inputs stay ID-less like the ones before.
+                    if state.global.reportID != nil, cursorByReport[Int?.none] != nil {
+                        state.global.reportID = nil
+                    }
                     state.clearLocals()
 
                 case 0xA: // COLLECTION
@@ -268,22 +324,11 @@ enum HIDDescriptorParser {
                     // REPORT_ID - the first byte of every report is the
                     // ID. Switch the active per-report bookkeeping; each
                     // report ID gets its own payload-relative cursor.
-                    let id = Int(rawData)
-                    // Fields recorded before the first REPORT_ID item
-                    // (malformed but seen in the wild) belong to that
-                    // first report; migrate them. Their offsets are
-                    // already payload-relative so no shift is needed.
-                    if state.global.reportID == nil {
-                        if let orphans = fieldsByReport[Int?.none], !orphans.isEmpty {
-                            fieldsByReport[id, default: []].append(contentsOf: orphans)
-                            fieldsByReport[Int?.none] = nil
-                        }
-                        if let orphanCursor = cursorByReport[Int?.none] {
-                            cursorByReport[id, default: 0] += orphanCursor
-                            cursorByReport[Int?.none] = nil
-                        }
-                    }
-                    state.global.reportID = id
+                    // Input fields recorded before it (malformed but seen
+                    // in the wild) move to that report only once an INPUT
+                    // item is read under the ID: an ID that labels just an
+                    // Output or Feature item does not own the pad's input.
+                    state.global.reportID = Int(rawData)
                 case 0x9: state.global.reportCount = Int(rawData)
                 case 0xA: // PUSH - save the whole global state
                     // Capped so a hostile descriptor can't grow the stack
@@ -314,7 +359,19 @@ enum HIDDescriptorParser {
             }
         }
 
-        return (fieldsByReport, cursorByReport)
+        return (fieldsByReport, cursorByReport, arraysByReport)
+    }
+
+    /// One array input item: `count` entries of `bitSize` bits, each the
+    /// number of a control that is down, counted from `logicalMin`.
+    struct ArrayInput: Equatable {
+        let bitOffset: Int
+        let bitSize: Int
+        let count: Int
+        let logicalMin: Int
+        let usagePage: Int
+        /// The usage for each value from logicalMin up.
+        let usages: [Int]
     }
 
     // MARK: - SDL element order
@@ -349,7 +406,7 @@ enum HIDDescriptorParser {
     }
 
     static func sdlElements(_ descriptor: Data) -> SDLElements? {
-        let (fieldsByReport, cursorByReport) = collectFields(descriptor)
+        let (fieldsByReport, cursorByReport, _) = collectFields(descriptor)
         guard !fieldsByReport.isEmpty else { return nil }
         var all: [(Field, Int?)] = []
         for (key, fields) in fieldsByReport { all += fields.map { ($0, key) } }
@@ -414,6 +471,9 @@ enum HIDDescriptorParser {
         let isSigned: Bool
         // Position in the descriptor, across every report.
         let sequence: Int
+        // INPUT flag bit 2: a change since the last report (a mouse's X
+        // and Y), not a position.
+        var isRelative = false
     }
 
     /// The logical range a field is scaled by. HID says a negative
@@ -456,10 +516,11 @@ enum HIDDescriptorParser {
     }
 
     private static func buildLayout(fieldsByReport: [Int?: [Field]],
-                                    cursorByReport: [Int?: Int]) -> HIDExtendedLayout? {
+                                    cursorByReport: [Int?: Int],
+                                    arraysByReport: [Int?: [ArrayInput]] = [:]) -> HIDExtendedLayout? {
         // Deterministic report order: nil (no IDs) first, then ascending.
         let keys = fieldsByReport.keys.sorted { ($0 ?? -1) < ($1 ?? -1) }
-        guard !keys.isEmpty else { return nil }
+        guard !keys.isEmpty || !arraysByReport.isEmpty else { return nil }
 
         // The primary report is the one with the richest control set; a
         // tie goes to the lowest ID so the choice is stable run to run.
@@ -470,6 +531,22 @@ enum HIDDescriptorParser {
             if score > bestScore {
                 bestScore = score
                 primary = .some(key)
+            }
+        }
+        // A device with none of the controls read before 1.7 (rudder pedals
+        // on toe brake usages, a button box sending an array) is scored by
+        // everything it has instead.
+        if bestScore <= 0 {
+            var allKeys = keys
+            for key in arraysByReport.keys where !allKeys.contains(where: { $0 == key }) { allKeys.append(key) }
+            allKeys.sort { ($0 ?? -1) < ($1 ?? -1) }
+            for key in allKeys {
+                let score = (fieldsByReport[key] ?? []).filter(isControl).count
+                    + (arraysByReport[key] ?? []).filter { $0.usagePage == 0x09 || $0.usagePage == 0x0C }.count
+                if score > bestScore {
+                    bestScore = score
+                    primary = .some(key)
+                }
             }
         }
         guard let primaryKey = primary, bestScore > 0 else { return nil }
@@ -483,29 +560,53 @@ enum HIDDescriptorParser {
         var hatCountSeen = 0
         var keptFields: [[Field]] = []
         var keptKeys: [Int?] = []
+        // A report with the same controls as an earlier one is a second
+        // player (split off by playerLayouts) and adds nothing here. One
+        // that repeats only some of them (a board with two differently
+        // built joysticks, a two-port retro adapter) keeps its own buttons,
+        // hats and axes: they are numbered after everything else, so earlier
+        // numbers stay.
+        var repeatedButtons: [[Field]] = []
+        var signatures: [[Int]] = []
+        func signature(_ fields: [Field]) -> [Int] {
+            fields.filter { isControl($0) }.map { ($0.usagePage << 16) | $0.usage }.sorted()
+        }
         for key in orderedKeys {
             var kept: [Field] = []
+            var repeated: [Field] = []
             let fields = fieldsByReport[key] ?? []
+            let sig = signature(fields)
+            // The same rule as playerLayouts (four controls or more): a small
+            // repeated report (an Atari stick per port, one switch per port)
+            // stays on this pad as repeated controls, not dropped.
+            let playerCopy = sig.count >= 4 && signatures.contains(sig)
+            signatures.append(sig)
             let hatsHere = fields.filter { isHat($0) }.count
             let reportAddsHats = hatsHere > hatCountSeen
             var usagesHere = Set<Int>()
             for field in fields where isControl(field) {
                 if isHat(field) {
-                    if reportAddsHats { kept.append(field) }
+                    if reportAddsHats { kept.append(field) } else if !playerCopy { repeated.append(field) }
                     continue
                 }
                 let full = (field.usagePage << 16) | field.usage
                 // Repeats inside one report are kept (DragonRise declares
                 // X four times); only repeats of an earlier report drop.
-                if seenUsages.contains(full) { continue }
+                if seenUsages.contains(full) {
+                    // A mouse report's X and Y on a pad's interface move, not
+                    // sit at a position, so they are not a second port.
+                    if !playerCopy, (field.usagePage == 0x09 && field.bitSize == 1) || (isAxis(field) && !field.isRelative) { repeated.append(field) }
+                    continue
+                }
                 usagesHere.insert(full)
                 kept.append(field)
             }
             seenUsages.formUnion(usagesHere)
             if reportAddsHats { hatCountSeen = hatsHere }
-            if !kept.isEmpty || key == primaryKey {
+            if !kept.isEmpty || !repeated.isEmpty || key == primaryKey {
                 keptFields.append(kept)
                 keptKeys.append(key)
+                repeatedButtons.append(repeated)
             }
         }
 
@@ -529,25 +630,43 @@ enum HIDDescriptorParser {
                 buttonCount += 1
             }
         }
-
         // Hats in report order, then bit order: hats[0], hats[1], ...
         var hatsPerReport: [[HIDExtendedLayout.Hat]] = keptFields.map { _ in [] }
         var hatCount = 0
-        for (r, fields) in keptFields.enumerated() {
-            for field in fields.sorted(by: { $0.bitOffset < $1.bitOffset }) where isHat(field) {
-                // Directions from the declared span: 0..3 is a 4-way hat,
-                // 0..7 / 1..8 an 8-way one. Anything odd falls back to the
-                // 8-way reading with a 0 or 1 minimum, as before.
-                let span = field.logicalMax - field.logicalMin + 1
-                let directions = span == 4 ? 4 : 8
-                let minimum = (span == 4 || span == 8) ? field.logicalMin
-                    : ((0...1).contains(field.logicalMin) ? field.logicalMin : 0)
-                hatsPerReport[r].append(.init(bitOffset: field.bitOffset,
-                                              bitSize: field.bitSize,
-                                              logicalMin: minimum,
-                                              directions: directions,
-                                              index: hatCount))
-                hatCount += 1
+        // Hats of the widths read before 1.7 first, so their numbers stay;
+        // hats of other widths follow.
+        // Then the hats of a report that repeats another's controls.
+        let hatPasses: [(legacy: Bool?, source: [[Field]])] = [(true, keptFields), (false, keptFields), (nil, repeatedButtons)]
+        for (pass, source) in hatPasses {
+            for (r, fields) in source.enumerated() {
+                for field in fields.sorted(by: { $0.bitOffset < $1.bitOffset })
+                where isHat(field) && (pass == nil || isLegacyHat(field) == pass) {
+                    // Directions from the declared span: 0..3 is a 4-way hat,
+                    // 0..7 / 1..8 an 8-way one, and a wide span (0..315 or
+                    // 0..35999) an angle, read whole. Anything else odd falls
+                    // back to the 8-way reading with a 0 or 1 minimum.
+                    let span = field.logicalMax - field.logicalMin + 1
+                    // An angle needs at least 9 bits (0..315); a 4 or 8 bit
+                    // hat with a wide range left over from the axes before
+                    // it is an ordinary 8-way hat. Judged on the repaired
+                    // range, so 0..35999 written as a 2-byte maximum (which
+                    // reads as negative) still counts.
+                    let wideSpan = field.rangeMax - field.rangeMin + 1
+                    let angular = field.bitSize >= 9 && wideSpan > 16 && wideSpan <= (1 << field.bitSize)
+                    // An angle hat counts degrees (0..315 for eight ways),
+                    // tenths or hundredths of a degree: a full turn is the
+                    // first of those its span fits in.
+                    let turn = [360, 3600, 36000].first { wideSpan <= $0 } ?? wideSpan
+                    let directions = angular ? turn : (span == 4 ? 4 : 8)
+                    let minimum = angular ? field.rangeMin : (span == 4 || span == 8) ? field.logicalMin
+                        : ((0...1).contains(field.logicalMin) ? field.logicalMin : 0)
+                    hatsPerReport[r].append(.init(bitOffset: field.bitOffset,
+                                                  bitSize: field.bitSize,
+                                                  logicalMin: minimum,
+                                                  directions: directions,
+                                                  index: hatCount))
+                    hatCount += 1
+                }
             }
         }
 
@@ -616,7 +735,7 @@ enum HIDDescriptorParser {
             // axis or a throttle rests mid travel, and as a 0 to 1 trigger it
             // read half pulled at rest (LT held, Scan catching LT at once).
             // It goes to the extras below as an ordinary axis.
-            let unsignedLeftovers = leftovers.filter { !candidates[$0].field.isSigned }
+            let unsignedLeftovers = leftovers.filter { !candidates[$0].field.isSigned && !candidates[$0].field.isRelative }
             if unsignedLeftovers.count >= 2 {
                 for c in unsignedLeftovers {
                     if let free = (4...5).first(where: { !used.contains($0) }) { assign(c, free) }
@@ -644,29 +763,49 @@ enum HIDDescriptorParser {
         }
         // Sliders and dials were always read as analog triggers; keep
         // that while a trigger slot is free.
+        // A centered (signed) one, or one that reports turns (relative), is
+        // not a trigger: it rests mid travel and would read half pulled.
         for c in candidates.indices where slotOf[c] == nil
             && candidates[c].field.usagePage == 0x01
-            && (candidates[c].field.usage == 0x36 || candidates[c].field.usage == 0x37) {
+            && (candidates[c].field.usage == 0x36 || candidates[c].field.usage == 0x37)
+            && !isCenteredSliderOrDial(candidates[c].field) && !candidates[c].field.isRelative {
             if let free = (4...5).first(where: { !used.contains($0) }) {
                 assign(c, free)
             }
         }
-        // Everything else lands after the real axes, in report order.
+        // Everything else lands after the real axes, in report order: the
+        // usages read before 1.7 first, so their numbers stay, then the ones
+        // read since (toe brakes, clutch, collective, aileron, the Game
+        // Controls and velocity axes).
         var nextExtra = 6
-        for c in candidates.indices where slotOf[c] == nil {
-            assign(c, nextExtra)
-            nextExtra += 1
+        for pass in [true, false] {
+            for c in candidates.indices where slotOf[c] == nil && isLegacyAxis(candidates[c].field) == pass {
+                assign(c, nextExtra)
+                nextExtra += 1
+            }
+        }
+        // Then the axes of a report that repeats another's controls (port 2's
+        // X and Y on a two-port adapter), after every axis numbered above.
+        for (r, fields) in repeatedButtons.enumerated() {
+            for field in fields.sorted(by: { $0.bitOffset < $1.bitOffset }) where isAxis(field) {
+                candidates.append(AxisCandidate(field: field, reportIndex: r))
+                assign(candidates.count - 1, nextExtra)
+                nextExtra += 1
+            }
         }
 
         var axesPerReport: [[HIDExtendedLayout.Axis]] = keptFields.map { _ in [] }
         for (c, candidate) in candidates.enumerated() {
             guard let slot = slotOf[c] else { continue }
             let f = candidate.field
-            let isTrigger = slot == 4 || slot == 5
+            let isTrigger = (slot == 4 || slot == 5) && !f.isRelative
             // Mirror a trigger onto the LT/RT button slot only when the
             // device has no physical button there; a pad with 8+ buttons
             // lost its real buttons 6 and 7 to this before.
-            let mirror = isTrigger && buttonPageCount <= slot + 2 ? slot + 2 : nil
+            // Not for a slider or dial with a signed range: one centered at
+            // rest reads half way, and its mirror held LT down for good.
+            let centeredDial = isCenteredSliderOrDial(f)
+            let mirror = isTrigger && !centeredDial && buttonPageCount <= slot + 2 ? slot + 2 : nil
             axesPerReport[candidate.reportIndex].append(.init(
                 bitOffset: f.bitOffset,
                 bitSize: f.bitSize,
@@ -677,11 +816,63 @@ enum HIDDescriptorParser {
                 usage: f.usage,
                 index: slot,
                 unipolar: isTrigger,
-                digitalButton: mirror
+                digitalButton: mirror,
+                relative: f.isRelative
             ))
         }
 
+        // Buttons read since 1.7, numbered after every button read before so
+        // presets made earlier keep theirs: one-bit Simulation and Game
+        // Controls switches (a flight stick's trigger, landing gear, weapons
+        // arm), Button page fields wider than a bit (a pressure button, or a
+        // 0..1 button in a byte), and array inputs.
+        // They are numbered once the triggers are placed, around the LT and
+        // RT numbers a trigger is mirrored onto, so a row on those keeps
+        // firing on the trigger.
+        let mirrored = Set(axesPerReport.flatMap { $0.compactMap(\.digitalButton) })
+        func nextButton() -> Int {
+            while mirrored.contains(buttonCount) { buttonCount += 1 }
+            defer { buttonCount += 1 }
+            return buttonCount
+        }
+        for (r, fields) in keptFields.enumerated() {
+            for field in fields.sorted(by: { $0.bitOffset < $1.bitOffset }) where isLaterButton(field) || isWideButton(field) {
+                let rest = field.bitSize > 1 ? field.rangeMin + max(0, (field.rangeMax - field.rangeMin) / 16) : 0
+                buttonsPerReport[r].append(.init(bitOffset: field.bitOffset, index: nextButton(),
+                                                 bitSize: min(32, field.bitSize), pressAbove: rest))
+            }
+        }
+        for (r, fields) in repeatedButtons.enumerated() {
+            for field in fields.sorted(by: { $0.bitOffset < $1.bitOffset }) where !isHat(field) && !isAxis(field) {
+                buttonsPerReport[r].append(.init(bitOffset: field.bitOffset, index: nextButton()))
+            }
+        }
+        var arraysPerReport: [Int?: [HIDExtendedLayout.ButtonArray]] = [:]
+        for key in arraysByReport.keys.sorted(by: { ($0 ?? -1) < ($1 ?? -1) }) {
+            for array in arraysByReport[key] ?? [] where array.usagePage == 0x09 || array.usagePage == 0x0C {
+                // Usage 0 is "no button pressed" (Button page) or unassigned
+                // (Consumer): the value naming it is the resting state.
+                let skip = array.usages.first == 0 ? 1 : 0
+                let count = array.usages.count - skip
+                guard count > 0 else { continue }
+                // A run of numbers clear of the mirrored ones.
+                while (buttonCount..<(buttonCount + count)).contains(where: mirrored.contains) { buttonCount += 1 }
+                arraysPerReport[key, default: []].append(.init(
+                    bitOffset: array.bitOffset, bitSize: array.bitSize, count: array.count,
+                    logicalMin: array.logicalMin + skip, firstIndex: buttonCount,
+                    buttons: count))
+                buttonCount += count
+            }
+        }
+
         guard buttonCount > 0 || !candidates.isEmpty || hatCount > 0 else { return nil }
+        // A report that carries only an array input still needs an entry.
+        for key in arraysPerReport.keys where !keptKeys.contains(where: { $0 == key }) {
+            keptKeys.append(key)
+            buttonsPerReport.append([])
+            axesPerReport.append([])
+            hatsPerReport.append([])
+        }
 
         var reports: [HIDExtendedLayout.Report] = []
         for (r, key) in keptKeys.enumerated() {
@@ -690,19 +881,48 @@ enum HIDDescriptorParser {
                 payloadSize: ((cursorByReport[key] ?? 0) + 7) / 8,
                 buttons: buttonsPerReport[r],
                 axes: axesPerReport[r].sorted { $0.index < $1.index },
-                hats: hatsPerReport[r]
+                hats: hatsPerReport[r],
+                buttonArrays: arraysPerReport[key] ?? []
             ))
         }
         return HIDExtendedLayout(usesReportIDs: primaryKey != nil, reports: reports)
     }
 
+    /// A Slider or Dial whose range is centered on zero (a trim wheel, a
+    /// jog or shuttle ring): it rests mid travel, so it is no analog trigger.
+    private static func isCenteredSliderOrDial(_ f: Field) -> Bool {
+        f.isSigned && f.rangeMin < 0 && f.usagePage == 0x01 && (f.usage == 0x36 || f.usage == 0x37)
+    }
+
     private static func isHat(_ f: Field) -> Bool {
-        // Accept 4-bit AND 8-bit hats: some pads declare the hat as a
-        // full byte (0-7/8 in the low nibble, padding above).
-        f.usagePage == 0x01 && f.usage == 0x39 && (f.bitSize == 4 || f.bitSize == 8)
+        // 4-bit and 8-bit hats (0-7/8 in the low nibble, padding above), and
+        // since 1.7 any width from 2 to 16 bits: a 3-bit 8-way hat, or a hat
+        // that reports its angle in a 9 or 16 bit field.
+        f.usagePage == 0x01 && f.usage == 0x39 && (2...16).contains(f.bitSize)
+    }
+
+    /// The hat widths read before 1.7, numbered first.
+    private static func isLegacyHat(_ f: Field) -> Bool {
+        isHat(f) && (f.bitSize == 4 || f.bitSize == 8)
     }
 
     private static func isAxis(_ f: Field) -> Bool {
+        guard f.bitSize >= 2 && f.bitSize <= 32 else { return false }
+        if isLegacyAxis(f) { return true }
+        switch f.usagePage {
+        // Velocity (Vx to Vbrz), sent by some 6-axis devices.
+        case 0x01: return (0x40...0x45).contains(f.usage)
+        // Every Simulation Controls axis: aileron, elevator, trims, toe
+        // brakes, clutch, shifter, collective, flaps and the rest.
+        case 0x02: return (0xB0...0xCF).contains(f.usage)
+        // Game Controls: turn, pitch, roll, move and lean axes.
+        case 0x05: return (0x21...0x2A).contains(f.usage)
+        default: return false
+        }
+    }
+
+    /// The axis usages read before 1.7, numbered first among the extras.
+    private static func isLegacyAxis(_ f: Field) -> Bool {
         guard f.bitSize >= 2 && f.bitSize <= 32 else { return false }
         switch f.usagePage {
         case 0x01: return (0x30...0x38).contains(f.usage)
@@ -713,6 +933,19 @@ enum HIDDescriptorParser {
 
     private static func isControl(_ f: Field) -> Bool {
         (f.usagePage == 0x09 && f.bitSize == 1) || isHat(f) || isAxis(f) || isExtraButton(f)
+            || isLaterButton(f) || isWideButton(f)
+    }
+
+    /// One-bit switches on the Simulation Controls and Game Controls pages
+    /// (a flight stick's trigger, weapons arm, landing gear, a gun's trigger).
+    private static func isLaterButton(_ f: Field) -> Bool {
+        f.bitSize == 1 && (f.usagePage == 0x02 || f.usagePage == 0x05)
+    }
+
+    /// A Button page field wider than one bit: a pressure button, or a
+    /// button sent as a 0 or 1 in a whole byte.
+    private static func isWideButton(_ f: Field) -> Bool {
+        f.usagePage == 0x09 && f.bitSize >= 2 && f.bitSize <= 16 && f.rangeMax > f.rangeMin
     }
 
     /// One-bit controls a pad can send outside the Button page: Home, Back
@@ -726,12 +959,14 @@ enum HIDDescriptorParser {
         return f.usagePage == 0x01 && [0x3D, 0x3E, 0x85, 0x90, 0x91, 0x92, 0x93].contains(f.usage)
     }
 
+    /// Scored with the controls read before 1.7 only, so the report chosen
+    /// as primary, and every number that follows from it, stays the same.
     private static func controlScore(_ fields: [Field]) -> Int {
         var score = 0
         for f in fields {
             if f.usagePage == 0x09 && f.bitSize == 1 { score += 1 }
-            else if isAxis(f) { score += 2 }
-            else if isHat(f) { score += 2 }
+            else if isLegacyAxis(f) { score += 2 }
+            else if isLegacyHat(f) { score += 2 }
         }
         return score
     }
@@ -774,6 +1009,29 @@ enum HIDDescriptorParser {
             return Usage(page: nil, id: 0)
         }
 
+        /// The usages an array item's values stand for, from the logical
+        /// minimum up: a listed set or a usage range. Nil when the item is
+        /// not one of buttons, or names more than 128 of them (a keyboard's
+        /// or the whole Consumer page's, which are not a controller's).
+        func arrayUsages(logicalMin: Int, logicalMax: Int) -> (page: Int?, ids: [Int])? {
+            let span = logicalMax - logicalMin + 1
+            guard span >= 1, span <= 128 else { return nil }
+            var ids: [Int] = []
+            var page: Int? = nil
+            if !usages.isEmpty {
+                ids = usages.map(\.id)
+                page = usages.first?.page
+            } else if hasUsageMin || hasUsageMax {
+                let lo = usageMin.id, hi = hasUsageMax ? usageMax.id : usageMin.id + span - 1
+                guard hi >= lo, hi - lo < 128 else { return nil }
+                ids = Array(lo...hi)
+                page = usageMin.page ?? usageMax.page
+            } else {
+                return nil
+            }
+            return (page, Array(ids.prefix(span)))
+        }
+
         mutating func clearLocals() {
             usages.removeAll(keepingCapacity: true)
             usageMin = Usage(page: nil, id: 0)
@@ -811,6 +1069,7 @@ struct HIDExtendedLayout: Equatable {
         var unipolar: Bool        // 0...1 (trigger slots) instead of -1...1
         var digitalButton: Int?   // Button slot mirrored at > 0.12, only where no physical button exists
         var inverted: Bool = false // Flip the value (a GameControllerDB "~" axis, or a "-" half axis)
+        var relative: Bool = false // Reports a change since the last report (a knob), not a position
     }
 
     /// A D-pad direction sent as its own button, folded into a hat. Some
@@ -840,8 +1099,20 @@ struct HIDExtendedLayout: Equatable {
         var bitOffset: Int
         var bitSize: Int
         var logicalMin: Int
-        var directions: Int       // 8, or 4 for a 0..3 hat
+        var directions: Int       // 8, or 4 for a 0..3 hat; above 16, an angle over that many steps
         var index: Int            // Slot in ControllerState.hats
+    }
+
+    /// An array input: each of `count` entries holds the number of a
+    /// button that is down (from logicalMin), or a value outside the
+    /// range for none. Its buttons are firstIndex up.
+    struct ButtonArray: Equatable {
+        var bitOffset: Int
+        var bitSize: Int
+        var count: Int
+        var logicalMin: Int
+        var firstIndex: Int
+        var buttons: Int
     }
 
     struct Report: Equatable {
@@ -851,10 +1122,28 @@ struct HIDExtendedLayout: Equatable {
         var axes: [Axis]
         var hats: [Hat]
         var dpadButtons: [DpadButton] = []
+        var buttonArrays: [ButtonArray] = []
     }
 
     var usesReportIDs: Bool
     var reports: [Report]
+    /// A hand-written layout's report must arrive whole: its length tells
+    /// one report format from another. A descriptor plan reads each field
+    /// that arrived, so a pad that leaves off trailing vendor bytes works.
+    var requiresFullReport = false
+
+    /// Every button number the plan can set: bit buttons and the buttons of
+    /// array inputs.
+    var buttonIndices: [Int] {
+        reports.flatMap { r in
+            r.buttons.map(\.index) + r.buttonArrays.flatMap { $0.firstIndex..<($0.firstIndex + $0.buttons) }
+        }
+    }
+
+    /// The axis slots that report turns of a knob, not a position.
+    var relativeAxisSlots: [Int] {
+        Array(Set(reports.flatMap { $0.axes.filter(\.relative).map(\.index) })).sorted()
+    }
 
     /// The report entry that decodes a report carrying this ID.
     func report(forID id: Int) -> Report? {
@@ -934,6 +1223,7 @@ struct HIDExtendedLayout: Equatable {
             hats: hats
         )
         self.init(usesReportIDs: layout.hasReportID, reports: [report])
+        requiresFullReport = true
     }
 
     init(usesReportIDs: Bool, reports: [Report]) {

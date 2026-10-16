@@ -98,6 +98,9 @@ final class FeedbackService {
     nonisolated(unsafe) static var debugLastPath: String = "none"
 
     func vibrate(controller: GCController, intensity: Float = 0.6, sharpness: Float = 0.5, durationMs: Int = 0) {
+        #if DEBUG
+        if TestCapture.blocksDevices { TestCapture.note("rumble \(intensity)"); return }
+        #endif
         // Sony pads buzz through the report this app already writes for the
         // light bar. Asking the system to play the haptic hands it the
         // controller's report stream and it repaints the light bar for as
@@ -105,7 +108,10 @@ final class FeedbackService {
         // preset's color was replaced on every press that buzzed. Carrying
         // the motor values ourselves means one writer and one color.
         let name = ((controller.vendorName ?? "") + " " + controller.productCategory).lowercased()
-        let sony = name.contains("dualsense") || name.contains("dualshock")
+        // The Access controller can report a DualSense name; it is no Sony
+        // pad to the raw writer, which would buzz the real DualSense.
+        let sony = (name.contains("dualsense") || name.contains("dualshock"))
+            && ControllerTypeDetector.detect(controller) != .accessController
         if sony, InProcessLightWriter.shared.ownsAnyDualSense {
             // A duration of 0 means "a tap", but a motor needs time to spin
             // up, so a tap gets a short pulse rather than nothing felt.
@@ -123,6 +129,9 @@ final class FeedbackService {
     }
 
     private func vibrateUsingEngine(controller: GCController, intensity: Float, sharpness: Float, durationMs: Int) {
+        #if DEBUG
+        if TestCapture.blocksDevices { TestCapture.note("rumble \(intensity)"); return }
+        #endif
         guard let haptics = controller.haptics else { return }
         let key = ObjectIdentifier(controller)
 
@@ -220,10 +229,16 @@ final class FeedbackService {
 
     /// Every installed voice for the user's languages, premium first.
     static func installedVoices() -> [AVSpeechSynthesisVoice] {
-        let preferred = Set(Locale.preferredLanguages.map { String($0.prefix(2)) })
+        // The Mac's own languages as well as the app's: a language picked
+        // for InputConfig alone narrows Locale.preferredLanguages to it, and
+        // dropped every voice in the Mac's language.
+        let system = CFPreferencesCopyValue("AppleLanguages" as CFString, kCFPreferencesAnyApplication,
+                                            kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] ?? []
+        let preferred = Set((system + Locale.preferredLanguages).map { String($0.prefix(2)) })
+        let chosen = UserDefaults.standard.string(forKey: voiceKey) ?? ""
         let novelty = "com.apple.speech.synthesis.voice."
         return AVSpeechSynthesisVoice.speechVoices()
-            .filter { preferred.contains(String($0.language.prefix(2))) && !$0.identifier.hasPrefix(novelty) }
+            .filter { ($0.identifier == chosen || preferred.contains(String($0.language.prefix(2)))) && !$0.identifier.hasPrefix(novelty) }
             .sorted { a, b in
                 if a.quality != b.quality { return a.quality.rawValue > b.quality.rawValue }
                 if a.language != b.language { return a.language < b.language }
@@ -235,7 +250,13 @@ final class FeedbackService {
     /// "Mac" plays through whatever audio output the Mac is currently using.
     /// "Controller" routes audio through the controller speaker when one is
     /// connected as an audio output device, otherwise falls back to Mac.
-    func speak(_ phrase: String, destination: SpeechDestination = .mac, rate: Float = AVSpeechUtteranceDefaultSpeechRate) {
+    /// `appText`: the phrase is the app's own words, in the app's language,
+    /// so a System Voice in another language does not read it.
+    func speak(_ phrase: String, destination: SpeechDestination = .mac, rate: Float = AVSpeechUtteranceDefaultSpeechRate,
+               appText: Bool = false) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("speak \(phrase)"); return }
+        #endif
         guard !phrase.isEmpty else { return }
         // Note: on macOS there is no public API to pin speech to a specific output device.
         // The user can route audio to the controller speaker via System Settings > Sound,
@@ -246,14 +267,85 @@ final class FeedbackService {
         systemSpeech.stopSpeaking()
 
         let chosen = UserDefaults.standard.string(forKey: Self.voiceKey) ?? ""
-        if !chosen.isEmpty, let voice = AVSpeechSynthesisVoice(identifier: chosen) {
+        if !chosen.isEmpty, let voice = resolvedVoice(chosen: chosen) {
             let utterance = AVSpeechUtterance(string: phrase)
             utterance.rate = rate
             utterance.voice = voice
             speech.speak(utterance)
+        } else if appText, let voice = resolvedVoice(chosen: "") {
+            // The System Voice speaks another language than the app shows:
+            // an English voice asked to read Japanese said nothing useful.
+            let utterance = AVSpeechUtterance(string: phrase)
+            utterance.voice = voice
+            // The speaking rate from Spoken Content, as the System Voice uses.
+            utterance.prefersAssistiveTechnologySettings = true
+            speech.speak(utterance)
         } else {
             systemSpeech.startSpeaking(phrase)
         }
+    }
+
+    /// The voice the last press resolved, with what it was resolved from.
+    /// Resolving runs the voice enumeration through the speech daemon
+    /// (`speechVoices()`, `attributes(forVoice:)`, two language lookups),
+    /// and it ran on every Speak press, inside the poll frame, so that
+    /// frame and every other row's outputs in it waited on it. Now a press
+    /// costs two defaults reads and three string compares; the enumeration
+    /// runs again only when the app language, the chosen voice or the
+    /// Mac's System Voice has changed since.
+    private var voiceCache: (app: String, chosen: String, systemVoice: String, voice: AVSpeechSynthesisVoice?)?
+
+    /// The chosen voice (`chosen` non-empty), or the app-language voice for
+    /// the app's own words when the System Voice speaks another language
+    /// (nil when they match, so the System Voice reads them).
+    private func resolvedVoice(chosen: String) -> AVSpeechSynthesisVoice? {
+        let app = AppLanguage.current
+        let systemVoice = chosen.isEmpty ? NSSpeechSynthesizer.defaultVoice.rawValue : ""
+        if let hit = voiceCache, hit.app == app, hit.chosen == chosen, hit.systemVoice == systemVoice {
+            return hit.voice
+        }
+        let voice = chosen.isEmpty ? Self.appLanguageVoiceIfSystemDiffers() : AVSpeechSynthesisVoice(identifier: chosen)
+        voiceCache = (app, chosen, systemVoice, voice)
+        return voice
+    }
+
+    /// Resolve the voice and build the System Voice synthesizer now, so the
+    /// first Speak press of a run does not do it inside the poll loop.
+    /// Called by the engine when the preset it starts has a Speak row.
+    func prepareSpeech() {
+        #if DEBUG
+        if TestCapture.active { return }
+        #endif
+        _ = systemSpeech
+        _ = resolvedVoice(chosen: UserDefaults.standard.string(forKey: Self.voiceKey) ?? "")
+    }
+
+    /// The best installed voice for the app's language, when the System
+    /// Voice is in a different one; nil when they match.
+    static func appLanguageVoiceIfSystemDiffers() -> AVSpeechSynthesisVoice? {
+        let app = String(AppLanguage.current.prefix(2))
+        let systemLocale = NSSpeechSynthesizer.attributes(forVoice: NSSpeechSynthesizer.defaultVoice)[.localeIdentifier] as? String ?? ""
+        guard !systemLocale.isEmpty, !systemLocale.hasPrefix(app) else { return nil }
+        let novelty = "com.apple.speech.synthesis.voice."
+        // The app's own region first: Brazilian text in a European voice,
+        // or Mandarin in a Cantonese one, read wrongly.
+        let region: String = {
+            switch AppLanguage.current {
+            case "zh-Hans": return "zh-CN"
+            case "zh-Hant": return "zh-TW"
+            case "pt-BR": return "pt-BR"
+            default: return AVSpeechSynthesisVoice(language: app)?.language ?? app
+            }
+        }()
+        let localeDefault = AVSpeechSynthesisVoice(language: region)?.identifier
+        // Eloquence character voices (Grandpa, Shelley) are not a reading voice.
+        let characters: Set<String> = ["Eddy", "Flo", "Grandma", "Grandpa", "Reed", "Rocko", "Sandy", "Shelley"]
+        func rank(_ v: AVSpeechSynthesisVoice) -> (Int, Int, Int) {
+            (v.language == region ? 1 : 0, v.quality.rawValue, v.identifier == localeDefault ? 1 : 0)
+        }
+        return AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix(app) && !$0.identifier.hasPrefix(novelty) && !characters.contains($0.name) }
+            .max { rank($0) < rank($1) }
     }
 
     /// Cancel any ongoing speech.

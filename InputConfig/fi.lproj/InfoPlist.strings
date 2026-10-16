@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig käyttää Bluetoothia vain langattoman ohjaimen yhteyden katkaisemiseen, kun sitä pyydetään.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig käyttää Bluetoothia vain langattoman ohjaimen yhteyden katkaisemiseen, kun sitä pyydetään.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Kaikki oikeudet pidätetään.";
+

@@ -190,6 +190,9 @@ final class CrashRecoveryService: ObservableObject {
     /// The last run ended without a clean quit (crash, force quit, kill),
     /// with a preset running, so it may have left synthetic keys held.
     private(set) var previousRunEndedWithPresetRunning = false
+    /// The preset loop protection kept off this launch, so the app can say
+    /// why the controller does nothing.
+    private(set) var skippedLoopPresetID: UUID?
 
     private func determineRecoveryDecision(from previous: Session?) {
         if let prev = previous, !prev.cleanShutdown, prev.activePresetID != nil {
@@ -210,13 +213,23 @@ final class CrashRecoveryService: ObservableObject {
             let elapsed = Date().timeIntervalSince1970 - lastAttempt
             if elapsed < recoveryLoopWindow {
                 NSLog("CrashRecoveryService: suppressing recovery (loop within \(Int(elapsed))s)")
+                skippedLoopPresetID = presetID
                 return
             }
         }
 
         presetIDToRestore = presetID
         didRecoverPreviousSession = true
+        // Stamped when the preset actually starts again (markRestarted), not
+        // here: the countdown used up most of the loop window, and Not Now
+        // restarted nothing yet still counted as an attempt.
+    }
+
+    /// The restored preset is starting now; a crash within the loop window
+    /// from here is the loop the protection is for.
+    func markRestarted() {
         currentSession.lastRecoveryAttempt = Date().timeIntervalSince1970
+        writeSentinel()
     }
 
     @objc private func handleWillTerminate() {

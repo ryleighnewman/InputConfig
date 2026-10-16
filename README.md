@@ -1,5 +1,7 @@
 # InputConfig: free controller mapper for Mac
 
+![Turn literally anything into your Mac's input](Marketing/posters/01-hero.jpg)
+
 InputConfig is a free, open-source controller mapper for macOS. Map any PS5, Xbox or
 Switch controller to keyboard keys and mouse movement, use a controller as a mouse,
 run your Mac from a MIDI knob box, play games that never supported controllers, or
@@ -28,30 +30,28 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.6
+## What's new in 1.7
 
-- Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles
-- Added infrastructure for far more controllers: generic USB pads and arcade sticks take their button names from the community SDL GameControllerDB, and wheels, flight sticks, and pedals are read on every axis at full resolution and every hat switch
-- Generic USB pads and a single Joy-Con number their controls like other controllers; InputConfig offers to update older rows on USB pads
-- Added infrastructure for two-player adapters and dual arcade encoders, so each player gets a controller of their own
-- Added infrastructure for Valve's 2026 Steam Controller on a USB cable, over Bluetooth, or through its Puck: every button, the four back buttons, both trackpads, the gyro, rumble, and battery, and a built-in preset
-- Added infrastructure for the Stream Deck, the Neo's touch points and the Stream Deck modules included, connected from the Devices menu or the menu bar
-- New built-in presets: Easy Browse for using the whole Mac from a controller, Easy Edit for a controller in one hand and a mouse in the other, and Auto Clicker, which clicks 5 to 20 times a second, on and off, while held, or a set number of times
-- While the editor is open, the controller still moves the pointer and clicks, and Escape, Return, Tab, the arrows and Space still work from it, so Save and Cancel are always in reach
-- Star your favorite presets and show only favorites in the sidebar and the menu bar
-- A controller that also acts as a keyboard, such as some arcade sticks, works once Input Monitoring is allowed for InputConfig in System Settings
-- With two PlayStation controllers connected, each gets its own light color, rumble, and Edge paddles, and two identical controllers can go to two players
-- While the Mac sleeps or is locked no key is sent: at the lock screen only the pointer, clicks, and scrolling work
+- InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese
+- The Live Visualizer's keyboard takes the shape of your keyboard, ANSI, ISO or JIS, and labels every key with what it types in your input source, so AZERTY, QWERTZ, Dvorak, Cyrillic, Arabic and every other layout macOS has show as printed; key names in the editor and the Live Visualizer follow your keyboard layout too; rows still store each key by its place, so presets work the same on every layout
+- Stick regions are rings: an area between two distances from the center and two directions, so pushing a stick past half way up is one button and all the way up another
+- Triggers and single axes take bands, a range of their travel such as the last third of a trigger pull, each one a button
+- Stick gestures: flicks of a stick in order, such as pulling it straight back twice, fire a row; pick the flicks or record them by doing them; with Quick flicks only on, a push held out never counts
+- Each device group in the editor ends with a Regions card listing that device's touchpad, trackpads, sticks, triggers and screen, where regions are drawn, moved and resized, right-clicked to rename, duplicate or delete, and each part's rows are a click away; every Edit regions button opens it there
+- Set Up Full Gyro, on any motion row, adds the rows for gyro aiming, tilting to move with the arrow keys, or shakes and jabs, and skips rows the group already has
+- New app actions turn motion on and off with one press, or let the motion rows work only while a button is held, from any input, a key or a foot pedal included
+- Starting a preset by hand that keeps the pointer off the screen edges, recenters or hides it, or takes over mouse buttons first says so and lists every way to stop it, from your own Emergency Stop settings; check Don't show this again to skip it for that preset
+- Game presets no longer pull the pointer to the middle of the screen or hide it, so inventories and menus work with the stick again; the games lock and hide the mouse themselves while you play. The built-in Minecraft preset and game presets from the Smart Preset Maker are updated
+- Long dropdowns in the editor, and the Live Visualizer's controller menu, start with Search: type to find any choice in them, nested ones too, then pick it with the arrow keys and Return
+- The sidebar can be searched and sorted by name, or by when presets were edited or made; a new library starts A to Z and an existing one keeps its own order
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
 ## A tour
 
-![Turn literally anything into your Mac's input](Marketing/posters/01-hero.jpg)
-
 Open InputConfig and everything it can do is on one screen. Controllers, keyboards,
 mice, trackpads, and MIDI gear go in; keys, mouse, macros, MIDI, system functions,
-and Siri Shortcuts come out. Forty-five presets ship with it, sorted into folders you
+and Siri Shortcuts come out. Forty-six presets ship with it, sorted into folders you
 can name and color, and the Smart Preset Maker draws on a library of more than 450
 games and apps.
 
@@ -92,15 +92,16 @@ triggers, keys, and knobs light up as you play, clicking any control jumps strai
 to its binding, and Edit Layout rearranges the keyboard, mouse, touchpad and generic
 maps; a drawn controller keeps its real layout.
 
-![Touchpad support, done right](Marketing/posters/08-touchpad.jpg)
+![Draw regions on any control](Marketing/posters/08-touchpad.jpg)
 
-Calibrate a controller touchpad so swipes feel uniform, then carve it into tap zones
-that fire their own bindings, with two fingers tracked independently.
+Draw regions right in the editor: rings on a stick, bands along a trigger's pull, and
+areas on a controller touchpad or the screen. Each region is a button of its own, and
+the Live Visualizer lights it as you reach it.
 
-![Deadzones, dialed in](Marketing/posters/09-precision.jpg)
+![Dial in gyro and deadzones](Marketing/posters/09-precision.jpg)
 
-Tune the inner and outer deadzone on every stick and trigger with a live plot, so
-drift disappears and full travel stays. Bind gyroscope rotation to the mouse for
+Set the Deadzone and Full push at points on every stick and trigger and watch the row
+follow live, so drift disappears and full travel stays. Bind gyroscope rotation to the mouse for
 motion aim in any app, with live sensor readings and a resting-zero calibration.
 
 ![Open source, yours](Marketing/posters/10-about.jpg)
@@ -134,7 +135,7 @@ tools. Check for yourself before you switch.
 
 - Every button, trigger, joystick, and D-pad on any MFi or HID-compatible gamepad
 - DualSense Edge extras: both back paddles, both FN buttons, and the mute button, over USB and Bluetooth
-- Controller touchpads: cursor control, two-finger tracking, tap zones, one-finger and two-finger taps, with calibration
+- Controller touchpads: cursor control, two-finger tracking, regions, and one-finger and two-finger taps
 - Gyroscope, accelerometer, and absolute attitude on Sony controllers (DualSense, DualShock 4)
 - MIDI notes and pads, CC knobs, sliders, and pedals, the pitch wheel, channel and polyphonic aftertouch, Program Change, and transport Start, Continue, and Stop, from any MIDI device over USB or Bluetooth
 - Three knob modes for MIDI dials: Switch (fires past halfway), Dial (speed grows from center, like a stick), and Turn (a nudge per step of rotation, for knobs and for endless encoders set to absolute mode)
@@ -145,7 +146,7 @@ tools. Check for yourself before you switch.
 - Screen regions: areas of any display that act as inputs while the pointer is inside them, per display or on every display
 - Bluetooth headset and hearing aid buttons as media keys
 - Switches, pedals, and sticks plugged into a PlayStation Access Controller or Xbox Adaptive Controller
-- Stick regions: directional zones on any stick with their own bindings
+- Stick regions as rings, trigger bands, and stick gestures such as pulling a stick back twice, each with its own bindings
 
 ### Outputs
 
@@ -174,7 +175,7 @@ tools. Check for yourself before you switch.
 - Turbo with an adjustable rate, and repeat counts with custom delays
 - Hold actions and double-tap actions, each with their own outputs and timing windows
 - Chords: a row can require up to three controls held together, each chosen from the menu or scanned
-- Inner and outer deadzones with a live visual calibrator on every stick and trigger
+- Deadzone and Full push at on every stick and trigger, shown live in the row and in a full calibrator
 - Axis inversion and three sensitivity curves: linear, smooth, aggressive
 - Variable sensitivity: trigger pressure and stick depth scale the output speed
 - Stacked outputs: one input firing several outputs in parallel
@@ -182,7 +183,7 @@ tools. Check for yourself before you switch.
 
 ### Presets
 
-- 45 built-in presets: Easy Browse and Easy Edit, an Auto Clicker, the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
+- 46 built-in presets: Easy Browse and Easy Edit, an Auto Clicker, the Access Controller and One-Stick Driving, the Mac's own keyboard, trackpad, and modifiers, desktop navigation, web browsing, media control, popular games, MIDI and creative work, and feature showcases, every row annotated
 - Smart Preset Maker builds a tailored preset from a few questions, from a library of more than 450 games, apps, and workflows, and can add a touchpad-as-trackpad, gyro fine aim, and trigger rumble
 - Folders with names and colors, and unlimited presets of your own
 - Per-app auto-switch: presets activate themselves when their app comes to the front
@@ -198,6 +199,7 @@ tools. Check for yourself before you switch.
 - The MIDI instrument: a seven-octave velocity-shaded keyboard, a named dial for every knob (Mod Wheel, Cutoff, Sustain and the rest), knob-mode badges, pitch bend and aftertouch meters, a 16-channel activity strip, and a rolling event log
 - Click any control to jump straight to its binding in the editor
 - Edit Layout to rearrange the keyboard, mouse, touchpad and generic maps (a drawn controller keeps its real layout), plus zoom, pan, and four backgrounds
+- A keyboard map in the shape of your keyboard, ANSI, ISO or JIS, with every key labeled in your own layout
 
 ### Accessibility
 
@@ -213,6 +215,8 @@ tools. Check for yourself before you switch.
 - Battery level and connection state for every controller
 - A changelog inside the app and a What's New popup after updates
 - 42 built-in help guides, the same pages as inputconfig.com, and a guided Quick Start tour
+- Available in 26 languages, with Arabic and Hebrew reading right to left
+- Search in long dropdowns and in the sidebar, which also sorts by name or by date
 - Menu bar control with a choice of twelve icons, plus Dock-only and menu-bar-only modes
 - An activity log of everything the app does, with a one-file report ready to send
 - Adjustable polling rate: 60, 120, 180, or 240 Hz, with an automatic battery saver
@@ -228,10 +232,10 @@ tools. Check for yourself before you switch.
 - Xbox Wireless Controller (One, Series X|S), Xbox Elite Series 2, and the Xbox Adaptive Controller
 - Nintendo Switch Pro Controller and Joy-Cons
 - 8BitDo Pro 2, SN30 Pro+, SN30 Pro, and Ultimate 2C
-- Steam Controller (2015 and 2026), Stadia Controller, and the Logitech G29 and G923 wheels
+- Steam Controller (2015 and 2026), Stadia Controller, and the Logitech G29, G920 and G923 wheels
 - Any MFi or HID-compatible gamepad
 - MIDI keyboards, pad controllers, knob boxes, and control surfaces
-- Stream Deck keys
+- Stream Deck keys, and the Stream Deck + dials and touch strip
 - Your Mac keyboard, mouse, and trackpad
 
 Other controllers, joysticks and wheels are read as well, shown in a generic drawing.

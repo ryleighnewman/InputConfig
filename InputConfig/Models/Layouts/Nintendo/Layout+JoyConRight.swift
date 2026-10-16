@@ -17,8 +17,7 @@ extension ControllerLayout {
     /// and 1 (Y flipped by profileAxisSign) and on hat 0, and the raw HID
     /// read is switched off for this device (RawHIDGamepadService counts
     /// 057E:2007 as listed by GameController), so R, ZR and the stick press
-    /// never reach the app. Motion is filled only for extendedGamepad pads,
-    /// so the gyro and accelerometer are never read either.
+    /// never reach the app. Motion is read whenever GameController exposes it.
     ///
     /// Face buttons use the POSITIONAL numbering as held sideways: btn 0 the
     /// bottom button (A), 1 the right (X), 2 the left (B), 3 the top (Y).
@@ -51,7 +50,7 @@ extension ControllerLayout {
             [.brand(.joyConRight), .gcProductCategoryContains("Joy-Con (R)")],
         ],
         matchPriority: 10,
-        readability: .partial("R, ZR, the stick press and motion never reach the Mac on a single Joy-Con (R)"),
+        readability: .partial("R, ZR and the stick press never reach the Mac on a single Joy-Con (R); motion is read when macOS reports it"),
         approximate: true,
         sources: [
             "nintendo.com Joy-Con specifications (102 x 35.9 x 28.4 mm)",
@@ -152,10 +151,10 @@ extension ControllerLayout {
                       shape: .capsule(angleDegrees: 0), printed: "R",
                       readable: .notReported("GameController does not expose R on a single Joy-Con, and the raw HID read is switched off for it")),
 
-        // Motion sensors inside the body, never read on this path.
+        // Motion sensors inside the body, read when macOS reports them.
         PlacedControl(id: "gyro", kind: .other, center: CGPoint(x: 0.2, y: 0.72), size: 0.075, height: 0.028,
                       shape: .capsule(angleDegrees: 0), printed: "Gyro",
-                      readable: .notReported("readControllerState fills motion only for extendedGamepad pads, and a single Joy-Con has none")),
+                      readable: .conditional("Read when macOS reports the Joy-Con's motion through GameController")),
 
         // Back, as held: ZR behind R at the right end, toward the outer shell.
         PlacedControl(id: "zr", kind: .trigger(.digital), face: .back, center: CGPoint(x: 0.92, y: 0.55), size: 0.085, height: 0.14,

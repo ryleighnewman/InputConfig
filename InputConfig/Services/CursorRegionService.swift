@@ -207,8 +207,10 @@ final class CursorRegionService: ObservableObject {
         // A region drawn for one display is silent on every other.
         guard regionApplies(r) else { return false }
         let p = cursorNormalized
-        return p.x >= CGFloat(r.minX) && p.x <= CGFloat(r.maxX)
-            && p.y >= CGFloat(r.minY) && p.y <= CGFloat(r.maxY)
+        // Far edges open (except at the screen's edge), so neighbors that
+        // share a border are not both pressed on it.
+        return p.x >= CGFloat(r.minX) && (p.x < CGFloat(r.maxX) || r.maxX >= 1)
+            && p.y >= CGFloat(r.minY) && (p.y < CGFloat(r.maxY) || r.maxY >= 1)
     }
 
     // MARK: - Cursor tracking

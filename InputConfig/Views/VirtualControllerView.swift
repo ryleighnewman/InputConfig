@@ -10,26 +10,26 @@ enum SpokenLive {
     /// "right 50 percent", "centered".
     static func stick(x: Float, y: Float) -> String {
         let mag = (x * x + y * y).squareRoot()
-        guard mag > 0.15 else { return "centered" }
+        guard mag > 0.15 else { return String(localized: "centered") }
         let step = Int((min(1, mag) * 4).rounded()) * 25
         var dir: [String] = []
-        if y < -0.35 { dir.append("up") } else if y > 0.35 { dir.append("down") }
-        if x < -0.35 { dir.append("left") } else if x > 0.35 { dir.append("right") }
-        return "\(dir.isEmpty ? "off center" : dir.joined(separator: " ")) \(step) percent"
+        if y < -0.35 { dir.append(String(localized: "up")) } else if y > 0.35 { dir.append(String(localized: "down")) }
+        if x < -0.35 { dir.append(String(localized: "left")) } else if x > 0.35 { dir.append(String(localized: "right")) }
+        return String(localized: "\(dir.isEmpty ? String(localized: "off center") : dir.joined(separator: " ")) \(step) percent")
     }
     /// A single signed axis in quarter steps: "plus 50 percent", "centered".
     static func axis(_ v: Float) -> String {
         let step = Int((min(1, abs(v)) * 4).rounded()) * 25
-        guard step > 0 else { return "centered" }
-        return "\(v < 0 ? "minus" : "plus") \(step) percent"
+        guard step > 0 else { return String(localized: "centered") }
+        return v < 0 ? String(localized: "minus \(step) percent") : String(localized: "plus \(step) percent")
     }
     /// A trigger in quarter steps: "released", "50 percent", "fully pressed".
     static func trigger(_ v: Float) -> String {
         let step = Int((min(1, max(0, v)) * 4).rounded()) * 25
         switch step {
-        case 0: return "released"
-        case 100: return "fully pressed"
-        default: return "\(step) percent"
+        case 0: return String(localized: "released")
+        case 100: return String(localized: "fully pressed")
+        default: return String(localized: "\(step) percent")
         }
     }
     /// An angle to the nearest 15 degrees.
@@ -73,14 +73,17 @@ final class VisualizerControlState: ObservableObject {
 
 /// The region editors a map's popover can open: Touchpad Setup for touchpad
 /// zones, the drawing sheet for screen regions, the stick zone editor.
-enum VisualizerRegionEditor {
-    case touchpadSetup, screenRegions, stickZones
+enum VisualizerRegionEditor: Equatable {
+    case touchpadSetup, screenRegions
+    /// On one stick (0, 1) or one axis's bands (100 plus the axis); nil
+    /// lets the sheet's title pick.
+    case stickZones(key: Int?)
 
     var buttonTitle: String {
         switch self {
-        case .touchpadSetup: return "Open Touchpad Setup"
-        case .screenRegions: return "Edit screen regions"
-        case .stickZones: return "Edit stick zones"
+        case .touchpadSetup: return String(localized: "Edit touchpad regions")
+        case .screenRegions: return String(localized: "Edit screen regions")
+        case .stickZones: return String(localized: "Edit stick regions")
         }
     }
 
@@ -103,10 +106,10 @@ enum VisualizerBackground: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .normal: return "Normal"
-        case .blueprint: return "Blueprint"
-        case .black: return "Black"
-        case .slate: return "Slate"
+        case .normal: return String(localized: "Normal")
+        case .blueprint: return String(localized: "Blueprint")
+        case .black: return String(localized: "Black")
+        case .slate: return String(localized: "Slate")
         }
     }
 
@@ -156,8 +159,15 @@ enum VisualizerBackground: String, CaseIterable, Identifiable {
 
 struct VirtualControllerView<Trailing: View>: View {
     @EnvironmentObject var controllerService: GameControllerService
+    /// The app's reading direction. The drawings are pinned left to right;
+    /// the popovers they open read in the app's own direction again.
+    @Environment(\.layoutDirection) private var appDirection
     @EnvironmentObject var mappingEngine: MappingEngine
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
+    /// A press shown by more than hue (see ControllerCanvas).
+    private var pressedOutline: Bool { differentiateWithoutColor || colorSchemeContrast == .increased || appHighContrast }
     let preset: Preset
     /// Asks the host to open the preset editor and scroll/pulse the row that
     /// matches this input. Fired when the user clicks any matching binding
@@ -223,10 +233,6 @@ struct VirtualControllerView<Trailing: View>: View {
     /// Points a group at a connected controller by the name its device menu
     /// uses (nil: Automatic, the pad at its own number).
     var onChangeDevice: ((Int, String?) -> Void)? = nil
-    /// Opens a region editor (Touchpad Setup, the screen region drawing
-    /// sheet, the stick zone editor) from a zone's or region's popover.
-    /// nil hides those buttons.
-    var onOpenRegionEditor: ((VisualizerRegionEditor) -> Void)? = nil
 
     /// Edit mode and zoom live with the host, which draws their controls on
     /// the Live Visualizer title row; the panel reads and writes them here.
@@ -274,6 +280,12 @@ struct VirtualControllerView<Trailing: View>: View {
             control.scale = 1
         }
         DispatchQueue.main.async { restoringView = false }
+    }
+
+    /// Moves the zoomed map a step, as a drag would.
+    private func pan(dx: CGFloat, dy: CGFloat) {
+        panOffset = clampedPan(CGSize(width: panOffset.width + dx, height: panOffset.height + dy))
+        saveView()
     }
 
     private func saveView() {
@@ -451,12 +463,26 @@ struct VirtualControllerView<Trailing: View>: View {
                     }
                     .buttonStyle(.solidSecondaryCompact)
                     .help("Put the map back in the middle at its normal size")
+                    // Panning without a drag, for VoiceOver, Switch Control
+                    // and keyboard users with the map zoomed in.
+                    .accessibilityAction(named: "Pan left") { pan(dx: 40, dy: 0) }
+                    .accessibilityAction(named: "Pan right") { pan(dx: -40, dy: 0) }
+                    .accessibilityAction(named: "Pan up") { pan(dx: 0, dy: 40) }
+                    .accessibilityAction(named: "Pan down") { pan(dx: 0, dy: -40) }
                     .padding(10)
+                }
+            }
+            .contextMenu {
+                if control.scale != 1 || panOffset != .zero {
+                    Button("Pan Left") { pan(dx: 40, dy: 0) }
+                    Button("Pan Right") { pan(dx: -40, dy: 0) }
+                    Button("Pan Up") { pan(dx: 0, dy: 40) }
+                    Button("Pan Down") { pan(dx: 0, dy: -40) }
                 }
             }
 
             if editMode {
-                Text("Drag any widget to a new position. The layout saves automatically for this controller model.")
+                Text("Drag any widget to a new position, or Tab to it and press the arrow keys, or right-click it, to move it a step at a time. The layout saves automatically for this controller model.")
                     .font(.caption2)
                     .foregroundStyle(.yellow.opacity(0.9))
                     .padding(.top, 2)
@@ -487,6 +513,9 @@ struct VirtualControllerView<Trailing: View>: View {
         }
         .onChange(of: control.scale) { _, _ in saveView() }
         .onChange(of: preset.id) { _, _ in loadView() }
+        // The pad behind the panel changed (a Connected pick, pads shifting
+        // slots): its own saved layout, not the last one's written over it.
+        .onChange(of: layoutStorageKey) { _, _ in loadOffsets() }
         .onChange(of: slot) { _, _ in
             loadOffsets()
             loadView()
@@ -545,6 +574,9 @@ struct VirtualControllerView<Trailing: View>: View {
             openInspectorLabel = nil
             _ = editing
         }
+        .onReceive(NotificationCenter.default.publisher(for: .inputConfigTourInspect)) { note in
+            openInspectorLabel = note.object as? String
+        }
         .debugEditLayout($control.editMode)
         .debugVizZoom($control.scale)
         #if DEBUG
@@ -595,15 +627,18 @@ struct VirtualControllerView<Trailing: View>: View {
             let majorStep: CGFloat = 100
 
             // Minor grid (faint).
+            // From one step in to one step short of the far edge: a line on
+            // the edge itself read as the box's border on the straight sides
+            // and vanished where the rounded corners clip it.
             var minorPath = Path()
-            var x: CGFloat = 0
-            while x <= size.width {
+            var x: CGFloat = minorStep
+            while x < size.width {
                 minorPath.move(to: CGPoint(x: x, y: 0))
                 minorPath.addLine(to: CGPoint(x: x, y: size.height))
                 x += minorStep
             }
-            var y: CGFloat = 0
-            while y <= size.height {
+            var y: CGFloat = minorStep
+            while y < size.height {
                 minorPath.move(to: CGPoint(x: 0, y: y))
                 minorPath.addLine(to: CGPoint(x: size.width, y: y))
                 y += minorStep
@@ -612,14 +647,14 @@ struct VirtualControllerView<Trailing: View>: View {
 
             // Major grid (slightly bolder).
             var majorPath = Path()
-            x = 0
-            while x <= size.width {
+            x = majorStep
+            while x < size.width {
                 majorPath.move(to: CGPoint(x: x, y: 0))
                 majorPath.addLine(to: CGPoint(x: x, y: size.height))
                 x += majorStep
             }
-            y = 0
-            while y <= size.height {
+            y = majorStep
+            while y < size.height {
                 majorPath.move(to: CGPoint(x: 0, y: y))
                 majorPath.addLine(to: CGPoint(x: size.width, y: y))
                 y += majorStep
@@ -703,7 +738,9 @@ struct VirtualControllerView<Trailing: View>: View {
         // template it was pinned to. Presets from before the Screen
         // template existed were pinned to Touchpad, and a touchpad drawing
         // of the display is the wrong picture.
-        if !j.bindings.isEmpty, j.bindings.allSatisfy({ $0.input.type == .cursorRegion }) { return .screen }
+        // A map picked by hand wins.
+        if j.inputKind == .auto || j.inputKind == .touchpad,
+           !j.bindings.isEmpty, j.bindings.allSatisfy({ $0.input.type == .cursorRegion }) { return .screen }
         if j.inputKind != .auto { return j.inputKind }
         guard !j.bindings.isEmpty else { return .controller }
         var counts: [SlotInputKind: Int] = [:]
@@ -753,9 +790,10 @@ struct VirtualControllerView<Trailing: View>: View {
             // drawn at 100% and blurred it. The picture spans the whole box,
             // so the zoomed map is not cut short at its own column. Not the
             // screen regions map, whose display menu is an AppKit control a
-            // drawing group cannot show.
+            // drawing group cannot show, nor the keyboard (its shape and
+            // layout menu) or MIDI (its knob row and Bound notes menu).
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .modifier(SharpZoom(active: visualizerScale != 1 && effectiveInputKind != .screen))
+            .modifier(SharpZoom(active: visualizerScale != 1 && ![.screen, .keyboard, .midi].contains(effectiveInputKind)))
     }
 
     /// The stationary gradient + grid + border backdrop the visualizer map sits
@@ -765,12 +803,13 @@ struct VirtualControllerView<Trailing: View>: View {
     private var visualizerBoxBackground: some View {
         RoundedRectangle(cornerRadius: 16)
             .fill(background.fill)
+            .overlay(gridOverlay)
+            // The outline over the grid, inside the edge, so it runs
+            // unbroken round the corners.
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.secondary.opacity(0.18),
-                            lineWidth: 0.5)
+                    .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 1)
             )
-            .overlay(gridOverlay)
             .allowsHitTesting(false)
     }
 
@@ -806,7 +845,10 @@ struct VirtualControllerView<Trailing: View>: View {
                         .onAppear { control.showingModel = true }
                         .onDisappear { control.showingModel = false }
                 } else {
+                    // Hardware: never mirrored for right-to-left languages
+                    // (inspectable puts the app's direction back in popovers).
                     controllerWidgets
+                        .environment(\.layoutDirection, .leftToRight)
                 }
             }
             // The regions this preset defines, whichever template is up:
@@ -827,21 +869,34 @@ struct VirtualControllerView<Trailing: View>: View {
         if boundTapCounts.isEmpty == false {
             TapMapView(counts: boundTapCounts)
         }
-        ForEach(stickRegionMaps, id: \.stick) { entry in
-            RegionMapView(title: entry.stick == 0 ? "Left stick zones" : "Right stick zones",
+        let onCanvas = zoneKeysOnCanvas
+        ForEach(stickRegionMaps.filter { !onCanvas.contains($0.stick) }, id: \.stick) { entry in
+            RegionMapView(title: entry.stick == 0 ? String(localized: "Left stick regions") : String(localized: "Right stick regions"),
                           systemImage: "circle.dashed",
                           aspect: 1,
                           regions: entry.regions,
                           point: entry.point,
-                          pointLabel: entry.stick == 0 ? "Left stick" : "Right stick",
+                          pointLabel: entry.stick == 0 ? String(localized: "Left stick") : String(localized: "Right stick"),
                           onPick: { region in
                               jumpToInput(InputEvent.stickRegion(stickIndex: entry.stick, id: region.id))
                           },
                           inspect: { region, swatch in
-                              AnyView(inspectable(label: region.name, key: "stickzone-\(region.id)",
+                              AnyView(inspectable(label: region.shownName, key: "stickzone-\(region.id)",
                                                   events: [InputEvent.stickRegion(stickIndex: entry.stick, id: region.id)],
-                                                  draggable: false, editor: .stickZones) { swatch })
+                                                  draggable: false, editor: .stickZones(key: entry.stick)) { swatch })
                           })
+        }
+        ForEach(bandMaps.filter { !onCanvas.contains($0.key) }, id: \.key) { entry in
+            let axisName = StickRegionService.axisDisplayName(entry.key - StickRegionService.bandKeyBase)
+            BandMapView(title: String(localized: "\(axisName) regions"),
+                        axis: entry.key - StickRegionService.bandKeyBase,
+                        regions: entry.regions,
+                        fraction: entry.fraction,
+                        inspect: { region, swatch in
+                            AnyView(inspectable(label: region.shownName, key: "stickzone-\(region.id)",
+                                                events: [InputEvent.stickRegion(stickIndex: entry.key, id: region.id)],
+                                                draggable: false, editor: .stickZones(key: entry.key)) { swatch })
+                        })
         }
     }
 
@@ -885,15 +940,15 @@ struct VirtualControllerView<Trailing: View>: View {
     private func regionInfo(for input: InputEvent) -> (name: String, colorIndex: Int)? {
         if let id = input.touchpadRegionID,
            let r = preset.touchpadRegions.first(where: { $0.id == id }) {
-            return (r.name, r.colorIndex)
+            return (r.shownName, r.colorIndex)
         }
         if let id = input.cursorRegionID,
            let r = preset.cursorRegions.first(where: { $0.id == id }) {
-            return (r.name, r.colorIndex)
+            return (r.shownName, r.colorIndex)
         }
         if let id = input.stickRegionID {
             for (_, list) in preset.stickRegions {
-                if let r = list.first(where: { $0.id == id }) { return (r.name, r.colorIndex) }
+                if let r = list.first(where: { $0.id == id }) { return (r.shownName, r.colorIndex) }
             }
         }
         return nil
@@ -915,9 +970,18 @@ struct VirtualControllerView<Trailing: View>: View {
     /// The display which the screen map shows, chosen by the user and
     /// remembered; empty means the map follows the pointer between displays.
     @AppStorage("InputConfig.visualizer.screenDisplay") private var screenDisplayName: String = ""
+    /// The same display by its hardware, which survives a language change:
+    /// macOS names a display ("Built-in Retina Display") in the app's
+    /// language. Empty in choices made before 1.7, found by name then.
+    @AppStorage("InputConfig.visualizer.screenDisplayID") private var screenDisplayID: String = ""
+
+    private static func hardwareID(_ k: DisplayKey) -> String { "\(k.vendor):\(k.model):\(k.serial):\(k.uuid ?? "")" }
 
     private var chosenScreenDisplay: DisplayKey? {
-        guard !screenDisplayName.isEmpty else { return nil }
+        guard !screenDisplayName.isEmpty || !screenDisplayID.isEmpty else { return nil }
+        if !screenDisplayID.isEmpty, let d = cursorService.attachedDisplays.first(where: { Self.hardwareID($0.key) == screenDisplayID }) {
+            return d.key
+        }
         return cursorService.attachedDisplays.first { $0.key.name == screenDisplayName }?.key
     }
 
@@ -953,6 +1017,7 @@ struct VirtualControllerView<Trailing: View>: View {
                 Menu {
                     Button {
                         screenDisplayName = ""
+                        screenDisplayID = ""
                     } label: {
                         if chosenScreenDisplay == nil { Label("Follow the pointer", systemImage: "checkmark") } else { Text("Follow the pointer") }
                     }
@@ -960,17 +1025,18 @@ struct VirtualControllerView<Trailing: View>: View {
                     ForEach(cursorService.attachedDisplays) { d in
                         Button {
                             screenDisplayName = d.key.name
+                            screenDisplayID = Self.hardwareID(d.key)
                         } label: {
                             if chosenScreenDisplay == d.key { Label(d.key.name, systemImage: "checkmark") } else { Text(d.key.name) }
                         }
                     }
                 } label: {
-                    Label(chosenScreenDisplay?.name ?? "Follow the pointer", systemImage: "display")
+                    Label(chosenScreenDisplay?.name ?? String(localized: "Follow the pointer"), systemImage: "display")
                         .font(.caption)
                 }
                 .fixedSize()
                 .help("Which display the map shows. Follow the pointer switches as the pointer moves between displays.")
-                Text("\(preset.cursorRegions.count) region\(preset.cursorRegions.count == 1 ? "" : "s")")
+                Text(preset.cursorRegions.count == 1 ? String(localized: "1 region") : String(localized: "\(preset.cursorRegions.count) regions"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -981,15 +1047,15 @@ struct VirtualControllerView<Trailing: View>: View {
                 Button {
                     jump(EditorJumpTarget(joystickIndex: slot, inputSerialized: "", action: .addScreenRegion))
                 } label: {
-                    Label(preset.cursorRegions.isEmpty ? "Draw a screen region" : "Draw another region",
+                    Label(preset.cursorRegions.isEmpty ? String(localized: "Draw a screen region") : String(localized: "Draw another region"),
                           systemImage: "plus.rectangle.on.rectangle")
                         .font(.callout)
                 }
                 .buttonStyle(.solidSecondaryCompact)
                 // A preset holds 16 regions, as the drawing sheet does.
                 .disabled(preset.cursorRegions.count >= 16)
-                .help(preset.cursorRegions.count >= 16 ? "This preset has the most regions it can hold, 16"
-                      : "Opens the editor with a Screen region row added and the drawing sheet open")
+                .help(preset.cursorRegions.count >= 16 ? String(localized: "This preset has the most regions it can hold, 16")
+                      : String(localized: "Opens the editor with a Screen region row added and the drawing sheet open"))
                 if preset.cursorRegions.isEmpty {
                     Text("Move the pointer into a region to fire its row.")
                         .font(.caption)
@@ -1004,7 +1070,7 @@ struct VirtualControllerView<Trailing: View>: View {
                                   aspect: 16.0 / 10.0,
                                   regions: drawnCursorRegions,
                                   point: .zero,
-                                  pointLabel: "Pointer",
+                                  pointLabel: String(localized: "Pointer"),
                                   liveCursor: true,
                                   displayOverride: chosenScreenDisplay,
                                   large: true,
@@ -1012,10 +1078,18 @@ struct VirtualControllerView<Trailing: View>: View {
                                       jumpToInput(InputEvent.cursorRegion(region.id))
                                   },
                                   inspect: { region, swatch in
-                                      AnyView(inspectable(label: region.name, key: "screen-\(region.id)",
+                                      AnyView(inspectable(label: region.shownName, key: "screen-\(region.id)",
                                                           events: [InputEvent.cursorRegion(region.id)],
                                                           draggable: false, editor: .screenRegions) { swatch })
                                   })
+                    // A display chosen before 1.7 is stored by name only;
+                    // its hardware is added while the name still matches,
+                    // so a later language change keeps the choice.
+                    .onAppear {
+                        if screenDisplayID.isEmpty, !screenDisplayName.isEmpty, let d = chosenScreenDisplay {
+                            screenDisplayID = Self.hardwareID(d)
+                        }
+                    }
                     Spacer(minLength: 0)
                 }
             }
@@ -1044,13 +1118,87 @@ struct VirtualControllerView<Trailing: View>: View {
     /// The preset's stick zones with the live stick position, per stick.
     private var stickRegionMaps: [(stick: Int, regions: [TouchpadRegion], point: CGPoint)] {
         preset.stickRegions.compactMap { key, list in
-            guard let stick = Int(key), !list.isEmpty else { return nil }
+            guard let stick = Int(key), !StickRegionService.isBandKey(stick), !list.isEmpty else { return nil }
             let x = Double(state.axes[stick * 2] ?? 0)
             let y = Double(state.axes[stick * 2 + 1] ?? 0)
             // Axis values run -1...1; the maps are drawn in 0...1.
             return (stick, list, CGPoint(x: (x + 1) / 2, y: (y + 1) / 2))
         }
         .sorted { $0.stick < $1.stick }
+    }
+
+    /// One stick's zones or one trigger's bands, drawn large in its popover,
+    /// live; clicking a zone goes to its row. Nil when it has none.
+    private func zoneMap(key: Int, name: String) -> AnyView? {
+        let list = preset.stickRegions[String(key)] ?? []
+        guard !list.isEmpty else { return nil }
+        if StickRegionService.isBandKey(key) {
+            let axis = key - StickRegionService.bandKeyBase
+            let fraction = StickRegionService.travelFraction(axis: axis, value: state.axes[axis] ?? 0,
+                                                             oneWay: StickRegionService.axisIsOneWay(axis)
+                                                                || controllerService.axisReadsOneWay(slot: slot, index: axis))
+            return AnyView(BandMapView(title: "", axis: axis, regions: list, fraction: fraction,
+                                       onPick: { jumpToInput(InputEvent.stickRegion(stickIndex: key, id: $0.id)) },
+                                       accessibilityName: String(localized: "\(name) regions")))
+        }
+        let x = Double(state.axes[key * 2] ?? 0), y = Double(state.axes[key * 2 + 1] ?? 0)
+        return AnyView(RegionMapView(title: "", systemImage: "circle.dashed", aspect: 1, regions: list,
+                                     point: CGPoint(x: (x + 1) / 2, y: (y + 1) / 2), pointLabel: name,
+                                     onPick: { jumpToInput(InputEvent.stickRegion(stickIndex: key, id: $0.id)) },
+                                     accessibilityName: String(localized: "\(name) regions")))
+    }
+
+    /// The sticks and axes the controller drawing shows zones inside, so
+    /// their maps are not drawn again under it.
+    private var zoneKeysOnCanvas: Set<Int> {
+        guard [.controller, .auto].contains(effectiveInputKind), !slotIsMacTapsOnly, showDiagram else { return [] }
+        if let r = resolvedLayout, r.layout.isComplete {
+            // Only the chosen variant's controls are drawn; another
+            // variant's stick would hide a map nothing shows.
+            let drawn = [LayoutFace.front, .top, .back].flatMap { r.layout.controls(on: $0, variant: r.variant) }
+            return Set(drawn.compactMap { c in
+                ControllerCanvas.zoneStick(c) ?? ControllerCanvas.bandAxis(c).map { StickRegionService.bandKeyBase + $0 }
+            })
+        }
+        // The standard pad's widgets: its sticks and its two triggers.
+        let caps = capabilities
+        var keys = Set<Int>()
+        if caps.sticks.count >= 2 { keys.formUnion([0, 1]) }
+        else if caps.sticks.first?.x == 0 { keys.insert(0) }
+        if caps.triggers { keys.formUnion([StickRegionService.bandKeyBase + 4, StickRegionService.bandKeyBase + 5]) }
+        return keys
+    }
+
+    /// A stick's zones or an axis's bands in this preset.
+    private func zones(key: Int) -> [TouchpadRegion] { preset.stickRegions[String(key)] ?? [] }
+
+    /// The rows on a stick's zones or an axis's bands, for its popover.
+    private func zoneEvents(key: Int) -> [InputEvent] {
+        zones(key: key).map { InputEvent.stickRegion(stickIndex: key, id: $0.id) }
+    }
+
+    /// This slot's gesture rows on a stick, so the stick's inspector lists them.
+    private func gestureEvents(stick: Int) -> [InputEvent] {
+        guard slot < preset.joysticks.count else { return [] }
+        var seen = Set<String>()
+        return preset.joysticks[slot].bindings.map(\.input)
+            .filter { $0.type == .stickGesture && $0.index == stick && seen.insert($0.serialized).inserted }
+    }
+
+    /// The preset's bands on a trigger's or one axis's travel, with the
+    /// live reading as a fraction of that travel.
+    private var bandMaps: [(key: Int, regions: [TouchpadRegion], fraction: Double)] {
+        preset.stickRegions.compactMap { key, list in
+            guard let k = Int(key), StickRegionService.isBandKey(k), !list.isEmpty else { return nil }
+            let axis = k - StickRegionService.bandKeyBase
+            // As the engine reads it: an axis the pad itself reads 0 to 1
+            // (a wheel's clutch) counts its own travel.
+            let f = StickRegionService.travelFraction(axis: axis, value: state.axes[axis] ?? 0,
+                                                      oneWay: StickRegionService.axisIsOneWay(axis)
+                                                        || controllerService.axisReadsOneWay(slot: slot, index: axis))
+            return (k, list, f)
+        }
+        .sorted { $0.key < $1.key }
     }
 
     /// Inline picker that lets the user switch THIS visualizer's
@@ -1119,28 +1267,69 @@ struct VirtualControllerView<Trailing: View>: View {
         // drawn as the standard gamepad, whatever model the group is set to.
         let padHere = info != nil
         let maps: [(kind: SlotInputKind, name: String, icon: String)] = [
-            (.screen, "Screen", "display"), (.keyboard, "Keyboard", "keyboard"),
-            (.touchpad, "Touchpad", "rectangle.and.hand.point.up.left.fill"),
-            (.mouse, "Mouse", "computermouse"), (.midi, "MIDI", "pianokeys"),
+            (.screen, String(localized: "Screen"), "display"), (.keyboard, String(localized: "Keyboard"), "keyboard"),
+            (.touchpad, String(localized: "Touchpad"), "rectangle.and.hand.point.up.left.fill"),
+            (.mouse, String(localized: "Mouse"), "computermouse"), (.midi, "MIDI", "pianokeys"),
         ]
         // Off the controller map the title names the map drawn, chosen or
         // picked on Automatic from the rows: a keyboard preset said
         // "DualSense" over a keyboard drawing.
         let shownKind = kind != .auto ? kind : effectiveInputKind
-        let title = !showingController ? (maps.first { $0.kind == shownKind }?.name ?? "Automatic")
-            : (resolvedLayout?.layout.displayName ?? connected?.displayName
-                ?? (padHere ? info?.name : nil) ?? chosen?.displayName ?? "Automatic")
+        let title = !showingController ? (maps.first { $0.kind == shownKind }?.name ?? String(localized: "Automatic"))
+            : (resolvedLayout?.layout.shownName ?? connected?.shownName
+                ?? (padHere ? info?.name : nil) ?? chosen?.shownName ?? String(localized: "Automatic"))
         // A model choice also brings the controller map back.
         func pick(_ id: ControllerModelID?) {
             change(slot, id)
             if kind != .auto && kind != .controller { onChangeInputKind?(slot, .controller) }
         }
-        return Menu {
+        func pickAutomatic() {
+            change(slot, nil)
+            if kind != .auto { onChangeInputKind?(slot, .auto) }
+            // A Connected pick is undone too, as the editor's Auto-detect does.
+            if group?.inputKind == .controller, group?.customName != nil { onChangeDevice?(slot, nil) }
+        }
+        // Search finds any model by name, its maker or its variant.
+        func searchChoices() -> [MenuSearchChoice] {
+            var out = [MenuSearchChoice(title: String(localized: "Automatic"), systemImage: "wand.and.stars") { pickAutomatic() }]
+            out += maps.map { map in MenuSearchChoice(title: map.name, systemImage: map.icon) { onChangeInputKind?(slot, map.kind) } }
+            let connectedTitle = String(localized: "Connected")
+            if !connectedPadNames.isEmpty, let onChangeDevice {
+                out += connectedPadNames.map { name in
+                    MenuSearchChoice(title: name, path: connectedTitle) {
+                        let padSlot = controllerService.slot(forDeviceNamed: name, preferring: slot)
+                        change(slot, padSlot.flatMap { ControllerLayoutResolver.match(service: controllerService, slot: $0) }?.id)
+                        onChangeDevice(slot, name)
+                    }
+                }
+            } else if let connected {
+                out.append(MenuSearchChoice(title: connected.shownName, path: connectedTitle) {
+                    if let r = resolvedLayout, r.layout.id == connected.id, let v = r.variant {
+                        pick(ControllerModelID("\(connected.id.rawValue).\(v)"))
+                    } else {
+                        pick(connected.id)
+                    }
+                })
+            }
+            for section in ControllerLayoutCatalog.byMaker {
+                for layout in section.layouts {
+                    if layout.variants.count > 1 {
+                        out += layout.variants.map { v in
+                            MenuSearchChoice(title: layout.shownName + ": " + LayoutText.t(v.displayName),
+                                             path: section.maker.title) { pick(ControllerModelID("\(layout.id.rawValue).\(v.id)")) }
+                        }
+                    } else {
+                        out.append(MenuSearchChoice(title: layout.shownName, path: section.maker.title) { pick(layout.id) })
+                    }
+                }
+            }
+            return out
+        }
+        return SearchableMenu(choices: searchChoices) {
             Button {
-                change(slot, nil)
-                if kind != .auto { onChangeInputKind?(slot, .auto) }
+                pickAutomatic()
             } label: {
-                if kind == .auto && group?.controllerModel == nil {
+                if kind == .auto && group?.controllerModel == nil && !(group?.inputKind == .controller && group?.customName != nil) {
                     Label("Automatic", systemImage: "checkmark")
                 } else {
                     Label("Automatic", systemImage: "wand.and.stars")
@@ -1179,7 +1368,7 @@ struct VirtualControllerView<Trailing: View>: View {
                 }
             } else if let connected {
                 Section("Connected") {
-                    Button("\(connected.displayName)") {
+                    Button(connected.shownName) {
                         // With the variant drawn now, so it stays when unplugged.
                         if let r = resolvedLayout, r.layout.id == connected.id, let v = r.variant {
                             pick(ControllerModelID("\(connected.id.rawValue).\(v)"))
@@ -1200,17 +1389,17 @@ struct VirtualControllerView<Trailing: View>: View {
                                     Button {
                                         pick(ControllerModelID("\(layout.id.rawValue).\(v.id)"))
                                     } label: {
-                                        if isChosen { Label(v.displayName, systemImage: "checkmark") } else { Text(v.displayName) }
+                                        if isChosen { Label(LayoutText.t(v.displayName), systemImage: "checkmark") } else { Text(LayoutText.t(v.displayName)) }
                                     }
                                 }
                             } label: {
-                                if chosen?.id == layout.id { Label(layout.displayName, systemImage: "checkmark") } else { Text(layout.displayName) }
+                                if chosen?.id == layout.id { Label(layout.shownName, systemImage: "checkmark") } else { Text(layout.shownName) }
                             }
                         } else {
                             Button {
                                 pick(layout.id)
                             } label: {
-                                if chosen?.id == layout.id { Label(layout.displayName, systemImage: "checkmark") } else { Text(layout.displayName) }
+                                if chosen?.id == layout.id { Label(layout.shownName, systemImage: "checkmark") } else { Text(layout.shownName) }
                             }
                         }
                     }
@@ -1224,8 +1413,8 @@ struct VirtualControllerView<Trailing: View>: View {
         }
         .fixedSize()
         .help(connected != nil
-              ? "Pick a connected controller for this group to read, or a model from its maker's menu to draw it as. Automatic draws the connected controller as itself."
-              : "What this panel shows: the controller this group is set up for, or a screen, keyboard, touchpad, mouse or MIDI map.")
+              ? String(localized: "Pick a connected controller for this group to read, or a model from its maker's menu to draw it as. Automatic draws the connected controller as itself.")
+              : String(localized: "What this panel shows: the controller this group is set up for, or a screen, keyboard, touchpad, mouse or MIDI map."))
         .accessibilityLabel("Visualizer map")
         .accessibilityValue(title)
     }
@@ -1235,7 +1424,7 @@ struct VirtualControllerView<Trailing: View>: View {
     private var connectedPadNames: [String] {
         let gc = controllerService.connectedControllers.map { $0.vendorName ?? $0.productCategory }
         let raw = controllerService.rawHIDGamepadSlots.sorted { $0.key < $1.key }.map(\.value.displayName)
-        var names = JoystickGroupView.numberedNames(gc + raw)
+        var names = JoystickGroupView.numberedNames(gc + raw + controllerService.racingWheelNames.map(\.name))
         if controllerService.steamControllerSlot != nil { names.append("Steam Controller") }
         return names
     }
@@ -1404,7 +1593,8 @@ struct VirtualControllerView<Trailing: View>: View {
                     .font(.callout.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text("\(bound.count) key\(bound.count == 1 ? "" : "s") bound")
+                KeyboardMapMenu()
+                Text(bound.count == 1 ? String(localized: "1 key bound") : String(localized: "\(bound.count) keys bound"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1439,7 +1629,7 @@ struct VirtualControllerView<Trailing: View>: View {
                     .font(.callout.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text("\(boundKinds.count) input\(boundKinds.count == 1 ? "" : "s") bound")
+                Text(boundKinds.count == 1 ? String(localized: "1 input bound") : String(localized: "\(boundKinds.count) inputs bound"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1453,8 +1643,8 @@ struct VirtualControllerView<Trailing: View>: View {
                                  scrollGesture: externalInput.scrollGesture,
                                  // A bound part opens its rows, as a button
                                  // on the controller does.
-                                 inspect: { kinds, name, part in
-                                     AnyView(inspectable(label: name, key: "mouse-\(name)",
+                                 inspect: { kinds, name, key, part in
+                                     AnyView(inspectable(label: name, key: "mouse-\(key)",
                                                          events: mouseInspectEvents(kinds), draggable: false) { part })
                                  })
             }
@@ -1486,7 +1676,7 @@ struct VirtualControllerView<Trailing: View>: View {
                     .font(.callout.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text("\(touchpadBindings) input\(touchpadBindings == 1 ? "" : "s") bound")
+                Text(touchpadBindings == 1 ? String(localized: "1 input bound") : String(localized: "\(touchpadBindings) inputs bound"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1522,7 +1712,7 @@ struct VirtualControllerView<Trailing: View>: View {
             .frame(maxWidth: .infinity)
 
             if touchpadBindings == 0 {
-                Text("No touchpad inputs bound for this slot. In the editor, pick Touchpad from the input type menu, or Scan a tap or a zone, or pick \"Apply default 1 to 16\" from the Touchpad Setup sheet for a starter grid.")
+                Text("No touchpad inputs bound for this slot. In the editor, pick Touchpad from the input type menu, or Scan a tap or a region, or pick \"Apply default 1 to 16\" in the touchpad's Regions card for a starter grid.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1536,9 +1726,9 @@ struct VirtualControllerView<Trailing: View>: View {
     /// from the controller, the second through the Mac's own pointer, and
     /// a preset can use either.
     private var touchpadSurfaceName: String {
-        if capabilities.touchpad, let name = info?.name { return "\(name) touchpad" }
-        if info != nil { return "Controller touchpad" }
-        return "Mac trackpad"
+        if capabilities.touchpad, let name = info?.name { return String(localized: "\(name) touchpad") }
+        if info != nil { return String(localized: "Controller touchpad") }
+        return String(localized: "Mac trackpad")
     }
 
     /// The touchpad drawing, clickable as a whole (its fingers, press, taps
@@ -1549,7 +1739,7 @@ struct VirtualControllerView<Trailing: View>: View {
     @ViewBuilder
     private func touchpadSurface(pressed: Bool) -> some View {
         ZStack {
-            inspectable(label: "Touchpad", events: touchpadInspectEvents, editor: .touchpadSetup) {
+            inspectable(label: String(localized: "Touchpad"), key: "Touchpad", events: touchpadInspectEvents, editor: .touchpadSetup) {
                 TouchpadWidget(pressed: pressed,
                                presetRegions: preset.touchpadRegions,
                                surfaceAspect: touchpadSurfaceAspect)
@@ -1560,6 +1750,8 @@ struct VirtualControllerView<Trailing: View>: View {
                     .offset(dragOffsets["Touchpad"] ?? .zero)
             }
         }
+        // The pad's own coordinates: a zone on the left stays on the left.
+        .environment(\.layoutDirection, .leftToRight)
     }
 
     /// One invisible click target over each zone the pad draws, in the
@@ -1572,15 +1764,15 @@ struct VirtualControllerView<Trailing: View>: View {
                 let rect = CGRect(x: CGFloat(region.minX) * w, y: CGFloat(region.minY) * h,
                                   width: CGFloat(region.maxX - region.minX) * w,
                                   height: CGFloat(region.maxY - region.minY) * h)
-                inspectable(label: region.name, key: "zone-\(region.id)",
+                inspectable(label: region.shownName, key: "zone-\(region.id)",
                             events: [InputEvent.touchpadRegion(region.id)],
                             draggable: false, editor: .touchpadSetup) {
                     Color.clear
                         .frame(width: max(8, rect.width), height: max(8, rect.height))
                         .contentShape(Rectangle())
-                        .accessibilityLabel("\(region.name) zone")
+                        .accessibilityLabel("\(region.shownName) region")
                 }
-                .help("\(region.name). Click to see its rows.")
+                .help("\(region.shownName). Click to see its rows.")
                 .position(x: rect.midX, y: rect.midY)
             }
         }
@@ -1608,7 +1800,7 @@ struct VirtualControllerView<Trailing: View>: View {
     /// when it is connected, else the panel's own slot.
     private var deviceSlot: Int {
         guard slot < preset.joysticks.count else { return slot }
-        return controllerService.effectiveSlots(for: preset.joysticks)[slot] ?? slot
+        return controllerService.effectiveSlotsCached(for: preset.joysticks)[slot] ?? slot
     }
 
     private var capabilities: ControllerScaffold.DeviceCapabilities {
@@ -1686,11 +1878,11 @@ struct VirtualControllerView<Trailing: View>: View {
         let axisFamily = naming.family ?? (input.index < 6 && !capabilities.sticks.isEmpty ? .automatic : nil)
         if input.type == .axis, let name = ButtonNames.axisName(input.index, family: axisFamily) {
             let positive = input.axisDirection != .negative
-            if name.hasSuffix(" X") { return String(name.dropLast(2)) + (positive ? " right" : " left") }
-            if name.hasSuffix(" Y") { return String(name.dropLast(2)) + (positive ? " down" : " up") }
+            if name.hasSuffix(" X") { return positive ? String(localized: "\(String(name.dropLast(2))) right") : String(localized: "\(String(name.dropLast(2))) left") }
+            if name.hasSuffix(" Y") { return positive ? String(localized: "\(String(name.dropLast(2))) down") : String(localized: "\(String(name.dropLast(2))) up") }
             return name
         }
-        if input.type == .hat, let dir = input.hatDirection { return "D-pad " + dir.displayName.lowercased() }
+        if input.type == .hat, let dir = input.hatDirection { return String(localized: "D-pad \(dir.displayName.lowercased())") }
         return ButtonNames.inputName(input, family: naming.family, model: naming.model)
     }
 
@@ -1716,6 +1908,13 @@ struct VirtualControllerView<Trailing: View>: View {
 
     /// The controller model drawn for this slot: the connected pad, else the
     /// group's chosen model, else one inferred from the preset.
+    private static func isTrigger(_ id: String, in controls: [PlacedControl]) -> Bool {
+        controls.contains { c in
+            guard c.id == id, case .trigger = c.kind else { return false }
+            return true
+        }
+    }
+
     private var resolvedLayout: ResolvedLayout? {
         ControllerLayoutResolver.resolve(service: controllerService, slot: deviceSlot,
                                          group: slot < preset.joysticks.count ? preset.joysticks[slot] : nil,
@@ -1739,6 +1938,10 @@ struct VirtualControllerView<Trailing: View>: View {
         let physical: (PlacedControl) -> PlacedControl = { c in resolved.layout.control(c.id) ?? c }
         let choice = FaceLetters(rawValue: faceLettersRaw) ?? .automatic
         let st = state
+        // The slot's rows by input, built once a frame: each control asked
+        // for its caption several times, and every ask scanned every row.
+        let rowsByKey: [String: [(offset: Int, element: BindingModel)]] = slot < preset.joysticks.count
+            ? Dictionary(grouping: Array(preset.joysticks[slot].bindings.enumerated()), by: { $0.element.input.serialized }) : [:]
         // Inputs a control owns, plus the ones the layout says have no
         // place on the body (a mode bit), are not "also reported".
         // Only copies and state bits: a function a profile gave a socket is
@@ -1762,10 +1965,19 @@ struct VirtualControllerView<Trailing: View>: View {
         // the rest; on every other pad it stays under the drawing.
         let gyroOnTop = info?.supportsMotion == true && [.dualSense, .dualSenseEdge].contains(layout.id)
         let showsLightBar = info?.hasLight == true || layout.controls.contains(where: { $0.id.hasPrefix("lightbar") })
+        // On a pad drawn with L2 and R2 the light bar sits between them, in
+        // the drawing, where there is room for it at a readable size; the
+        // gyro ball, when it is there too, goes under it.
+        // Only between real triggers drawn on the top, with no light bar of
+        // the drawing's own there (a DualShock 4's): on a fight stick or a
+        // wheel "l2" and "r2" are buttons, and the chip would cover them.
+        let top = layout.controls(on: .top, variant: resolved.variant)
+        let lightBetween = showsLightBar && Self.isTrigger("l2", in: top) && Self.isTrigger("r2", in: top)
+            && !top.contains(where: { $0.kind == .light })
         VStack(spacing: 8) {
-            // The preset's light bar color is set here, as before the canvas:
-            // for a pad with a light, or a drawing of one with nothing plugged in.
-            if showsLightBar {
+            // The preset's light bar color is set here: for a pad with a
+            // light, or a drawing of one with nothing plugged in.
+            if showsLightBar && !lightBetween {
                 lightBarStripWidget.frame(maxWidth: 640)
             }
             ControllerCanvas(
@@ -1775,7 +1987,7 @@ struct VirtualControllerView<Trailing: View>: View {
                 legend: { CanvasLegend.legend(for: physical($0), in: layout, family: family, model: model, choice: choice) },
                 ownLegend: { CanvasLegend.legend(for: physical($0), in: layout, family: layout.family,
                                                  model: resolved.layout.modelNames, choice: .automatic) },
-                caption: { boundCaption(for: $0, layout: layout) },
+                caption: { boundCaption(for: $0, layout: layout, rowsByKey: rowsByKey) },
                 touchPoints: { surface in
                     guard surface == 0, sonyTouch else { return [] }
                     let tp = TouchpadService.shared
@@ -1789,9 +2001,14 @@ struct VirtualControllerView<Trailing: View>: View {
                 // Zones only on a surface whose fingers reach the touch service.
                 zones: sonyTouch || steamTouch ? preset.touchpadRegions : [],
                 zoneOn: { id in
-                    // A Steam pad's right trackpad has its own instance.
-                    (layout.family?.isSteam == true ? TouchpadService.steamRight : TouchpadService.shared).isRegionPressed(id)
+                    // A Steam Controller's two trackpads each have their own
+                    // instance; region ids are unique, so either may hold it.
+                    layout.family?.isSteam == true
+                        ? TouchpadService.steamRight.isRegionPressed(id) || TouchpadService.second.isRegionPressed(id)
+                        : TouchpadService.shared.isRegionPressed(id)
                 },
+                stickZones: { preset.stickRegions[String($0)] ?? [] },
+                axisBands: { preset.stickRegions[String(StickRegionService.bandKeyBase + $0)] ?? [] },
                 name: { canvasName(physical($0), layout: layout, family: family, model: model, choice: choice) },
                 livePaused: !appIsActive,
                 // The preset's color, else the one the pad is showing now.
@@ -1803,14 +2020,24 @@ struct VirtualControllerView<Trailing: View>: View {
                 // deadzone below.
                 threshold: { _ in 0.25 },
                 deadzone: { canvasDeadzone($0, layout: layout) },
-                between: gyroOnTop ? ("l2", "r2", AnyView(motionWidgetIfAvailable)) : nil,
+                between: lightBetween || gyroOnTop
+                    ? ("l2", "r2", AnyView(VStack(spacing: 10) {
+                        if lightBetween { lightBarStripWidget }
+                        if gyroOnTop { motionWidgetIfAvailable }
+                    }))
+                    : nil,
                 inspect: { control, view in
                     let name = canvasName(physical(control), layout: layout, family: family, model: model, choice: choice)
-                    // A touch surface's zones are drawn in Touchpad Setup.
-                    let editor: VisualizerRegionEditor? = layout.surface(forControl: control.id) != nil ? .touchpadSetup : nil
+                    // A touch surface's zones are drawn in Touchpad Setup, a
+                    // stick's or a trigger's in the stick zones sheet, on it alone.
+                    let zoneKey = ControllerCanvas.zoneStick(control)
+                        ?? ControllerCanvas.bandAxis(control).map { StickRegionService.bandKeyBase + $0 }
+                    let editor: VisualizerRegionEditor? = layout.surface(forControl: control.id) != nil ? .touchpadSetup
+                        : zoneKey.map { .stickZones(key: $0) }
                     return AnyView(inspectable(label: name, key: "canvas-\(control.id)",
                                                events: canvasEvents(control, layout: layout), draggable: false,
-                                               note: canvasNote(control), editor: editor) { view })
+                                               note: canvasNote(control), editor: editor,
+                                               zoneMap: zoneKey.flatMap { zoneMap(key: $0, name: name) }) { view })
                 })
                 .frame(maxWidth: 640)
             if info?.supportsMotion == true {
@@ -1824,15 +2051,16 @@ struct VirtualControllerView<Trailing: View>: View {
             // not taken for a fault.
             switch resolved.layout.readability {
             case .partial(let why), .notReadable(let why):
-                Text(why).font(.caption).foregroundStyle(.secondary)
+                Text(LayoutText.t(why)).font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
             case .full:
                 EmptyView()
             }
             if !stray.isEmpty {
+                let strayNames = stray.map { ButtonNames.label($0, family: family, model: naming.family == nil ? layout.modelNames : naming.model) }.joined(separator: ", ")
                 // Strays are numbered by the read path, so the path's names.
-                Text("Also reported: " + stray.map { ButtonNames.label($0, family: family, model: naming.family == nil ? layout.modelNames : naming.model) }.joined(separator: ", "))
+                Text(String(localized: "Also reported: \(strayNames)"))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -1843,6 +2071,14 @@ struct VirtualControllerView<Trailing: View>: View {
     /// surface every finger, zone and gesture row it can carry.
     private func canvasEvents(_ c: PlacedControl, layout: ControllerLayout) -> [InputEvent] {
         var events = c.inputs.inspectEvents()
+        // A stick's zones and gestures, a trigger's bands: their rows too.
+        if let stick = ControllerCanvas.zoneStick(c) {
+            events += (preset.stickRegions[String(stick)] ?? []).map { InputEvent.stickRegion(stickIndex: stick, id: $0.id) }
+            events += gestureEvents(stick: stick)
+        } else if let axis = ControllerCanvas.bandAxis(c) {
+            let key = StickRegionService.bandKeyBase + axis
+            events += (preset.stickRegions[String(key)] ?? []).map { InputEvent.stickRegion(stickIndex: key, id: $0.id) }
+        }
         guard let spec = layout.surface(forControl: c.id) else { return events }
         func onSurface(_ e: InputEvent) -> InputEvent {
             var e = e
@@ -1856,8 +2092,11 @@ struct VirtualControllerView<Trailing: View>: View {
                 }
             }
         }
-        // Zones are drawn on the first surface only.
-        if spec.surface == 0 { events += preset.touchpadRegions.map { InputEvent.touchpadRegion($0.id) } }
+        // Each pad's own regions: the left Steam trackpad's carry its surface.
+        if spec.surface <= 1 {
+            events += preset.touchpadRegions.filter { ($0.surface == 1) == (spec.surface == 1) }
+                .map { onSurface(InputEvent.touchpadRegion($0.id)) }
+        }
         events += TouchpadGestureKind.allCases.map { onSurface(.touchpadGesture($0)) }
         return events
     }
@@ -1865,50 +2104,55 @@ struct VirtualControllerView<Trailing: View>: View {
     /// The line under a control's inspector title: when it is read only in
     /// some setups, why; else the layout's note on it.
     private func canvasNote(_ c: PlacedControl) -> String? {
-        if case .conditional(let why) = c.readable { return why }
-        return c.note
+        if case .conditional(let why) = c.readable { return LayoutText.t(why) }
+        return c.note.map(LayoutText.t)
     }
 
     /// A control's name for its inspector title and VoiceOver.
     private func canvasName(_ c: PlacedControl, layout: ControllerLayout, family: FaceLetters?,
                             model: ButtonNames.ModelNames, choice: FaceLetters) -> String {
-        if let spec = layout.surface(forControl: c.id) { return spec.name }
-        if let name = c.name { return name }
-        if let dir = c.inputs.hatDirection { return "D-pad \(dir.displayName.lowercased())" }
+        if let spec = layout.surface(forControl: c.id) { return LayoutText.t(spec.name) }
+        if let name = c.name { return LayoutText.t(name) }
+        if let dir = c.inputs.hatDirection { return String(localized: "D-pad \(dir.displayName.lowercased())") }
         switch c.kind {
         case .stick:
             if let x = c.inputs.axes.first?.index, let n = ButtonNames.axisName(x, family: family ?? .automatic),
                n.hasSuffix(" X") { return String(n.dropLast(2)) }
-            return "Stick"
-        case .dpad: return "D-pad"
+            return String(localized: "Stick")
+        case .dpad: return String(localized: "D-pad")
         case .trigger:
             // The analog trigger, not its digital copy's "(digital)" name.
             if let a = c.inputs.axes.first?.index, let n = ButtonNames.axisName(a, family: family ?? .automatic) { return n }
             if let d = c.inputs.digitalCopy, let short = ButtonNames.short(d, family: family, model: model) { return short }
-            return c.printed ?? "Trigger"
+            return c.printed ?? String(localized: "Trigger")
         default:
             if let b = c.inputs.buttons.first {
                 // The family's full name where it has one ("Left Fn (Edge)"
                 // for a button printed "Fn"); the printed legend otherwise.
                 let label = ButtonNames.label(b, family: family, model: model, choice: choice)
-                if let printed = c.printed, label.hasPrefix("Button ") { return printed }
+                // The legend too where the name is only a number: the app's
+                // own fallback, or a model's English "Button 3".
+                if let printed = c.printed, label == ButtonNames.fallbackLabel(b) || label.hasPrefix("Button ")
+                    || label == LayoutText.t("Button \(b + 1)") { return printed }
                 return label
             }
-            if let printed = c.printed { return printed }
+            if let printed = c.printed { return CanvasLegend.printedWord(printed) }
             // The id in words, never the raw id.
-            return CanvasLegend.words(c.id)
+            return LayoutText.t(CanvasLegend.words(c.id))
         }
     }
 
     /// The function a control is bound to in this group, for its caption:
     /// the row's note, else its outputs.
-    private func boundCaption(for c: PlacedControl, layout: ControllerLayout) -> String? {
+    private func boundCaption(for c: PlacedControl, layout: ControllerLayout,
+                              rowsByKey: [String: [(offset: Int, element: BindingModel)]]) -> String? {
         guard slot < preset.joysticks.count else { return nil }
+        // In row order, as the full scan gave them.
         let keys = Set(canvasEvents(c, layout: layout).map(\.serialized))
-        let rows = preset.joysticks[slot].bindings.filter { keys.contains($0.input.serialized) }
+        let rows = keys.flatMap { rowsByKey[$0] ?? [] }.sorted { $0.offset < $1.offset }.map(\.element)
         guard let row = rows.first else { return nil }
-        let note = (row.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = note.isEmpty ? row.outputs.map(\.displayName).joined(separator: " + ") : note
+        let note = ShippedText.t((row.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+        let text = note.isEmpty ? OutputAction.names(row.outputs).joined(separator: " + ") : note
         return rows.count > 1 ? text + " +\(rows.count - 1)" : text
     }
 
@@ -1934,15 +2178,18 @@ struct VirtualControllerView<Trailing: View>: View {
         let _ = {
             let st = state
             if st.hats[0] != nil { caps.dpad = true }
-            if (st.axes[4] ?? 0) != 0 || (st.axes[5] ?? 0) != 0 { caps.triggers = true }
+            // Not for a wheel's pedals or a flight stick's lone slider on a
+            // trigger slot: they get bars of their own below.
+            let axesKnown = caps.steering || caps.combinedPedal || !caps.pedals.isEmpty || caps.loneTrigger || !caps.extraAxes.isEmpty
+            if !axesKnown, (st.axes[4] ?? 0) != 0 || (st.axes[5] ?? 0) != 0 { caps.triggers = true }
             // Not the Steam Controller's "left pad and stick both in use"
             // bit, which is a state, not a button, and showed as "Button 22".
             for index in st.buttons.keys where !caps.buttons.contains(where: { $0.index == index })
                 && !(isSteam && index == SteamControllerButton.stickActive.rawValue) {
-                caps.buttons.append((index, "Button \(index)"))
+                caps.buttons.append((index, String(localized: "Button \(index)")))
             }
-            if caps.sticks.isEmpty, st.axes[0] != nil || st.axes[1] != nil {
-                caps.sticks = [("Left stick", 0, 1, "Left stick")]
+            if caps.sticks.isEmpty, !axesKnown, st.axes[0] != nil || st.axes[1] != nil {
+                caps.sticks = [("Left stick", 0, 1, String(localized: "Left stick"))]
             }
         }()
         VStack(spacing: 14) {
@@ -1963,10 +2210,13 @@ struct VirtualControllerView<Trailing: View>: View {
                 HStack(alignment: .center, spacing: 16) {
                     VStack(spacing: 8) {
                         if caps.triggers {
-                            inspectable(label: labels.shoulder[6] ?? "LT", key: "LT", events: [.axis(4, direction: .positive)]) {
+                            inspectable(label: labels.shoulder[6] ?? "LT", key: "LT",
+                                        events: [.axis(4, direction: .positive)] + zoneEvents(key: StickRegionService.bandKeyBase + 4),
+                                        editor: .stickZones(key: StickRegionService.bandKeyBase + 4),
+                                        zoneMap: zoneMap(key: StickRegionService.bandKeyBase + 4, name: labels.shoulder[6] ?? "LT")) {
                                 TriggerWidget(label: labels.shoulder[6] ?? "LT", value: state.axes[4] ?? 0,
                                               threshold: thresholdForAxis(4, dir: .positive),
-                                              tint: .blue)
+                                              tint: .blue, bands: zones(key: StickRegionService.bandKeyBase + 4))
                             }
                         }
                         if has(4) {
@@ -1980,7 +2230,7 @@ struct VirtualControllerView<Trailing: View>: View {
                         HStack(spacing: 8) {
                             ForEach([8, 10, 9], id: \.self) { index in
                                 if has(index) {
-                                    menuPill(label: labels.menu[index] ?? "Menu", index: std(index), key: "menu-\(index)")
+                                    menuPill(label: labels.menu[index] ?? String(localized: "Menu"), index: std(index), key: "menu-\(index)")
                                 }
                             }
                         }
@@ -1989,10 +2239,13 @@ struct VirtualControllerView<Trailing: View>: View {
                     Spacer(minLength: 0)
                     VStack(spacing: 8) {
                         if caps.triggers {
-                            inspectable(label: labels.shoulder[7] ?? "RT", key: "RT", events: [.axis(5, direction: .positive)]) {
+                            inspectable(label: labels.shoulder[7] ?? "RT", key: "RT",
+                                        events: [.axis(5, direction: .positive)] + zoneEvents(key: StickRegionService.bandKeyBase + 5),
+                                        editor: .stickZones(key: StickRegionService.bandKeyBase + 5),
+                                        zoneMap: zoneMap(key: StickRegionService.bandKeyBase + 5, name: labels.shoulder[7] ?? "RT")) {
                                 TriggerWidget(label: labels.shoulder[7] ?? "RT", value: state.axes[5] ?? 0,
                                               threshold: thresholdForAxis(5, dir: .positive),
-                                              tint: .red)
+                                              tint: .red, bands: zones(key: StickRegionService.bandKeyBase + 5))
                             }
                         }
                         if has(5) {
@@ -2011,7 +2264,7 @@ struct VirtualControllerView<Trailing: View>: View {
             if showDiagram {
                 HStack(alignment: .center) {
                     if caps.dpad {
-                        inspectable(label: "D-pad", events: [
+                        inspectable(label: String(localized: "D-pad"), key: "D-pad", events: [
                             .hat(0, direction: .up), .hat(0, direction: .right),
                             .hat(0, direction: .down), .hat(0, direction: .left)
                         ] + (isSteam ? (8...11).map { InputEvent.button($0) } : [])) {
@@ -2025,11 +2278,13 @@ struct VirtualControllerView<Trailing: View>: View {
                                 .axis(0, direction: .positive), .axis(0, direction: .negative),
                                 .axis(1, direction: .positive), .axis(1, direction: .negative),
                                 .button(std(11))
-                            ]) {
+                            ] + gestureEvents(stick: 0) + zoneEvents(key: 0), editor: .stickZones(key: 0),
+                               zoneMap: zoneMap(key: 0, name: caps.sticks[0].label)) {
                                 StickWidget(label: caps.sticks[0].label,
                                             x: state.axes[0] ?? 0,
                                             y: state.axes[1] ?? 0,
-                                            pressed: (state.buttons[std(11)] ?? 0) > 0.5)
+                                            pressed: (state.buttons[std(11)] ?? 0) > 0.5,
+                                            zones: zones(key: 0))
                             }
                             // The 2015 Steam Controller's right "stick" is its
                             // right trackpad, pressed on its own button.
@@ -2038,18 +2293,20 @@ struct VirtualControllerView<Trailing: View>: View {
                                 .axis(2, direction: .positive), .axis(2, direction: .negative),
                                 .axis(3, direction: .positive), .axis(3, direction: .negative),
                                 .button(rightPress)
-                            ]) {
+                            ] + gestureEvents(stick: 1) + zoneEvents(key: 1), editor: .stickZones(key: 1),
+                               zoneMap: zoneMap(key: 1, name: caps.sticks[1].label)) {
                                 StickWidget(label: caps.sticks[1].label,
                                             x: state.axes[2] ?? 0,
                                             y: state.axes[3] ?? 0,
-                                            pressed: (state.buttons[rightPress] ?? 0) > 0.5)
+                                            pressed: (state.buttons[rightPress] ?? 0) > 0.5,
+                                            zones: zones(key: 1))
                             }
                             // Further surfaces: the Steam Controllers'
                             // trackpads (the 2015 left one on 6 and 7, the
                             // 2026 pair on 6 to 9), each with its press.
                             ForEach(Array(caps.sticks.dropFirst(2).enumerated()), id: \.offset) { _, surface in
                                 let press = trackpadPress(axisX: surface.x, steam2015: isSteam)
-                                inspectable(label: surface.label, events: [
+                                inspectable(label: surface.label, key: "surface-\(surface.x)-\(surface.y)", legacyKey: surface.label, events: [
                                     .axis(surface.x, direction: .positive), .axis(surface.x, direction: .negative),
                                     .axis(surface.y, direction: .positive), .axis(surface.y, direction: .negative)
                                 ] + (press.map { [InputEvent.button($0)] } ?? [])) {
@@ -2090,14 +2347,17 @@ struct VirtualControllerView<Trailing: View>: View {
             if showDiagram, caps.sticks.count == 1, let only = caps.sticks.first {
                 HStack {
                     Spacer(minLength: 0)
-                    inspectable(label: only.label, events: [
+                    inspectable(label: only.label, key: "stick-\(only.x)-\(only.y)", legacyKey: only.label, events: [
                         .axis(only.x, direction: .positive), .axis(only.x, direction: .negative),
                         .axis(only.y, direction: .positive), .axis(only.y, direction: .negative)
-                    ]) {
+                    ] + (only.x == 0 ? gestureEvents(stick: 0) + zoneEvents(key: 0) : []),
+                       editor: only.x == 0 ? .stickZones(key: 0) : nil,
+                       zoneMap: only.x == 0 ? zoneMap(key: 0, name: only.label) : nil) {
                         StickWidget(label: only.label,
                                     x: state.axes[only.x] ?? 0,
                                     y: state.axes[only.y] ?? 0,
-                                    pressed: false)
+                                    pressed: false,
+                                    zones: only.x == 0 ? zones(key: 0) : [])
                     }
                     Spacer(minLength: 0)
                 }
@@ -2128,7 +2388,7 @@ struct VirtualControllerView<Trailing: View>: View {
                       pad.profile?.identifier.hasPrefix("generic-hid-") == true,
                       case .generic(let generic)? = pad.profile?.layout else { return [6, 7] }
                 let plan = HIDExtendedLayoutRegistry.extended(for: generic)
-                let physical = Set(plan.reports.flatMap(\.buttons).map(\.index))
+                let physical = Set(plan.buttonIndices)
                 let mirrored = Set(plan.reports.flatMap(\.axes).compactMap(\.digitalButton))
                 return [6, 7].filter { mirrored.contains($0) || !physical.contains($0) }
             }()
@@ -2149,8 +2409,8 @@ struct VirtualControllerView<Trailing: View>: View {
                 HStack(alignment: .center, spacing: 16) {
                     if caps.touchpad {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(caps.family == .steamController2026 ? "Right trackpad (touch)"
-                                 : "\(info?.name ?? "Controller") touchpad")
+                            Text(caps.family == .steamController2026 ? String(localized: "Right trackpad (touch)")
+                                 : (info.map { String(localized: "\($0.name) touchpad") } ?? String(localized: "Controller touchpad")))
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .accessibilityAddTraits(.isHeader)
@@ -2168,9 +2428,30 @@ struct VirtualControllerView<Trailing: View>: View {
             // extra trigger surfaces past the standard LT/RT (axes 4
             // and 5) get a slim live-value bar per axis.
             let drawnAxes = Set(caps.sticks.dropFirst(2).flatMap { [$0.x, $0.y] })
-            let extraAxes = controllerService.extraAxesSnapshot(for: deviceSlot).filter { !drawnAxes.contains($0.index) }
+            var extraAxes = controllerService.extraAxesSnapshot(for: deviceSlot).filter { !drawnAxes.contains($0.index) }
+            // An axis with no stick or trigger to draw it (a flight stick's
+            // twist on 2 with nothing on 3) gets a bar too.
+            // A wheel's steering and pedals too, drawn at rest, and every
+            // listed axis before its first report.
+            let _ = {
+                var listed = caps.extraAxes
+                if caps.steering { listed.append((0, String(localized: "Steering"))) }
+                if caps.combinedPedal { listed.append((1, String(localized: "Pedals"))) }
+                listed += caps.pedals
+                for a in listed where !drawnAxes.contains(a.index) {
+                    if let at = extraAxes.firstIndex(where: { $0.index == a.index }) {
+                        extraAxes[at] = GameControllerService.ExtraAxis(label: a.name, index: a.index, value: extraAxes[at].value)
+                    } else {
+                        extraAxes.append(GameControllerService.ExtraAxis(label: a.name, index: a.index, value: state.axes[a.index] ?? 0))
+                    }
+                }
+                extraAxes.sort { $0.index < $1.index }
+            }()
             if !extraAxes.isEmpty {
-                extraAxesWidget(axes: extraAxes)
+                extraAxesWidget(axes: extraAxes, pedalAxes: Set(caps.pedals.map(\.index)),
+                                // A 2026 trackpad's pressure (10 and 11) only
+                                // rises; its X and Y (6 to 9) go both ways.
+                                pressureAxes: caps.family == .steamController2026 ? [10, 11] : [])
             }
 
             // Hats past the first: a flight stick's POV hats, or a pad with
@@ -2180,9 +2461,10 @@ struct VirtualControllerView<Trailing: View>: View {
             if showDiagram, !extraHats.isEmpty {
                 HStack(spacing: 18) {
                     ForEach(extraHats, id: \.self) { index in
-                        let label = "Hat \(index + 1)"
+                        // The number the rows use (Hat 1 is the second hat).
+                        let label = String(localized: "Hat \(index)")
                         VStack(spacing: 4) {
-                            inspectable(label: label, events: [
+                            inspectable(label: label, key: "Hat \(index + 1)", events: [
                                 .hat(index, direction: .up), .hat(index, direction: .right),
                                 .hat(index, direction: .down), .hat(index, direction: .left)
                             ]) {
@@ -2200,13 +2482,20 @@ struct VirtualControllerView<Trailing: View>: View {
     }
 
     @ViewBuilder
-    private func extraAxesWidget(axes: [GameControllerService.ExtraAxis]) -> some View {
+    private func extraAxesWidget(axes: [GameControllerService.ExtraAxis], pedalAxes: Set<Int> = [], pressureAxes: Set<Int> = []) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Extra axes")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
             ForEach(axes) { axis in
+                // Clicked like any other control, to see and add its rows.
+                // A pedal or trigger-slot axis reads only one way.
+                let oneWay = axis.index == 4 || axis.index == 5 || pedalAxes.contains(axis.index) || pressureAxes.contains(axis.index)
+                inspectable(label: axis.label, key: "axis-\(axis.index)",
+                            events: oneWay ? [.axis(axis.index, direction: .positive)]
+                                : [.axis(axis.index, direction: .positive), .axis(axis.index, direction: .negative)],
+                            draggable: false) {
                 HStack(spacing: 8) {
                     Text(axis.label)
                         .font(.caption2)
@@ -2226,14 +2515,16 @@ struct VirtualControllerView<Trailing: View>: View {
                         }
                     }
                     .frame(height: 8)
-                    Text(String(format: "%+.2f", axis.value))
+                    Text(String(format: "%+.2f", locale: .current, axis.value))
                         .font(.system(size: 9).monospacedDigit())
                         .foregroundStyle(.hint)
-                        .frame(width: 44, alignment: .trailing)
+                        .frame(minWidth: 44, alignment: .trailing)
+                        .fixedSize()
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(axis.label)
                 .accessibilityValue(SpokenLive.axis(axis.value))
+                }
             }
         }
         .padding(.top, 4)
@@ -2243,8 +2534,13 @@ struct VirtualControllerView<Trailing: View>: View {
     /// (PS, Home, Mute, paddles, FN). False when it's a raw HID
     /// gamepad's "Button N" / "Btn N" fallback label - those become
     /// round placeholder icons instead.
-    private func isNamedExtra(_ label: String) -> Bool {
-        let lower = label.lowercased()
+    private func isNamedExtra(_ extra: GameControllerService.ExtraButton) -> Bool {
+        // The app's own fallback name, in the app's language.
+        if extra.label == ButtonNames.fallbackLabel(extra.index) { return false }
+        // A model's numbered name ("Button 14" on a Logitech wheel), translated.
+        if extra.label == LayoutText.t("Button \(extra.index + 1)") { return false }
+        // Generic names a device reports itself, in English.
+        let lower = extra.label.lowercased()
         if lower.hasPrefix("button ") { return false }
         if lower.hasPrefix("btn ") { return false }
         return true
@@ -2257,7 +2553,7 @@ struct VirtualControllerView<Trailing: View>: View {
         _ extras: [GameControllerService.ExtraButton]
     ) -> String {
         extras.map { extra in
-            extra.pressed ? "\(extra.label) pressed" : extra.label
+            extra.pressed ? String(localized: "\(extra.label) pressed") : extra.label
         }.joined(separator: ", ")
     }
 
@@ -2271,8 +2567,8 @@ struct VirtualControllerView<Trailing: View>: View {
         // Each subgroup only renders when its list is non-empty, so a
         // controller with only named extras never shows the "Unknown
         // buttons" header and vice versa.
-        let named = extras.filter { isNamedExtra($0.label) }
-        let unknown = extras.filter { !isNamedExtra($0.label) }
+        let named = extras.filter { isNamedExtra($0) }
+        let unknown = extras.filter { !isNamedExtra($0) }
         VStack(alignment: .leading, spacing: 8) {
             if !named.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2285,7 +2581,7 @@ struct VirtualControllerView<Trailing: View>: View {
                     // and takes you to its row, or offers to add one.
                     WrappingHStackLayout(spacing: 6, lineSpacing: 6) {
                         ForEach(named) { extra in
-                            inspectable(label: extra.label, events: [.button(extra.index)]) {
+                            inspectable(label: extra.label, key: "extra-\(extra.index)", legacyKey: extra.label, events: [.button(extra.index)]) {
                                 extraChip(label: extra.label, pressed: extra.pressed)
                             }
                         }
@@ -2301,11 +2597,11 @@ struct VirtualControllerView<Trailing: View>: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .accessibilityAddTraits(.isHeader)
-                    HStack(spacing: 8) {
+                    // Wrapped, so a 32 or 64 button device stays inside the map.
+                    WrappingHStackLayout(spacing: 8, lineSpacing: 8) {
                         ForEach(unknown) { btn in
                             unknownButtonPlaceholder(btn)
                         }
-                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -2319,14 +2615,14 @@ struct VirtualControllerView<Trailing: View>: View {
         let tint: Color = pressed ? .green : .secondary
         return Text(label)
             .font(.caption2.weight(.medium))
-            .foregroundStyle(pressed ? Color.white : tint)
+            .foregroundStyle(pressed ? (pressedOutline ? Color.black : Color.white) : tint)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(Capsule().fill(tint.opacity(pressed ? 0.85 : 0.15)))
             .overlay(Capsule().stroke(tint.opacity(pressed ? 1 : 0.35), lineWidth: 1))
             .animation(.easeOut(duration: 0.12), value: pressed)
-            .accessibilityLabel("\(label) button")
-            .accessibilityValue(pressed ? "pressed" : "released")
+            .accessibilityLabel(label)
+            .accessibilityValue(pressed ? String(localized: "pressed") : String(localized: "released"))
     }
 
     /// Round placeholder icon for an unknown extra button. Shows the
@@ -2339,7 +2635,7 @@ struct VirtualControllerView<Trailing: View>: View {
     ) -> some View {
         // The label keys the saved layout position, so it stays as it is;
         // the popover gets a readable title.
-        inspectable(label: "extra-\(button.index)", title: "Button \(button.index)",
+        inspectable(label: "extra-\(button.index)", title: String(localized: "Button \(button.index)"),
                     events: [.button(button.index)]) {
             ZStack {
                 Circle()
@@ -2353,13 +2649,13 @@ struct VirtualControllerView<Trailing: View>: View {
                             lineWidth: 1)
                 Text("\(button.index)")
                     .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(button.pressed ? .white : .primary)
+                    .foregroundStyle(button.pressed ? (pressedOutline ? Color.black : Color.white) : Color.primary)
             }
             .frame(width: 28, height: 28)
             .help("Unknown extra button \(button.index): drag in 'Customize layout' to reposition")
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Extra button \(button.index)")
-            .accessibilityValue(button.pressed ? "pressed" : "released")
+            .accessibilityValue(button.pressed ? String(localized: "pressed") : String(localized: "released"))
         }
     }
 
@@ -2376,54 +2672,29 @@ struct VirtualControllerView<Trailing: View>: View {
         Button {
             showLightBarPopover.toggle()
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "light.beacon.max.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("Light bar")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if lightBarOff {
-                    Text("Off")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                } else if lightBarRainbow {
-                    Capsule()
-                        .fill(LinearGradient(colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple],
-                                             startPoint: .leading, endPoint: .trailing))
-                        .frame(width: 30, height: 8)
-                } else if let tint = lightBarTint {
-                    Capsule()
-                        .fill(tint)
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
-                        .shadow(color: tint.opacity(0.6), radius: 3)
-                        .frame(width: 30, height: 8)
-                } else {
-                    Text("Not set")
-                        .font(.caption)
-                        .foregroundStyle(.hint)
-                }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.hint)
-            }
+            // In the drawing, at its captions' size, and only as wide as the
+            // gap between the triggers: the words go first when it is tight.
+            LightBarChipLabel(off: lightBarOff, rainbow: lightBarRainbow, tint: lightBarTint)
             .padding(.vertical, 3)
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .help(lightBarTint == nil && !lightBarRainbow && !lightBarOff
-              ? "Pick a light bar color for this preset"
-              : "Edit this preset's light bar color")
+              ? String(localized: "Pick a light bar color for this preset")
+              : String(localized: "Edit this preset's light bar color"))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Light bar color")
-        .accessibilityValue(lightBarOff ? "off" : lightBarRainbow ? "rainbow" : lightBarTint == nil ? "not set" : "set")
+        .accessibilityValue(lightBarOff ? String(localized: "off") : lightBarRainbow ? String(localized: "rainbow") : lightBarTint == nil ? String(localized: "not set") : String(localized: "set"))
         .accessibilityHint("Opens the light bar color picker")
         .accessibilityAddTraits(.isButton)
         .spotlightAnchor(SpotlightID.lightBarStrip)
         .popover(isPresented: $showLightBarPopover, arrowEdge: .top) {
+            // Inside the left-to-right controller drawing; the picker reads
+            // in the app's own direction.
             trailing()
+                .environment(\.layoutDirection, appDirection)
         }
     }
 
@@ -2438,13 +2709,14 @@ struct VirtualControllerView<Trailing: View>: View {
     @ViewBuilder
     private var motionWidgetIfAvailable: some View {
         if info?.supportsMotion == true {
-            inspectable(label: "Motion", events: motionInspectEvents) {
+            inspectable(label: String(localized: "Motion"), key: "Motion", events: motionInspectEvents) {
                 MotionWidget(
                     state: state,
                     integratedRoll: integratedRoll,
                     integratedPitch: integratedPitch,
                     integratedYaw: integratedYaw
                 )
+                .spotlightAnchor(SpotlightID.motionWidget)
             }
         }
     }
@@ -2456,8 +2728,9 @@ struct VirtualControllerView<Trailing: View>: View {
     /// (x, y) offset from its structural position and applies it here.
     @ViewBuilder
     private func inspectable<Content: View>(
-        label: String, title: String? = nil, key: String? = nil, events: [InputEvent],
+        label: String, title: String? = nil, key: String? = nil, legacyKey: String? = nil, events: [InputEvent],
         draggable: Bool = true, note: String? = nil, editor: VisualizerRegionEditor? = nil,
+        zoneMap: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
         // A stable key for the saved position and the open popover, so a
@@ -2465,7 +2738,9 @@ struct VirtualControllerView<Trailing: View>: View {
         let key = key ?? label
         // The controller drawing places every control where it really is,
         // so it neither drags nor takes a saved offset.
-        let persistedOffset = draggable ? (dragOffsets[key] ?? .zero) : .zero
+        // A position saved before 1.7 under the widget's label still counts
+        // (the label is the 1.6 key in English) until the widget is dragged again.
+        let persistedOffset = draggable ? (dragOffsets[key] ?? legacyKey.flatMap { dragOffsets[$0] } ?? .zero) : .zero
         let liveOffset: CGSize = (liveDrag?.label == key) ? liveDrag!.translation : .zero
         let totalOffset = CGSize(
             width: persistedOffset.width + liveOffset.width,
@@ -2483,14 +2758,13 @@ struct VirtualControllerView<Trailing: View>: View {
                         .padding(-2)
                         .allowsHitTesting(false)
                 )
-                .offset(totalOffset)
                 .gesture(
                     DragGesture()
                         .onChanged { value in
                             liveDrag = (key, value.translation)
                         }
                         .onEnded { value in
-                            let base = dragOffsets[key] ?? .zero
+                            let base = dragOffsets[key] ?? legacyKey.flatMap { dragOffsets[$0] } ?? .zero
                             dragOffsets[key] = CGSize(
                                 width: base.width + value.translation.width,
                                 height: base.height + value.translation.height
@@ -2499,6 +2773,37 @@ struct VirtualControllerView<Trailing: View>: View {
                             persistOffsets()
                         }
                 )
+                // Moved without dragging: named actions for VoiceOver and
+                // Switch Control, a right-click menu for pointer, dwell and
+                // Voice Control users. Ten points a step.
+                // The widget's own spoken name comes through: the layout
+                // key read "extra-12" and the bare PlayStation glyphs.
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Drag to move, or use the move actions")
+                // Keyboard: Tab to a widget, arrows move it.
+                .focusable()
+                .onMoveCommand { direction in
+                    switch direction {
+                    case .left: nudge(key, legacyKey, dx: -10, dy: 0)
+                    case .right: nudge(key, legacyKey, dx: 10, dy: 0)
+                    case .up: nudge(key, legacyKey, dx: 0, dy: -10)
+                    case .down: nudge(key, legacyKey, dx: 0, dy: 10)
+                    @unknown default: break
+                    }
+                }
+                .accessibilityAction(named: "Move left") { nudge(key, legacyKey, dx: -10, dy: 0) }
+                .accessibilityAction(named: "Move right") { nudge(key, legacyKey, dx: 10, dy: 0) }
+                .accessibilityAction(named: "Move up") { nudge(key, legacyKey, dx: 0, dy: -10) }
+                .accessibilityAction(named: "Move down") { nudge(key, legacyKey, dx: 0, dy: 10) }
+                .contextMenu {
+                    Button("Move Left") { nudge(key, legacyKey, dx: -10, dy: 0) }
+                    Button("Move Right") { nudge(key, legacyKey, dx: 10, dy: 0) }
+                    Button("Move Up") { nudge(key, legacyKey, dx: 0, dy: -10) }
+                    Button("Move Down") { nudge(key, legacyKey, dx: 0, dy: 10) }
+                }
+                // Last, so the focus ring, the right-click area and the
+                // accessibility frame follow the widget where it is drawn.
+                .offset(totalOffset)
         } else {
             let isOpen = Binding(
                 get: { openInspectorLabel == key },
@@ -2517,7 +2822,8 @@ struct VirtualControllerView<Trailing: View>: View {
             .accessibilityElement(children: .combine)
             .accessibilityHint("Inspects bindings for this input")
             .popover(isPresented: isOpen, arrowEdge: .top) {
-                inspectorContent(label: title ?? label, events: events, note: note, editor: editor)
+                inspectorContent(label: title ?? label, key: key, events: events, note: note, editor: editor, zoneMap: zoneMap)
+                    .environment(\.layoutDirection, appDirection)
             }
         }
     }
@@ -2541,6 +2847,13 @@ struct VirtualControllerView<Trailing: View>: View {
     /// Persist the current offsets dictionary for the active controller
     /// model. UserDefaults can't store CGSize directly so we encode each
     /// entry as ["w": width, "h": height].
+    /// Moves a widget in Edit Layout by a step, as a drag would.
+    private func nudge(_ key: String, _ legacyKey: String?, dx: CGFloat, dy: CGFloat) {
+        let base = dragOffsets[key] ?? legacyKey.flatMap { dragOffsets[$0] } ?? .zero
+        dragOffsets[key] = CGSize(width: base.width + dx, height: base.height + dy)
+        persistOffsets()
+    }
+
     private func persistOffsets() {
         let encoded = dragOffsets.mapValues { ["w": Double($0.width),
                                                "h": Double($0.height)] }
@@ -2568,10 +2881,10 @@ struct VirtualControllerView<Trailing: View>: View {
                 .background(
                     Capsule().fill(pressed ? Color.green.opacity(0.20) : Color.secondary.opacity(0.10))
                 )
-                .overlay(Capsule().stroke(pressed ? Color.green : Color.secondary.opacity(0.3), lineWidth: 0.5))
+                .overlay(Capsule().stroke(pressed ? Color.green : Color.secondary.opacity(0.3), lineWidth: pressed && pressedOutline ? 2 : 0.5))
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(label) button")
-                .accessibilityValue(pressed ? "pressed" : "released")
+                .accessibilityLabel(label)
+                .accessibilityValue(pressed ? String(localized: "pressed") : String(localized: "released"))
         }
     }
 
@@ -2612,8 +2925,8 @@ struct VirtualControllerView<Trailing: View>: View {
     /// own button so the user can tap the description to jump straight to
     /// the editor; nothing requires hitting a tiny Edit button.
     @ViewBuilder
-    fileprivate func inspectorContent(label: String, events: [InputEvent], note: String? = nil,
-                                      editor: VisualizerRegionEditor? = nil) -> some View {
+    fileprivate func inspectorContent(label: String, key: String? = nil, events: [InputEvent], note: String? = nil,
+                                      editor: VisualizerRegionEditor? = nil, zoneMap: AnyView? = nil) -> some View {
         let matchingBindings = matches(for: events)
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -2636,10 +2949,12 @@ struct VirtualControllerView<Trailing: View>: View {
             // Motion widget gets an extra "Reset gyroscope" action so
             // the user can re-zero on a flat surface without leaving
             // the visualizer.
-            if label == "Motion" {
+            if key == "Motion" {
                 gyroResetActionRow
                 Divider()
             }
+            // A stick's or a trigger's zones, large enough to read.
+            if let zoneMap { zoneMap }
             if matchingBindings.isEmpty {
                 Text("Nothing in this preset uses it yet. Add a row in the editor and pick what it should do.")
                     .font(.callout)
@@ -2671,7 +2986,7 @@ struct VirtualControllerView<Trailing: View>: View {
                 }
             }
             // A zone or region also has its own editor, where it is drawn.
-            if let editor, onOpenRegionEditor != nil {
+            if let editor, onJump != nil {
                 Button {
                     openRegionEditor(editor)
                 } label: {
@@ -2679,9 +2994,9 @@ struct VirtualControllerView<Trailing: View>: View {
                         .font(.callout)
                 }
                 .buttonStyle(.solidSecondaryCompact)
-                .help(editor == .touchpadSetup ? "Draw and name this preset's touchpad zones"
-                      : editor == .screenRegions ? "Draw and name this preset's screen regions"
-                      : "Draw and name this preset's stick zones")
+                .help(editor == .touchpadSetup ? String(localized: "Draw and name this preset's touchpad regions")
+                      : editor == .screenRegions ? String(localized: "Draw and name this preset's screen regions")
+                      : String(localized: "Draw and name this preset's stick regions"))
             }
         }
         .padding(14)
@@ -2691,8 +3006,10 @@ struct VirtualControllerView<Trailing: View>: View {
     /// The device this map shows and how many rows use the control.
     private func inspectorSubtitle(count: Int) -> String {
         let device = capabilities.deviceName
-        let use = count == 0 ? "not used in this preset" : count == 1 ? "1 row in this preset" : "\(count) rows in this preset"
-        return device.isEmpty ? use.prefix(1).uppercased() + use.dropFirst() : "\(device), \(use)"
+        if device.isEmpty {
+            return count == 0 ? String(localized: "Not used in this preset") : count == 1 ? String(localized: "1 row in this preset") : String(localized: "\(count) rows in this preset")
+        }
+        return count == 0 ? String(localized: "\(device), not used in this preset") : count == 1 ? String(localized: "\(device), 1 row in this preset") : String(localized: "\(device), \(count) rows in this preset")
     }
 
     /// One row of the inspector: what the control does, in words. The
@@ -2700,28 +3017,38 @@ struct VirtualControllerView<Trailing: View>: View {
     /// ways it fires besides a plain press.
     private func inspectorRow(_ match: BindingMatch, widgetHasSeveralInputs: Bool) -> some View {
         let b = match.binding
-        let outputs = b.outputs.map(\.displayName).joined(separator: " + ")
-        let note = (b.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let outputs = OutputAction.names(b.outputs).joined(separator: " + ")
+        let note = ShippedText.t((b.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
         var details: [String] = []
-        if !note.isEmpty, !outputs.isEmpty { details.append("Sends " + outputs) }
+        if !note.isEmpty, !outputs.isEmpty { details.append(String(localized: "Sends \(outputs)")) }
         if let hold = b.holdOutputs, !hold.isEmpty {
-            details.append("Held: " + hold.map(\.displayName).joined(separator: " + "))
+            details.append(String(localized: "Held: \(OutputAction.names(hold).joined(separator: " + "))"))
         }
         if let double = b.doubleTapOutputs, !double.isEmpty {
-            details.append("Double tap: " + double.map(\.displayName).joined(separator: " + "))
+            details.append(String(localized: "Double tap: \(OutputAction.names(double).joined(separator: " + "))"))
         }
         if !b.modifiers.isEmpty {
             let family = controllerService.naming(forSlot: deviceSlot, presetFamily: preset.buttonFamily)
-            details.append("Only while holding " + b.modifiers
+            let held = b.modifiers
                 .map { ButtonNames.inputName($0, family: family.family, model: family.model) }
-                .joined(separator: " and "))
+            details.append(String(localized: "Only while holding \(LocalizedList.and(held))"))
         }
-        if let steps = b.macroSteps, !steps.isEmpty { details.append("Runs a macro of \(steps.count) steps") }
-        if b.toggleMode == true { details.append("Toggles: press once to hold, again to let go") }
-        if b.turboEnabled == true { details.append("Repeats rapidly while held") }
-        if let n = b.repeatCount, n > 1 { details.append("Fires \(n) times") }
-        if preset.joysticks.count > 1 { details.append("On \(groupDeviceName(match.joystickIndex))") }
-        let headline = !note.isEmpty ? note : (outputs.isEmpty ? "Nothing chosen yet" : outputs)
+        if let steps = b.macroSteps, !steps.isEmpty { details.append(steps.count == 1 ? String(localized: "Runs a macro of 1 step") : String(localized: "Runs a macro of \(steps.count) steps")) }
+        // The press modes the engine runs: toggle plus turbo is the auto
+        // clicker, and a repeat count counts only on a plain press or a
+        // macro (as the editor's own summary has it).
+        let toggles = b.toggleMode == true, turbo = b.turboEnabled == true
+        if toggles && turbo {
+            details.append(String(localized: "Repeats until pressed again"))
+        } else {
+            if toggles { details.append(String(localized: "Toggles: press once to hold, again to let go")) }
+            if turbo { details.append(String(localized: "Repeats rapidly while held")) }
+        }
+        let repeatApplies = b.macroSteps?.isEmpty == false
+            || (!toggles && !turbo && b.holdOutputs == nil && b.doubleTapOutputs == nil)
+        if let n = b.repeatCount, n > 1, repeatApplies { details.append(String(localized: "Fires \(n) times")) }
+        if preset.joysticks.count > 1 { details.append(String(localized: "On \(groupDeviceName(match.joystickIndex))")) }
+        let headline = !note.isEmpty ? note : (outputs.isEmpty ? String(localized: "Nothing chosen yet") : outputs)
         return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 // A widget with several inputs (a stick's four directions,
@@ -2753,10 +3080,11 @@ struct VirtualControllerView<Trailing: View>: View {
                 }
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
+            Image(systemName: "chevron.forward")
                 .font(.caption)
                 .foregroundStyle(.hint)
                 .padding(.top, 2)
+                .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -2768,11 +3096,11 @@ struct VirtualControllerView<Trailing: View>: View {
 
     /// The device a group reads, by the name its device menu shows.
     private func groupDeviceName(_ index: Int) -> String {
-        guard index < preset.joysticks.count else { return "Input Device \(index)" }
-        if let name = preset.joysticks[index].customName, !name.isEmpty { return name }
+        guard index < preset.joysticks.count else { return String(localized: "Input Device \(index)") }
+        if let name = preset.joysticks[index].shownCustomName, !name.isEmpty { return name }
         if let mac = preset.joysticks[index].macInputName { return mac }
         let slots = controllerService.effectiveSlots(for: preset.joysticks)
-        return slots[index].flatMap { controllerService.controllerDetails[$0]?.name } ?? "Input Device \(index)"
+        return slots[index].flatMap { controllerService.controllerDetails[$0]?.name } ?? String(localized: "Input Device \(index)")
     }
 
     /// Closes the popover first and opens the editor a beat later, so the
@@ -2782,10 +3110,16 @@ struct VirtualControllerView<Trailing: View>: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { onJump?(target) }
     }
 
-    /// The same for a region editor sheet: the popover closes first.
+    /// Zones are drawn in the editor, in this group's Zones section, on the
+    /// part that was clicked.
     private func openRegionEditor(_ editor: VisualizerRegionEditor) {
-        openInspectorLabel = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { onOpenRegionEditor?(editor) }
+        let part: ZonePart
+        switch editor {
+        case .touchpadSetup: part = .touchpad
+        case .screenRegions: part = .screen
+        case .stickZones(let key): part = key.map(ZonePart.init(regionKey:)) ?? .stick(0)
+        }
+        jump(EditorJumpTarget(joystickIndex: slot, inputSerialized: "", action: .showZones(part)))
     }
 
     // MARK: - Motion popover extras
@@ -2824,7 +3158,11 @@ struct VirtualControllerView<Trailing: View>: View {
         // samples and only stores a zero from a pad that is still. One raw
         // sample, taken whatever the pad was doing, stored the noise or
         // the movement as rest.
-        for slot in controllerService.connectedControllers.indices {
+        // Pads read directly or through a helper (the Steam Controllers)
+        // keep their own zero and are re-zeroed the same way.
+        let directSlots = controllerService.rawHIDGamepadSlots.filter { $0.value.profile?.layout == .steamController2026 }.map(\.key)
+            + (controllerService.steamControllerSlot.map { [$0] } ?? [])
+        for slot in Array(controllerService.connectedControllers.indices) + directSlots.sorted() {
             guard controllerService.rezeroMotion(slot: slot) else { continue }
             if controllerService.lastRezeroStoredZero { count += 1 } else { moving += 1 }
         }
@@ -2836,12 +3174,14 @@ struct VirtualControllerView<Trailing: View>: View {
         integratedYaw = 0
         withAnimation(.easeInOut(duration: 0.18)) {
             gyroResetFeedback = count == 0 && moving == 0
-                ? "No motion-capable controller connected"
+                ? String(localized: "No motion-capable controller connected")
                 : count == 0
-                    ? "Moving, hold it still and try again"
-                    : "Zeroed on \(count) controller\(count == 1 ? "" : "s")"
+                    ? String(localized: "Moving, hold it still and try again")
+                    : count == 1 ? String(localized: "Zeroed on 1 controller") : String(localized: "Zeroed on \(count) controllers")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        if let said = gyroResetFeedback { AccessibilityNotification.Announcement(said).post() }
+        // A failure stays longer: it is the one that needs reading.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (count == 0 ? 5 : 1.5)) {
             withAnimation(.easeInOut(duration: 0.18)) {
                 gyroResetFeedback = nil
             }
@@ -2909,37 +3249,44 @@ struct VirtualControllerView<Trailing: View>: View {
         mark.outerLeft = outer[.left] ?? 1
         mark.outerDown = outer[.down] ?? 1
         mark.outerUp = outer[.up] ?? 1
-        func pct(_ v: Float) -> String { "\(Int((v * 100).rounded()))%" }
+        // Locale digits and percent sign, as the rest of the app writes them.
+        func pct(_ v: Float) -> String { (Double(v)).formatted(.percent.precision(.fractionLength(0))) }
         var help: String
         if oneWay {
             mark.thresholds = Array(Set(inner[.right] ?? [])).sorted()
             help = mark.thresholds.count > 1
-                ? "Rows start at " + mark.thresholds.map(pct).joined(separator: ", ") + ": red up to the first, an orange line at each"
-                : "Deadzone " + pct(mark.right)
-            if let o = outer[.right] { help += ", full push at " + pct(o) }
+                ? String(localized: "Rows start at \(mark.thresholds.map(pct).joined(separator: ", ")): red up to the first, an orange line at each")
+                : String(localized: "Deadzone \(pct(mark.right))")
+            if let o = outer[.right] { help += String(localized: ", full push at \(pct(o))") }
         } else {
             // Ways with the same deadzone named together.
-            let names: [DeadzoneWay: String] = [.right: "right", .left: "left", .down: "down", .up: "up"]
+            let names: [DeadzoneWay: String] = [.right: String(localized: "right"), .left: String(localized: "left"), .down: String(localized: "down"), .up: String(localized: "up")]
             let read = DeadzoneWay.allCases.filter { first[$0] != nil }
             let byValue = Dictionary(grouping: read) { first[$0] ?? 0 }
             if byValue.count == 1, let v = byValue.keys.first {
-                help = "Deadzone " + pct(v)
+                help = String(localized: "Deadzone \(pct(v))")
             } else {
-                help = "Deadzone " + byValue.keys.sorted().map { v in
-                    pct(v) + " " + (byValue[v] ?? []).map { names[$0] ?? "" }.joined(separator: " and ")
+                let perWay = byValue.keys.sorted().map { v in
+                    // One phrase translators can reorder.
+                    String(localized: "deadzone.percentWays", defaultValue: "\(pct(v)) \(LocalizedList.and((byValue[v] ?? []).map { names[$0] ?? "" }))",
+                           comment: "A deadzone percent, then the directions it applies to")
                 }.joined(separator: ", ")
+                help = String(localized: "Deadzone \(perWay)")
             }
             let moves = Set(ways.values.flatMap { [$0.positive] + [$0.negative].compactMap { $0 } })
             let unreadNames = DeadzoneWay.allCases.filter { first[$0] == nil && moves.contains($0) }.map { names[$0] ?? "" }
-            if !unreadNames.isEmpty { help += "; no row reads " + unreadNames.joined(separator: " or ") }
+            if !unreadNames.isEmpty { help += String(localized: "; no row reads \(LocalizedList.or(unreadNames))") }
             // A later row the same way: the ring is the first one.
             let later = DeadzoneWay.allCases.compactMap { w -> String? in
                 let starts = Array(Set(inner[w] ?? [])).sorted()
-                return starts.count > 1 ? names[w].map { $0 + " " + starts.dropFirst().map(pct).joined(separator: ", ") } : nil
+                return starts.count > 1 ? names[w].map {
+                    String(localized: "deadzone.wayStarts", defaultValue: "\($0) \(starts.dropFirst().map(pct).joined(separator: ", "))",
+                           comment: "A direction, then the deadzones later rows start at that way")
+                } : nil
             }
-            if !later.isEmpty { help += "; the ring is the first row each way, others start at " + later.joined(separator: "; ") }
+            if !later.isEmpty { help += String(localized: "; the ring is the first row each way, others start at \(later.joined(separator: "; "))") }
             let outers = DeadzoneWay.allCases.compactMap { outer[$0] }
-            if let o = outers.min() { help += "; full push at " + pct(o) }
+            if let o = outers.min() { help += String(localized: "; full push at \(pct(o))") }
         }
         mark.help = help
         return mark
@@ -2984,18 +3331,42 @@ struct VirtualControllerView<Trailing: View>: View {
 // MARK: - Widget components
 
 private struct StickWidget: View {
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
     let label: String
     let x: Float
     let y: Float
     let pressed: Bool
+    /// The preset's zones on this stick, drawn on the dot's travel.
+    var zones: [TouchpadRegion] = []
 
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
                 Circle()
                     .fill(pressed ? Color.green.opacity(0.25) : Color.secondary.opacity(0.18))
+                // The zones on the dot's travel (26 points each way), the
+                // one the stick is in filled.
+                if !zones.isEmpty {
+                    let px = Double((x + 1) / 2), py = Double((y + 1) / 2)
+                    ZStack(alignment: .topLeading) {
+                        ForEach(zones) { z in
+                            let box = z.drawnBox
+                            let on = z.contains(normalizedX: px, y: py)
+                            ZoneSwatch(ring: z.ring, color: ControllerCanvas.zoneColor(z.colorIndex), fill: on ? 0.6 : 0.18,
+                                       stroke: on ? 1 : 0.55, lineWidth: on ? 1.5 : 0.75)
+                                .frame(width: max(1, box.width * 52), height: max(1, box.height * 52))
+                                .position(x: 10 + box.midX * 52, y: 10 + box.midY * 52)
+                        }
+                    }
+                    .frame(width: 72, height: 72)
+                    .clipShape(Circle())
+                    .allowsHitTesting(false)
+                }
                 Circle()
-                    .stroke(pressed ? Color.green : Color.secondary.opacity(0.4), lineWidth: 1.5)
+                    .stroke(pressed ? Color.green : Color.secondary.opacity(0.4),
+                            lineWidth: pressed && (differentiateWithoutColor || colorSchemeContrast == .increased || appHighContrast) ? 3.5 : 1.5)
                 // Crosshair
                 Path { p in
                     p.move(to: CGPoint(x: 36, y: 0)); p.addLine(to: CGPoint(x: 36, y: 72))
@@ -3021,7 +3392,7 @@ private struct StickWidget: View {
     /// Spoken description of the live analog position and press state, so
     /// VoiceOver users hear where the stick is instead of a silent circle.
     private var accessibilityValue: String {
-        SpokenLive.stick(x: x, y: y) + (pressed ? ", pressed" : "")
+        pressed ? String(localized: "\(SpokenLive.stick(x: x, y: y)), pressed") : SpokenLive.stick(x: x, y: y)
     }
 }
 
@@ -3030,6 +3401,8 @@ private struct TriggerWidget: View {
     let value: Float
     let threshold: Float
     let tint: Color
+    /// The preset's bands on this trigger, drawn along its travel.
+    var bands: [TouchpadRegion] = []
 
     var body: some View {
         VStack(spacing: 4) {
@@ -3041,6 +3414,18 @@ private struct TriggerWidget: View {
                     .fill(tint.gradient)
                     .frame(width: 22, height: max(2, CGFloat(value) * 80))
                     .animation(.linear(duration: 0.04), value: value)
+                // The bands, the one the trigger is in filled.
+                ForEach(bands) { z in
+                    let on = z.containsTravel(Double(min(1, max(0, value))))
+                    let color = ControllerCanvas.zoneColor(z.colorIndex)
+                    let low = CGFloat(min(1, max(0, z.minY))), high = CGFloat(min(1, max(0, z.maxY)))
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color.opacity(on ? 0.55 : 0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(color.opacity(on ? 1 : 0.6), lineWidth: on ? 1.5 : 0.75))
+                        .frame(width: 22, height: max(2, (high - low) * 80))
+                        .offset(y: -low * 80)
+                        .allowsHitTesting(false)
+                }
                 // Threshold marker
                 Rectangle()
                     .fill(Color.orange.opacity(0.7))
@@ -3048,7 +3433,7 @@ private struct TriggerWidget: View {
                     .offset(y: -CGFloat(threshold) * 80)
             }
             Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(String(format: "%.0f%%", min(1, max(0, value)) * 100))
+            Text(String(format: "%.0f%%", locale: .current, min(1, max(0, value)) * 100))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.hint)
         }
@@ -3059,6 +3444,9 @@ private struct TriggerWidget: View {
 }
 
 private struct ShoulderWidget: View {
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
     let label: String
     let pressed: Bool
 
@@ -3067,20 +3455,30 @@ private struct ShoulderWidget: View {
             Capsule()
                 .fill(pressed ? Color.green.opacity(0.25) : Color.secondary.opacity(0.15))
             Capsule()
-                .stroke(pressed ? Color.green : Color.secondary.opacity(0.35), lineWidth: 1)
+                .stroke(pressed ? Color.green : Color.secondary.opacity(0.35),
+                        lineWidth: pressed && (differentiateWithoutColor || colorSchemeContrast == .increased || appHighContrast) ? 3 : 1)
             Text(label)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(pressed ? .green : .secondary)
         }
         .frame(width: 56, height: 18)
+        // Drawn at its own size, like the controller drawing's labels: the
+        // app's Text Size spilled the word out of the capsule.
+        .environment(\.appTextScale, 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label) shoulder")
-        .accessibilityValue(pressed ? "pressed" : "released")
+        .accessibilityValue(pressed ? String(localized: "pressed") : String(localized: "released"))
     }
 }
 
 private struct DPadWidget: View {
     let hat: (x: Float, y: Float)
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
+    private var moreContrast: Bool { colorSchemeContrast == .increased || appHighContrast }
+    /// A press shown by more than hue (see ControllerCanvas).
+    private var outline: Bool { differentiateWithoutColor || moreContrast }
 
     var body: some View {
         let up = hat.y > 0.5
@@ -3096,6 +3494,8 @@ private struct DPadWidget: View {
             }
             arrow(down: true, active: down)
         }
+        // Fixed 20 pt cells: at a larger Text Size the arrows overlapped.
+        .environment(\.appTextScale, 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("D-pad")
         .accessibilityValue(directionValue(up: up, down: down, left: left, right: right))
@@ -3105,11 +3505,11 @@ private struct DPadWidget: View {
     /// the two axes so diagonals read naturally (for example "up right").
     private func directionValue(up: Bool, down: Bool, left: Bool, right: Bool) -> String {
         var parts: [String] = []
-        if up { parts.append("up") }
-        if down { parts.append("down") }
-        if left { parts.append("left") }
-        if right { parts.append("right") }
-        return parts.isEmpty ? "centered" : parts.joined(separator: " ")
+        if up { parts.append(String(localized: "up")) }
+        if down { parts.append(String(localized: "down")) }
+        if left { parts.append(String(localized: "left")) }
+        if right { parts.append(String(localized: "right")) }
+        return parts.isEmpty ? String(localized: "centered") : parts.joined(separator: " ")
     }
 
     private func arrow(up: Bool = false, down: Bool = false, left: Bool = false, right: Bool = false, active: Bool) -> some View {
@@ -3126,6 +3526,7 @@ private struct DPadWidget: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(active ? Color.green.opacity(0.18) : Color.secondary.opacity(0.10))
             )
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.green, lineWidth: active && outline ? 2.5 : 0))
     }
 }
 
@@ -3133,6 +3534,12 @@ private struct FaceButtonGlyph: View {
     let label: String
     let pressed: Bool
     let tint: Color
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
+    private var moreContrast: Bool { colorSchemeContrast == .increased || appHighContrast }
+    /// A press shown by more than hue (see ControllerCanvas).
+    private var outline: Bool { differentiateWithoutColor || moreContrast }
 
     /// PlayStation glyphs are drawn as symbols at one fixed size. As text,
     /// the four characters come out at four different sizes.
@@ -3147,15 +3554,15 @@ private struct FaceButtonGlyph: View {
     }
     private var spokenName: String {
         switch label {
-        case "✕": return "Cross"
-        case "○": return "Circle"
-        case "□": return "Square"
-        case "△": return "Triangle"
+        case "✕": return String(localized: "Cross")
+        case "○": return String(localized: "Circle")
+        case "□": return String(localized: "Square")
+        case "△": return String(localized: "Triangle")
         // Face button names by position, spoken in full.
-        case "S": return "South"
-        case "E": return "East"
-        case "W": return "West"
-        case "N": return "North"
+        case "S": return String(localized: "South")
+        case "E": return String(localized: "East")
+        case "W": return String(localized: "West")
+        case "N": return String(localized: "North")
         default: return label
         }
     }
@@ -3165,21 +3572,21 @@ private struct FaceButtonGlyph: View {
             Circle()
                 .fill(pressed ? tint.opacity(0.4) : Color.secondary.opacity(0.18))
             Circle()
-                .stroke(pressed ? tint : Color.secondary.opacity(0.35), lineWidth: 1.5)
+                .stroke(pressed ? tint : Color.secondary.opacity(0.35), lineWidth: pressed && outline ? 3.5 : 1.5)
             if let symbol {
                 Image(systemName: symbol)
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(pressed ? tint : tint.opacity(0.85))
+                    .foregroundStyle(moreContrast ? Color.primary : (pressed ? tint : tint.opacity(0.85)))
             } else {
                 Text(label)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(pressed ? tint : tint.opacity(0.85))
+                    .foregroundStyle(moreContrast ? Color.primary : (pressed ? tint : tint.opacity(0.85)))
             }
         }
         .frame(width: 32, height: 32)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(spokenName) button")
-        .accessibilityValue(pressed ? "pressed" : "released")
+        .accessibilityLabel(spokenName)
+        .accessibilityValue(pressed ? String(localized: "pressed") : String(localized: "released"))
     }
 }
 
@@ -3304,7 +3711,7 @@ private struct TouchpadWidget: View {
             // A tap has no lasting state to draw, so it is shown as a
             // short flash of its name at the top edge.
             if let tap = lastTap, Date().timeIntervalSince(lastTapAt) < 0.7 {
-                Text(tap == .oneFingerTap ? "Tap" : tap == .doubleTap ? "Double tap" : "Two-finger tap")
+                Text(tap == .oneFingerTap ? String(localized: "Tap") : tap == .doubleTap ? String(localized: "Double tap") : String(localized: "Two-finger tap"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.mint)
                     .position(x: pad.width - 44, y: 8)
@@ -3315,7 +3722,7 @@ private struct TouchpadWidget: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Touchpad")
-        .accessibilityValue(pressed ? "pressed" : "released")
+        .accessibilityValue(pressed ? String(localized: "pressed") : String(localized: "released"))
         // 60 Hz sampling. Higher rates produced visibly worse
         // performance because each tick invalidated @State and forced
         // SwiftUI to rebuild the whole widget body. 30 Hz, the same as the
@@ -3342,10 +3749,12 @@ private struct TouchpadWidget: View {
         // touch state until the last one lets go.
         .onAppear {
             TouchpadService.shared.retain()
-            regions = presetRegions.isEmpty ? TouchpadService.shared.allRegions() : presetRegions
+            // This preset's zones only: the service holds whichever preset
+            // ran or was edited last, and its zones were drawn on this pad.
+            regions = presetRegions
         }
         .onChange(of: presetRegions) { _, new in
-            regions = new.isEmpty ? TouchpadService.shared.allRegions() : new
+            regions = new
         }
         .onDisappear { TouchpadService.shared.release() }
     }
@@ -3378,10 +3787,7 @@ private struct TouchpadWidget: View {
     /// before, one per region for isRegionPressed). At 60 Hz with ~10
     /// regions this used to do ~600 NSLock ops/sec; now it's 60.
     private func refreshRegionState() {
-        let (snapshot, pressed) = TouchpadService.shared.snapshotRegions()
-        if presetRegions.isEmpty, snapshot.map(\.id) != regions.map(\.id) {
-            regions = snapshot
-        }
+        let (_, pressed) = TouchpadService.shared.snapshotRegions()
         if pressed != pressedRegionIDs {
             pressedRegionIDs = pressed
         }
@@ -3547,15 +3953,30 @@ private struct MotionDeadzoneMeter: View {
                                                   invert: $0.invertAxis == true, deadzone: deadzone($0)) }
     }
 
+    /// The same in words: VoiceOver drops the lone + and \u{2212} that tell
+    /// the two sides apart, and reads "rad/s" letter by letter.
+    private var spokenHelp: String {
+        func num(_ v: Float) -> String { Double(v).formatted(.number.precision(.significantDigits(1...2))) }
+        let s = sides
+        let unit = scale == 3 ? String(localized: " radians per second") : ""
+        switch (s.positive, s.negative) {
+        case let (p?, n?) where p == n: return String(localized: "\(channel.displayName): deadzone \(num(p))\(unit)")
+        case let (p?, n?): return String(localized: "\(channel.displayName): deadzone \(num(p))\(unit) on the plus side, \(num(n))\(unit) on the minus side")
+        case let (p?, nil): return String(localized: "\(channel.displayName): deadzone \(num(p))\(unit), plus side only")
+        case let (nil, n?): return String(localized: "\(channel.displayName): deadzone \(num(n))\(unit), minus side only")
+        default: return channel.displayName
+        }
+    }
+
     private var help: String {
-        func pct(_ v: Float) -> String { String(format: "%.2g", v) }
+        func pct(_ v: Float) -> String { Double(v).formatted(.number.precision(.significantDigits(1...2))) }
         let s = sides
         let unit = scale == 3 ? " rad/s" : ""
         switch (s.positive, s.negative) {
-        case let (p?, n?) where p == n: return "\(channel.displayName): deadzone \(pct(p))\(unit)"
-        case let (p?, n?): return "\(channel.displayName): deadzone \(pct(p))\(unit) +, \(pct(n))\(unit) \u{2212}"
-        case let (p?, nil): return "\(channel.displayName): deadzone \(pct(p))\(unit), + only"
-        case let (nil, n?): return "\(channel.displayName): deadzone \(pct(n))\(unit), \u{2212} only"
+        case let (p?, n?) where p == n: return String(localized: "\(channel.displayName): deadzone \(pct(p))\(unit)")
+        case let (p?, n?): return String(localized: "\(channel.displayName): deadzone \(pct(p))\(unit) +, \(pct(n))\(unit) \u{2212}")
+        case let (p?, nil): return String(localized: "\(channel.displayName): deadzone \(pct(p))\(unit), + only")
+        case let (nil, n?): return String(localized: "\(channel.displayName): deadzone \(pct(n))\(unit), \u{2212} only")
         default: return channel.displayName
         }
     }
@@ -3565,17 +3986,22 @@ private struct MotionDeadzoneMeter: View {
             Text(channel.displayName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                // One line, shrunk to fit: "Beschleunigung X" must not
+                // break inside the word.
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 70, alignment: .trailing)
             meter.frame(width: 150, height: 8)
-            Text(String(format: "%+.2f", value))
+            Text(String(format: "%+.2f", locale: .current, value))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(firing ? Color.green : Color.secondary)
-                .frame(width: 40, alignment: .leading)
+                .frame(minWidth: 40, alignment: .leading)
+                .fixedSize()
         }
         .help(help)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(help)
-        .accessibilityValue(firing ? "past the deadzone" : "inside the deadzone")
+        .accessibilityLabel(spokenHelp)
+        .accessibilityValue(firing ? String(localized: "past the deadzone") : String(localized: "inside the deadzone"))
     }
 
     private var meter: some View {
@@ -3660,6 +4086,66 @@ private struct MotionWidget: View {
     }
 }
 
+/// The light bar's label: an icon, the words, the preset's color, and a
+/// chevron. In the drawing it takes the size of the drawing's captions and
+/// drops the words when the gap between the triggers is too narrow.
+private struct LightBarChipLabel: View {
+    let off: Bool
+    let rainbow: Bool
+    let tint: Color?
+    @Environment(\.canvasCaptionSize) private var canvasCaptionSize
+    private var fs: CGFloat { canvasCaptionSize ?? 12 }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            chip(words: true)
+            chip(words: false)
+        }
+    }
+
+    @ViewBuilder
+    private func chip(words: Bool) -> some View {
+        HStack(spacing: fs * 0.5) {
+            Image(systemName: "light.beacon.max.fill")
+                .font(.system(size: fs * 0.9))
+                .foregroundStyle(.secondary)
+            if words {
+                Text("Light bar")
+                    .font(.system(size: fs))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if off {
+                Text("Off")
+                    .font(.system(size: fs))
+                    .foregroundStyle(.primary)
+                    .fixedSize()
+            } else if rainbow {
+                Capsule()
+                    .fill(LinearGradient(colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(width: fs * 3.2, height: fs * 0.8)
+            } else if let tint = tint {
+                Capsule()
+                    .fill(tint)
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+                    .shadow(color: tint.opacity(0.6), radius: 3)
+                    .frame(width: fs * 3.2, height: fs * 0.8)
+            } else {
+                Text("Not set")
+                    .font(.system(size: fs))
+                    .foregroundStyle(.hint)
+                    .fixedSize()
+            }
+            Image(systemName: "chevron.down")
+                .font(.system(size: fs * 0.7, weight: .semibold))
+                .foregroundStyle(.hint)
+        }
+    }
+
+}
+
 // MARK: - MIDI Instrument layout
 
 /// The MIDI template for the Live Visualizer: a full instrument panel that
@@ -3687,6 +4173,9 @@ private struct MotionWidget: View {
 /// per tick and zero re-renders.
 struct MIDIInstrumentView: View {
     @Environment(\.visualizerSuspended) private var suspended
+    /// The app's direction, put back in the popovers of the keyboard strip,
+    /// which is drawn left to right like the instrument.
+    @Environment(\.layoutDirection) private var appDirection
     let preset: Preset
     let slot: Int
     var onJump: ((EditorJumpTarget) -> Void)?
@@ -3750,28 +4239,28 @@ struct MIDIInstrumentView: View {
     /// Standard General MIDI controller names for the knob labels.
     static func ccName(_ cc: Int) -> String? {
         switch cc {
-        case 0: return "Bank"
-        case 1: return "Mod Wheel"
-        case 2: return "Breath"
-        case 4: return "Foot"
-        case 5: return "Porta Time"
-        case 7: return "Volume"
-        case 8: return "Balance"
-        case 10: return "Pan"
-        case 11: return "Expression"
-        case 64: return "Sustain"
-        case 65: return "Portamento"
-        case 66: return "Sostenuto"
-        case 67: return "Soft Pedal"
-        case 71: return "Resonance"
-        case 72: return "Release"
-        case 73: return "Attack"
-        case 74: return "Cutoff"
-        case 84: return "Porta Ctl"
-        case 91: return "Reverb"
-        case 93: return "Chorus"
-        case 120: return "All Sound Off"
-        case 123: return "All Notes Off"
+        case 0: return String(localized: "Bank")
+        case 1: return String(localized: "Mod Wheel")
+        case 2: return String(localized: "Breath")
+        case 4: return String(localized: "Foot")
+        case 5: return String(localized: "Porta Time")
+        case 7: return String(localized: "Volume")
+        case 8: return String(localized: "Balance")
+        case 10: return String(localized: "Pan")
+        case 11: return String(localized: "Expression")
+        case 64: return String(localized: "Sustain")
+        case 65: return String(localized: "Portamento")
+        case 66: return String(localized: "Sostenuto")
+        case 67: return String(localized: "Soft Pedal")
+        case 71: return String(localized: "Resonance")
+        case 72: return String(localized: "Release")
+        case 73: return String(localized: "Attack")
+        case 74: return String(localized: "Cutoff")
+        case 84: return String(localized: "Porta Ctl")
+        case 91: return String(localized: "Reverb")
+        case 93: return String(localized: "Chorus")
+        case 120: return String(localized: "All Sound Off")
+        case 123: return String(localized: "All Notes Off")
         default: return nil
         }
     }
@@ -3787,7 +4276,7 @@ struct MIDIInstrumentView: View {
                     .font(.caption)
                     .foregroundStyle(.pink)
                 Text(isPlaceholder
-                     ? "No MIDI device connected. Plug one in and this goes live"
+                     ? String(localized: "No MIDI device connected. Plug one in and this goes live")
                      : device.name)
                     .font(.caption.weight(isPlaceholder ? .regular : .semibold))
                     .foregroundStyle(isPlaceholder ? .secondary : .primary)
@@ -3906,17 +4395,27 @@ struct MIDIInstrumentView: View {
             .popover(isPresented: inspectorPresented(prefix: "keys-\(device.id)-")) {
                 if let key = openInspector,
                    let note = Int(key.split(separator: "-").last ?? "") {
-                    midiInspector(title: "\(MIDIService.noteName(note)) (note \(note))",
+                    midiInspector(title: String(localized: "\(MIDIService.noteName(note)) (note \(note))"),
                                   kind: .note, number: note, device: device)
+                        .environment(\.layoutDirection, appDirection)
                 }
             }
             .help("Keys glow with press strength. A dot marks a bound note. Click a key to see its bindings.")
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Keyboard")
             .accessibilityValue(held.isEmpty
-                ? "No keys held. \(bound.count) bound note\(bound.count == 1 ? "" : "s")"
-                : "Held: " + held.sorted().map { MIDIService.noteName($0) }.joined(separator: ", "))
+                ? (bound.count == 1 ? String(localized: "No keys held. 1 bound note") : String(localized: "No keys held. \(bound.count) bound notes"))
+                : String(localized: "Held: \(held.sorted().map { MIDIService.noteName($0) }.joined(separator: ", "))"))
             .accessibilityAddTraits(.updatesFrequently)
+            // Each bound note's rows without aiming at a key: an action
+            // for VoiceOver and Switch Control.
+            .accessibilityActions {
+                ForEach(bound.sorted(), id: \.self) { note in
+                    Button(String(localized: "Show bindings for \(MIDIService.noteName(note))")) {
+                        openInspector = "keys-\(device.id)-\(note)"
+                    }
+                }
+            }
 
             // Octave labels under every C.
             HStack(spacing: 0) {
@@ -3928,7 +4427,22 @@ struct MIDIInstrumentView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+            // The same from the keyboard and by voice: a menu of the bound notes.
+            if !bound.isEmpty {
+                Menu {
+                    ForEach(bound.sorted(), id: \.self) { note in
+                        Button(MIDIService.noteName(note)) { openInspector = "keys-\(device.id)-\(note)" }
+                    }
+                } label: {
+                    Text("Bound notes").font(.caption2)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .environment(\.layoutDirection, appDirection)
+            }
         }
+        // An instrument: low notes on the left in every language.
+        .environment(\.layoutDirection, .leftToRight)
     }
 
     private func noteAt(location: CGPoint) -> Int {
@@ -3974,12 +4488,12 @@ struct MIDIInstrumentView: View {
                 && binding.input.index == cc {
                 if let filter = binding.input.midiDeviceID, filter != deviceID { continue }
                 if binding.outputs.contains(where: { $0.type == .absoluteVolume }) {
-                    return ("Fader", .teal)
+                    return (String(localized: "Fader"), .teal)
                 }
                 switch binding.input.midiCCMode {
-                case .centered: return ("Dial", .orange)
-                case .relative: return ("Turn", .indigo)
-                default: return ("Switch", .secondary)
+                case .centered: return (String(localized: "Dial"), .orange)
+                case .relative: return (String(localized: "Turn"), .indigo)
+                default: return (String(localized: "Switch"), .secondary)
                 }
             }
         }
@@ -4044,6 +4558,8 @@ struct MIDIInstrumentView: View {
                         .foregroundStyle(isNewest ? .primary : .secondary)
                 }
                 .frame(width: 36, height: 36)
+                // A knob turns clockwise as it goes up, in every language.
+                .environment(\.layoutDirection, .leftToRight)
                 Text("CC \(knob.cc)")
                     .font(.system(size: 8, weight: .medium).monospaced())
                     .foregroundStyle(.secondary)
@@ -4068,18 +4584,18 @@ struct MIDIInstrumentView: View {
         .popover(isPresented: inspectorPresented(exact: "cc-\(device.id)-\(knob.cc)")) {
             midiInspector(title: ccTitle(knob.cc), kind: .cc, number: knob.cc, device: device)
         }
-        .help("Control Change \(knob.cc)\(Self.ccName(knob.cc).map { " (\($0))" } ?? ""), value \(knob.stamp == 0 ? "not seen yet" : String(knob.value)). Click to see its bindings.")
+        .help("Control Change \(knob.cc)\(Self.ccName(knob.cc).map { " (\($0))" } ?? ""), value \(knob.stamp == 0 ? String(localized: "not seen yet") : String(knob.value)). Click to see its bindings.")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(ccTitle(knob.cc).replacingOccurrences(of: " · ", with: ", ")
-                            + (badge.map { ", bound as \($0.label)" } ?? ""))
-        .accessibilityValue(knob.stamp == 0 ? "not seen yet" : "\(knob.value) of 127")
+        .accessibilityLabel(ccTitle(knob.cc)
+                            + (badge.map { String(localized: ", bound as \($0.label)") } ?? ""))
+        .accessibilityValue(knob.stamp == 0 ? String(localized: "not seen yet") : String(localized: "\(knob.value) of 127"))
         .accessibilityHint("Inspects bindings for this control")
         .accessibilityAddTraits(.isButton)
     }
 
     private func ccTitle(_ cc: Int) -> String {
-        if let name = Self.ccName(cc) { return "CC \(cc) · \(name)" }
-        return "CC \(cc)"
+        if let name = Self.ccName(cc) { return String(localized: "CC \(cc), \(name)") }
+        return String(localized: "CC \(cc)")
     }
 
     // MARK: Meters
@@ -4111,11 +4627,11 @@ struct MIDIInstrumentView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Pitch Bend")
-        .accessibilityValue(abs(bend) < 0.01 ? "centered" : "\(Int((bend * 100).rounded())) percent")
+        .accessibilityValue(abs(bend) < 0.01 ? String(localized: "centered") : String(localized: "\(Int((bend * 100).rounded())) percent"))
         .accessibilityHint("Inspects bindings for this control")
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: inspectorPresented(exact: "bend-\(device.id)")) {
-            midiInspector(title: "Pitch Bend", kind: .pitchBend, number: nil, device: device)
+            midiInspector(title: String(localized: "Pitch Bend"), kind: .pitchBend, number: nil, device: device)
         }
     }
 
@@ -4146,7 +4662,7 @@ struct MIDIInstrumentView: View {
         .accessibilityHint("Inspects bindings for this control")
         .accessibilityAddTraits(.isButton)
         .popover(isPresented: inspectorPresented(exact: "touch-\(device.id)")) {
-            midiInspector(title: "Aftertouch", kind: .aftertouch, number: nil, device: device)
+            midiInspector(title: String(localized: "Aftertouch"), kind: .aftertouch, number: nil, device: device)
         }
     }
 
@@ -4167,7 +4683,7 @@ struct MIDIInstrumentView: View {
                               : seen ? Color.secondary.opacity(0.6)
                               : Color.secondary.opacity(0.15))
                         .frame(width: 6, height: 6)
-                        .help("Channel \(channel)\(seen ? "" : " - no messages yet")")
+                        .help(seen ? String(localized: "Channel \(channel)") : String(localized: "Channel \(channel) - no messages yet"))
                 }
             }
             .frame(height: 12)
@@ -4175,9 +4691,9 @@ struct MIDIInstrumentView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Channels")
         .accessibilityValue(device.channelStamps.isEmpty
-            ? "No messages yet"
-            : "Heard on " + device.channelStamps.keys.sorted().map(String.init).joined(separator: ", ")
-                + (freshest.map { ", latest \($0)" } ?? ""))
+            ? String(localized: "No messages yet")
+            : String(localized: "Heard on \(device.channelStamps.keys.sorted().map(String.init).joined(separator: ", "))")
+                + (freshest.map { String(localized: ", latest \($0)") } ?? ""))
     }
 
     // MARK: Event log
@@ -4271,7 +4787,7 @@ struct MIDIInstrumentView: View {
                                 Text(match.binding.input.displayName)
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(.primary)
-                                Text(match.binding.outputs.map(\.displayName).joined(separator: " + "))
+                                Text(OutputAction.names(match.binding.outputs).joined(separator: " + "))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -4301,13 +4817,15 @@ struct VisualizerHeaderControls: View {
             Button {
                 control.editMode.toggle()
             } label: {
-                Label(control.editMode ? "Done Editing" : "Edit Layout",
+                Label(control.editMode ? String(localized: "Done Editing") : String(localized: "Edit Layout"),
                       systemImage: control.editMode ? "checkmark.circle.fill" : "pencil.and.outline")
             }
-            .buttonStyle(SolidButton(tint: control.editMode ? .green : .blue, size: .compact))
+            // Black text and icon on the blue, as on the Quick Start Guide button.
+            .buttonStyle(SolidButton(tint: control.editMode ? .green : .blue, size: .compact,
+                                     label: control.editMode ? nil : .black))
             .disabled(control.showingModel && !control.editMode)
-            .help(control.showingModel ? "The controller is drawn as it is built, so its controls stay in place"
-                  : (control.editMode ? "Finish customizing" : "Drag widgets to rearrange the layout"))
+            .help(control.showingModel ? String(localized: "The controller is drawn as it is built, so its controls stay in place")
+                  : (control.editMode ? String(localized: "Finish customizing") : String(localized: "Drag widgets to rearrange the layout, or right-click one to move it a step at a time")))
             .spotlightAnchor(SpotlightID.customizeButton)
 
             if control.editMode {
@@ -4339,7 +4857,7 @@ struct VisualizerHeaderControls: View {
                     .frame(width: 80)
                     .help("Resize the live visualizer content")
                     .accessibilityLabel("Visualizer size")
-                    .accessibilityValue(String(format: "%.0f percent", control.scale * 100))
+                    .accessibilityValue(String(localized: "\(String(format: "%.0f", control.scale * 100)) percent"))
 
                 Button {
                     control.scale = min(1.5, control.scale + 0.1)
@@ -4403,6 +4921,8 @@ struct RegionMapView: View {
     /// clicking a button on the controller map. Nil leaves the map
     /// read-only.
     var onPick: ((TouchpadRegion) -> Void)?
+    /// The map's spoken name when no title is drawn (a stick's popover).
+    var accessibilityName: String? = nil
     /// Wraps a region in the visualizer's inspector, the popover that lists
     /// its rows with a way to each and to the region's editor. Used in place
     /// of `onPick` when set.
@@ -4446,11 +4966,11 @@ struct RegionMapView: View {
         guard !name.isEmpty else { return nil }
         let here = regions.filter { cursorService.regionApplies($0, on: shownDisplay) }.count
         if here < regions.count {
-            return "\(name): \(here) of \(regions.count) regions apply here"
+            return String(localized: "\(name): \(here) of \(regions.count) regions apply here")
         }
         let perDisplay = regions.contains { $0.display != nil }
         return cursorService.screenCount > 1 && !perDisplay
-            ? "\(name), and every other display"
+            ? String(localized: "\(name), and every other display")
             : name
     }
 
@@ -4485,7 +5005,7 @@ struct RegionMapView: View {
                             .font(.callout.weight(.semibold))
                             .accessibilityAddTraits(.isHeader)
                         Spacer()
-                        Text("\(regions.count) region\(regions.count == 1 ? "" : "s")")
+                        Text(regions.count == 1 ? String(localized: "1 region") : String(localized: "\(regions.count) regions"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -4523,21 +5043,18 @@ struct RegionMapView: View {
                         // it is visible but clearly not live here.
                         let here = applies(region)
                         let color = regionPaletteColor(at: region.colorIndex).opacity(here ? 1 : 0.35)
-                        let rect = CGRect(x: region.minX * w, y: region.minY * h,
-                                          width: (region.maxX - region.minX) * w,
-                                          height: (region.maxY - region.minY) * h)
-                        let swatch = RoundedRectangle(cornerRadius: 4)
-                            .fill(color.opacity(lit ? 0.55 : 0.16))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(color.opacity(lit ? 1 : 0.5), lineWidth: lit ? 2 : 1)
-                            )
+                        let box = region.drawnBox
+                        let rect = CGRect(x: box.minX * w, y: box.minY * h,
+                                          width: box.width * w,
+                                          height: box.height * h)
+                        let swatch = ZoneSwatch(ring: region.ring, color: color, fill: lit ? 0.55 : 0.16,
+                                                stroke: lit ? 1 : 0.5, lineWidth: lit ? 2 : 1)
                             .overlay(
                                 // A small corner region has no room for its
                                 // name; the color and the tooltip carry it.
                                 Group {
                                     if rect.width >= 42 && rect.height >= 18 {
-                                        Text(region.name)
+                                        Text(region.shownName)
                                             .font(.system(size: 9, weight: .semibold))
                                             .foregroundStyle(lit ? .white : .secondary)
                                             .lineLimit(1)
@@ -4546,16 +5063,19 @@ struct RegionMapView: View {
                                 }
                             )
                             .frame(width: max(8, rect.width), height: max(8, rect.height))
+                            .contentShape(ZoneHitShape(ring: region.ring))
                         Group {
                             if let inspect {
-                                inspect(region, AnyView(swatch.accessibilityLabel(region.name)))
-                                    .help("\(region.name). Click to see its rows.")
+                                inspect(region, AnyView(swatch.accessibilityLabel(region.shownName)))
+                                    .help("\(region.shownName). Click to see its rows.")
                             } else if let onPick {
                                 Button { onPick(region) } label: { swatch }
                                     .buttonStyle(.plain)
-                                    .help("\(region.name). Click to go to its row.")
+                                    .help("\(region.shownName). Click to go to its row.")
+                                    .accessibilityLabel(region.shownName)
+                                    .accessibilityValue(lit ? String(localized: "Active") : "")
                             } else {
-                                swatch.help(region.name)
+                                swatch.help(region.shownName)
                             }
                         }
                         .position(x: rect.midX, y: rect.midY)
@@ -4576,6 +5096,9 @@ struct RegionMapView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 // Centered in whatever space is left over once it is fitted.
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                // A map of the screen or the stick: left is left in every
+                // language (the inspect popovers put the app's direction back).
+                .environment(\.layoutDirection, .leftToRight)
             }
             .frame(height: large ? 300 : (drawnAspect > 1.2 ? 170 : 200))
             .frame(maxWidth: large ? 520 : (drawnAspect > 1.2 ? 320 : 220))
@@ -4584,11 +5107,110 @@ struct RegionMapView: View {
             .onDisappear { setTracking(false) }
             .onChange(of: suspended) { _, now in setTracking(liveCursor && !now) }
             // Clickable regions stay reachable with VoiceOver.
-            .accessibilityElement(children: inspect != nil ? .contain : .ignore)
-            .accessibilityLabel(title.isEmpty ? "Screen regions" : title)
+            // Clickable regions stay reachable with VoiceOver and Voice Control.
+            .accessibilityElement(children: inspect != nil || onPick != nil ? .contain : .ignore)
+            .accessibilityLabel(accessibilityName ?? (title.isEmpty ? String(localized: "Screen regions") : title))
             .accessibilityValue(hot.isEmpty
-                                ? "\(pointLabel) outside every region"
-                                : "\(pointLabel) inside \(regions.filter { hot.contains($0.id) }.map(\.name).joined(separator: ", "))")
+                                ? String(localized: "\(pointLabel) outside every region")
+                                : String(localized: "\(pointLabel) inside \(regions.filter { hot.contains($0.id) }.map(\.shownName).joined(separator: ", "))"))
+        }
+        .padding(.top, 4)
+    }
+}
+
+
+/// A preset's bands on one axis's travel: a bar with the low end at the
+/// bottom, each band across it, lit while the live reading is inside.
+struct BandMapView: View {
+    let title: String
+    let axis: Int
+    let regions: [TouchpadRegion]
+    /// Live reading, 0...1 of the travel.
+    let fraction: Double
+    var inspect: ((TouchpadRegion, AnyView) -> AnyView)? = nil
+    /// Clicking a band goes to its row (in a control's popover).
+    var onPick: ((TouchpadRegion) -> Void)? = nil
+    /// The map's spoken name when no title is drawn (a trigger's popover).
+    var accessibilityName: String? = nil
+
+    var body: some View {
+        let hot = Set(regions.filter { $0.maxY > $0.minY && $0.containsTravel(fraction) }.map(\.id))
+        let ends = StickRegionService.travelEnds(axis: axis)
+        VStack(alignment: .leading, spacing: 6) {
+            if !title.isEmpty {
+            HStack {
+                Label(title, systemImage: "slider.vertical.3")
+                    .font(.callout.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text(regions.count == 1 ? String(localized: "1 region") : String(localized: "\(regions.count) regions"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            }
+            HStack(alignment: .top, spacing: 8) {
+                GeometryReader { geo in
+                    let w = geo.size.width, h = geo.size.height
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.22))
+                        RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                        ForEach(regions) { region in
+                            let lit = hot.contains(region.id)
+                            let color = regionPaletteColor(at: region.colorIndex)
+                            let rect = CGRect(x: 4, y: (1 - region.maxY) * h, width: w - 8,
+                                              height: max(6, (region.maxY - region.minY) * h))
+                            let swatch = ZoneSwatch(ring: nil, color: color, fill: lit ? 0.55 : 0.16,
+                                                    stroke: lit ? 1 : 0.5, lineWidth: lit ? 2 : 1)
+                                .overlay(Group {
+                                    if rect.height >= 14 {
+                                        Text(region.shownName)
+                                            .font(.system(size: 9, weight: .semibold))
+                                            .foregroundStyle(lit ? .white : .secondary)
+                                            .lineLimit(1)
+                                            .padding(.horizontal, 2)
+                                    }
+                                })
+                                .frame(width: rect.width, height: rect.height)
+                            Group {
+                                if let inspect {
+                                    inspect(region, AnyView(swatch.accessibilityLabel(region.shownName)))
+                                        .help("\(region.shownName). Click to see its rows.")
+                                } else if let onPick {
+                                    Button { onPick(region) } label: { swatch }
+                                        .buttonStyle(.plain)
+                                        .help("\(region.shownName). Click to go to its row.")
+                                        .accessibilityLabel(region.shownName)
+                                        .accessibilityValue(lit ? String(localized: "Active") : "")
+                                } else {
+                                    swatch.help(region.shownName)
+                                }
+                            }
+                            .position(x: rect.midX, y: rect.midY)
+                            .animation(.easeOut(duration: 0.12), value: lit)
+                        }
+                        Rectangle()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: w, height: 2)
+                            .shadow(color: .black.opacity(0.5), radius: 2)
+                            .position(x: w / 2, y: (1 - min(1, max(0, fraction))) * h)
+                            .allowsHitTesting(false)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .frame(width: 110, height: 170)
+                VStack(alignment: .leading) {
+                    Text(ends.high).font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(ends.low).font(.caption2).foregroundStyle(.secondary)
+                }
+                .frame(height: 170)
+                .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: inspect != nil || onPick != nil ? .contain : .ignore)
+            .accessibilityLabel(accessibilityName ?? title)
+            .accessibilityValue(hot.isEmpty
+                                ? String(localized: "Outside every band, at \(fraction.formatted(.percent.precision(.fractionLength(0)))) of the travel")
+                                : String(localized: "Inside \(regions.filter { hot.contains($0.id) }.map(\.shownName).joined(separator: ", "))"))
         }
         .padding(.top, 4)
     }
@@ -4603,7 +5225,7 @@ struct TapMapView: View {
     let counts: [Int]
     @ObservedObject private var activity = ChassisTapActivity.shared
 
-    private static let names = ["", "Single", "Double", "Triple", "Quadruple", "Quintuple"]
+    private static let names = ["", String(localized: "Single"), String(localized: "Double"), String(localized: "Triple"), String(localized: "Quadruple"), String(localized: "Quintuple")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -4652,7 +5274,7 @@ struct TapMapView: View {
         .animation(.easeOut(duration: 0.12), value: lit)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(name) tap")
-        .accessibilityValue(lit ? "just fired" : "idle")
+        .accessibilityValue(lit ? String(localized: "just fired") : String(localized: "idle"))
     }
 }
 

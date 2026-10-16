@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig bruker bare Bluetooth til å koble fra en trådløs kontroller når du ber om det.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig bruker bare Bluetooth til å koble fra en trådløs kontroller når du ber om det.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle rettigheter forbeholdt.";
+

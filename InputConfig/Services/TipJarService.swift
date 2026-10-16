@@ -121,11 +121,11 @@ final class TipJarService: ObservableObject {
                 await transaction.finish()
                 incrementTipCount()
                 await refreshActiveSubscription()
-                AccessibilityNotification.Announcement("Thank you for your support").post()
+                AccessibilityNotification.Announcement(String(localized: "Thank you for your support")).post()
                 return true
             case .unverified(let transaction, let error):
                 await transaction.finish()
-                lastError = "The purchase could not be verified: \(error.localizedDescription)"
+                lastError = String(localized: "The purchase could not be verified: \(error.localizedDescription)")
                 throw TipJarError.unverifiedTransaction
             }
 
@@ -135,7 +135,7 @@ final class TipJarService: ObservableObject {
         case .pending:
             // Pending transactions resolve later (e.g. parental approval).
             // The transaction listener picks them up.
-            notice = "Your tip is waiting for approval. It will go through on its own once approved."
+            notice = String(localized: "Your tip is waiting for approval. It will go through on its own once approved.")
             return false
 
         @unknown default:
@@ -150,10 +150,10 @@ final class TipJarService: ObservableObject {
         do {
             try await AppStore.sync()
             await refreshActiveSubscription()
-            notice = activeSubscription.map { "Restored. Your \($0.displayName) is active." }
-                ?? "Restored. There are no active monthly tips on this Apple Account."
+            notice = activeSubscription.map { String(localized: "Restored. Your \($0.displayName) is active.") }
+                ?? String(localized: "Restored. There are no active monthly tips on this Apple Account.")
         } catch {
-            lastError = "Could not restore purchases: \(error.localizedDescription)"
+            lastError = String(localized: "Could not restore purchases: \(error.localizedDescription)")
         }
     }
 
@@ -248,7 +248,7 @@ enum TipJarError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unverifiedTransaction:
-            return "The App Store returned an unverified transaction. Tip was not processed."
+            return String(localized: "The App Store returned an unverified transaction. Tip was not processed.")
         }
     }
 }

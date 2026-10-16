@@ -148,6 +148,24 @@ final class InputSimulator: @unchecked Sendable {
     /// The setting that sends plain keys by what they type on the layout.
     nonisolated static let followLayoutKey = "InputConfig.keysFollowLayout"
 
+    /// Whether `virtualCode` sends this key by the character it types on a
+    /// US keyboard: a letter or mark in a Command or Control shortcut, or a
+    /// plain letter, digit or mark with Keys follow the keyboard layout on,
+    /// and only when this layout has a key for that character (otherwise
+    /// the key goes out by position). For naming outputs the way they go out.
+    static func sendsByCharacter(_ hidCode: Int, inShortcut: Bool) -> Bool {
+        let character: Character?
+        if inShortcut { character = shortcutCharacter(hidCode) }
+        else if UserDefaults.standard.bool(forKey: followLayoutKey) {
+            character = shortcutCharacter(hidCode) ?? digitCharacter(hidCode)
+        } else { character = nil }
+        guard let character else { return false }
+        return KeyLabelCache.typable(character, command: inShortcut) {
+            (inShortcut ? SystemActionService.virtualKey(typing: character, command: true)
+                        : SystemActionService.virtualKey(typing: character)) != nil
+        }
+    }
+
     /// The digit a HID code types on a US keyboard (1 to 9, then 0).
     private static func digitCharacter(_ hidCode: Int) -> Character? {
         guard (30...39).contains(hidCode) else { return nil }
@@ -180,7 +198,10 @@ final class InputSimulator: @unchecked Sendable {
     private var layoutLetterKeys: [Int: Int?] = [:]
     private var layoutObserver: NSObjectProtocol?
 
-    private func watchLayout() {
+    /// Also called when the stop registers at launch: installed only on the
+    /// first key sent, a layout switch before that left the stop's chord on
+    /// the old layout's period key.
+    func watchLayout() {
         guard layoutObserver == nil else { return }
         layoutObserver = DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.Carbon.TISNotifySelectedKeyboardInputSourceChanged"),
@@ -223,7 +244,7 @@ final class InputSimulator: @unchecked Sendable {
                 // Held already by a row without repeat: this row's repeat
                 // still starts, instead of being dropped.
                 if repeats, !isModifier, repeatTimers[hidCode] == nil,
-                   let virtualCode = KeyCodeMap.hidToVirtualKeyCode[hidCode] {
+                   let virtualCode = postedKeys[hidCode] ?? KeyCodeMap.hidToVirtualKeyCode[hidCode] {
                     startRepeat(hidCode, virtualCode: virtualCode)
                 }
                 return
@@ -247,6 +268,7 @@ final class InputSimulator: @unchecked Sendable {
 
         if let virtualCode = virtualCode(for: hidCode, scope: scope) {
             if isModifier {
+                lastOwnModifierChange[hidCode] = CFAbsoluteTimeGetCurrent()
                 postModifierChange(virtualCode, down: true)
             } else {
                 postedKeys[hidCode] = virtualCode
@@ -282,14 +304,18 @@ final class InputSimulator: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + delay, repeating: interval, leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
+            // The key the press is down on now: a re-scoped press (Command A
+            // over a held A) moved it, and repeating the old one sent Command Q
+            // on AZERTY.
+            let current = self?.postedKeys[hidCode] ?? virtualCode
             guard let self, self.pressedKeys.contains(hidCode),
                   let event = CGEvent(keyboardEventSource: self.eventSource,
-                                      virtualKey: CGKeyCode(virtualCode), keyDown: true) else {
+                                      virtualKey: CGKeyCode(current), keyDown: true) else {
                 self?.stopRepeat(hidCode)
                 return
             }
             var flags = self.scopedModifierFlags(self.keyScopes[hidCode])
-            flags.formUnion(self.keyOwnFlagBits(virtualCode))
+            flags.formUnion(self.keyOwnFlagBits(current))
             flags.insert(.maskNonCoalesced)
             event.flags = flags
             event.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
@@ -341,6 +367,7 @@ final class InputSimulator: @unchecked Sendable {
                 // flags are written even when empty. Left unset, the event
                 // inherited the HID system state, where the key was still
                 // down, so apps saw two presses and no release.
+                lastOwnModifierChange[hidCode] = CFAbsoluteTimeGetCurrent()
                 postModifierChange(virtualCode, down: false)
             } else {
                 // Carry the modifiers of its own row that are still held, so
@@ -357,18 +384,29 @@ final class InputSimulator: @unchecked Sendable {
     /// held modifier, the rule for callers that do not say which row pressed.
     private func scopedModifierFlags(_ scope: Set<Int>?) -> CGEventFlags {
         var flags: CGEventFlags = []
-        // A modifier in the row's own scope that the person is holding on
-        // the keyboard (not this app): a Left Command row sending Command
-        // Tab lets the finger supply the Command.
-        if let scope {
-            var physical: UInt64?
-            for code in scope where !pressedKeys.contains(code) {
-                guard let f = modifierFlags(for: code), let side = Self.deviceBit[code] else { continue }
-                let held = physical ?? CGEventSource.flagsState(.hidSystemState).rawValue
-                physical = held
-                if held & side != 0 { flags.insert(f); flags.insert(CGEventFlags(rawValue: side)) }
-            }
+        // A modifier the person is holding on the keyboard (not this app).
+        // Shift goes on every key, as on a real keyboard: a one-handed user
+        // holds Shift and presses a D-pad row for Down Arrow to extend a
+        // selection. Command, Control and Option only reach a row that names
+        // them (a Left Command row sending Command Tab lets the finger supply
+        // the Command): one latched by Sticky Keys never clears for posted
+        // keys, and went onto every controller key after it.
+        // Never one this app holds for another row (pressedKeys), one it
+        // moved itself in the last moment (the system's state can still show
+        // the one it let go), or one the running preset reads as an input
+        // (a Right Command row sending Delete is not Command Delete).
+        let now = CFAbsoluteTimeGetCurrent()
+        let physical = CGEventSource.flagsState(.hidSystemState).rawValue
+        for (code, side) in Self.deviceBit where !pressedKeys.contains(code) && physical & side != 0 {
+            let inScope = scope?.contains(code) == true
+            guard now - (lastOwnModifierChange[code] ?? 0) > 0.3,
+                  inScope || (Self.shiftCodes.contains(code) && !inputModifierCodes.contains(code)),
+                  let f = modifierFlags(for: code) else { continue }
+            flags.insert(f)
+            flags.insert(CGEventFlags(rawValue: side))
         }
+        // Caps Lock is on: letters from the controller type capitals too.
+        if physical & CGEventFlags.maskAlphaShift.rawValue != 0 { flags.insert(.maskAlphaShift) }
         for code in pressedKeys {
             guard let f = modifierFlags(for: code) else { continue }
             if let scope, !scope.contains(code), standaloneModifiers[code] == nil { continue }
@@ -380,6 +418,18 @@ final class InputSimulator: @unchecked Sendable {
         }
         return flags
     }
+
+    private var physicalButtonCheck = 0
+    private var physicalLeftDown = false
+    private var physicalRightDown = false
+
+    /// When this app last pressed or let go of each modifier itself, by
+    /// HID code.
+    private var lastOwnModifierChange: [Int: CFAbsoluteTime] = [:]
+    private static let shiftCodes: Set<Int> = [225, 229]
+    /// Modifiers the running preset reads as its own inputs (a Mac key row
+    /// on Right Command); set by the engine at start.
+    var inputModifierCodes: Set<Int> = []
 
     /// Tab and ` (Grave): the keys of the app and window switchers.
     private static let switcherKeys: Set<Int> = [43, 53]
@@ -434,17 +484,20 @@ final class InputSimulator: @unchecked Sendable {
         // astral chars) or a combining sequence is never split across the
         // 20-UTF-16-unit API limit, which would corrupt the character.
         var chunk: [UInt16] = []
+        // The text rides on key 0 (A) unless a row is holding A: its key-up
+        // let go of the held A for the game. F16 then, which nothing holds.
+        let carrier: CGKeyCode = postedKeys.values.contains(0) || pressedKeys.contains(4) ? CGKeyCode(kVK_F16) : 0
         func flush() {
             guard !chunk.isEmpty else { return }
             // Typed text carries no modifiers. Left unset, the flags came from
             // the HID system state, so text typed while a Command shortcut was
             // still held on another button went out as Command A, Select All.
-            if let down = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true) {
+            if let down = CGEvent(keyboardEventSource: eventSource, virtualKey: carrier, keyDown: true) {
                 down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
                 down.flags = [.maskNonCoalesced]
                 taggedPost(down)
             }
-            if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: false) {
+            if let up = CGEvent(keyboardEventSource: eventSource, virtualKey: carrier, keyDown: false) {
                 up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
                 up.flags = [.maskNonCoalesced]
                 taggedPost(up)
@@ -645,6 +698,9 @@ final class InputSimulator: @unchecked Sendable {
                               mouseCursorPosition: point, mouseButton: .left) {
             taggedPost(move)
         }
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("place \(Int(x)),\(Int(y))"); return }
+        #endif
         CGWarpMouseCursorPosition(point)
         // Re-associated, as in warpPointer: a bare warp froze the physical
         // mouse for a quarter second on every fixed-point auto-click pulse.
@@ -663,6 +719,9 @@ final class InputSimulator: @unchecked Sendable {
     /// undid the warp, and a warp freezes the physical mouse for about a
     /// quarter second unless the mouse is re-associated with the cursor.
     func warpPointer(to point: CGPoint) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("warp \(Int(point.x)),\(Int(point.y))"); return }
+        #endif
         CGWarpMouseCursorPosition(point)
         CGAssociateMouseAndMouseCursorPosition(1)
         mouseLock.lock()
@@ -822,6 +881,13 @@ final class InputSimulator: @unchecked Sendable {
     /// and releases buttons.
     private let mouseLock = NSLock()
 
+    /// True while a row holds a synthesized mouse button, so the editor's
+    /// live reload waits instead of letting go of a drag halfway.
+    var holdsMouseButton: Bool {
+        mouseLock.lock(); defer { mouseLock.unlock() }
+        return !pressedMouseButtons.isEmpty
+    }
+
     func moveMouse(deltaX: Int, deltaY: Int) {
         mouseLock.lock(); defer { mouseLock.unlock() }
         let now = ProcessInfo.processInfo.systemUptime
@@ -868,7 +934,19 @@ final class InputSimulator: @unchecked Sendable {
         } else if let other = pressedMouseButtons.first {
             type = .otherMouseDragged; button = .center; otherNumber = other; heldButton = other
         } else {
-            type = .mouseMoved; button = .left
+            // A button held on the real trackpad or mouse drags too: someone
+            // who holds the click with one finger and steers with a stick.
+            // Read every eighth move, so the 240 Hz path stays cheap.
+            // While either reads held it is checked every move, so a
+            // release is seen at once and never leaves stale drags behind.
+            physicalButtonCheck &+= 1
+            if physicalButtonCheck % 8 == 1 || physicalLeftDown || physicalRightDown {
+                physicalLeftDown = CGEventSource.buttonState(.hidSystemState, button: .left)
+                physicalRightDown = CGEventSource.buttonState(.hidSystemState, button: .right)
+            }
+            if physicalLeftDown { type = .leftMouseDragged; button = .left }
+            else if physicalRightDown { type = .rightMouseDragged; button = .right }
+            else { type = .mouseMoved; button = .left }
         }
 
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: type,
@@ -1100,6 +1178,9 @@ final class AccessibilityPermissionService: ObservableObject {
         let now = AXIsProcessTrusted()
         if now != isTrusted {
             isTrusted = now
+            // Said aloud too: the intro sheet swaps the button that had focus.
+            AccessibilityNotification.Announcement(now ? String(localized: "Accessibility access granted")
+                                                       : String(localized: "Accessibility access not granted")).post()
             if now {
                 ActivityLog.shared.info("Permissions", "Accessibility access granted")
             } else {
@@ -1327,6 +1408,71 @@ struct HotKeySpec: Codable, Hashable {
     var keyCode: UInt32
     var modifiers: UInt32
 
+    /// "Control Option Command period", for VoiceOver and spoken text: the
+    /// modifier glyphs as words, and the key's mark by name (VoiceOver drops
+    /// a lone ".", ":" or "-" at its default punctuation level).
+    var spokenString: String {
+        var words: [String] = []
+        if modifiers & UInt32(controlKey) != 0 { words.append(String(localized: "Control")) }
+        if modifiers & UInt32(optionKey)  != 0 { words.append(String(localized: "Option")) }
+        if modifiers & UInt32(shiftKey)   != 0 { words.append(String(localized: "Shift")) }
+        if modifiers & UInt32(cmdKey)     != 0 { words.append(String(localized: "Command")) }
+        return (words + [Self.spokenKey(HotKeySpec.keyName(for: keyCode))]).joined(separator: " ")
+    }
+
+    /// A key name with its punctuation mark spoken as a word.
+    static func spokenKey(_ key: String) -> String {
+        let marks = [".": String(localized: "period"), ",": String(localized: "comma"), "/": String(localized: "slash"),
+                     ";": String(localized: "semicolon"), ":": String(localized: "colon"),
+                     "!": String(localized: "exclamation mark"), "-": String(localized: "hyphen"),
+                     "=": String(localized: "equals sign"), "?": String(localized: "question mark"),
+                     "'": String(localized: "apostrophe"), "esc": String(localized: "escape"),
+                     "[": String(localized: "left bracket"), "]": String(localized: "right bracket"),
+                     "\\": String(localized: "backslash"), "`": String(localized: "grave accent"),
+                     "^": String(localized: "caret"), "<": String(localized: "less than"),
+                     "#": String(localized: "number sign"), "\u{00B4}": String(localized: "acute accent"),
+                     "*": String(localized: "asterisk")]
+        let bare = key.hasPrefix("\u{200F}") ? String(key.dropFirst()) : key
+        return marks[bare] ?? key
+    }
+
+    /// Text for VoiceOver with each lone mark ("Command + .") as its word.
+    static func spokenMarks(in text: String) -> String {
+        text.components(separatedBy: " ").map { spokenKey($0) }.joined(separator: " ")
+    }
+
+    /// A message for VoiceOver with each chord in it ("\u{2303}\u{2325}\u{2318}.") read as words,
+    /// since a voice says the glyphs oddly and drops the key's mark.
+    static func speakingChords(in text: String) -> String {
+        let words: [Character: String] = ["\u{2303}": String(localized: "Control"), "\u{2325}": String(localized: "Option"),
+                                          "\u{21E7}": String(localized: "Shift"), "\u{2318}": String(localized: "Command")]
+        var out = ""
+        var i = text.startIndex
+        while i < text.endIndex {
+            guard words[text[i]] != nil else { out.append(text[i]); i = text.index(after: i); continue }
+            var mods: [String] = []
+            while i < text.endIndex, let w = words[text[i]] { mods.append(w); i = text.index(after: i) }
+            var key = ""
+            while i < text.endIndex, !text[i].isWhitespace, words[text[i]] == nil { key.append(text[i]); i = text.index(after: i) }
+            var tail = ""
+            // A mark key is one character; the rest is the sentence, which
+            // in Japanese and Chinese runs on with no space after the chord.
+            if let first = key.first, spokenKey(String(first)) != String(first) {
+                tail = String(key.dropFirst())
+                key = String(first)
+            } else if key.unicodeScalars.contains(where: { $0.value > 0x2E7F }) {
+                // A word key followed by CJK text: the key is the Latin part.
+                let latin = key.prefix { $0.unicodeScalars.allSatisfy { $0.value < 0x2E80 } }
+                tail = String(key.dropFirst(latin.count))
+                key = String(latin)
+            }
+            // The sentence's own period after a chord on the period key.
+            if key.count > 1, let last = key.last, ".,".contains(last) { tail = String(last) + tail; key.removeLast() }
+            out += (mods + (key.isEmpty ? [] : [spokenKey(key)])).joined(separator: " ") + tail
+        }
+        return out
+    }
+
     /// Chord as the user reads it, e.g. "Control Option Command ." using the
     /// standard macOS glyphs.
     var displayString: String {
@@ -1335,7 +1481,8 @@ struct HotKeySpec: Codable, Hashable {
         if modifiers & UInt32(optionKey)  != 0 { out += "\u{2325}" }
         if modifiers & UInt32(shiftKey)   != 0 { out += "\u{21E7}" }
         if modifiers & UInt32(cmdKey)     != 0 { out += "\u{2318}" }
-        return out + HotKeySpec.keyName(for: keyCode)
+        // No right-to-left mark inside the chord: it lays out like F1 to F12.
+        return out + HotKeySpec.keyName(for: keyCode).withoutRTLMark
     }
 
     /// True when this is a bare key you would normally type, so registering
@@ -1360,19 +1507,17 @@ struct HotKeySpec: Codable, Hashable {
     }
 
     static func keyName(for code: UInt32) -> String {
-        // A punctuation key by what it types on the current layout: the
-        // period key of a US keyboard is the semicolon of a French one.
-        if [kVK_ANSI_Period, kVK_ANSI_Comma, kVK_ANSI_Slash].contains(Int(code)),
-           let typed = SystemActionService.character(forVirtualKey: Int(code)) {
-            return typed
-        }
         switch Int(code) {
-        case kVK_ANSI_Period: return "."
-        case kVK_ANSI_Comma:  return ","
-        case kVK_ANSI_Slash:  return "/"
+        // A punctuation key by what its keycap shows on the layout, the
+        // same as every other key and the rows (the period key of a US
+        // keyboard is the colon of a French one); the US mark when the
+        // layout gives none.
+        case kVK_ANSI_Period: return KeyCodeMap.name(for: ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(code)))
+        case kVK_ANSI_Comma:  return KeyCodeMap.name(for: ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(code)))
+        case kVK_ANSI_Slash:  return KeyCodeMap.name(for: ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(code)))
         case kVK_Escape:      return "esc"
-        case kVK_Space:       return "space"
-        case kVK_Delete:      return "delete"
+        case kVK_Space:       return String(localized: "space", comment: "The Space bar in a keyboard shortcut, lowercase like esc")
+        case kVK_Delete:      return String(localized: "delete", comment: "The Delete key in a keyboard shortcut, lowercase like esc")
         case kVK_F1:  return "F1";  case kVK_F2:  return "F2"
         case kVK_F3:  return "F3";  case kVK_F4:  return "F4"
         case kVK_F5:  return "F5";  case kVK_F6:  return "F6"
@@ -1380,12 +1525,10 @@ struct HotKeySpec: Codable, Hashable {
         case kVK_F9:  return "F9";  case kVK_F10: return "F10"
         case kVK_F11: return "F11"; case kVK_F12: return "F12"
         default:
-            if let key = KeyCodeMap.allKeys.first(where: {
-                ExternalInputDeviceService.hidUsage(forVirtualKeyCode: Int(code)) == $0.code
-            }) {
-                return key.name
-            }
-            return "Key \(code)"
+            // What the keycap shows under the current layout (the Y of a
+            // German keyboard, not the US Z), or the key's name in the app's
+            // language.
+            return KeyCodeMap.name(for: ExternalInputDeviceService.inputCode(forVirtualKeyCode: Int(code)))
         }
     }
 }
@@ -1459,7 +1602,13 @@ final class EmergencyStopService: @unchecked Sendable {
         // The default chord is on whatever key types a period on this
         // layout (help and Settings call it period); on AZERTY, Dvorak and
         // Turkish the US period position types something else.
-        if stored == Self.defaultSpec,
+        // Only when the default was never recorded: a chord the person
+        // pressed is registered as pressed, even when it matches the US one.
+        // Read from the app's own domain: the registered defaults always
+        // answer object(forKey:), so the chord looked recorded.
+        let own = Bundle.main.bundleIdentifier.flatMap { d.persistentDomain(forName: $0) }
+        let recorded = own?[Self.keyCodeKey] != nil || own?[Self.modifiersKey] != nil
+        if !recorded, stored == Self.defaultSpec,
            let period = SystemActionService.virtualKey(typing: ".", command: true), period != Int(Self.defaultSpec.keyCode) {
             return HotKeySpec(keyCode: UInt32(period), modifiers: stored.modifiers)
         }
@@ -1484,6 +1633,54 @@ final class EmergencyStopService: @unchecked Sendable {
     /// Whether the hold needs Start (9) held with the button: on by default
     /// for the default button, off for any button picked in Settings.
     var holdNeedsStart: Bool { cachedWithStart && cachedButton == Self.defaultControllerButton }
+
+    /// The Access Controller cannot press Back and Start together; its
+    /// Options socket alone does the default hold (MappingEngine.emergencyHoldIsDown).
+    var accessControllerHoldNote: String {
+        cachedButton == Self.defaultControllerButton
+            ? String(localized: " (socket 7 alone on an Access Controller, Minus or Plus alone on a single Joy-Con, Start alone on a controller with no Back button)") : ""
+    }
+
+    /// VoiceOver keeps Control Option chords for itself; Control Option
+    /// Tab passes the next keystroke through to the app.
+    var voiceOverChordNote: String {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return "" }
+        let m = spec.modifiers
+        guard m & UInt32(controlKey) != 0, m & UInt32(optionKey) != 0 else { return "" }
+        return String(localized: " (with VoiceOver on, press Control Option Tab first)")
+    }
+
+    /// Set by the stop's observer, which runs before the spoken line: the
+    /// restart is promised only when the stop stopped a preset.
+    var lastStopStoppedSomething = false
+
+    /// The family and model names of the first connected controller, set
+    /// by the menu bar controller, so the hold is named the way that pad
+    /// prints it.
+    @MainActor static var connectedFamily: () -> FaceLetters? = { nil }
+    @MainActor static var connectedModel: () -> ButtonNames.ModelNames = { .none }
+
+    /// A hold button's name: the connected pad's own ("Create" and
+    /// "Options" on a DualSense), else the generic one ("Back / Share /
+    /// Select"). Short is the everyday first name ("Back").
+    @MainActor static func holdButtonName(_ index: Int, short: Bool) -> String {
+        let full: String
+        // A pad's own name for that button (SHARE on a DualShock 4), then its
+        // family's; not for pads that number their buttons their own way
+        // (the Steam and GameCube controllers), where index 8 is another
+        // button and the hold is read through a map.
+        if let renamed = connectedModel().renamed[index] {
+            full = LayoutText.t(renamed)
+        } else if let family = connectedFamily(), !ButtonNames.ownNumbering(family),
+                  let own = ButtonNames.name(index, family: family) {
+            full = own
+        } else {
+            full = BindingRowView.standardButtonLabels.first { $0.index == index }?.label ?? String(localized: "Button \(index)")
+        }
+        guard short else { return full }
+        let first = full.components(separatedBy: " / ").first ?? full
+        return first.components(separatedBy: " (").first ?? first
+    }
 
     /// Pull the controller-hold settings into memory. Called at registration
     /// and whenever any default changes.
@@ -1511,6 +1708,7 @@ final class EmergencyStopService: @unchecked Sendable {
     @discardableResult
     func refreshRegistration() -> Bool {
         refreshCachedSettings()
+        MainActor.assumeIsolated { InputSimulator.shared.watchLayout() }
         observeDefaults()
         if let t = token { HotKeyCenter.shared.unregister(t); token = nil }
         if let t = shiftToken { HotKeyCenter.shared.unregister(t); shiftToken = nil }
@@ -1560,6 +1758,15 @@ final class EmergencyStopService: @unchecked Sendable {
         return true
     }
 
+    /// Takes the Shift chord back once no preset holds it: given away, it was
+    /// never returned, so the stop failed while a preset held Shift.
+    func reclaimShiftVariant(presets: [Preset]) {
+        guard isRegistered, shiftToken == nil, let variant = shiftVariant,
+              !presets.contains(where: { $0.activateHotKey == variant }) else { return }
+        shiftToken = HotKeyCenter.shared.register(keyCode: variant.keyCode, modifiers: variant.modifiers,
+                                                  action: { EmergencyStopService.shared.stop(reason: .hotkey) })
+    }
+
     /// Record a new chord and switch the keyboard stop on with it. When the
     /// chord cannot be registered, the previous chord and switch come back.
     @discardableResult
@@ -1603,12 +1810,25 @@ final class EmergencyStopService: @unchecked Sendable {
     func stop(reason: Reason) {
         // Heard and spoken, so a stop is never silent; from the controller,
         // also how to start again.
+        // Shown as well, for someone who hears neither.
         DispatchQueue.main.async {
-            NSSound(named: "Funk")?.play()
-            let said = reason == .controllerHold
-                ? "Stopped by the controller hold. Hold it again to start the preset back up."
-                : "Emergency stop. Everything stopped."
+            #if DEBUG
+            let quiet = TestCapture.active
+            if quiet { TestCapture.note("stop sound \(reason)") }
+            #else
+            let quiet = false
+            #endif
+            if !quiet { NSSound(named: "Funk")?.play() }
+            let said: String
+            if reason == .controllerHold {
+                said = String(localized: "Stopped by the controller hold. Hold it again to start the preset back up.")
+            } else if self.controllerHoldEnabled, self.lastStopStoppedSomething {
+                said = String(localized: "Emergency stop. Everything stopped. Holding the controller stop starts the preset again.")
+            } else {
+                said = String(localized: "Emergency stop. Everything stopped.")
+            }
             AccessibilityNotification.Announcement(said).post()
+            MainActor.assumeIsolated { StatusHUD.shared.show(said) }
         }
         let work = {
             // 1. Engine and preset. Observers run synchronously on this
@@ -1624,6 +1844,8 @@ final class EmergencyStopService: @unchecked Sendable {
             InProcessLightWriter.shared.stopMotors()
             MainActor.assumeIsolated { RawHIDGamepadService.shared.stopSteamController2026Rumble() }
             MainActor.assumeIsolated { FeedbackService.shared.clearHapticEngines() }
+            // A row's phrase stops too, so it does not talk over the stop.
+            MainActor.assumeIsolated { FeedbackService.shared.stopSpeaking() }
             // 3. Give the pointer back. CursorGuardService is main-actor
             //    isolated and this block only ever runs on the main thread.
             MainActor.assumeIsolated {
@@ -1679,6 +1901,7 @@ final class PresetHotKeyService: @unchecked Sendable {
                 failed.insert(id)
             }
         }
+        EmergencyStopService.shared.reclaimShiftVariant(presets: presets)
     }
 
     /// True when two presets ask for the same chord, or one collides with
@@ -1720,8 +1943,11 @@ final class GlobalHotKeyService: @unchecked Sendable {
         return true
     }
 
-    /// Human-readable chord, shown in Settings.
-    let shortcutDescription = "Control + Option + Command + P"
+    /// Human-readable chord, shown in Settings, with the key named by the
+    /// keyboard layout (the P key types L on Dvorak).
+    var shortcutDescription: String {
+        String(localized: "Control + Option + Command + \(HotKeySpec.keyName(for: Self.spec.keyCode))")
+    }
     /// The fixed chord, so the emergency stop recorder can refuse it.
     static let spec = HotKeySpec(keyCode: UInt32(kVK_ANSI_P),
                                  modifiers: UInt32(controlKey | optionKey | cmdKey))
@@ -1841,6 +2067,9 @@ final class SystemVolumeService: @unchecked Sendable {
     /// frame: identical or near-identical levels are dropped before any
     /// CoreAudio traffic happens.
     func setVolume(_ level: Float) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("volume \(level)"); return }
+        #endif
         let clamped = max(0, min(1, level))
         lock.lock()
         if abs(clamped - lastSet) < 0.004 { lock.unlock(); return }
@@ -1939,14 +2168,49 @@ final class SystemActionService: @unchecked Sendable {
         case .screenshotMenu:
             postCombo(keyCode: 23, flags: [.maskCommand, .maskShift])    // Cmd+Shift+5
         case .runShortcut:
-            if let name = parameter, !name.isEmpty { runShortcut(named: name) }
+            // Trimmed, as Open URL is: a name typed with a space around it
+            // matched nothing.
+            let name = (parameter ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { runShortcut(named: name) }
         case .openApp:
-            if let target = parameter, !target.isEmpty { openApp(target) }
+            let target = (parameter ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !target.isEmpty { openApp(target) }
         case .openURL:
-            if let raw = parameter, let url = URL(string: raw) {
-                NSWorkspace.shared.open(url)
+            // Trimmed: a pasted link with a space around it opened nothing.
+            let raw = (parameter ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            #if DEBUG
+            if TestCapture.active { TestCapture.note("open url \(raw)"); return }
+            #endif
+            // The log counts the link's characters rather than writing it out,
+            // as the privacy policy says: a link can carry a token.
+            if !raw.isEmpty, let url = URL(string: raw), Self.opensLink(url) {
+                if !NSWorkspace.shared.open(url) {
+                    ActivityLog.shared.warning("Outputs", "Open URL could not open a link (\(raw.count) characters)")
+                }
+            } else if !raw.isEmpty, let scheme = URL(string: raw)?.scheme, !scheme.isEmpty {
+                ActivityLog.shared.warning("Outputs", "Open URL does not open \(scheme.lowercased()): links; use Open App or Run Shortcut for those")
+            } else if !raw.isEmpty {
+                ActivityLog.shared.warning("Outputs", "Open URL could not open a link (\(raw.count) characters); it needs a scheme such as https://")
             }
         }
+    }
+
+    /// Link schemes Open URL and a preset's launch link never open: they
+    /// open a file or an app, run a Shortcut or a script, reach a network
+    /// share or a remote machine, or place a call, with none of the
+    /// confirmation those paths have elsewhere in the app. A preset file
+    /// from someone else could bind one to a button. Web, mail and app deep
+    /// links (steam://, spotify:, obsidian://) open as before.
+    static let blockedLinkSchemes: Set<String> = [
+        "file", "shortcuts", "javascript", "data", "applescript",
+        "ssh", "vnc", "smb", "afp", "nfs", "ftp", "telnet",
+        "tel", "sms", "facetime", "facetime-audio", "x-apple.systempreferences",
+    ]
+
+    /// Whether an Open URL output or a launch link may open this URL.
+    static func opensLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else { return false }
+        return !blockedLinkSchemes.contains(scheme)
     }
 
     /// The virtual key that types `character` on the current keyboard
@@ -2028,6 +2292,9 @@ final class SystemActionService: @unchecked Sendable {
     }
 
     private func nudgeVolume(by delta: Float) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("volume by \(delta)"); return }
+        #endif
         let device = defaultOutputDevice()
         guard device != kAudioObjectUnknown else { return }
         var address = volumeAddress()
@@ -2043,6 +2310,9 @@ final class SystemActionService: @unchecked Sendable {
     }
 
     private func toggleMute() {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("mute toggle"); return }
+        #endif
         let device = defaultOutputDevice()
         guard device != kAudioObjectUnknown else { return }
         var address = AudioObjectPropertyAddress(
@@ -2059,6 +2329,9 @@ final class SystemActionService: @unchecked Sendable {
     }
 
     private func setMuted(_ muted: Bool) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("mute \(muted)"); return }
+        #endif
         let device = defaultOutputDevice()
         guard device != kAudioObjectUnknown else { return }
         var address = AudioObjectPropertyAddress(
@@ -2077,6 +2350,9 @@ final class SystemActionService: @unchecked Sendable {
     /// same events the keyboard's media row sends. Must run on a thread
     /// with an NSEvent-safe context, so hop to main.
     private func postAuxKey(_ keyType: Int32) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("aux key \(keyType)"); return }
+        #endif
         DispatchQueue.main.async {
             for down in [true, false] {
                 let flags: NSEvent.ModifierFlags = down ? [] : []
@@ -2116,6 +2392,9 @@ final class SystemActionService: @unchecked Sendable {
     /// default shortcut (the microphone key), which means the user does not
     /// have to configure a custom shortcut first.
     private func startDictation() {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("dictation"); return }
+        #endif
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source,
@@ -2132,6 +2411,9 @@ final class SystemActionService: @unchecked Sendable {
     static let dictationKeyCode: CGKeyCode = 176
 
     private func postCombo(keyCode: CGKeyCode, flags: CGEventFlags) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("combo \(keyCode) \(flags.rawValue)"); return }
+        #endif
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source,
@@ -2150,6 +2432,9 @@ final class SystemActionService: @unchecked Sendable {
     /// gone. Found by bundle id so the path does not matter; a miss is
     /// logged rather than silent.
     private func openLaunchpad() {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("launchpad"); return }
+        #endif
         let ids = ["com.apple.apps.launcher", "com.apple.launchpad.launcher"]
         guard let url = ids.lazy.compactMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }).first else {
             ActivityLog.shared.warning("Outputs", "Could not find Launchpad or Apps on this Mac")
@@ -2159,6 +2444,9 @@ final class SystemActionService: @unchecked Sendable {
     }
 
     private func openSystemApp(_ name: String) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("open system \(name)"); return }
+        #endif
         let url = URL(fileURLWithPath: "/System/Applications/\(name).app")
         NSWorkspace.shared.openApplication(at: url,
                                            configuration: NSWorkspace.OpenConfiguration())
@@ -2170,6 +2458,9 @@ final class SystemActionService: @unchecked Sendable {
     /// If the CLI is unavailable from the sandbox, fall back to the
     /// shortcuts:// URL scheme, which Shortcuts handles itself.
     private func runShortcut(named name: String) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("shortcut \(name)"); return }
+        #endif
         DispatchQueue.global(qos: .userInitiated).async {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
@@ -2189,10 +2480,11 @@ final class SystemActionService: @unchecked Sendable {
                 // again through the URL scheme would run it twice.
                 if self.installedShortcuts().contains(name) {
                     let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ActivityLog.shared.warning("Outputs", "Shortcut \u{201C}\(name)\u{201D} did not finish" + (detail.isEmpty ? "" : ": \(detail)"))
+                    // The name counted, not written out, as the privacy policy says.
+                    ActivityLog.shared.warning("Outputs", "A shortcut (name of \(name.count) characters) did not finish" + (detail.isEmpty ? "" : " (\(detail.count) characters of error text)"))
                     return
                 }
-                NSLog("[SystemAction] shortcuts run '%@' could not reach Shortcuts; falling back to URL scheme", name)
+                NSLog("[SystemAction] shortcuts run could not reach Shortcuts; falling back to URL scheme")
             } catch {
                 NSLog("[SystemAction] shortcuts CLI unavailable (%@); falling back to URL scheme",
                       String(describing: error))
@@ -2327,6 +2619,9 @@ final class SystemActionService: @unchecked Sendable {
     }
 
     private func openApp(_ target: String) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("open app \(target)"); return }
+        #endif
         let config = NSWorkspace.OpenConfiguration()
         let url: URL? = {
             if target.hasPrefix("/") { return URL(fileURLWithPath: target) }
@@ -2346,9 +2641,56 @@ final class SystemActionService: @unchecked Sendable {
             return NSWorkspace.shared.urlForApplication(withBundleIdentifier: target)
         }()
         guard let url else {
-            ActivityLog.shared.warning("Outputs", "Open App could not find \u{201C}\(target)\u{201D}")
+            ActivityLog.shared.warning("Outputs", "Open App could not find the app (\(target.count) characters)")
             return
         }
         NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 }
+
+/// Every write to a controller (light, rumble, mode and handshake reports)
+/// goes through here, so a test run can never reach a real pad: the tests
+/// run as their own process on the same Mac, and a test that set a light
+/// fought the running app's color on the owner's DualSense (it flickered).
+enum HIDWrite {
+    @discardableResult
+    static func setReport(_ device: IOHIDDevice, _ type: IOHIDReportType, _ id: CFIndex,
+                          _ report: UnsafePointer<UInt8>, _ length: CFIndex) -> IOReturn {
+        #if DEBUG
+        // Silent: a test that reads the capture log counts only its own effects.
+        if TestCapture.blocksDevices { return kIOReturnSuccess }
+        #endif
+        return IOHIDDeviceSetReport(device, type, id, report, length)
+    }
+}
+
+#if DEBUG
+/// Tests only: while `active`, every output that would reach the Mac outside
+/// the event sink (a pointer warp, hiding the cursor, the volume, opening an
+/// app or a Shortcut, speech, MIDI) is written to `log` instead of done, so
+/// the end-to-end tests run real presets through the real engine without
+/// touching the Mac they run on. Never compiled into Release.
+enum TestCapture {
+    nonisolated(unsafe) static var active = false
+    /// Any test run (the test script sets INPUTCONFIG_TESTS=1), or a harness
+    /// that is capturing: no light, rumble or report reaches a real device.
+    static let inTestRun = ProcessInfo.processInfo.environment["INPUTCONFIG_TESTS"] == "1"
+        || ProcessInfo.processInfo.processName == "xctest"
+    static var blocksDevices: Bool { active || inTestRun }
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var entries: [String] = []
+
+    static func note(_ entry: String) {
+        lock.lock(); entries.append(entry); lock.unlock()
+    }
+
+    static var log: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return entries
+    }
+
+    static func clear() {
+        lock.lock(); entries.removeAll(); lock.unlock()
+    }
+}
+#endif

@@ -60,6 +60,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         ) { [weak mappingEngine, weak presetStore] note in
             let byController = (note.userInfo?["reason"] as? String) == EmergencyStopService.Reason.controllerHold.rawValue
             MainActor.assumeIsolated {
+                // Only a stop that stopped something arms the restart: one
+                // tried with nothing running started yesterday's preset.
+                let wasRunning = mappingEngine?.isRunning == true || presetStore?.activePresetId != nil
+                EmergencyStopService.shared.lastStopStoppedSomething = wasRunning
                 let last = presetStore?.activePresetId ?? presetStore?.lastActivatedPresetId
                 // Stop the engine before EmergencyStopService releases the
                 // held keys, so nothing is re-pressed on the next frame.
@@ -67,15 +71,31 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 presetStore?.deactivateAll()
                 // An open editor with nothing changed closes, so a stop from
                 // the controller never leaves its user shut in the sheet.
-                if byController, let editor = OpenEditor.current, !editor.isDirty() { editor.close() }
+                if byController, let editor = OpenEditor.current {
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    if !editor.isDirty() { editor.close() }
+                }
                 // The same hold starts it again, for someone whose only
-                // input is the controller.
-                guard byController, let last, let engine = mappingEngine else { return }
+                // input is the controller: after any stop, since a stop row
+                // or the menu bar clicked with the controller's pointer
+                // leaves that person just as stuck.
+                guard wasRunning, EmergencyStopService.shared.controllerHoldEnabled, let last, let engine = mappingEngine else { return }
                 engine.watchForRestartHold { [weak presetStore, weak engine] in
                     guard let store = presetStore, let engine,
                           let preset = store.presets.first(where: { $0.id == last }) else { return }
-                    ActivityLog.shared.info("Emergency stop", "Started \(preset.name) again from the controller hold")
                     MenuBarController.activate(preset, store: store, engine: engine, background: true)
+                    // Refused (its rows gone, or an import not yet confirmed):
+                    // nothing started, so nothing says it did.
+                    guard engine.isRunning, store.activePresetId == preset.id else {
+                        ActivityLog.shared.warning("Emergency stop", "\(preset.name) could not be started again from the controller hold")
+                        return
+                    }
+                    ActivityLog.shared.info("Emergency stop", "Started \(preset.name) again from the controller hold")
+                    // A pad that cannot buzz still hears and sees it start.
+                    let said = String(localized: "Started \(preset.shownName)")
+                    NSSound(named: "Tink")?.play()
+                    AccessibilityNotification.Announcement(said).post()
+                    StatusHUD.shared.show(said, seconds: 3)
                 }
             }
         }
@@ -116,8 +136,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// `background`: started by something other than the person at the Mac
     /// (auto-switch, a controller button). Those never raise the alert,
     /// which pulled focus away from the game in front.
-    static func activate(_ preset: Preset, store: PresetStore, engine: MappingEngine, background: Bool = false) {
-        guard store.confirmFirstStart(preset, background: background) else { return }
+    /// `quietPointerWarning`: the global shortcut, pressed by the person
+    /// but often over a game, logs the pointer warning instead of an alert.
+    static func activate(_ preset: Preset, store: PresetStore, engine: MappingEngine, background: Bool = false,
+                         quietPointerWarning: Bool = false) {
+        // A preset with no rows cannot run: it was marked running while
+        // the engine refused it.
+        guard preset.isRunnable else { return }
+        guard store.confirmFirstStart(preset, background: background),
+              store.confirmRestrictiveStart(preset, background: background || quietPointerWarning) else { return }
         engine.stop()
         store.activatePreset(preset)
         engine.start(with: preset)
@@ -139,16 +166,28 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard !background, !warnedAboutAccessibility else { return }
         warnedAboutAccessibility = true
         let alert = NSAlert()
-        alert.messageText = "Turn On Accessibility"
-        alert.informativeText = "\(preset.name) is running, but macOS will not deliver its keys and clicks until InputConfig is on in System Settings, Privacy & Security, Accessibility."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Not Now")
+        alert.messageText = String(localized: "Turn On Accessibility")
+        alert.informativeText = String(localized: "\(preset.shownName) is running, but macOS will not deliver its keys and clicks until InputConfig is on in System Settings, Privacy & Security, Accessibility.")
+        alert.addButton(withTitle: String(localized: "Open System Settings"))
+        alert.addButton(withTitle: String(localized: "Not Now"))
+        alert.buttons[1].keyEquivalent = "\u{1b}"
         NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn { permission.requestAccess() }
     }
 
     /// Create the status item and seed visibility from defaults. Called once
     /// from app startup with live references to the stores the popover reads.
+    #if DEBUG
+    /// Tests only: what install does for app actions and the emergency stop,
+    /// with no menu bar item, popover or window.
+    func debugAttach(presetStore: PresetStore, mappingEngine: MappingEngine, controllerService: GameControllerService?) {
+        self.presetStore = presetStore
+        self.mappingEngine = mappingEngine
+        self.controllerService = controllerService
+        installEmergencyStopHandling(presetStore: presetStore, mappingEngine: mappingEngine)
+    }
+    #endif
+
     func install(presetStore: PresetStore, mappingEngine: MappingEngine,
                  controllerService: GameControllerService? = nil) {
         guard statusItem == nil else { return }
@@ -171,6 +210,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         statusItem = item
         refreshMenuBarImage()
         installEmergencyStopHandling(presetStore: presetStore, mappingEngine: mappingEngine)
+        // Redrawn when Differentiate Without Color changes (its play mark).
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.refreshMenuBarImage() } }
+        EmergencyStopService.connectedFamily = { [weak mappingEngine] in
+            guard let service = mappingEngine?.controllerServiceForSettings else { return nil }
+            return service.controllerDetails.keys.sorted().lazy.compactMap { service.namingFamily(forSlot: $0) }.first
+        }
+        EmergencyStopService.connectedModel = { [weak mappingEngine] in
+            guard let service = mappingEngine?.controllerServiceForSettings,
+                  let slot = service.controllerDetails.keys.sorted().first(where: { service.namingFamily(forSlot: $0) != nil })
+            else { return .none }
+            return service.modelNames(forSlot: slot)
+        }
 
         let pop = NSPopover()
         pop.behavior = .transient
@@ -252,7 +305,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                     presetStore.deactivateAll()
                 } else {
                     let target = presetStore.lastActivatedPresetId
-                        .flatMap { id in presetStore.presets.first(where: { $0.id == id }) }
+                        .flatMap { id in presetStore.presets.first(where: { $0.id == id && $0.isRunnable }) }
                         ?? presetStore.presets.first(where: { $0.isRunnable })
                     // From a run loop block: activate can show the
                     // Accessibility alert, and modal inside a main-queue
@@ -260,7 +313,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                     if let target {
                         RunLoop.main.perform(inModes: [.default]) {
                             MainActor.assumeIsolated {
-                                Self.activate(target, store: presetStore, engine: mappingEngine)
+                                Self.activate(target, store: presetStore, engine: mappingEngine, quietPointerWarning: true)
                             }
                         }
                     }
@@ -294,9 +347,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func refreshMenuBarImage() {
         guard let button = statusItem?.button else { return }
         let running = mappingEngine?.isRunning ?? false
+        let blocked = running && accessibilityBlocksRunningPreset
         button.image = Self.makeMenuBarImage(running: running,
-                                             blocked: running && accessibilityBlocksRunningPreset,
+                                             blocked: blocked,
                                              appearance: button.effectiveAppearance)
+        // The state in words on hover, not only in the icon's color.
+        button.toolTip = button.image?.accessibilityDescription
     }
 
     /// True while the running preset sends keys or clicks and Accessibility
@@ -351,12 +407,38 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 fill.setFill()
                 rect.fill()
                 base.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1.0)
+                // Blocked is orange and also carries a small "!" dot, so it
+                // does not rest on telling orange from green.
+                if blocked {
+                    let d = min(rect.width, rect.height) * 0.42
+                    let dot = NSRect(x: rect.maxX - d, y: rect.maxY - d, width: d, height: d)
+                    fill.setFill()
+                    NSBezierPath(ovalIn: dot).fill()
+                    NSColor.white.setFill()
+                    let bar = NSRect(x: dot.midX - d * 0.07, y: dot.minY + d * 0.38, width: d * 0.14, height: d * 0.42)
+                    NSBezierPath(rect: bar).fill()
+                    NSBezierPath(ovalIn: NSRect(x: dot.midX - d * 0.08, y: dot.minY + d * 0.14, width: d * 0.16, height: d * 0.16)).fill()
+                } else if NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor {
+                    // Running is green; with Differentiate Without Color it
+                    // also carries a small play mark, as blocked has its "!".
+                    let d = min(rect.width, rect.height) * 0.42
+                    let dot = NSRect(x: rect.maxX - d, y: rect.maxY - d, width: d, height: d)
+                    fill.setFill()
+                    NSBezierPath(ovalIn: dot).fill()
+                    NSColor.white.setFill()
+                    let tri = NSBezierPath()
+                    tri.move(to: NSPoint(x: dot.minX + d * 0.36, y: dot.minY + d * 0.26))
+                    tri.line(to: NSPoint(x: dot.minX + d * 0.36, y: dot.maxY - d * 0.26))
+                    tri.line(to: NSPoint(x: dot.maxX - d * 0.26, y: dot.midY))
+                    tri.close()
+                    tri.fill()
+                }
                 return true
             }
             green.isTemplate = false
             green.accessibilityDescription = blocked
-                ? "InputConfig (running, Accessibility is off)"
-                : "InputConfig (running)"
+                ? String(localized: "InputConfig (running, Accessibility is off)")
+                : String(localized: "InputConfig (running)")
             return green
         } else {
             let template = base.copy() as? NSImage
@@ -403,6 +485,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let hosting = NSHostingController(rootView: root.reduceMotionFriendly())
         hosting.sizingOptions = [.preferredContentSize]
         pop.contentViewController = hosting
+        // The app's own Reduce motion switch too, which reaches only SwiftUI.
+        pop.animates = !(AppA11y.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         pop.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         // Make the popover key so its SwiftUI buttons receive clicks.
         pop.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
@@ -462,14 +546,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             // actually uses rather than every preset installed. An ungrouped
             // preset, or none active, cycles through the whole list.
             let active = store.presets.first { $0.id == store.activePresetId }
-            let pool: [Preset] = {
+            // An import not yet reviewed refuses a background start, and the
+            // cycle stuck on it; it is left out until it has been started
+            // once. Left out before the folder is judged, so a folder whose
+            // only other preset is one cycles the whole library instead.
+            func usableHere(_ p: Preset) -> Bool {
+                p.isRunnable && (!store.isUnreviewedImport(p.id) || p.id == store.activePresetId)
+            }
+            let usable: [Preset] = {
                 if let folder = active?.groupID {
-                    let inFolder = store.presets(in: folder).filter { $0.isRunnable }
+                    let inFolder = store.presets(in: folder).filter(usableHere)
                     if inFolder.count > 1 { return inFolder }
                 }
-                return store.presets.filter { $0.isRunnable }
+                return store.presetsInSidebarOrder.filter(usableHere)
             }()
-            let usable = pool
             guard !usable.isEmpty else { return }
             let step = (kind == .nextPreset) ? 1 : -1
             let nextIndex: Int
@@ -479,20 +569,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 nextIndex = (kind == .nextPreset) ? 0 : usable.count - 1
             }
             let preset = usable[nextIndex]
+            // The only one: starting it again would only restart it.
+            if preset.id == store.activePresetId, engine.isRunning { return }
             Self.activate(preset, store: store, engine: engine, background: true)
         case .deactivate:
             engine.stop()
             store.deactivateAll()
         case .togglePauseOutputs:
-            // The open editor holds its own pause; un-pausing from a row
-            // made every output live inside the editor.
-            guard OpenEditor.current == nil else {
-                ActivityLog.shared.info("Engine", "Pause / Resume Outputs waits until the editor is closed")
-                return
-            }
+            // Works in the editor too: a running preset keeps working there.
             engine.outputsPaused.toggle()
-            AccessibilityNotification.Announcement(engine.outputsPaused ? "Outputs paused" : "Outputs resumed").post()
-        case .holdMuteMotion:
+            AccessibilityNotification.Announcement(engine.outputsPaused ? String(localized: "Outputs paused") : String(localized: "Outputs resumed")).post()
+        case .holdMuteMotion, .toggleMotion, .holdEnableMotion:
             // Held-only; MappingEngine gates motion per poll frame.
             break
         case .emergencyStop:
@@ -504,6 +591,26 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Bring the main window up, recreating it if every window was closed.
     func showMainWindow() { openMainWindow() }
+
+    /// The running preset, which a restart for a language change starts again.
+    var activePresetID: UUID? { presetStore?.activePresetId }
+
+    /// A menu command the library window carries out. With that window
+    /// closed (closing it does not quit), nobody heard the notification and
+    /// the command did nothing, so the window opens first.
+    func postToMainWindow(_ name: Notification.Name, object: Any? = nil) {
+        if let window = Self.mainWindow, window.isVisible {
+            // In front first, so a dialog or sheet the command opens is where
+            // the keyboard and VoiceOver are, not behind Help or Settings.
+            if !window.isKeyWindow { NSApp.activate(); window.makeKeyAndOrderFront(nil) }
+            NotificationCenter.default.post(name: name, object: object)
+            return
+        }
+        openMainWindow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NotificationCenter.default.post(name: name, object: object)
+        }
+    }
 
     /// Opens the main window scene. Set from the main window's view, the
     /// only place SwiftUI hands out `openWindow`; it keeps working after
@@ -537,14 +644,15 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     /// No window has appeared yet this run, so nothing has handed over
-    /// SwiftUI's openWindow. The Window menu's InputConfig item
+    /// SwiftUI's openWindow. The Window menu's Show Main Window item
     /// (`OpenMainWindowCommand`) holds one from launch; choosing it creates
     /// the window.
     @discardableResult
     private static func openMainFromWindowMenu() -> Bool {
+        let title = OpenMainWindowCommand.title
         let menus = [NSApp.windowsMenu].compactMap { $0 } + (NSApp.mainMenu?.items.compactMap(\.submenu) ?? [])
         for menu in menus {
-            if let index = menu.items.firstIndex(where: { $0.title == "InputConfig" && $0.action != nil }) {
+            if let index = menu.items.firstIndex(where: { $0.title == title && $0.action != nil }) {
                 menu.performActionForItem(at: index)
                 return true
             }
@@ -559,7 +667,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// make a new preset. Taken by whichever comes first, the window's
     /// appearance or the notification below, so it runs exactly once even
     /// when a recreated window subscribes after the notification was sent.
-    enum PendingMainAction { case settings, newPreset, statistics, smartMaker, whatsNew }
+    enum PendingMainAction { case settings, newPreset, statistics, smartMaker, whatsNew, about }
     static var pendingMainAction: PendingMainAction?
     static func takePendingMainAction(_ kind: PendingMainAction) -> Bool {
         guard pendingMainAction == kind else { return false }
@@ -585,6 +693,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// sheet state directly, so it routes through here the way the menu bar
     /// already does for Statistics.
     func openAboutPage() {
+        // Taken by the window when it appears, for a window that was closed
+        // and subscribes after the notification went out.
+        Self.pendingMainAction = .about
         openMainWindow()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             NotificationCenter.default.post(name: .inputConfigOpenAbout, object: nil)
@@ -627,7 +738,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func quitApp() {
-        NSApplication.shared.terminate(nil)
+        // Through the same path as the Quit menu item: an open editor is
+        // saved or discarded first, and a sheet does not stall the quit.
+        if let quit = QuitCoordinator.shared { quit.requestQuit() } else { NSApplication.shared.terminate(nil) }
     }
 }
 
@@ -641,6 +754,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 /// onto InputConfig's domain: the Mode/Input pills become Preset/Controller,
 /// the record pill becomes Start/Stop, and Recent becomes engine Status.
 private struct MenuBarPopoverView: View {
+    /// Wider at a large Text Size, so the preset's name and the header fit.
+    @Environment(\.appTextScale) private var popoverTextScale
     @ObservedObject var presetStore: PresetStore
     @ObservedObject var mappingEngine: MappingEngine
     weak var controllerService: GameControllerService?
@@ -670,7 +785,7 @@ private struct MenuBarPopoverView: View {
             footer
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(width: 320 * min(max(1, popoverTextScale), 1.6))
         .symbolRenderingMode(.hierarchical)
         .focusRingForKeyboardUsers()
         // THE glass: the same window-container frosted material YapToText uses,
@@ -703,27 +818,30 @@ private struct MenuBarPopoverView: View {
             Button { onToggle(active) } label: {
                 pill(icon: "stop.fill", text: "Stop", tint: .icStop)
             }
-            .buttonStyle(.plain).help("Stop \(active.name)")
+            .buttonStyle(.plain).help("Stop \(active.shownName)")
             .accessibilityLabel("Stop the running preset")
+            .voiceNames("Stop")
         } else {
             let target = firstRunnable
             Button { if let t = target { onToggle(t) } } label: {
                 pill(icon: "play.fill", text: "Start", tint: .green)
             }
             .buttonStyle(.plain).disabled(target == nil).opacity(target == nil ? 0.5 : 1)
-            .help(target.map { "Start \($0.name)" } ?? "Add a preset first")
-            .accessibilityLabel("Start the last preset")
+            .help(target.map { String(localized: "Start \($0.shownName)") } ?? String(localized: "Add a preset first"))
+            .accessibilityLabel(target.map { String(localized: "Start \($0.shownName)") } ?? String(localized: "Add a preset first"))
+            .voiceNames("Start")
         }
     }
 
-    private func pill(icon: String, text: String, tint: Color) -> some View {
+    private func pill(icon: String, text: LocalizedStringKey, tint: Color) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 10, weight: .semibold))
             Text(text).font(.caption.weight(.semibold))
         }
-        .foregroundStyle(.white)
+        // White, or black where white would not read on the tint (green).
+        .foregroundStyle(tint == .green ? Color.readableLabel(red: 0.20, green: 0.78, blue: 0.35) : .white)
         .padding(.horizontal, 11).padding(.vertical, 6)
-        .background(tint.opacity(0.72), in: Capsule())
+        .background(tint.opacity(tint == .green ? 1 : 0.72), in: Capsule())
         .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.5))
         .contentShape(Capsule())
     }
@@ -746,13 +864,13 @@ private struct MenuBarPopoverView: View {
                     Section("Favorites") { ForEach(favorites) { presetMenuButton($0) } }
                 }
                 if favorites.isEmpty || !presetStore.showFavoritesOnly {
-                    ForEach(presetStore.groups.sorted { $0.sortOrder < $1.sortOrder }) { group in
+                    ForEach(presetStore.inSidebarOrder(presetStore.groups)) { group in
                         let ps = presetStore.presets(in: group.id)
-                        if !ps.isEmpty { Section(group.name) { ForEach(ps) { presetMenuButton($0) } } }
+                        if !ps.isEmpty { Section(ShippedText.t(group.name)) { ForEach(ps) { presetMenuButton($0) } } }
                     }
                     let ungrouped = presetStore.presets(in: nil)
                     if !ungrouped.isEmpty {
-                        Section(presetStore.groups.isEmpty ? "Presets" : "Ungrouped") {
+                        Section(presetStore.groups.isEmpty ? String(localized: "Presets") : String(localized: "Ungrouped")) {
                             ForEach(ungrouped) { presetMenuButton($0) }
                         }
                     }
@@ -762,10 +880,12 @@ private struct MenuBarPopoverView: View {
                     Toggle("Favorites Only", isOn: $presetStore.showFavoritesOnly)
                 }
             } label: {
-                selectorLabel("Preset", icon: "slider.horizontal.3", value: activePreset?.name ?? "No preset")
+                selectorLabel(String(localized: "Preset"), icon: "slider.horizontal.3", value: activePreset?.shownName ?? String(localized: "No preset"))
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .help("Switch the active preset")
+            // The name too, since a long one is cut off on the pill.
+            .help(String(localized: "\(String(localized: "Switch the active preset")): \(activePreset?.shownName ?? String(localized: "No preset"))"))
+            .accessibilityInputLabels([Text(activePreset?.shownName ?? String(localized: "No preset")), Text("Preset")])
 
             Menu {
                 if let svc = controllerService, !svc.controllerDetails.isEmpty {
@@ -786,26 +906,29 @@ private struct MenuBarPopoverView: View {
                     Button("No controller connected") {}.disabled(true)
                 }
             } label: {
-                selectorLabel("Controller", icon: "gamecontroller.fill", value: primaryControllerName)
+                selectorLabel(String(localized: "Controller"), icon: "gamecontroller.fill", value: primaryControllerName)
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .help("Connected controllers")
+            .help(String(localized: "\(String(localized: "Connected controllers")): \(primaryControllerName)"))
+            .accessibilityInputLabels([Text(primaryControllerName), Text("Controller")])
         }
     }
 
     @ViewBuilder private func presetMenuButton(_ preset: Preset) -> some View {
         Button { onToggle(preset) } label: {
-            Label(preset.name,
+            Label(preset.shownName,
                   systemImage: preset.isActive ? "checkmark"
                       : (preset.isRunnable ? "circle" : "circle.dashed"))
         }
+        // The running one in words, not only by its checkmark.
+        .accessibilityLabel(preset.isActive ? String(localized: "\(preset.shownName), running") : preset.shownName)
         .disabled(!preset.isRunnable && !preset.isActive)
     }
 
     private var primaryControllerName: String {
-        guard let d = controllerService?.controllerDetails, !d.isEmpty else { return "No controller" }
+        guard let d = controllerService?.controllerDetails, !d.isEmpty else { return String(localized: "No controller") }
         if d.count == 1, let info = d.first?.value { return info.name }
-        return "\(d.count) controllers"
+        return String(localized: "\(d.count) controllers")
     }
 
     /// The capsule selector pill, identical to YapToText's selectorLabel token.
@@ -847,14 +970,21 @@ private struct MenuBarPopoverView: View {
         let shortcut = service.isRegistered ? service.spec.displayString : nil
         var ways: [String] = []
         if service.controllerHoldEnabled {
-            let name = BindingRowView.standardButtonLabels.first { $0.index == service.controllerButton }?.label
-                ?? "Button \(service.controllerButton)"
-            let secs = service.holdSeconds
-            ways.append("Hold \(name) \(secs == secs.rounded() ? String(Int(secs)) : String(secs)) s")
+            func label(_ index: Int) -> String {
+                // Its everyday name with Start beside it ("Back and Start"), as the main window says.
+                EmergencyStopService.holdButtonName(index, short: service.holdNeedsStart)
+            }
+            // Start too when the hold needs it, as it does by default.
+            let name = service.holdNeedsStart
+                ? LocalizedList.and([label(service.controllerButton), label(EmergencyStopService.startButton)])
+                : label(service.controllerButton)
+            let secsText = service.holdSeconds.formatted(.number.precision(.fractionLength(0...1)))
+            ways.append(String(localized: "Hold \(name) \(secsText) s") + service.accessControllerHoldNote)
         }
         let presetWays = activePresetEmergencyInputs
         if !presetWays.isEmpty {
-            ways.append("This preset: " + presetWays.joined(separator: ", "))
+            let presetList = presetWays.joined(separator: ", ")
+            ways.append(String(localized: "This preset: \(presetList)"))
         }
         return Button {
             service.stop(reason: .menu)
@@ -862,32 +992,46 @@ private struct MenuBarPopoverView: View {
             HStack(spacing: 7) {
                 Image(systemName: "exclamationmark.octagon.fill")
                     .font(.system(size: 14))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Emergency Stop")
                         .font(.system(size: 12, weight: .semibold))
                     if !ways.isEmpty {
-                        Text(ways.joined(separator: " \u{00B7} "))
+                        Text(ways.joined(separator: ", "))
                             .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            // The gray label color, not a pale shade of the
+                            // row's red: the ways to stop read at about 2:1.
+                            .foregroundStyle(Color.secondary)
+                            // As many lines as it needs: the hold time and the
+                            // Access Controller socket must not be cut off.
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 0)
                 if let shortcut {
                     Text(shortcut)
                         .font(.system(size: 11).monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondary)
+                        .accessibilityLabel(service.spec.spokenString)
                 }
             }
             .foregroundStyle(.red)
             .padding(.horizontal, 11)
             .frame(maxWidth: .infinity)
-            .frame(height: ways.isEmpty ? 34 : 42)
+            .frame(minHeight: ways.isEmpty ? 34 : 42)
+            .padding(.vertical, ways.isEmpty ? 0 : 2)
             .innerWell(radius: 9)
             .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)
         .help("Stop the engine and release every held key, button, and note.")
+        // One short name to say, with the ways to stop as its value.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Emergency Stop")
+        .accessibilityValue((ways + [shortcut.map { _ in service.spec.spokenString + service.voiceOverChordNote }].compactMap { $0 }).joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { service.stop(reason: .menu) }
+        .voiceNames("Emergency Stop")
     }
 
     /// Controls in the active preset that are bound to Emergency Stop, as
@@ -904,14 +1048,16 @@ private struct MenuBarPopoverView: View {
         }
     }
 
-    private func squareButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    private func squareButton(_ title: LocalizedStringKey, _ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 18)).iconTint(.green)
+                Image(systemName: icon).font(.system(size: 18)).iconTint(.green).accessibilityHidden(true)
+                // Two centered lines for a long translation ("Smart
+                // forhåndsinnstilling"), still inside the 62 point square.
                 Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
             }
-            .frame(maxWidth: .infinity).frame(height: 62)
+            .frame(maxWidth: .infinity).frame(minHeight: 62)
             .innerWell(radius: 11)
             .contentShape(RoundedRectangle(cornerRadius: 11))
         }
@@ -924,8 +1070,8 @@ private struct MenuBarPopoverView: View {
         let paused = mappingEngine.outputsPaused
         let dot: Color = running ? (paused ? .orange : .green) : .secondary
         let label = running
-            ? (paused ? "Outputs paused" : "Engine running \(mappingEngine.currentPollHz) Hz")
-            : "Engine idle"
+            ? (paused ? String(localized: "Outputs paused") : String(localized: "Engine running \(mappingEngine.currentPollHz) Hz"))
+            : String(localized: "Engine idle")
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Status").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -935,7 +1081,7 @@ private struct MenuBarPopoverView: View {
                 Circle().fill(dot.opacity(0.85)).frame(width: 7, height: 7)
                 Text(label).font(.caption)
                 Spacer(minLength: 8)
-                Text(String(format: "CPU %.0f%%  \u{00B7}  RAM %.0f MB",
+                Text(String(format: String(localized: "CPU %.0f%%, RAM %.0f MB"), locale: .current,
                             stats.current.smoothedCpuPercent,
                             Double(stats.current.residentMemoryBytes) / 1_048_576.0))
                     .font(.caption2.monospacedDigit()).foregroundStyle(.hint)
@@ -948,7 +1094,7 @@ private struct MenuBarPopoverView: View {
                     permission.requestAccess()
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityHidden(true)
                         Text("Accessibility is off, so this preset's keys and clicks go nowhere. Turn it on in System Settings.")
                             .font(.caption)
                             .multilineTextAlignment(.leading)
@@ -962,23 +1108,27 @@ private struct MenuBarPopoverView: View {
                 // A group pinned to a controller that is away reads nothing
                 // while another pad is here: the preset looked like it ran.
                 ForEach(preset.joysticks.indices.filter { svc.waitingDeviceName(forGroup: $0, in: preset.joysticks) != nil }, id: \.self) { index in
+                    let waitingName = preset.joysticks[index].shownCustomName ?? String(localized: "its controller")
                     Button {
                         var updated = preset
-                        updated.joysticks[index].customName = nil
-                        updated.joysticks[index].inputKind = .auto
+                        guard let name = svc.standInPadName(forGroup: index, in: preset.joysticks) else {
+                            GameControllerService.sayEveryPadInUse(); return
+                        }
+                        updated.joysticks[index].customName = name
+                        updated.joysticks[index].inputKind = .controller
                         updated.modifiedAt = Date()
                         presetStore.savePreset(updated)
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                            Text("Waiting for \(preset.joysticks[index].customName ?? "its controller"). Click to use the connected controller instead.")
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityHidden(true)
+                            Text("Waiting for \(waitingName). Click to use the connected controller instead.")
                                 .font(.caption)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("Sets this input device to Auto-detect")
+                    .help("Sets this input device to the controller connected now")
                 }
             }
         }
@@ -1036,7 +1186,7 @@ private extension View {
 /// shared iconTint transparency. Matches YapToText's footer icon language.
 private struct MenuFooterIcon: View {
     let symbol: String
-    let help: String
+    let help: LocalizedStringKey
     var tint: Color? = nil
     let action: () -> Void
 
@@ -1091,17 +1241,70 @@ enum MenuBarIconChoice: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .controller: return "InputConfig"
-        case .gamepad: return "Gamepad"
-        case .arcade: return "Arcade stick"
-        case .dpad: return "D-pad"
-        case .keyboard: return "Keyboard"
-        case .mouse: return "Mouse"
-        case .piano: return "Piano keys"
-        case .note: return "Music"
-        case .tap: return "Tap"
-        case .wheelchair: return "Accessibility"
-        case .headphones: return "Headphones"
-        case .pointer: return "Pointer"
+        case .gamepad: return String(localized: "Gamepad")
+        case .arcade: return String(localized: "Arcade stick")
+        case .dpad: return String(localized: "D-pad")
+        case .keyboard: return String(localized: "Keyboard")
+        case .mouse: return String(localized: "Mouse")
+        case .piano: return String(localized: "Piano keys")
+        case .note: return String(localized: "Music")
+        case .tap: return String(localized: "Tap")
+        case .wheelchair: return String(localized: "Accessibility")
+        case .headphones: return String(localized: "Headphones")
+        case .pointer: return String(localized: "Pointer")
         }
+    }
+}
+
+/// A short line shown over every app for a few seconds, for cues that were
+/// otherwise only heard or spoken to VoiceOver: the emergency stop, its
+/// one-second warning, a start by the controller hold and a refused start.
+/// It never takes focus or clicks.
+@MainActor
+final class StatusHUD {
+    static let shared = StatusHUD()
+    private var panel: NSPanel?
+    private var hideWork: DispatchWorkItem?
+
+    func show(_ text: String, seconds: TimeInterval = 6) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("notice \(text)"); return }
+        #endif
+        let scale = AppA11y.scale(forStep: UserDefaults.standard.integer(forKey: "InputConfig.a11y.textSize"))
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 15 * scale, weight: .semibold)
+        label.textColor = .labelColor
+        label.alignment = .center
+        label.preferredMaxLayoutWidth = 420 * scale
+        let size = label.fittingSize
+        let box = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: size.width + 36, height: size.height + 24))
+        box.material = .hudWindow
+        box.state = .active
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 12
+        label.frame = NSRect(x: 18, y: 12, width: size.width, height: size.height)
+        box.addSubview(label)
+        let p = panel ?? NSPanel(contentRect: box.frame, styleMask: [.nonactivatingPanel, .borderless],
+                                 backing: .buffered, defer: false)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.level = .statusBar
+        p.ignoresMouseEvents = true
+        // Shown while another app is in front, which is when it is needed.
+        p.hidesOnDeactivate = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        p.contentView = box
+        p.setContentSize(box.frame.size)
+        if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            p.setFrameOrigin(NSPoint(x: f.midX - box.frame.width / 2, y: f.maxY - box.frame.height - 24))
+        }
+        p.orderFrontRegardless()
+        panel = p
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 }

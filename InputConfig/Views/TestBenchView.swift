@@ -13,13 +13,20 @@ struct TestBenchView: View {
     enum Tab: String, CaseIterable {
         case automated = "Automated Tests"
         case manual = "Manual Output Injectors"
+
+        var title: String {
+            switch self {
+            case .automated: return String(localized: "Automated Tests")
+            case .manual: return String(localized: "Manual Output Injectors")
+            }
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             Picker("Test Bench section", selection: $selectedTab) {
                 ForEach(Tab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
+                    Text(tab.title).tag(tab)
                 }
             }
             .pickerStyle(.segmented)
@@ -46,10 +53,11 @@ struct TestBenchView: View {
                 Button {
                     Task {
                         let (passed, failed) = await service.runAll()
-                        summary = "\(passed) passed · \(failed) failed"
+                        summary = String(localized: "\(passed) passed, \(failed) failed")
+                        AccessibilityNotification.Announcement(String(localized: "\(passed) passed, \(failed) failed")).post()
                     }
                 } label: {
-                    Label(service.isRunning ? "Running…" : "Run All Tests",
+                    Label(service.isRunning ? String(localized: "Running…") : String(localized: "Run All Tests"),
                           systemImage: service.isRunning ? "hourglass" : "play.fill")
                 }
                 .buttonStyle(.solid)
@@ -93,6 +101,8 @@ struct TestBenchView: View {
                 }
                 .padding(.vertical, 4)
             }
+            // Keys scroll the results.
+            .focusable()
         }
     }
 
@@ -109,7 +119,6 @@ struct TestBenchView: View {
                     Text(result.category)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text("·").foregroundStyle(.hint)
                     Text(result.name)
                         .font(.caption)
                 }
@@ -123,6 +132,8 @@ struct TestBenchView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(result.status == .fail ? Color.red.opacity(0.06) : Color.clear)
+        // One VoiceOver stop per result.
+        .accessibilityElement(children: .combine)
     }
 
     private func statusColor(_ s: TestResult.Status) -> Color {
@@ -169,11 +180,12 @@ struct TestBenchView: View {
     }
 
     @ViewBuilder
-    private func section<Content: View>(title: String, description: String,
+    private func section<Content: View>(title: LocalizedStringKey, description: LocalizedStringKey,
                                          @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
             Text(description)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -362,7 +374,7 @@ struct TestBenchView: View {
     }
 
     @ViewBuilder
-    private func lightButton(_ name: String, color: Color, r: UInt8, g: UInt8, b: UInt8) -> some View {
+    private func lightButton(_ name: LocalizedStringKey, color: Color, r: UInt8, g: UInt8, b: UInt8) -> some View {
         Button {
             // The same in-process writer presets use for the light bar.
             InProcessLightWriter.shared.write(red: r, green: g, blue: b)
@@ -396,7 +408,7 @@ final class TestBenchWindowController {
             .reduceMotionFriendly()
             .appAccessibility())
         let newWindow = NSWindow(contentViewController: hosting)
-        newWindow.title = "InputConfig Test Bench"
+        newWindow.title = String(localized: "InputConfig Test Bench")
         newWindow.setContentSize(NSSize(width: 820, height: 600))
         // .fullSizeContentView lets the blur reach under the transparent
         // titlebar so the top bar isn't see-through to the desktop.

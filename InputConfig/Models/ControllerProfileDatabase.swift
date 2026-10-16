@@ -164,16 +164,26 @@ enum ControllerProfileDatabase {
         let (pid, name, keys, offset, mirror) = model
         let first = ControllerProfile.StreamDeckFormat.firstSlot
         // The Neo's two touch points under its screen follow its 8 keys.
-        let keyNames = pid == 0x0086
+        var keyNames = pid == 0x0086
             ? ["Left pedal", "Middle pedal", "Right pedal"]
             : (pid == 0x009A ? (1...8).map { "Key \($0)" } + ["Left touch", "Right touch"]
                              : (1...keys).map { "Key \($0)" })
+        // The Plus's four dials and its touch strip follow its 8 keys, in
+        // the order StreamDeckFormat numbers them.
+        let plus = pid == 0x0084
+        let format = ControllerProfile.StreamDeckFormat(keys: keys, keyOffset: offset, mirrorColumns: mirror,
+                                                        dials: plus ? 4 : 0, touchStrip: plus)
+        if plus {
+            keyNames += (1...4).map { "Dial \($0) press" }
+            keyNames += (1...4).flatMap { ["Dial \($0) turn left", "Dial \($0) turn right"] }
+            keyNames += ["Touch strip tap", "Touch strip long press", "Swipe left", "Swipe right"]
+        }
         return ControllerProfile(
             identifier: String(format: "elgato-stream-deck-%04x", pid),
             displayName: name + " (Experimental)",
             vendorID: streamDeckVendorID,
             productMatches: [.exact(pid)],
-            layout: .streamDeck(.init(keys: keys, keyOffset: offset, mirrorColumns: mirror)),
+            layout: .streamDeck(format),
             physicalButtonNames: (0..<first).map { "Button \($0)" } + keyNames
         )
     }

@@ -4,6 +4,19 @@ import SwiftUI
 /// family's name for its input (ButtonNames), with PlayStation's face glyphs
 /// as symbols and compass letters under Positions.
 enum CanvasLegend {
+    /// A label printed as a word rather than a hardware legend (a flight
+    /// stick's twist dial, a wheel's pedals), in the app's language.
+    static func printedWord(_ printed: String) -> String {
+        switch printed {
+        case "Twist": return String(localized: "Twist")
+        case "Pedals": return String(localized: "Pedals")
+        case "Gas": return String(localized: "Gas")
+        case "Brake": return String(localized: "Brake")
+        case "Clutch": return String(localized: "Clutch")
+        default: return printed
+        }
+    }
+
     static func legend(for c: PlacedControl, in layout: ControllerLayout,
                        family: FaceLetters?, model: ButtonNames.ModelNames,
                        choice: FaceLetters = FaceLetters.current) -> (text: String?, symbol: String?) {
@@ -12,8 +25,8 @@ enum CanvasLegend {
         // Not on a button the model renames: its index is not where the
         // standard compass puts it (a single Joy-Con, an N64 pad).
         if choice == .positions, c.kind == .faceButton, let b = c.inputs.buttons.first, model.renamed[b] == nil,
-           let compass = ButtonNames.positionName(b, family: family) {
-            return (String(compass.prefix(1)), nil)
+           let compass = ButtonNames.positionLetter(b, family: family) {
+            return (compass, nil)
         }
         // An Xbox-style pad under the Nintendo or PlayStation face letters
         // (many 8BitDo pads report as Xbox pads but print B on the bottom):
@@ -23,7 +36,7 @@ enum CanvasLegend {
             if choice == .playstation { return (nil, ["xmark", "circle", "square", "triangle"][b]) }
             return (ButtonNames.label(b, family: family, model: model, choice: choice), nil)
         }
-        if let printed = c.printed { return (printed, nil) }
+        if let printed = c.printed { return (Self.printedWord(printed), nil) }
         switch c.kind {
         case .faceButton:
             guard let b = c.inputs.buttons.first else { return (nil, nil) }
@@ -36,7 +49,9 @@ enum CanvasLegend {
                 default: break
                 }
             }
-            let name = ButtonNames.label(b, family: family, model: model, choice: choice)
+            // Measured and cut without a leading right-to-left mark, which
+            // is a character of its own and would leave the button blank.
+            let name = ButtonNames.label(b, family: family, model: model, choice: choice).withoutRTLMark
             return (name.count <= 3 ? name : String(name.prefix(1)), nil)
         case .shoulder, .menuButton, .homeButton:
             guard let b = c.inputs.buttons.first else { return (nil, nil) }

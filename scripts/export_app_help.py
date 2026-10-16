@@ -33,8 +33,8 @@ PAGES = [
     ("help/midi-as-input", "MIDI Devices", "Inputs"),
     ("help/gyroscope-aim", "Gyroscope", "Inputs"),
     ("help/touchpad-as-mouse", "Touchpad as a Mouse", "Inputs"),
-    ("help/touchpad-regions-and-gestures", "Touchpad Zones", "Inputs"),
-    ("help/cursor-and-stick-regions", "Screen Regions, Stick Zones", "Inputs"),
+    ("help/touchpad-regions-and-gestures", "Touchpad Regions", "Inputs"),
+    ("help/cursor-and-stick-regions", "Screen Regions, Stick Regions", "Inputs"),
     ("help/tap-the-mac", "Tap the Mac", "Inputs"),
 
     ("help/system-functions", "System Functions", "Outputs"),
@@ -159,8 +159,24 @@ def inline(s):
 TAG = r"(?:\s[^>]*)?"
 
 
+def fold_code(h):
+    """A code box after its label line goes into that line, in backticks: the
+    in-app Help has no code boxes, and without this the path was lost."""
+    def one(m):
+        label, code = m.group(1), htmlmod.unescape(m.group(2)).strip()
+        if "this path" in label:
+            label = label.replace("this path", "`%s`" % code, 1)
+        else:
+            head, sep, rest = label.partition("</strong>")
+            rest = rest.strip()
+            label = head + sep + " Paste `%s`, %s" % (code, rest[:1].lower() + rest[1:])
+        return "<p>%s</p>" % label
+    return re.sub(r'<p class="ic-code-label">(.*?)</p>\s*<div class="ic-code"><pre><code>(.*?)</code></pre></div>', one, h, flags=re.S)
+
+
 def blocks(h):
     """A section's HTML as an ordered list of (kind, payload)."""
+    h = fold_code(h)
     out = []
     pattern = re.compile(r"<(p|ul|ol|dl|table)%s>(.*?)</\1>" % TAG, re.S)
     for m in pattern.finditer(h):

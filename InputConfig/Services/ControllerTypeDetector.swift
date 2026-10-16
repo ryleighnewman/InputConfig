@@ -29,12 +29,12 @@ enum ControllerBrand: String, CaseIterable {
         case .switchPro:   return "Switch Pro"
         case .joyConLeft:  return "Joy-Con (L)"
         case .joyConRight: return "Joy-Con (R)"
-        case .joyConPair:  return "Joy-Con Pair"
+        case .joyConPair:  return String(localized: "Joy-Con Pair")
         case .stadia:      return "Stadia"
         case .eightBitDo:  return "8BitDo"
         case .steamController: return "Steam Controller"
-        case .mfiGeneric:  return "Generic Gamepad"
-        case .unknown:     return "Controller"
+        case .mfiGeneric:  return String(localized: "Generic Gamepad")
+        case .unknown:     return String(localized: "Controller")
         }
     }
 
@@ -53,7 +53,7 @@ enum ControllerBrand: String, CaseIterable {
         case .eightBitDo:                           return "8BitDo"
         case .steamController:                      return "Valve"
         case .mfiGeneric:                           return "MFi"
-        case .unknown:                              return "Unknown"
+        case .unknown:                              return String(localized: "Unknown")
         }
     }
 
@@ -73,14 +73,13 @@ enum ControllerBrand: String, CaseIterable {
         }
     }
 
-    /// Has gyro / accelerometer motion sensors InputConfig reads. Sony pads
-    /// only, matching Help and the Motion Cursor notes; the Smart Preset
-    /// Maker offered gyro aim on Nintendo pads that the rest of the app
-    /// says are not supported. A connected pad that does report motion
-    /// still works in any motion row.
+    /// Has gyro / accelerometer motion sensors InputConfig reads, as Help's
+    /// motion page lists them: Sony pads, the Switch Pro Controller (and an
+    /// 8BitDo pad in Switch mode, which macOS lists as one), Joy-Con, and
+    /// both Steam Controllers.
     var hasMotion: Bool {
         switch self {
-        case .dualSense, .dualShock4: return true
+        case .dualSense, .dualShock4, .switchPro, .joyConLeft, .joyConRight, .joyConPair, .steamController: return true
         default: return false
         }
     }
@@ -89,10 +88,10 @@ enum ControllerBrand: String, CaseIterable {
     /// Smart Preset Maker so it only surfaces options the hardware supports.
     var capabilitySummary: String {
         var caps: [String] = []
-        if hasLightBar { caps.append("light bar") }
-        if hasTouchpad { caps.append("touchpad") }
-        if hasMotion { caps.append("motion / gyro") }
-        return caps.isEmpty ? "standard buttons & sticks" : caps.joined(separator: " · ")
+        if hasLightBar { caps.append(String(localized: "light bar")) }
+        if hasTouchpad { caps.append(String(localized: "touchpad")) }
+        if hasMotion { caps.append(String(localized: "motion / gyro")) }
+        return caps.isEmpty ? String(localized: "standard buttons & sticks") : caps.joined(separator: ", ")
     }
 
     /// Whether the four face buttons use Nintendo naming (B/A/Y/X) instead
@@ -251,11 +250,11 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
 
     var menuTitle: String {
         switch self {
-        case .automatic: return "Automatic"
+        case .automatic: return String(localized: "Automatic")
         case .xbox: return "Xbox"
         case .playstation: return "PlayStation"
         case .nintendo: return "Nintendo"
-        case .positions: return "Positions"
+        case .positions: return String(localized: "Positions")
         case .stadia: return "Stadia"
         case .steamController: return "Steam Controller (2015)"
         case .steamController2026: return "Steam Controller (2026)"
@@ -280,11 +279,11 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .automatic: return "Automatic"
-        case .xbox: return "Xbox: A on the bottom"
-        case .playstation: return "PlayStation: Cross on the bottom"
-        case .nintendo: return "Nintendo: B on the bottom"
-        case .positions: return "Positions: North, South, East, West"
+        case .automatic: return String(localized: "Automatic")
+        case .xbox: return String(localized: "Xbox: A on the bottom")
+        case .playstation: return String(localized: "PlayStation: Cross on the bottom")
+        case .nintendo: return String(localized: "Nintendo: B on the bottom")
+        case .positions: return String(localized: "Positions: North, South, East, West")
         case .stadia: return "Stadia"
         case .steamController: return "Steam Controller (2015)"
         case .steamController2026: return "Steam Controller (2026)"
@@ -314,17 +313,25 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
     /// any other button.
     static func positionName(_ index: Int) -> String? {
         switch index {
-        case 0: return "South"
-        case 1: return "East"
-        case 2: return "West"
-        case 3: return "North"
+        case 0: return String(localized: "South")
+        case 1: return String(localized: "East")
+        case 2: return String(localized: "West")
+        case 3: return String(localized: "North")
         default: return nil
         }
     }
 
-    /// One letter for the visualizer's round buttons: S, E, W, N.
+    /// One letter for the visualizer's round buttons: S, E, W, N in English.
+    /// A letter of its own per direction, not the word's first letter, which
+    /// is the same for two directions in several languages.
     static func positionInitial(_ index: Int) -> String? {
-        positionName(index).map { String($0.prefix(1)) }
+        switch index {
+        case 0: return String(localized: "compass.south", defaultValue: "S", table: "KeyNames")
+        case 1: return String(localized: "compass.east", defaultValue: "E", table: "KeyNames")
+        case 2: return String(localized: "compass.west", defaultValue: "W", table: "KeyNames")
+        case 3: return String(localized: "compass.north", defaultValue: "N", table: "KeyNames")
+        default: return nil
+        }
     }
 
     /// The editor's name for a face button of a pad with no known family:
@@ -337,10 +344,10 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
         }
         if choice == .playstation {
             switch index {
-            case 0: return "Cross"
-            case 1: return "Circle"
-            case 2: return "Square"
-            case 3: return "Triangle"
+            case 0: return String(localized: "Cross")
+            case 1: return String(localized: "Circle")
+            case 2: return String(localized: "Square")
+            case 3: return String(localized: "Triangle")
             default: return nil
             }
         }

@@ -31,6 +31,9 @@ final class AppState: ObservableObject {
         UserDefaults.standard.register(defaults: [
             "InputConfig.autoPollHzByPower": true,
             "InputConfig.showDockIcon": true,
+            // Settings shows the activity log on by default; the engine read
+            // the unset key as off and logged no presses until it was flipped.
+            "InputConfig.showDebugLog": true,
         ])
         // The app is designed dark-first; in light mode the frosted-glass
         // surfaces wash out to near-white. Force the dark appearance app-wide
@@ -42,7 +45,9 @@ final class AppState: ObservableObject {
         // touching NSApp here trapped at launch for every Sonoma user.
         // NSApplication.shared is non-optional and creates the instance.
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
-        AppState.enforceSingleInstance()
+        // The keyboard layout's labels before anything names a key: the
+        // emergency stop registers below and names its chord in an alert.
+        _ = KeyboardLayoutService.shared
         // Boot the freeze watchdog before any heavy work runs - this is the
         // earliest place the main actor is alive, so we get the most
         // accurate "main thread responsiveness" baseline.
@@ -71,9 +76,7 @@ final class AppState: ObservableObject {
         // because you believe you have one. Carbon hot keys are exclusive per
         // process, so another app (or a second copy of this one) holding the
         // same chord makes this fail quietly.
-        if !EmergencyStopService.shared.refreshRegistration() {
-            AppState.warnEmergencyStopUnavailable()
-        }
+        let stopShortcutTaken = !EmergencyStopService.shared.refreshRegistration()
         // Keys a crashed run left held are let go first. If the user
         // hasn't opted out of session restore, the preset that was running
         // is offered again below, deferred to the next run-loop tick so
@@ -114,7 +117,29 @@ final class AppState: ObservableObject {
         // and the controller services started only after it closed).
         RunLoop.main.perform(inModes: [.default]) { [presetStore, crashRecovery, mappingEngine] in
           MainActor.assumeIsolated {
-            guard let id = crashRecovery.consumeRestoreTarget() else { return }
+            // Restarted for a language: the preset that was running starts
+            // again. Read only by that relaunch, so a canceled restart's
+            // record is never acted on later.
+            let relaunched = AppLanguage.startedByRestart || CommandLine.arguments.contains(AppLanguage.relaunchArgument)
+            let carried = UserDefaults.standard.string(forKey: AppLanguage.relaunchPresetKey).flatMap(UUID.init(uuidString:))
+            UserDefaults.standard.removeObject(forKey: AppLanguage.relaunchPresetKey)
+            if relaunched, let carried, let preset = presetStore.presets.first(where: { $0.id == carried }) {
+                MenuBarController.activate(preset, store: presetStore, engine: mappingEngine, background: true)
+                AccessibilityNotification.Announcement(String(localized: "Started \(preset.shownName)")).post()
+                return
+            }
+            guard let id = crashRecovery.consumeRestoreTarget() else {
+                // Loop protection kept the preset off: say so, or a
+                // controller user is left with a pad that does nothing.
+                if let skipped = crashRecovery.skippedLoopPresetID,
+                   let preset = presetStore.presets.first(where: { $0.id == skipped }) {
+                    let said = String(localized: "InputConfig quit twice in a row, so \(preset.shownName) was not started again.")
+                    ActivityLog.shared.warning("Recovery", "InputConfig quit twice in a row; left \(preset.name) off")
+                    AccessibilityNotification.Announcement(said).post()
+                    StatusHUD.shared.show(said, seconds: 10)
+                }
+                return
+            }
             if let preset = presetStore.presets.first(where: { $0.id == id }) {
                 // Ask before starting it again. Starting it silently brought
                 // back a runaway preset the user had just force quit to stop.
@@ -124,15 +149,24 @@ final class AppState: ObservableObject {
                 // by itself after 20 seconds, as 1.5 did at once.
                 NSApp.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
-                alert.messageText = "InputConfig quit while \u{201C}\(preset.name)\u{201D} was running"
-                alert.informativeText = "Start it again? It starts again by itself in 20 seconds unless you choose Not Now."
-                alert.addButton(withTitle: "Start")
-                alert.addButton(withTitle: "Not Now")
+                alert.messageText = String(localized: "InputConfig quit while \u{201C}\(preset.shownName)\u{201D} was running")
+                let assistive = NSWorkspace.shared.isVoiceOverEnabled || NSWorkspace.shared.isSwitchControlEnabled
+                alert.informativeText = assistive
+                    ? String(localized: "Start it again? It starts again by itself in 1 minute unless you choose Not Now.")
+                    : String(localized: "Start it again? It starts again by itself in 20 seconds unless you choose Not Now.")
+                alert.addButton(withTitle: String(localized: "alert.startPreset", defaultValue: "Start", comment: "Alert button that starts the preset (a verb)"))
+                alert.addButton(withTitle: String(localized: "Not Now"))
+                // Escape is Not Now (NSAlert gives Escape only to Cancel).
+                alert.buttons[1].keyEquivalent = "\u{1b}"
                 // abortModal, not stopModal: a timer is not an event, and
                 // a stop request is only noticed once an event arrives,
                 // which a controller never sends. Abort ends the loop
                 // straight away and counts as Start.
-                let timeout = Timer(timeInterval: 20, repeats: false) { _ in
+                // With VoiceOver or Switch Control on, scanning to Not Now
+                // can take longer than 20 seconds, so it waits a minute. Not
+                // longer: the switches Switch Control scans with may be the
+                // very preset this alert holds back.
+                let timeout = Timer(timeInterval: assistive ? 60 : 20, repeats: false) { _ in
                     NSApp.abortModal()
                 }
                 RunLoop.main.add(timeout, forMode: .modalPanel)
@@ -146,11 +180,17 @@ final class AppState: ObservableObject {
                     flag.stopped = true
                     NSApp.abortModal()
                 }
+                // A preset started meanwhile (auto-switch, a shortcut) is the
+                // one wanted now: the countdown no longer puts the old one
+                // back over it.
+                let runningBefore = presetStore.activePresetId
                 let answer = alert.runModal()
                 timeout.invalidate()
                 NotificationCenter.default.removeObserver(stopObserver)
-                if !flag.stopped, answer == .alertFirstButtonReturn || answer == .abort {
+                let startedMeanwhile = presetStore.activePresetId != runningBefore && presetStore.activePresetId != nil
+                if !flag.stopped, !startedMeanwhile, answer == .alertFirstButtonReturn || answer == .abort {
                     ActivityLog.shared.warning("Recovery", "InputConfig ended unexpectedly last time; started \(preset.name) again")
+                    crashRecovery.markRestarted()
                     // In the background: no second, untimed alert about
                     // Accessibility can follow the timed one.
                     MenuBarController.activate(preset, store: presetStore, engine: mappingEngine, background: true)
@@ -159,6 +199,15 @@ final class AppState: ObservableObject {
                 }
             }
           }
+        }
+        // The stop shortcut's warning comes after the timed restore above:
+        // queued first, its untimed alert held the restore back for anyone
+        // whose only input was the preset. Not modal inside this init, while
+        // SwiftUI builds the scene graph.
+        if stopShortcutTaken {
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { AppState.warnEmergencyStopUnavailable() }
+            }
         }
 
         // Silence any controller left buzzing by an earlier run. A pad holds
@@ -248,17 +297,48 @@ final class AppState: ObservableObject {
     static func enforceSingleInstance() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
         let me = ProcessInfo.processInfo.processIdentifier
-        let others = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == bundleID && $0.processIdentifier != me
+        // Checked with the kernel, not only the running applications list,
+        // which this early is a snapshot that can still hold a copy that quit.
+        func others() -> [NSRunningApplication] {
+            NSWorkspace.shared.runningApplications.filter {
+                $0.bundleIdentifier == bundleID && $0.processIdentifier != me && AppLanguage.isAlive($0.processIdentifier)
+            }
         }
+        // Started by a language change: the copy that started this one is
+        // finishing its quit, so wait for that process to be gone.
+        let args = CommandLine.arguments
+        var waitFor: pid_t?
+        if let i = args.firstIndex(of: AppLanguage.relaunchArgument), i + 1 < args.count, let old = pid_t(args[i + 1]) {
+            waitFor = old
+        }
+        // Or as the quitting copy left it in the defaults (its launch
+        // arguments do not arrive), when it asked in the last half minute.
+        let defaults = UserDefaults.standard
+        if let mark = defaults.array(forKey: AppLanguage.relaunchFromKey) as? [Double], mark.count == 2 {
+            defaults.removeObject(forKey: AppLanguage.relaunchFromKey)
+            if Date().timeIntervalSince1970 - mark[1] < 30 { waitFor = waitFor ?? pid_t(mark[0]) }
+        }
+        if waitFor != nil { AppLanguage.startedByRestart = true }
+        if let old = waitFor, old != me {
+            let deadline = Date().addingTimeInterval(15)
+            while AppLanguage.isAlive(old), Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        let others = others()
         guard let other = others.first else { return }
 
+        // This runs from the App's init, before SwiftUI creates the
+        // application object; the alert needs one to run.
+        _ = NSApplication.shared
+        // Dark like every other window of the app (AppState sets this too,
+        // but later than this alert).
+        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        NSApplication.shared.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "InputConfig is already running"
-        alert.informativeText = "Another copy of InputConfig is already open, and two copies fight over the same keyboard and mouse: controls you never mapped can appear to fire, and the emergency stop only works in one of them.\n\nThis copy will quit. Use the one already running."
-        alert.addButton(withTitle: "Quit This Copy")
-        alert.addButton(withTitle: "Show the Other Copy")
+        alert.messageText = String(localized: "InputConfig is already running")
+        alert.informativeText = String(localized: "Another copy of InputConfig is already open, and two copies fight over the same keyboard and mouse: controls you never mapped can appear to fire, and the emergency stop only works in one of them.\n\nThis copy will quit. Use the one already running.")
+        alert.addButton(withTitle: String(localized: "Quit This Copy"))
+        alert.addButton(withTitle: String(localized: "Show the Other Copy"))
         if alert.runModal() == .alertSecondButtonReturn {
             // Closing the window keeps the app running in the menu bar, so
             // the other copy may have no window to bring forward. Opening
@@ -290,27 +370,38 @@ final class AppState: ObservableObject {
         // Once per conflicting chord, not on every launch.
         let warnedKey = "InputConfig.emergencyStopWarnedChord"
         guard UserDefaults.standard.string(forKey: warnedKey) != chord else { return }
-        UserDefaults.standard.set(chord, forKey: warnedKey)
         // What actually still works, from the live settings: the controller
         // hold and the menu bar icon can each be turned off.
         var ways: [String] = []
         if service.controllerHoldEnabled {
-            let name = BindingRowView.standardButtonLabels(for: nil)
-                .first(where: { $0.index == service.controllerButton })?.label ?? "Button \(service.controllerButton)"
-            ways.append("holding \(name) on the controller for \(String(format: "%g", service.holdSeconds)) seconds")
+            func label(_ index: Int) -> String {
+                EmergencyStopService.holdButtonName(index, short: service.holdNeedsStart)
+            }
+            // Start too when the hold needs it, as it does by default.
+            let name = service.holdNeedsStart
+                ? LocalizedList.and([label(service.controllerButton), label(EmergencyStopService.startButton)])
+                : label(service.controllerButton)
+            let seconds = service.holdSeconds.formatted(.number.precision(.fractionLength(0...1)))
+            ways.append(String(localized: "holding \(name) on the controller for \(seconds) seconds") + service.accessControllerHoldNote)
         }
         if (UserDefaults.standard.object(forKey: MenuBarController.defaultsKey) as? Bool) ?? true {
-            ways.append("using the InputConfig menu bar icon")
+            ways.append(String(localized: "using the InputConfig menu bar icon"))
         }
         let fallback = ways.isEmpty
-            ? "Turn on the controller hold in Settings so there is still a way to stop a preset."
-            : "You can still stop everything by " + ways.joined(separator: ", or by ") + "."
+            ? String(localized: "Turn on the controller hold in Settings so there is still a way to stop a preset.")
+            : ways.count == 1
+                ? String(localized: "You can still stop everything by \(ways[0]).")
+                : String(localized: "You can still stop everything by \(ways[0]), or by \(ways[1]).")
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "The emergency stop shortcut is not available"
-        alert.informativeText = "Another app has already claimed \(chord), so InputConfig could not register it. That keyboard shortcut will not stop a running preset.\n\n\(fallback) Choose a different shortcut in Settings to restore it."
-        alert.addButton(withTitle: "OK")
+        alert.messageText = String(localized: "The emergency stop shortcut is not available")
+        alert.informativeText = String(localized: "Another app has already claimed \(chord), so InputConfig could not register it. That keyboard shortcut will not stop a running preset.\n\n\(fallback) Choose a different shortcut in Settings to restore it.")
+        alert.addButton(withTitle: String(localized: "OK"))
+        // In front, so VoiceOver and the keyboard reach it at a login launch.
+        NSApplication.shared.activate(ignoringOtherApps: true)
         alert.runModal()
+        // Only once it was seen: a warning lost before it showed came back.
+        UserDefaults.standard.set(chord, forKey: warnedKey)
     }
 
     /// Tear down outputs in priority order. Called on willTerminate.
@@ -368,7 +459,7 @@ struct ControllerGlyph: View {
     var height: CGFloat = 13
 
     var body: some View {
-        Image("ControllerGlyph")
+        Image(decorative: "ControllerGlyph")
             .renderingMode(.template)
             .resizable()
             .scaledToFit()
@@ -404,7 +495,7 @@ struct MenuIcon: View {
     let name: String
     var body: some View {
         if name.hasPrefix("gamecontroller") {
-            Image("ControllerGlyphMenu").renderingMode(.template)
+            Image(decorative: "ControllerGlyphMenu").renderingMode(.template)
         } else {
             Image(systemName: name)
         }
@@ -503,6 +594,7 @@ enum AppA11y {
         case 1: return 1.15
         case 2: return 1.3
         case 3: return 1.5
+        case 4: return 2
         default: return 1
         }
     }
@@ -675,7 +767,21 @@ enum AppAccent: String, CaseIterable, Identifiable {
     /// The swatches; Custom is the color well at the end of the row.
     static var swatches: [AppAccent] { allCases.filter { $0 != .custom } }
     var id: String { rawValue }
-    var label: String { self == .automatic ? "Automatic" : rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .automatic: return String(localized: "Automatic")
+        case .blue: return String(localized: "Blue")
+        case .cyan: return String(localized: "Cyan")
+        case .purple: return String(localized: "Purple")
+        case .pink: return String(localized: "Pink")
+        case .red: return String(localized: "Red")
+        case .orange: return String(localized: "Orange")
+        case .yellow: return String(localized: "Yellow")
+        case .green: return String(localized: "Green")
+        case .graphite: return String(localized: "Graphite")
+        case .custom: return String(localized: "Custom")
+        }
+    }
 
     /// The color for this choice. Custom needs the stored hex, so callers
     /// that must redraw when it changes pass it in from their own AppStorage.
@@ -886,6 +992,18 @@ enum Metrics {
     static let badgeRadius: CGFloat = 9
     static let cardPad: CGFloat = 14
     static let gap: CGFloat = 14
+
+    /// A sheet's height, kept on the screen. `ideal` when the screen has
+    /// room; otherwise what fits between the menu bar and the Dock once the
+    /// window's title bar and a margin are taken off, never under `floor`.
+    /// AppKit does not pull a sheet that runs past the bottom back onto the
+    /// screen: on a 13-inch display with the Dock shown, a fixed 740 pt
+    /// sheet put its Close button under the Dock.
+    static func sheetHeight(ideal: CGFloat, floor: CGFloat,
+                            screenHeight: CGFloat? = NSScreen.main?.visibleFrame.height) -> CGFloat {
+        guard let screenHeight else { return ideal }
+        return max(floor, min(ideal, screenHeight - 130))
+    }
 }
 
 extension View {
@@ -1104,6 +1222,21 @@ extension Color {
         // until it falls under 2.5:1, which only light fills do.
         return 1.05 / (l + 0.05) >= 2.5 ? .white : .black
     }
+
+    /// White or black text, whichever reads on this color (a region's chip):
+    /// the higher contrast of the two, not the buttons' white-first rule,
+    /// which kept white on pink and purple chips at under 4:1.
+    var readableText: Color {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return .white }
+        return Color.higherContrastLabel(red: c.redComponent, green: c.greenComponent, blue: c.blueComponent)
+    }
+
+    /// Whichever of white and black reads better on the fill.
+    static func higherContrastLabel(red: CGFloat, green: CGFloat, blue: CGFloat) -> Color {
+        func linear(_ v: CGFloat) -> CGFloat { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        let l = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? .white : .black
+    }
 }
 
 /// One flat button look across the app: a SOLID fill, no gradient or glass
@@ -1117,6 +1250,8 @@ struct SolidButton: ButtonStyle {
     var tint: Color = .accentColor
     var prominent: Bool = true
     var size: Size = .regular
+    /// A label color chosen by the caller instead of the measured one.
+    var labelOverride: Color? = nil
     @Environment(\.isEnabled) private var isEnabled
     /// For the fill as drawn: the accent picked in Settings lives in the
     /// environment, which NSColor(Color.accentColor) cannot see, so a yellow
@@ -1124,7 +1259,20 @@ struct SolidButton: ButtonStyle {
     @Environment(\.self) private var environment
 
     private var labelColor: Color {
+        if let labelOverride { return labelOverride }
         var fill = tint
+        // More contrast asked for (macOS or the app): the label that reads
+        // best on the fill as drawn, which the lighter Increase Contrast
+        // reds and blues need; white measured under 3:1 on them.
+        if environment.colorSchemeContrast == .increased || environment.appHighContrast {
+            if tint == .accentColor {
+                let d = UserDefaults.standard
+                let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
+                if let picked = choice.color(customHex: d.string(forKey: AppAccent.customKey) ?? "") { fill = picked }
+            }
+            let c = fill.resolve(in: environment)
+            return Color.higherContrastLabel(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue))
+        }
         if tint == .accentColor {
             let d = UserDefaults.standard
             let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
@@ -1147,10 +1295,11 @@ struct SolidButton: ButtonStyle {
         self.init(tint: tint, prominent: prominent, size: compact ? .compact : .regular)
     }
 
-    init(tint: Color = .accentColor, prominent: Bool = true, size: Size = .regular) {
+    init(tint: Color = .accentColor, prominent: Bool = true, size: Size = .regular, label: Color? = nil) {
         self.tint = tint
         self.prominent = prominent
         self.size = size
+        self.labelOverride = label
     }
 
     private var font: Font {
@@ -1258,21 +1407,75 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
         OpenedPresetFiles.receive(files)
     }
 
+    /// macOS refuses to quit, silently, while a window has a sheet up
+    /// (Settings, Statistics), so they come down first. SwiftUI's sheets
+    /// are closed through their own state (an AppKit endSheet alone left
+    /// SwiftUI showing it, and the attached-sheet lookup found nothing on
+    /// macOS 27, so Restart Now in Settings did nothing), and the quit is
+    /// tried again if the first try was still refused.
+    private func quitTakingSheetsDown() {
+        let appKitSheets = NSApp.windows.contains { !$0.sheets.isEmpty || $0.sheetParent != nil }
+        let anySheet = appKitSheets || OpenedPresetFiles.otherSheetIsUp
+        guard anySheet else { NSApplication.shared.terminate(nil); return }
+        quitting = true
+        func takeDown() {
+            NotificationCenter.default.post(name: .inputConfigCloseSheetsForQuit, object: nil)
+            for window in NSApp.windows {
+                for sheet in window.sheets { window.endSheet(sheet) }
+                if let parent = window.sheetParent { parent.endSheet(window) }
+            }
+        }
+        takeDown()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApplication.shared.terminate(nil)
+            // Still running: a sheet was still closing. Once more.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                takeDown()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApplication.shared.terminate(nil) }
+            }
+        }
+    }
+
     /// Close an open editor (saving or discarding as the person chooses),
     /// then quit once the sheet is gone.
     func requestQuit() {
-        guard let editor = OpenEditor.current else { NSApplication.shared.terminate(nil); return }
+        guard let editor = OpenEditor.current else {
+            quitTakingSheetsDown()
+            return
+        }
+        // A number still being typed is committed first, so it is saved, or
+        // counts as a change to ask about. The field sits on the editor's
+        // sheet, which is not the key window when Settings is in front, so
+        // every sheet ends its editing; the value lands on the next turn
+        // (the editor's own Save waits the same way, commitFieldsThen), and
+        // the alert then runs from a run loop block as applicationShouldTerminate asks.
+        EditorInlineEdit.commit?()
+        for window in NSApp.windows where window.isKeyWindow || window.sheetParent != nil {
+            window.makeFirstResponder(nil)
+        }
+        DispatchQueue.main.async {
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { self.finishQuit(editor) }
+            }
+        }
+    }
+
+    private func finishQuit(_ editor: OpenEditor) {
         if editor.isDirty() {
             let alert = NSAlert()
-            alert.messageText = "Save your changes to \u{201C}\(editor.name())\u{201D} before quitting?"
-            alert.informativeText = "The binding editor is still open. If you do not save, the changes are lost."
-            alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Don\u{2019}t Save")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = String(localized: "Save your changes to \u{201C}\(editor.name())\u{201D} before quitting?")
+            alert.informativeText = String(localized: "The binding editor is still open. If you do not save, the changes are lost.")
+            alert.addButton(withTitle: String(localized: "Save"))
+            alert.addButton(withTitle: String(localized: "Don\u{2019}t Save"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
+            NSApp.activate(ignoringOtherApps: true)  // in front, so the keyboard and VoiceOver reach it
             switch alert.runModal() {
             case .alertFirstButtonReturn: editor.save()
             case .alertSecondButtonReturn: editor.discard()
-            default: return
+            default:
+                // Cancel keeps the app open, so a pending language restart is off too.
+                AppLanguage.relaunchPending = false
+                return
             }
         } else {
             editor.discard()
@@ -1298,6 +1501,8 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
     /// with nothing on screen.
     func applicationDidFinishLaunching(_ notification: Notification) {
         CursorSetThrottle.install()
+        // Key names follow the keyboard layout from the first row drawn.
+        _ = KeyboardLayoutService.shared
         #if DEBUG
         LayoutSnapshots.installHook()
         #endif
@@ -1305,6 +1510,12 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
             guard MenuBarController.mainWindow == nil else { return }
             MenuBarController.shared.showMainWindow()
         }
+    }
+
+    /// A language change starts the copy that replaces this one now, when
+    /// nothing can cancel the quit any more.
+    func applicationWillTerminate(_ notification: Notification) {
+        AppLanguage.launchReplacement()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -1370,13 +1581,17 @@ enum OpenedPresetFiles {
     }
 }
 
-/// Window > InputConfig. Menu items exist from launch, before any window,
-/// so this is also how the app opens the library window when a launch
-/// restored none (see `MenuBarController.openMainFromWindowMenu`).
+/// Window > Show Main Window. Menu items exist from launch, before any
+/// window, so this is also how the app opens the library window when a
+/// launch restored none (see `MenuBarController.openMainFromWindowMenu`).
+/// Not titled "InputConfig": the window list below it names the open
+/// window that way, and the menu read "InputConfig" twice.
 struct OpenMainWindowCommand: View {
+    /// The item's title, for the lookup in `MenuBarController`.
+    static var title: String { String(localized: "Show Main Window") }
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Button("InputConfig") {
+        Button(Self.title) {
             openWindow(id: "main")
             NSApp.activate()
         }
@@ -1402,7 +1617,21 @@ struct OpenEditor {
 @main
 struct InputConfig: App {
     @StateObject private var appState = AppState()
+
+    /// Posts a Presets menu action to the main window's sidebar.
+    static func sidebar(_ command: SidebarCommand) {
+        MenuBarController.shared.postToMainWindow(.inputConfigSidebarCommand, object: command)
+    }
     @NSApplicationDelegateAdaptor(QuitCoordinator.self) private var quitCoordinator
+
+    init() {
+        // Before SwiftUI builds the scene graph. From AppState's init, which
+        // runs while the graph is being built, the alert's modal run loop
+        // let SwiftUI render in the middle of that update, and a second copy
+        // crashed (AttributeGraph precondition failure) instead of saying a
+        // copy is already running.
+        AppState.enforceSingleInstance()
+    }
 
     var body: some Scene {
         // One main window. As a WindowGroup, File > New Window (Cmd-N) made
@@ -1416,8 +1645,12 @@ struct InputConfig: App {
                 .environmentObject(appState.mappingEngine)
                 .environmentObject(appState.eightBitDoDetector)
                 // The narrowest the window goes: the home screen's four
-                // showcase columns still read cleanly at this width.
-                .frame(minWidth: 1080, minHeight: 700)
+                // showcase columns still read cleanly at this width. The
+                // height fits a 13-inch display with the Dock shown (about
+                // 705 pt left, less the title bar); at 700 the sidebar's
+                // bottom row sat under the Dock. The home page and the
+                // detail pane scroll.
+                .frame(minWidth: 1080, minHeight: 600)
                 .windowBackdrop()
                 .reduceMotionFriendly()
                 .appAccessibility()
@@ -1468,6 +1701,9 @@ struct InputConfig: App {
                 Button("Duplicate Active Preset") {
                     if let active = appState.presetStore.presets.first(where: { $0.isActive }) {
                         _ = appState.presetStore.duplicatePreset(active)
+                    } else {
+                        NSSound.beep()
+                        AccessibilityNotification.Announcement(String(localized: "No preset is running")).post()
                     }
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
@@ -1486,22 +1722,55 @@ struct InputConfig: App {
                 OpenMainWindowCommand()
             }
 
-            // MARK: View menu - sidebar + statistics + welcome
+            // MARK: View menu - statistics. The sidebar item is the
+            // system's: NavigationSplitView puts Hide Sidebar / Show Sidebar
+            // (Control-Command-S) here itself, and a second one of the app's
+            // own showed the same shortcut twice.
             CommandGroup(before: .sidebar) {
-                Button("Toggle Sidebar") {
-                    NSApp.keyWindow?.firstResponder?.tryToPerform(
-                        #selector(NSSplitViewController.toggleSidebar(_:)), with: nil
-                    )
-                }
-                .keyboardShortcut("s", modifiers: [.command, .control])
-
                 Button("Show Statistics") {
-                    NotificationCenter.default.post(name: .inputConfigShowStats, object: nil)
+                    MenuBarController.shared.postToMainWindow(.inputConfigShowStats)
                 }
                 .keyboardShortcut("0", modifiers: .command)
             }
 
             // MARK: Controller menu - new top-level menu for controller stuff
+            // Everything the sidebar's menus do, for the keyboard and voice.
+            CommandMenu("Presets") {
+                Button("Duplicate Selected Preset") { Self.sidebar(.duplicate) }
+                Button("Export Selected Preset\u{2026}") { Self.sidebar(.export) }
+                Button("Add or Remove Favorite") { Self.sidebar(.favorite) }
+                Button("Move Selected Preset Up") { Self.sidebar(.moveUp) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                Button("Move Selected Preset Down") { Self.sidebar(.moveDown) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                Button("Move Selected Preset to Folder\u{2026}") { Self.sidebar(.moveToFolder) }
+                // Delete sits apart, as in the sidebar's own context menus.
+                Divider()
+                Button("Delete Selected Preset\u{2026}") { Self.sidebar(.delete) }
+                Divider()
+                // A folder to act on, without a pointer: every folder in turn.
+                Button("Select Next Folder") { Self.sidebar(.nextFolder) }
+                Button("Select Previous Folder") { Self.sidebar(.previousFolder) }
+                Button("Expand or Collapse Folder") { Self.sidebar(.toggleFolder) }
+                Button("Rename Folder\u{2026}") { Self.sidebar(.renameFolder) }
+                Button("Folder Color\u{2026}") { Self.sidebar(.folderColor) }
+                Button("New Subfolder\u{2026}") { Self.sidebar(.newSubfolder) }
+                Button("Move Folder Up") { Self.sidebar(.folderUp) }
+                Button("Move Folder Down") { Self.sidebar(.folderDown) }
+                Button("Move Folder Into\u{2026}") { Self.sidebar(.moveFolderInto) }
+                Divider()
+                Button("Delete Folder\u{2026}") { Self.sidebar(.deleteFolder) }
+                Divider()
+                Button("Expand All Folders") { Self.sidebar(.expandAll) }
+                Button("Collapse All Folders") { Self.sidebar(.collapseAll) }
+                Divider()
+                Button("Show Trash") { Self.sidebar(.showTrash) }
+                Button("Put Back Last Deleted") { Self.sidebar(.restoreLastDeleted) }
+                Button("Put Back from Trash\u{2026}") { Self.sidebar(.trashItems) }
+                Divider()
+                Button("Empty Trash\u{2026}") { Self.sidebar(.emptyTrash) }
+            }
+
             CommandMenu("Controller") {
                 Button("Refresh Connected Controllers") {
                     appState.controllerService.refreshControllers()
@@ -1511,7 +1780,7 @@ struct InputConfig: App {
                 Divider()
 
                 Button("Activate / Deactivate Selected Preset") {
-                    NotificationCenter.default.post(name: .inputConfigToggleActivePreset, object: nil)
+                    MenuBarController.shared.postToMainWindow(.inputConfigToggleActivePreset)
                 }
                 .keyboardShortcut("p", modifiers: [.command, .option])
 
@@ -1523,12 +1792,12 @@ struct InputConfig: App {
 
                 Divider()
 
-                Button("Calibrate Touchpad…") {
-                    NotificationCenter.default.post(name: .inputConfigOpenTouchpadCalibration, object: nil)
+                Button("Touchpad Regions…") {
+                    MenuBarController.shared.postToMainWindow(.inputConfigOpenTouchpadCalibration)
                 }
 
                 Button("Calibrate Motion / Gyro…") {
-                    NotificationCenter.default.post(name: .inputConfigOpenMotionCalibration, object: nil)
+                    MenuBarController.shared.postToMainWindow(.inputConfigOpenMotionCalibration)
                 }
             }
 
@@ -1540,7 +1809,7 @@ struct InputConfig: App {
                 .keyboardShortcut("?", modifiers: .command)
 
                 Button("Quick Start Tour") {
-                    NotificationCenter.default.post(name: .inputConfigStartTutorial, object: nil)
+                    MenuBarController.shared.postToMainWindow(.inputConfigStartTutorial)
                 }
 
                 Divider()
@@ -1655,6 +1924,7 @@ final class FrontmostAppWatcher {
     private static let systemOverlays: Set<String> = [
         "com.apple.loginwindow", "com.apple.ScreenSaver.Engine",
         "com.apple.SecurityAgent", "com.apple.UserNotificationCenter",
+        "com.apple.accessibility.universalAccessAuthWarn",
     ]
 
     private func handleFrontmost(bundleID: String?) {
@@ -1698,6 +1968,7 @@ final class FrontmostAppWatcher {
             // keeps the original restore point.
             // After a stand-down, a preset started by hand meanwhile is the
             // one to come back to, not the one that stood down.
+            let restorePoint = autoSwitchedFromPresetID
             if lastAutoActivatedPresetID == nil
                 || (store.activePresetId != lastAutoActivatedPresetID && lastAutoActivatedPresetID != Self.standDownID)
                 || (lastAutoActivatedPresetID == Self.standDownID && store.activePresetId != nil) {
@@ -1706,6 +1977,12 @@ final class FrontmostAppWatcher {
             activatingFromWatcher = true
             MenuBarController.activate(match, store: store, engine: engine, background: true)
             activatingFromWatcher = false
+            // Refused (an import not yet confirmed, no rows): no switch
+            // happened, so none is recorded or unwound on leaving the app.
+            guard store.activePresetId == match.id else {
+                autoSwitchedFromPresetID = restorePoint
+                return
+            }
             lastAutoActivatedPresetID = match.id
             ActivityLog.shared.info("Presets", "Auto-switched to \"\(match.name)\" because one of its apps came to the front")
         } else if let lastAuto = lastAutoActivatedPresetID {

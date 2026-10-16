@@ -28,6 +28,11 @@ struct ControllerCanvas: View {
     /// whether one is pressed now.
     var zones: [TouchpadRegion] = []
     var zoneOn: (UUID) -> Bool = { _ in false }
+    /// The preset's zones on a stick (0 left, 1 right) and bands on an
+    /// axis's travel (by the axis), drawn inside the stick and the trigger
+    /// the way touchpad zones are drawn on the touchpad.
+    var stickZones: (Int) -> [TouchpadRegion] = { _ in [] }
+    var axisBands: (Int) -> [TouchpadRegion] = { _ in [] }
     /// A control's spoken and inspector name; nil uses its legend.
     var name: ((PlacedControl) -> String)? = nil
     /// Stops the live finger clock (the app is in the background).
@@ -48,11 +53,22 @@ struct ControllerCanvas: View {
     let inspect: (PlacedControl, AnyView) -> AnyView
 
     @Environment(\.colorScheme) private var colorScheme
+    /// Pressed is green; with Differentiate Without Color it is also a
+    /// thicker outline, so it does not rest on the color alone.
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.appHighContrast) private var appHighContrast
+    /// A press shown by more than hue: Differentiate Without Color, or more
+    /// contrast asked for in macOS or the app.
+    private var pressedOutline: Bool { differentiateWithoutColor || colorSchemeContrast == .increased || appHighContrast }
+    /// More contrast asked for: legends in the label color, the brand tint
+    /// kept on the fill and outline (a yellow Y read at about 1:1).
+    private var moreContrast: Bool { colorSchemeContrast == .increased || appHighContrast }
     @Environment(\.visualizerSuspended) private var suspended
 
     /// What VoiceOver calls a control.
     private func spoken(_ c: PlacedControl, _ fallback: String) -> String {
-        name?(c) ?? c.name ?? legend(c).text ?? fallback
+        ButtonNames.spokenGlyphs(name?(c) ?? c.name.map(LayoutText.t) ?? legend(c).text ?? fallback)
     }
 
     private var hasTop: Bool { layout.hasTop(variant: variant) }
@@ -205,7 +221,10 @@ struct ControllerCanvas: View {
         return Metrics(keyed: keyed, kf: kf, bands: bands, tops: laid.tops, total: total)
     }
 
-    var body: some View {
+    // A drawing of real hardware: never mirrored for right-to-left languages.
+    var body: some View { drawing.environment(\.layoutDirection, .leftToRight) }
+
+    @ViewBuilder private var drawing: some View {
         // Worked out once per drawing pass.
         let m = metrics
         let keyed = m.keyed, kf = m.kf, bands = m.bands
@@ -230,7 +249,7 @@ struct ControllerCanvas: View {
                             // What it does here, and its deadzone, for
                             // VoiceOver (the key entry is hidden from
                             // accessibility).
-                            .accessibilityHint([caption(control), deadzone(control)?.help]
+                            .accessibilityHint([caption(control).map(HotKeySpec.spokenMarks), deadzone(control)?.help]
                                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ". "))
                             .frame(width: frame.width, height: frame.height)
                             .position(x: frame.midX, y: frame.midY)
@@ -238,26 +257,33 @@ struct ControllerCanvas: View {
                 }
                 ForEach(entries) { e in keyLabel(e, width: w, key: kf) }
                 if let between, let mid = midpoint(between.first, between.second, bands: bands, tops: laid.tops, width: w) {
-                    between.view.position(x: mid.x, y: mid.y)
+                    // Inside the gap between the two, at the captions' size,
+                    // so it never runs over either control.
+                    between.view
+                        .environment(\.canvasCaptionSize, CaptionLayout.fontSize(forWidth: w))
+                        .frame(maxWidth: max(40, mid.gap - 12))
+                        .position(x: mid.x, y: mid.y)
                 }
             }
         }
         .aspectRatio(1 / max(0.1, total), contentMode: .fit)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(layout.displayName)
+        .accessibilityLabel(layout.shownName)
     }
 
-    /// The point midway between two drawn controls' centers.
-    private func midpoint(_ a: String, _ b: String, bands: [Band], tops: [CGFloat], width w: CGFloat) -> CGPoint? {
-        var found: [CGPoint] = []
+    /// The point midway between two drawn controls' centers, and the room
+    /// left between their facing edges.
+    private func midpoint(_ a: String, _ b: String, bands: [Band], tops: [CGFloat], width w: CGFloat) -> (x: CGFloat, y: CGFloat, gap: CGFloat)? {
+        var found: [CGRect] = []
         for (n, band) in bands.enumerated() {
             for c in band.controls where c.id == a || c.id == b {
-                let f = controlFrame(c, band: band, top: tops[n], width: w)
-                found.append(CGPoint(x: f.midX, y: f.midY))
+                found.append(controlFrame(c, band: band, top: tops[n], width: w))
             }
         }
         guard found.count == 2 else { return nil }
-        return CGPoint(x: (found[0].x + found[1].x) / 2, y: (found[0].y + found[1].y) / 2)
+        let left = found[0].midX <= found[1].midX ? found[0] : found[1]
+        let right = left == found[0] ? found[1] : found[0]
+        return ((left.midX + right.midX) / 2, (left.midY + right.midY) / 2, max(0, right.minX - left.maxX))
     }
 
     private func controlFrame(_ c: PlacedControl, band b: Band, top: CGFloat, width w: CGFloat) -> CGRect {
@@ -354,24 +380,24 @@ struct ControllerCanvas: View {
         switch symbol {
         case "plus": return "+"
         case "minus": return "\u{2212}"
-        case "house": return "Home"
-        case "camera", "camera.viewfinder", "viewfinder": return "Capture"
-        case "rectangle.on.rectangle": return "View"
-        case "star", "star.fill": return "Star"
+        case "house": return String(localized: "Home")
+        case "camera", "camera.viewfinder", "viewfinder": return String(localized: "Capture")
+        case "rectangle.on.rectangle": return String(localized: "View")
+        case "star", "star.fill": return String(localized: "Star")
         case "logo.xbox": return "Xbox"
         case "playstation.logo": return "PS"
-        case "mic.slash": return "Mute"
+        case "mic.slash": return String(localized: "Mute")
         default:
             // The name printed on this model's button, not the preset's.
             // The model's own name, else the family's short one ("Create",
             // not "Create / Share"), else the first of a combined name.
-            var n = c.name ?? c.inputs.buttons.first.map { b in
-                layout.modelNames.renamed[b] ?? ButtonNames.short(b, family: layout.family, model: layout.modelNames)
+            var n = c.name.map(LayoutText.t) ?? c.inputs.buttons.first.map { b in
+                layout.modelNames.renamed[b].map(LayoutText.t) ?? ButtonNames.short(b, family: layout.family, model: layout.modelNames)
                     ?? ButtonNames.label(b, family: layout.family, model: layout.modelNames, choice: .automatic)
-            } ?? name?(c) ?? "Menu"
-            if n.hasPrefix("Button ") { n = name?(c) ?? n }
+            } ?? name?(c) ?? String(localized: "Menu")
+            if let b = c.inputs.buttons.first, n == ButtonNames.fallbackLabel(b) { n = name?(c) ?? n }
             if let slash = n.range(of: " / ") { n = String(n[..<slash.lowerBound]) }
-            if let paren = n.range(of: " (") { n = String(n[..<paren.lowerBound]) }
+            if let paren = n.range(of: " (") ?? n.range(of: "（") ?? n.range(of: "(") { n = String(n[..<paren.lowerBound]) }
             if n.hasSuffix(" button") { n = String(n.dropLast(7)) }
             return n
         }
@@ -969,7 +995,8 @@ struct ControllerCanvas: View {
         guard !legendFits(c, size: size) else { return action }
         let name = wordFor(c) ?? legend(c).text ?? spoken(c, "")
         guard !name.isEmpty else { return action }
-        return action.map { "\(name): \($0)" } ?? name
+        // Through the catalog, so each language orders and punctuates it.
+        return action.map { String(localized: "\(name): \($0)") } ?? name
     }
 
     /// Whether the control is in use now, so its key line lights.
@@ -977,6 +1004,9 @@ struct ControllerCanvas: View {
         if isOn(c) { return true }
         if c.inputs.axes.contains(where: { abs(state.axes[$0.index] ?? 0) > 0.3 }) { return true }
         if let spec = layout.surface(forControl: c.id), let t = spec.touchIndex, (state.buttons[t] ?? 0) > 0.5 { return true }
+        // A whole D-pad on a hat (every pad's, and a lever in DP mode): any
+        // direction held. One direction of it goes through hatOn above.
+        if let h = c.inputs.hat, c.inputs.hatDirection == nil, let v = state.hats[h], v.x != 0 || v.y != 0 { return true }
         return false
     }
 
@@ -1044,6 +1074,9 @@ struct ControllerCanvas: View {
             .position(x: e.left ? (k - 4) / 2 : w - (k - 4) / 2, y: e.y)
             .help(e.text)
             .accessibilityHidden(true)
+            // Measured at the drawing's own size; the app's Text Size would
+            // overflow the key column (the text is in the help and inspector).
+            .environment(\.appTextScale, 1)
     }
 
     private func controlFrame(_ c: PlacedControl, in rect: CGRect, width w: CGFloat) -> CGRect {
@@ -1062,12 +1095,12 @@ struct ControllerCanvas: View {
     private func controlView(_ c: PlacedControl, size: CGSize) -> some View {
         let content: AnyView
         if case .notReported(let why) = c.readable {
-            content = AnyView(notReported(c, size: size).help(why))
+            content = AnyView(notReported(c, size: size).help(LayoutText.t(why)))
             return content
         }
         // Read only in some setups: drawn a little dimmer, the reason on hover.
         if case .conditional(let why) = c.readable {
-            return AnyView(controlBody(c, size: size).opacity(0.75).help(why))
+            return AnyView(controlBody(c, size: size).opacity(0.75).help(LayoutText.t(why)))
         }
         return controlBody(c, size: size)
     }
@@ -1101,9 +1134,13 @@ struct ControllerCanvas: View {
         default:
             content = AnyView(button(c, size: size))
         }
+        // The words and symbols on a control are measured at the drawing's
+        // own size, like the key labels; the app's Text Size spilled them
+        // over the capsules. The inspector, outside it, still follows it.
+        let drawn = AnyView(content.environment(\.appTextScale, 1))
         // Which rows set the deadzone drawn on it, and to what, on hover.
-        if let dz = deadzone(c) { return inspect(c, AnyView(content.help(dz.help))) }
-        return inspect(c, content)
+        if let dz = deadzone(c) { return inspect(c, AnyView(drawn.help(dz.help))) }
+        return inspect(c, drawn)
     }
 
     private func isOn(_ c: PlacedControl) -> Bool {
@@ -1211,17 +1248,17 @@ struct ControllerCanvas: View {
         let on = isOn(c)
         return ZStack {
             Capsule().fill(on ? Color.green.opacity(0.25) : Color.secondary.opacity(0.15))
-            Capsule().stroke(on ? Color.green : Color.secondary.opacity(0.35), lineWidth: 1)
+            Capsule().stroke(on ? Color.green : Color.secondary.opacity(0.35), lineWidth: on && pressedOutline ? 2.5 : 1)
             Text(word)
                 .font(.system(size: max(7, size.height - 7), weight: .semibold))
-                .foregroundStyle(on ? .green : .secondary)
+                .foregroundStyle(moreContrast ? AnyShapeStyle(.primary) : AnyShapeStyle(on ? Color.green : Color.secondary))
                 .lineLimit(1)
                 .fixedSize()
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken(c, word))
-        .accessibilityValue(on ? "pressed" : "released")
+        .accessibilityValue(on ? String(localized: "pressed") : String(localized: "released"))
     }
 
     private func glyphButton(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1236,18 +1273,18 @@ struct ControllerCanvas: View {
         let fontSize = max(7, min(14, legendRaw(c, size)))
         return ZStack {
             shape.fill(on ? (tint ?? .green).opacity(tint == nil ? 0.25 : 0.4) : Color.secondary.opacity(0.18))
-            shape.stroke(on ? (tint ?? .green) : Color.secondary.opacity(0.35), lineWidth: 1.5)
+            shape.stroke(on ? (tint ?? .green) : Color.secondary.opacity(0.35), lineWidth: on && pressedOutline ? 3.5 : 1.5)
             // Too small to read: the name is in the key instead.
             if !legendFits(c, size: size) {
                 EmptyView()
             } else if let symbol = shownLegend(c).symbol {
                 Image(systemName: symbol)
                     .font(.system(size: fontSize, weight: .bold))
-                    .foregroundStyle(tint.map { on ? $0 : $0.opacity(0.85) } ?? (on ? .green : .secondary))
+                    .foregroundStyle(moreContrast ? Color.primary : (tint.map { on ? $0 : $0.opacity(0.85) } ?? (on ? .green : .secondary)))
             } else if let text = shownLegend(c).text {
                 Text(text)
                     .font(.system(size: fontSize, weight: .semibold, design: .rounded))
-                    .foregroundStyle(tint.map { on ? $0 : $0.opacity(0.85) } ?? (on ? .green : .secondary))
+                    .foregroundStyle(moreContrast ? Color.primary : (tint.map { on ? $0 : $0.opacity(0.85) } ?? (on ? .green : .secondary)))
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .padding(.horizontal, 2)
@@ -1255,8 +1292,8 @@ struct ControllerCanvas: View {
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "Button"))
-        .accessibilityValue(on ? "pressed" : "released")
+        .accessibilityLabel(spoken(c, String(localized: "Button")))
+        .accessibilityValue(on ? String(localized: "pressed") : String(localized: "released"))
     }
 
     private func stick(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1279,7 +1316,7 @@ struct ControllerCanvas: View {
         return ZStack {
             Circle().fill(on ? Color.green.opacity(0.25) : Color.secondary.opacity(0.18))
             Circle().stroke(touch ? Color.accentColor : (on ? Color.green : Color.secondary.opacity(0.4)),
-                            lineWidth: touch ? 2 : 1.5)
+                            lineWidth: on && pressedOutline ? 3.5 : (touch ? 2 : 1.5))
             Path { p in
                 p.move(to: CGPoint(x: d / 2, y: 0)); p.addLine(to: CGPoint(x: d / 2, y: d))
                 p.move(to: CGPoint(x: 0, y: d / 2)); p.addLine(to: CGPoint(x: d, y: d / 2))
@@ -1288,6 +1325,12 @@ struct ControllerCanvas: View {
             // The rows' deadzones, on the dot's own scale: the dot's middle
             // inside the red ring is inside the deadzone.
             let travel = CGRect(x: d / 2 - d * 0.36, y: d / 2 - d * 0.36, width: d * 0.72, height: d * 0.72)
+            // The stick's zones on the dot's travel, the one it is in filled.
+            if let zoneStick = Self.zoneStick(c) {
+                stickZoneShapes(stickZones(zoneStick), travel: travel, point: zonePoint(zoneStick))
+                    .frame(width: d, height: d)
+                    .clipShape(Circle())
+            }
             if let dz = deadzone(c) { deadzoneRings(dz, travel: travel, lines: false).frame(width: d, height: d) }
             Circle()
                 .fill(Color.accentColor)
@@ -1299,8 +1342,56 @@ struct ControllerCanvas: View {
         }
         .frame(width: d, height: d)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "Stick"))
-        .accessibilityValue(SpokenLive.stick(x: xAxis, y: yAxis) + (on ? ", pressed" : "") + (touch ? ", touched" : ""))
+        .accessibilityLabel(spoken(c, String(localized: "Stick")))
+        .accessibilityValue(SpokenLive.stick(x: xAxis, y: yAxis) + (on ? String(localized: ", pressed") : "") + (touch ? String(localized: ", touched") : "")
+                            + spokenRegions(Self.zoneStick(c).map { key in
+                                let p = zonePoint(key)
+                                return stickZones(key).filter { $0.contains(normalizedX: p.x, y: p.y) }
+                            } ?? []))
+    }
+
+    /// Which stick's zones a stick control shows: the left (axes 0 and 1)
+    /// or the right (2 and 3); nil for any other pair.
+    static func zoneStick(_ c: PlacedControl) -> Int? {
+        guard c.kind == .stick || c.kind == .lever, c.shape != .crossPad,
+              let x = c.inputs.axes.first(where: { $0.role == .x })?.index else { return nil }
+        return x == 0 ? 0 : (x == 2 ? 1 : nil)
+    }
+
+    /// The axis whose bands an analog trigger shows.
+    static func bandAxis(_ c: PlacedControl) -> Int? {
+        guard case .trigger(.analog) = c.kind else { return nil }
+        return c.inputs.axes.first { $0.role == .analog }?.index
+    }
+
+    /// Where a stick's zones read it: that stick's own axes, not the
+    /// furthest pair a lever lists (an arcade lever in RS or DP mode).
+    private func zonePoint(_ key: Int) -> (x: Double, y: Double) {
+        let x = Double(state.axes[key * 2] ?? 0), y = Double(state.axes[key * 2 + 1] ?? 0)
+        return ((x + 1) / 2, (y + 1) / 2)
+    }
+
+    /// The regions a stick or trigger is in, said after its position: the
+    /// drawing shows them only by their fill.
+    private func spokenRegions(_ list: [TouchpadRegion]) -> String {
+        guard !list.isEmpty else { return "" }
+        return String(localized: ", in region \(LocalizedList.and(list.map(\.shownName)))",
+                      comment: "After a stick or trigger's position: the regions it is inside")
+    }
+
+    private func stickZoneShapes(_ list: [TouchpadRegion], travel: CGRect, point: (x: Double, y: Double)) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(list) { z in
+                let box = z.drawnBox
+                let on = z.contains(normalizedX: point.x, y: point.y)
+                ZoneSwatch(ring: z.ring, color: Self.zoneColor(z.colorIndex), fill: on ? 0.6 : 0.18,
+                           stroke: on ? 1 : 0.55, lineWidth: on ? 1.5 : 0.75)
+                    .frame(width: max(1, box.width * travel.width), height: max(1, box.height * travel.height))
+                    .position(x: travel.minX + box.midX * travel.width, y: travel.minY + box.midY * travel.height)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func trackpad(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1351,8 +1442,10 @@ struct ControllerCanvas: View {
             outline.stroke(pressed ? Color.green : Color.mint.opacity(active ? 0.9 : 0.5), lineWidth: pressed ? 2 : 1)
                 .shadow(color: pressed ? Color.green.opacity(0.7) : .clear, radius: pressed ? 10 : 0)
             // The zones, the one under a finger filled.
-            if spec?.surface == 0, !zones.isEmpty {
-                ForEach(zones) { z in
+            // Each pad's own regions: a Steam Controller's left trackpad
+            // (surface 1) has its own, the main surface the rest.
+            if let surf = spec?.surface, surf <= 1, !zones.isEmpty {
+                ForEach(zones.filter { ($0.surface == 1) == (surf == 1) }) { z in
                     let r = CGRect(x: z.minX * size.width, y: z.minY * size.height,
                                    width: max(0, z.maxX - z.minX) * size.width, height: max(0, z.maxY - z.minY) * size.height)
                     let on = zoneOn(z.id)
@@ -1383,9 +1476,9 @@ struct ControllerCanvas: View {
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, spec?.name ?? "Trackpad"))
-        .accessibilityValue(pressed ? "pressed"
-            : (active || (live && spec.map { !touchPoints($0.surface).isEmpty } == true) ? "touched" : "not touched"))
+        .accessibilityLabel(spoken(c, spec?.name ?? String(localized: "Trackpad")))
+        .accessibilityValue(pressed ? String(localized: "pressed")
+            : (active || (live && spec.map { !touchPoints($0.surface).isEmpty } == true) ? String(localized: "touched") : String(localized: "not touched")))
     }
 
     private func fingerDots(_ points: [CGPoint], size: CGSize) -> some View {
@@ -1401,9 +1494,15 @@ struct ControllerCanvas: View {
 
     private func dpad(_ c: PlacedControl, size: CGSize) -> some View {
         // A D-pad on axes (a pad read from its descriptor, a cross pad in
-        // a stick's place) counts past the middle of each half.
-        let ax = c.inputs.axes.first { $0.role == .x }.map { state.axes[$0.index] ?? 0 } ?? 0
-        let ay = c.inputs.axes.first { $0.role == .y }.map { state.axes[$0.index] ?? 0 } ?? 0
+        // a stick's place) counts past the middle of each half. Every pair
+        // it lists, the one furthest from center, as stick() does: the
+        // 8BitDo Micro's D-pad moves to the right stick's axes in that mode.
+        let xs = c.inputs.axes.filter { $0.role == .x }, ys = c.inputs.axes.filter { $0.role == .y }
+        var ax: Float = 0, ay: Float = 0
+        for (rx, ry) in zip(xs, ys) {
+            let x = state.axes[rx.index] ?? 0, y = state.axes[ry.index] ?? 0
+            if x * x + y * y > ax * ax + ay * ay { ax = x; ay = y }
+        }
         // The hat, unless it is centered and the axes say otherwise (a
         // D-pad switched to send a stick).
         let hatNow = c.inputs.hat.flatMap { state.hats[$0] }
@@ -1423,6 +1522,8 @@ struct ControllerCanvas: View {
         func armView(_ on: Bool, _ dx: CGFloat, _ dy: CGFloat, _ symbol: String) -> some View {
             RoundedRectangle(cornerRadius: arm * 0.2)
                 .fill(on ? Color.green.opacity(0.18) : Color.secondary.opacity(0.10))
+                .overlay(RoundedRectangle(cornerRadius: arm * 0.2)
+                    .stroke(Color.green, lineWidth: on && pressedOutline ? 2.5 : 0))
                 .overlay(Image(systemName: symbol).font(.system(size: max(6, arm * 0.6)))
                     .foregroundStyle(on ? Color.green : Color.secondary.opacity(0.55)))
                 .frame(width: arm, height: arm)
@@ -1437,10 +1538,11 @@ struct ControllerCanvas: View {
         }
         .frame(width: d, height: d)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "D-pad"))
+        .accessibilityLabel(spoken(c, String(localized: "D-pad")))
         .accessibilityValue({
-            let dirs = [up ? "up" : nil, down ? "down" : nil, left ? "left" : nil, right ? "right" : nil].compactMap { $0 }
-            return (dirs.isEmpty ? "centered" : dirs.joined(separator: " ")) + (pressed ? ", pressed" : "")
+            let dirs = [up ? String(localized: "up") : nil, down ? String(localized: "down") : nil,
+                        left ? String(localized: "left") : nil, right ? String(localized: "right") : nil].compactMap { $0 }
+            return (dirs.isEmpty ? String(localized: "centered") : dirs.joined(separator: " ")) + (pressed ? String(localized: ", pressed") : "")
         }())
     }
 
@@ -1491,6 +1593,21 @@ struct ControllerCanvas: View {
                 Rectangle().fill(Color.orange.opacity(0.7)).frame(height: 1)
                     .offset(y: -size.height * mark)
             }
+            // The trigger's bands along its travel, the one it is in filled.
+            if let bandAxis = Self.bandAxis(c) {
+                ForEach(axisBands(bandAxis)) { z in
+                    let on = z.containsTravel(Double(value))
+                    let tint = Self.zoneColor(z.colorIndex)
+                    let low = CGFloat(min(1, max(0, z.minY))), high = CGFloat(min(1, max(0, z.maxY)))
+                    shape.fill(tint.opacity(on ? 0.55 : 0.18))
+                        .mask(alignment: .bottom) {
+                            Rectangle().frame(height: size.height * max(0, high - low))
+                                .offset(y: -size.height * low)
+                        }
+                    Rectangle().fill(tint.opacity(on ? 1 : 0.7)).frame(height: on ? 1.5 : 1)
+                        .offset(y: -size.height * low)
+                }
+            }
             shape.stroke(on ? tint : Color.secondary.opacity(0.35), lineWidth: 1)
             Group {
                 if stacked {
@@ -1512,8 +1629,9 @@ struct ControllerCanvas: View {
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "Trigger"))
-        .accessibilityValue(SpokenLive.trigger(Float(value)))
+        .accessibilityLabel(spoken(c, String(localized: "Trigger")))
+        .accessibilityValue(SpokenLive.trigger(Float(value))
+                            + spokenRegions(Self.bandAxis(c).map { axisBands($0).filter { $0.containsTravel(Double(value)) } } ?? []))
     }
 
     private func light(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1525,7 +1643,7 @@ struct ControllerCanvas: View {
             .fill((tint ?? .secondary).opacity(tint == nil ? (bar ? 0.5 : 0.25) : 0.9))
             .shadow(color: tint?.opacity(0.7) ?? .clear, radius: tint == nil ? 0 : 4)
             .frame(width: size.width, height: size.height)
-            .accessibilityLabel(spoken(c, "Light"))
+            .accessibilityLabel(spoken(c, String(localized: "Light")))
     }
 
     /// A steering wheel: its rim, with a mark at the top that turns as far
@@ -1542,10 +1660,10 @@ struct ControllerCanvas: View {
         let reading: String = {
             if let range {
                 let a = Int((Double(v) * range / 2).rounded())
-                return a == 0 ? "0°" : (a < 0 ? "\(-a)° left" : "\(a)° right")
+                return a == 0 ? "0°" : (a < 0 ? String(localized: "\(-a)° left") : String(localized: "\(a)° right"))
             }
             let pct = Int((abs(v) * 100).rounded())
-            return pct == 0 ? "Centered" : "\(pct)% \(v < 0 ? "left" : "right")"
+            return pct == 0 ? String(localized: "Centered") : (v < 0 ? String(localized: "\(pct)% left") : String(localized: "\(pct)% right"))
         }()
         let rim = max(2, d * 0.06)
         // Degrees each way from the top at full lock, as the mark turns.
@@ -1582,7 +1700,7 @@ struct ControllerCanvas: View {
         }
         .frame(width: d, height: d)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "Wheel"))
+        .accessibilityLabel(spoken(c, String(localized: "Wheel")))
         .accessibilityValue(reading)
     }
 
@@ -1665,8 +1783,8 @@ struct ControllerCanvas: View {
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(c, "Slider"))
-        .accessibilityValue("\(Int(level * 100)) percent")
+        .accessibilityLabel(spoken(c, String(localized: "Slider")))
+        .accessibilityValue(String(localized: "\(Int(level * 100)) percent"))
     }
 
     private func port(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1695,7 +1813,7 @@ struct ControllerCanvas: View {
         }
         .opacity(0.6)
         .frame(width: size.width, height: size.height)
-        .accessibilityLabel("\(spoken(c, "Control")), not reported to the Mac")
+        .accessibilityLabel("\(spoken(c, String(localized: "Control"))), not reported to the Mac")
     }
 }
 
@@ -1792,6 +1910,18 @@ extension ControlInputs {
 /// it; a long one is shortened to fit; one that fits nowhere is left off the
 /// drawing (the control's popover and VoiceOver still say it).
 /// Text sizes for the key, measured once.
+/// The drawing's caption size, for a view placed in it to match its labels.
+private struct CanvasCaptionSizeKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var canvasCaptionSize: CGFloat? {
+        get { self[CanvasCaptionSizeKey.self] }
+        set { self[CanvasCaptionSizeKey.self] = newValue }
+    }
+}
+
 enum CaptionLayout {
     static func fontSize(forWidth w: CGFloat) -> CGFloat { max(8.5, min(10.5, w * 0.017)) }
 

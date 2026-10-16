@@ -61,7 +61,8 @@ struct ImportReviewSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Review imports")
                     .font(.title3.weight(.semibold))
-                Text("\(importableCount) ready · \(brokenCount) broken")
+                    .accessibilityAddTraits(.isHeader)
+                Text("\(importableCount) ready, \(brokenCount) broken")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -103,12 +104,13 @@ struct ImportReviewSheet: View {
                     .controlSize(.mini)
                     .labelsHidden()
                     .accessibilityLabel("Skip \(row.filename)")
+                    .accessibilityInputLabels([Text("Skip"), Text("Skip \(row.filename)")])
                     .help("Skip this file in the import batch")
                 }
             }
 
             if isBroken {
-                Text(row.errorMessage ?? "Unknown error")
+                Text(row.errorMessage ?? String(localized: "Unknown error"))
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.vertical, 4)
@@ -124,13 +126,16 @@ struct ImportReviewSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     TextField("Preset name", text: Binding(
-                        get: { rows[idx].nameDraft },
-                        set: { rows[idx].nameDraft = $0 }
+                        // A built-in's name in the app's language; stored
+                        // English when left as shown.
+                        get: { ShippedText.shown(rows[idx].nameDraft) },
+                        set: { if $0 != ShippedText.shown(rows[idx].nameDraft) { rows[idx].nameDraft = ShippedText.stored($0) } }
                     ))
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.small)
                     .disabled(isSkipped)
                     .accessibilityLabel("Name for \(row.filename)")
+                    .accessibilityInputLabels([Text("Name"), Text("Name for \(row.filename)")])
                 }
                 if let warning = row.warning {
                     Text(warning)
@@ -164,12 +169,18 @@ struct ImportReviewSheet: View {
                                 }
                             }
                         }
+                        // Keys scroll it too: this is the security review.
+                        .focusable(automation.count > 6)
                         .frame(maxHeight: automation.count > 6 ? 180 : nil)
                         if row.hasOpeners {
                             Toggle("Remove the actions that open apps, websites, Shortcuts, Spotlight, or Launchpad, or type text", isOn: Binding(
                                 get: { rows[idx].removeOpeners },
                                 set: { rows[idx].removeOpeners = $0 }
                             ))
+                            // Named for its file: with several files, every
+                            // one of these read the same.
+                            .accessibilityLabel(String(localized: "Remove the opening and typing actions in \(row.filename)"))
+                            .voiceNames("Remove the actions")
                             .toggleStyle(.checkbox)
                             .controlSize(.small)
                             .disabled(isSkipped)
@@ -185,13 +196,15 @@ struct ImportReviewSheet: View {
                             get: { rows[idx].removePointerSettings },
                             set: { rows[idx].removePointerSettings = $0 }
                         ))
+                        .accessibilityLabel("Turn off the pointer settings in \(row.filename)")
+                        .voiceNames("Turn these off")
                         .toggleStyle(.checkbox)
                         .controlSize(.small)
                         .disabled(isSkipped)
                     }
                 }
                 if let tag = row.preset?.tag, !tag.isEmpty {
-                    Text(tag)
+                    Text(ShippedText.shown(tag))
                         .font(.caption2)
                         .foregroundStyle(.hint)
                         .lineLimit(2)
@@ -228,9 +241,8 @@ struct ImportReviewSheet: View {
     }
 
     private var footerStatusText: String {
-        if willImportCount == 0 { return "Nothing to import" }
-        let suffix = willImportCount == 1 ? "" : "s"
-        return "Will import \(willImportCount) preset\(suffix)"
+        if willImportCount == 0 { return String(localized: "Nothing to import") }
+        return willImportCount == 1 ? String(localized: "Will import 1 preset") : String(localized: "Will import \(willImportCount) presets")
     }
 
     private var footer: some View {
@@ -262,7 +274,7 @@ struct ImportReviewSheet: View {
         // Everything this sheet showed is done, skipped and broken rows too.
         let shown = Set(rows.map(\.id))
         presetStore.importReviewQueue.removeAll { shown.contains($0.id) }
-        AccessibilityNotification.Announcement("Imported \(toCommit.count) preset\(toCommit.count == 1 ? "" : "s")").post()
+        AccessibilityNotification.Announcement(toCommit.count == 1 ? String(localized: "Imported 1 preset") : String(localized: "Imported \(toCommit.count) presets")).post()
         dismiss()
         // After the sheet dismisses, ask the sidebar to scroll the
         // newly imported preset into view and flash it green. Uses

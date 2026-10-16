@@ -101,27 +101,45 @@ final class MIDIService: @unchecked Sendable {
 
     // MARK: - Sending
 
-    /// Send a Note On.
-    func sendNoteOn(note: Int, velocity: Int, channel: Int) {
+    /// Who holds each sounding note (channel * 128 + note), by the row
+    /// that pressed it, so two rows on one note keep it sounding until the
+    /// second lets go, as held keys do. Touched on `queue` only.
+    private var noteHolders: [Int: Set<String>] = [:]
+
+    /// Send a Note On. With an owner, a note another owner already holds
+    /// is not struck again.
+    func sendNoteOn(note: Int, velocity: Int, channel: Int, owner: String? = nil) {
         guard isSetup else { return }
         let bytes = Self.noteOnBytes(note: note, velocity: velocity, channel: channel)
         let safeNote = Int(bytes[1])
         let safeCh = Int(bytes[0] & 0x0F)
 
         queue.async { [self] in
+            if let owner {
+                let key = safeCh * 128 + safeNote
+                let held = !(noteHolders[key] ?? []).isEmpty
+                noteHolders[key, default: []].insert(owner)
+                if held { return }
+            }
             send(bytes: bytes)
             track(note: safeNote, channel: safeCh, on: true)
             usedChannels.insert(safeCh)
         }
     }
 
-    /// Send a Note Off.
-    func sendNoteOff(note: Int, channel: Int) {
+    /// Send a Note Off. With an owner, only once no other owner holds it.
+    func sendNoteOff(note: Int, channel: Int, owner: String? = nil) {
         guard isSetup else { return }
         let bytes = Self.noteOffBytes(note: note, channel: channel)
         let safeNote = Int(bytes[1])
         let safeCh = Int(bytes[0] & 0x0F)
         queue.async { [self] in
+            let key = safeCh * 128 + safeNote
+            if let owner {
+                noteHolders[key]?.remove(owner)
+                if !(noteHolders[key] ?? []).isEmpty { return }
+            }
+            noteHolders[key] = nil
             send(bytes: bytes)
             track(note: safeNote, channel: safeCh, on: false)
         }
@@ -133,9 +151,26 @@ final class MIDIService: @unchecked Sendable {
     /// Release every note we have tracked as active. Called by MappingEngine
     /// when the engine stops or a preset is deactivated, so we never leave
     /// stuck notes hanging in the DAW.
+    /// Let go of the notes these owners hold (a controller that left),
+    /// leaving notes another row still holds sounding.
+    func releaseNotes(ownerPrefix prefix: String) {
+        guard isSetup else { return }
+        queue.async { [self] in
+            for (key, holders) in noteHolders where holders.contains(where: { $0.hasPrefix(prefix) }) {
+                let left = holders.filter { !$0.hasPrefix(prefix) }
+                noteHolders[key] = left.isEmpty ? nil : left
+                guard left.isEmpty else { continue }
+                let bytes = Self.noteOffBytes(note: key % 128, channel: key / 128 + 1)
+                send(bytes: bytes)
+                track(note: key % 128, channel: key / 128, on: false)
+            }
+        }
+    }
+
     func releaseAllNotes() {
         guard isSetup else { return }
         queue.async { [self] in
+            noteHolders.removeAll()
             activeNotesLock.lock()
             let snapshot = activeNotes
             // Reset the per-channel sets in place (pre-populated with
@@ -289,6 +324,9 @@ final class MIDIService: @unchecked Sendable {
     // MARK: - Internal Sending
 
     private func send(bytes: [UInt8]) {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("midi " + bytes.map { String(format: "%02X", $0) }.joined(separator: " ")); return }
+        #endif
         guard isSetup else { return }
         var packetList = MIDIPacketList()
         let packet = MIDIPacketListInit(&packetList)
@@ -342,24 +380,24 @@ final class MIDIService: @unchecked Sendable {
     /// Common CC numbers with human-readable names. Used in the binding
     /// editor's CC picker so users can find familiar ones quickly.
     static let commonCCs: [(number: Int, name: String)] = [
-        (1, "Modulation Wheel"),
-        (2, "Breath Controller"),
-        (4, "Foot Controller"),
-        (5, "Portamento Time"),
-        (7, "Volume"),
-        (8, "Balance"),
-        (10, "Pan"),
-        (11, "Expression"),
-        (64, "Sustain Pedal"),
-        (65, "Portamento On/Off"),
-        (66, "Sostenuto Pedal"),
-        (67, "Soft Pedal"),
-        (71, "Resonance"),
-        (74, "Cutoff Frequency"),
-        (91, "Reverb Depth"),
-        (93, "Chorus Depth"),
-        (120, "All Sound Off"),
-        (123, "All Notes Off"),
+        (1, String(localized: "Modulation Wheel")),
+        (2, String(localized: "Breath Controller")),
+        (4, String(localized: "Foot Controller")),
+        (5, String(localized: "Portamento Time")),
+        (7, String(localized: "Volume")),
+        (8, String(localized: "Balance")),
+        (10, String(localized: "Pan")),
+        (11, String(localized: "Expression")),
+        (64, String(localized: "Sustain Pedal")),
+        (65, String(localized: "Portamento On/Off")),
+        (66, String(localized: "Sostenuto Pedal")),
+        (67, String(localized: "Soft Pedal")),
+        (71, String(localized: "Resonance")),
+        (74, String(localized: "Cutoff Frequency")),
+        (91, String(localized: "Reverb Depth")),
+        (93, String(localized: "Chorus Depth")),
+        (120, String(localized: "All Sound Off")),
+        (123, String(localized: "All Notes Off")),
     ]
 
     /// Pre-built lookup so picker rendering does not have to do a linear scan
@@ -437,6 +475,9 @@ final class MIDIInputService: @unchecked Sendable {
     private var arrivalCounter: UInt64 = 0
     /// deviceID -> channel -> last pitch bend, normalized -1...1.
     private var pitchBend: [String: [Int: Float]] = [:]
+    /// When each pitch bend stream last moved, so an Any channel or Any
+    /// device row reads the bend being played, not one left off center.
+    private var bendStamps: [String: [Int: UInt64]] = [:]
     /// deviceID -> channel -> last channel aftertouch (0-127).
     private var aftertouch: [String: [Int: Int]] = [:]
     /// deviceID -> channel -> note -> polyphonic key pressure (0-127).
@@ -466,6 +507,9 @@ final class MIDIInputService: @unchecked Sendable {
     /// the knob has traveled in each direction since the engine last
     /// consumed a step. Travel is in raw CC units (0-127).
     private var ccLastRaw: [String: Int] = [:]
+    /// When each CC stream last sent, for telling a press-only control that
+    /// repeats its value apart from a fader streaming its position.
+    private var ccLastAt: [String: TimeInterval] = [:]
     /// Each CC stream's value when Scan started, so a knob turned smoothly
     /// one step at a time is caught by its total travel.
     private var scanBaseline: [String: Int] = [:]
@@ -504,9 +548,10 @@ final class MIDIInputService: @unchecked Sendable {
     /// polls this to know whether anything changed since its last frame,
     /// so its render clock can pause while the MIDI gear sits idle.
     private var eventCounter: UInt64 = 0
-    /// deviceID -> channel -> last Program Change (sticky, for display -
-    /// unlike `programHits`, which the engine consumes).
-    private var lastProgram: [String: [Int: Int]] = [:]
+    /// deviceID -> the last Program Change and its channel (sticky, for
+    /// display - unlike `programHits`, which the engine consumes). One per
+    /// device, so the label shows the latest, not an arbitrary channel's.
+    private var lastProgram: [String: (channel: Int, program: Int)] = [:]
     /// deviceID -> note -> velocity of the CURRENT press (removed on
     /// release). Drives velocity-shaded keys in the visualizer.
     private var noteVel: [String: [Int: Int]] = [:]
@@ -634,6 +679,28 @@ final class MIDIInputService: @unchecked Sendable {
         if force {
             for (src, _) in connectedSources { MIDIPortDisconnectSource(port, src) }
             connectedSources.removeAll()
+            // Reconnect is for a source that went quiet while still listed
+            // (a network session dropped, a Bluetooth pad asleep): its held
+            // notes and pressure never got their release, so a row stayed
+            // held. Everything held is let go; live sources send again.
+            lock.lock()
+            notesDown.removeAll()
+            noteOnAt.removeAll()
+            polyPressure.removeAll()
+            aftertouch.removeAll()
+            pitchBend.removeAll()
+            bendStamps.removeAll()
+            // The knobs too: a sustain pedal down when the link dropped
+            // kept its row (a Switch on CC 64) held through the reconnect.
+            // A row reads nil until the live source sends again; the
+            // absolute-volume fader re-arms on its next movement.
+            ccValues.removeAll()
+            ccStamps.removeAll()
+            ccLastRaw.removeAll()
+            ccLastAt.removeAll()
+            ccNetTravel.removeAll()
+            consumerTravelMark.removeAll()
+            lock.unlock()
         }
 
         let ownSource = MIDIService.ownSourceEndpoint
@@ -697,6 +764,7 @@ final class MIDIInputService: @unchecked Sendable {
             ccStamps.removeValue(forKey: dead)
             notesDown.removeValue(forKey: dead)
             pitchBend.removeValue(forKey: dead)
+            bendStamps.removeValue(forKey: dead)
             aftertouch.removeValue(forKey: dead)
             programHits.removeValue(forKey: dead)
             polyPressure.removeValue(forKey: dead)
@@ -717,7 +785,7 @@ final class MIDIInputService: @unchecked Sendable {
            let name = cf?.takeRetainedValue() as String? {
             return name
         }
-        return "MIDI Device"
+        return String(localized: "MIDI Device")
     }
 
     // MARK: Message handling
@@ -815,9 +883,9 @@ final class MIDIInputService: @unchecked Sendable {
         transportHits[deviceID, default: []].insert(status)
         let label: String
         switch status {
-        case 0xFA: label = "Transport start"
-        case 0xFB: label = "Transport continue"
-        default:   label = "Transport stop"
+        case 0xFA: label = String(localized: "Transport start")
+        case 0xFB: label = String(localized: "Transport continue")
+        default:   label = String(localized: "Transport stop")
         }
         pushEvent(deviceID, label)
         let handler = scanHandler
@@ -829,6 +897,14 @@ final class MIDIInputService: @unchecked Sendable {
             DispatchQueue.main.async { handler(event) }
         }
     }
+
+    #if DEBUG
+    /// Tests only: one incoming message, as a device sends it (status is the
+    /// high nibble: 0x9 note on, 0x8 note off, 0xB CC, 0xE pitch bend...).
+    func debugInject(status: UInt8, channel: Int, data1: Int, data2: Int, deviceID: String = "test-device") {
+        applyMessage(status: status, channel: channel, data1: data1, data2: data2, deviceID: deviceID)
+    }
+    #endif
 
     private func applyMessage(status: UInt8, channel: Int,
                               data1: Int, data2: Int, deviceID: String) {
@@ -848,13 +924,37 @@ final class MIDIInputService: @unchecked Sendable {
             noteOnAt["\(deviceID)|\(channel)|\(data1)"] = onAt
             if noteOnAt.count > 256 { noteOnAt = noteOnAt.filter { onAt - $0.value < 1 } }
             noteVel[deviceID, default: [:]][data1] = data2
-            pushEvent(deviceID, "\(MIDIService.noteName(data1)) on · vel \(data2) · ch \(channel)")
+            pushEvent(deviceID, String(localized: "\(MIDIService.noteName(data1)) on, vel \(data2), ch \(channel)"))
             scanEvent = .midi(.note, number: data1, channel: channel, deviceID: deviceID)
         case 0x8, 0x9:              // note off (or note on, velocity 0)
             notesDown[deviceID, default: [:]][channel, default: []].remove(data1)
+            // An MPE controller bends each note on its own channel and does
+            // not re-center a channel when its note ends, so a lifted
+            // slide held an Any channel bend row on. With bends on more
+            // than one channel, a channel whose last note ends is centered.
+            // Its stamp goes too, so a bend still held on another channel
+            // is the one read. Only a channel that held notes and bent on
+            // its own: a split keyboard's wheel on two channels stays.
+            if notesDown[deviceID]?[channel]?.isEmpty == true, (pitchBend[deviceID]?.count ?? 0) > 1,
+               let bent = pitchBend[deviceID]?[channel], bent != 0,
+               let others = pitchBend[deviceID]?.filter({ $0.key != channel }).values,
+               !others.allSatisfy({ $0 == bent }) {
+                pitchBend[deviceID]?[channel] = 0
+                bendStamps[deviceID]?[channel] = 0
+            }
             noteVel[deviceID]?.removeValue(forKey: data1)
             polyPressure[deviceID]?[channel]?.removeValue(forKey: data1)
-            pushEvent(deviceID, "\(MIDIService.noteName(data1)) off · ch \(channel)")
+            pushEvent(deviceID, String(localized: "\(MIDIService.noteName(data1)) off, ch \(channel)"))
+        case 0xB where data1 == 120 || data1 == 123:   // All Sound Off, All Notes Off
+            // A panic button or a DAW stopping a clip ends its notes with
+            // the channel-mode message instead of a Note Off each; stored as
+            // a knob value it left every note row held. Not a knob for Scan.
+            for note in notesDown[deviceID]?[channel] ?? [] { noteVel[deviceID]?.removeValue(forKey: note) }
+            notesDown[deviceID]?[channel]?.removeAll()
+            polyPressure[deviceID]?[channel]?.removeAll()
+            noteOnAt = noteOnAt.filter { !$0.key.hasPrefix("\(deviceID)|\(channel)|") }
+            if data1 == 120 { aftertouch[deviceID]?[channel] = 0 }
+            pushEvent(deviceID, String(localized: "All notes off, ch \(channel)"))
         case 0xB:                   // control change
             // Relative-mode travel accumulation. Delta against the last
             // raw value for this exact (device, channel, cc) stream; the
@@ -869,13 +969,14 @@ final class MIDIInputService: @unchecked Sendable {
                 if abs(delta) <= 32 { ccNetTravel[rawKey, default: 0] += delta }
             }
             ccLastRaw[rawKey] = data2
+            defer { ccLastAt[rawKey] = ProcessInfo.processInfo.systemUptime }
             ccValues[deviceID, default: [:]][channel, default: [:]][data1] = data2
             // Log the sweep sparsely: endpoints always, then every 16 units.
             let logKey = "\(deviceID)|\(channel)|\(data1)"
             if data2 == 0 || data2 == 127
                 || abs(data2 - (lastLoggedCC[logKey] ?? -100)) >= 16 {
                 lastLoggedCC[logKey] = data2
-                pushEvent(deviceID, "CC \(data1) = \(data2) · ch \(channel)")
+                pushEvent(deviceID, String(localized: "CC \(data1) = \(data2), ch \(channel)"))
             }
             arrivalCounter &+= 1
             ccStamps[deviceID, default: [:]][channel, default: [:]][data1] = arrivalCounter
@@ -891,9 +992,16 @@ final class MIDIInputService: @unchecked Sendable {
             let moved: Bool
             if scanHandler == nil {
                 moved = false
-            } else if let base = scanBaseline[rawKey] ?? previousRaw {
-                scanBaseline[rawKey] = base
+            } else if let base = scanBaseline[rawKey] {
                 moved = abs(data2 - base) >= 3
+            } else if let base = previousRaw {
+                scanBaseline[rawKey] = base
+                // The same nonzero value again after a pause: a footswitch
+                // that sends 127 on every press, or an encoder sending one
+                // step, never moves 3 from its last value and was never
+                // caught. A fader streaming its position sends without a pause.
+                let paused = ccLastAt[rawKey].map { ProcessInfo.processInfo.systemUptime - $0 > 0.3 } ?? true
+                moved = abs(data2 - base) >= 3 || (data2 == base && data2 > 0 && paused)
             } else {
                 scanBaseline[rawKey] = data2
                 moved = data2 > 0
@@ -924,22 +1032,33 @@ final class MIDIInputService: @unchecked Sendable {
         case 0xE:                   // pitch bend: 14-bit, center 8192
             let raw = (data2 << 7) | data1
             pitchBend[deviceID, default: [:]][channel] = Float(raw - 8192) / 8192.0
+            arrivalCounter &+= 1
+            bendStamps[deviceID, default: [:]][channel] = arrivalCounter
             if abs(raw - 8192) > 2048 {
-                scanEvent = .midi(.pitchBend, number: 0, channel: channel, deviceID: deviceID)
+                // The way the wheel was bent, or a bend down bound as up.
+                scanEvent = .midi(.pitchBend, number: 0, channel: channel,
+                                  direction: raw < 8192 ? .negative : .positive, deviceID: deviceID)
             }
         case 0xD:                   // channel aftertouch
             aftertouch[deviceID, default: [:]][channel] = data1
+            // Scan sees a firm lean into the key, not only its note.
+            if data1 >= 64 {
+                scanEvent = .midi(.aftertouch, number: 0, channel: channel, deviceID: deviceID)
+            }
         case 0xA:                   // polyphonic key pressure: note, pressure
             if data2 > 0 {
                 polyPressure[deviceID, default: [:]][channel, default: [:]][data1] = data2
+                if data2 >= 64 {
+                    scanEvent = .midi(.aftertouch, number: 0, channel: channel, deviceID: deviceID)
+                }
             } else {
                 polyPressure[deviceID]?[channel]?.removeValue(forKey: data1)
             }
         case 0xC:                   // program change
             if pendingBankScan?.key == "\(deviceID)|\(channel)" { pendingBankScan = nil }
             programHits[deviceID, default: [:]][channel, default: []].insert(data1)
-            lastProgram[deviceID, default: [:]][channel] = data1
-            pushEvent(deviceID, "Program \(data1) · ch \(channel)")
+            lastProgram[deviceID] = (channel, data1)
+            pushEvent(deviceID, String(localized: "Program \(data1), ch \(channel)"))
             scanEvent = .midi(.programChange, number: data1, channel: channel, deviceID: deviceID)
         default:
             break
@@ -1018,12 +1137,15 @@ final class MIDIInputService: @unchecked Sendable {
                 }
             }
             ccList.sort { $0.stamp > $1.stamp }
-            let bend = pitchBend[dev]?.values.first
+            // The freshest channel's bend, as the engine reads it: an MPE
+            // pad bends on several channels, and the first in dictionary
+            // order could be one sitting at center.
+            let bend = (pitchBend[dev] ?? [:]).max { (bendStamps[dev]?[$0.key] ?? 0) < (bendStamps[dev]?[$1.key] ?? 0) }?.value
             var touch = aftertouch[dev]?.values.max()
             for (_, byNote) in polyPressure[dev] ?? [:] {
                 if let poly = byNote.values.max() { touch = max(touch ?? 0, poly) }
             }
-            let prog = lastProgram[dev]?.values.first
+            let prog = lastProgram[dev]?.program
             return DeviceActivity(id: dev, name: device.name,
                                   notesDown: notes, ccs: ccList,
                                   pitchBend: bend, aftertouch: touch,
@@ -1088,9 +1210,16 @@ final class MIDIInputService: @unchecked Sendable {
     func pitchBendValue(channel: Int?, deviceID: String?) -> Float {
         lock.lock(); defer { lock.unlock() }
         var out: Float = 0
+        var bestStamp: UInt64 = 0
+        var first = true
         for (dev, byChannel) in pitchBend where deviceID == nil || dev == deviceID {
             for (ch, v) in byChannel where channel == nil || ch == channel {
-                if abs(v) > abs(out) { out = v }
+                let stamp = bendStamps[dev]?[ch] ?? 0
+                if first || stamp > bestStamp {
+                    out = v
+                    bestStamp = stamp
+                    first = false
+                }
             }
         }
         return out
@@ -1238,6 +1367,8 @@ final class MIDIInputService: @unchecked Sendable {
         lock.lock()
         scanHandler = nil
         scanBaseline.removeAll()
+        // A Bank Select heard by this scan does not reach the next one.
+        pendingBankScan = nil
         // A scanned Program Change or Start is not left queued for a row.
         programHits.removeAll()
         transportHits.removeAll()

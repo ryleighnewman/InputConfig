@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig använder Bluetooth bara för att koppla från en trådlös spelkontroll när du ber om det.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig använder Bluetooth bara för att koppla från en trådlös spelkontroll när du ber om det.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alla rättigheter förbehållna.";
+

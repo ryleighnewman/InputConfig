@@ -5,6 +5,9 @@ import Combine
 /// Rows light from LiveRowLights, so live input never re-runs the group.
 struct JoystickGroupView: View {
     @SwiftUI.Binding var joystick: JoystickMapping
+    /// Settings' Face button names: the rows read it through
+    /// FaceLetters.current, so a change re-renders them.
+    @AppStorage(FaceLetters.defaultsKey) private var faceChoice = FaceLetters.automatic.rawValue
     let joystickIndex: Int
     let controllerName: String
     let onAddBinding: () -> Void
@@ -19,6 +22,7 @@ struct JoystickGroupView: View {
     /// Binding UUID currently pulsing (jump-to-binding from Live Visualizer).
     /// nil when no pulse is active.
     var pulsingBindingID: UUID? = nil
+    var focusBindingID: UUID? = nil
     /// A row a jump is heading for: built at once, with the rows above it,
     /// rather than waiting for the staged reveal to reach it.
     var revealThrough: UUID? = nil
@@ -28,6 +32,9 @@ struct JoystickGroupView: View {
     /// The slot this group reads, worked out with the preset's other groups
     /// the way the engine does. nil falls back to this group on its own.
     var resolvedSlot: Int? = nil
+    /// The connected pad this group would read if it stopped waiting for
+    /// its own, worked out with the preset's other groups.
+    var standInPadName: () -> String? = { nil }
 
     /// Preset list for the App Action target picker, passed as plain values
     /// so the row views stay store-subscription free.
@@ -57,6 +64,8 @@ struct JoystickGroupView: View {
     // the list scrolled, because a scroll is itself a live mouse input.
     @ObservedObject private var rawHIDService = RawHIDGamepadService.shared
     @ObservedObject private var deviceRegistry = HIDDeviceRegistry.shared
+    /// Zone edits redo the rows' overlap notes.
+    @ObservedObject private var stickZones = StickRegionService.shared
     /// Keyboards and mice for the device menu, refreshed when the list
     /// changes rather than on every event the service publishes.
     @State private var externalDevices: [ExternalInputDeviceService.Device] = ExternalInputDeviceService.shared.devices
@@ -109,6 +118,13 @@ struct JoystickGroupView: View {
     /// Stick Settings popover: set the deadzone across every axis binding
     /// in this joystick in one move instead of expanding each row's Options.
     @State private var showStickSettings = false
+    /// The Zones section at the foot of the group, and the part it shows.
+    @State private var zonesOpen = false
+    @State private var zonesPart: ZonePart?
+    /// Set when a request opened the section, so it is scrolled into view.
+    @State private var scrollToZones = false
+    /// The row that opened the section, for its Back button.
+    @State private var zonesReturnRow: UUID?
     @State private var newSectionPopoverOpen = false
     @State private var newSectionName = ""
     @State private var bulkDeadzone: Double = 0.25
@@ -118,6 +134,7 @@ struct JoystickGroupView: View {
     static let rowInset: CGFloat = 8
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
         VStack(spacing: 0) {
             headerView
                 // Older presets were born with this placeholder as their
@@ -152,11 +169,11 @@ struct JoystickGroupView: View {
                 // grid: one over the input columns, one over the outputs.
                 if !joystick.bindings.isEmpty {
                     HStack(spacing: 0) {
-                        Color.clear.frame(width: Self.rowInset + BindingRowView.inputBracketLeading, height: 1)
+                        Color.clear.frame(width: Self.rowInset + BindingRowView.inputBracketLeading(scale: textScale), height: 1)
                         BracketHeader(title: "Input", font: .callout.weight(.semibold))
                             .frame(width: BindingRowView.inputBracketWidth(scale: textScale))
                         Color.clear.frame(width: BindingRowView.outputBracketLeading(scale: textScale)
-                                          - BindingRowView.inputBracketLeading
+                                          - BindingRowView.inputBracketLeading(scale: textScale)
                                           - BindingRowView.inputBracketWidth(scale: textScale), height: 1)
                         BracketHeader(title: "Output", font: .callout.weight(.semibold))
                         Color.clear.frame(width: BindingRowView.bracketTrailing + Self.rowInset, height: 1)
@@ -168,16 +185,16 @@ struct JoystickGroupView: View {
                 // Each binding is its own box with a gap between them, so a
                 // long preset reads as a stack of cards, not a wall of text.
                 VStack(spacing: Self.rowGap) {
-                    ForEach(joystick.bindings.indices.prefix(revealedRows), id: \.self) { index in
-                        let binding = joystick.bindings[index]
+                    // Keyed by the row, so a move moves it instead of
+                    // rebuilding both rows: focus and an open Options stay.
+                    ForEach(Array(joystick.bindings.prefix(revealedRows).enumerated()), id: \.element.id) { index, binding in
                         // A heading above the first row of each run of rows
                         // that share a section name.
                         if let section = binding.section, !section.isEmpty,
                            index == 0 || joystick.bindings[index - 1].section != section {
                             SectionHeadingRow(
                                 name: section,
-                                onRename: { renameSection(startingAt: index, to: $0) },
-                                onAddRow: { addRow(toSectionStartingAt: index) },
+                                onRename: { renameSection(startingAt: index, from: section, to: $0) },
                                 onDissolve: { dissolveSection(startingAt: index) })
                         }
                         // Serialize the input once and reuse it across the three
@@ -200,7 +217,14 @@ struct JoystickGroupView: View {
                             // the engine's chord rules (see RowLight).
                             liveKey: LiveRowLights.RowLight(binding, in: joystick.bindings, inputKey: inputKey),
                             displayNumber: index + 1,
+                            zoneOverlap: binding.input.type == .stickRegion
+                                ? StickRegionService.shared.directionRowsOverlapping(binding, in: joystick.bindings) : [],
+                            zoneZoneOverlap: binding.input.type == .stickRegion
+                                ? StickRegionService.shared.zoneRowsOverlapping(binding, in: joystick.bindings) : [],
+                            zoneTakenBy: binding.input.type == .axis
+                                ? StickRegionService.shared.zoneRowsTakingOver(binding, in: joystick.bindings) : [],
                             isPulsing: pulsingBindingID == binding.id,
+                            takesFocus: focusBindingID == binding.id,
                             // Named extras (paddles/FN/mute/Home) for the
                             // slot's connected controller, passed by value so
                             // BindingRowView doesn't need to subscribe to
@@ -208,15 +232,16 @@ struct JoystickGroupView: View {
                             extraButtons: rowExtras,
                             availablePresets: availablePresets,
                             slot: deviceSlot,
+                            faceChoice: faceChoice,
                             onScan: { onScanInput(index) },
                             onScanModifier: { onScanModifierInput(index, $0) },
                             onRemove: { onRemoveBinding(index) },
                             onDuplicate: { onDuplicateBinding(index) },
                             onDragChanged: { dy in dragRow(binding.id, at: index, by: dy) },
-                            onDragEnded: { dropRow() }
+                            onDragEnded: { dropRow() },
+                            onMove: { (step: Int) in moveRow(binding.id, by: step) }
                         )
                         .equatable()
-                        .id(binding.id)
                         // Reordering without a pointer, for VoiceOver and
                         // Full Keyboard Access: rows moved only by dragging.
                         .accessibilityAction(named: "Move up") { moveRow(binding.id, by: -1) }
@@ -232,6 +257,12 @@ struct JoystickGroupView: View {
                             }
                         })
                         .modifier(RowDragLift(lift: rowDrag.lift(for: binding.id)))
+                        // Under the last row of a section: a line to its plus,
+                        // which adds a row at the section's end.
+                        if let section = binding.section, !section.isEmpty,
+                           index == joystick.bindings.count - 1 || joystick.bindings[index + 1].section != section {
+                            SectionEndRow(name: section, onAddRow: { addRow(toSectionEndingAt: index) })
+                        }
                     }
                 }
                 .padding(.horizontal, Self.rowInset)
@@ -289,6 +320,7 @@ struct JoystickGroupView: View {
                     HStack {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(.green)
+                            .accessibilityHidden(true)
                         Text("Add a new bind")
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -307,10 +339,258 @@ struct JoystickGroupView: View {
                 .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // A named stop per device group, so two groups' "Row 1" are told
+        // apart and a long group can be skipped in one move.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(resolvedHeaderName)
+            // The device's regions, in a card of their own under its rows.
+            if joystick.isExpanded { zonesSection }
+        }
         // The rows name their buttons the way this group's controller does.
         .onReceive(ExternalInputDeviceService.shared.$devices) { externalDevices = $0 }
+        // A row's "draw zones", its Options, the preset page or the Live
+        // Visualizer asked for one part's zones in this group.
+        .onReceive(NotificationCenter.default.publisher(for: ShowZonesRequest.name)) { note in
+            guard let request = note.object as? ShowZonesRequest else { return }
+            let mine = request.bindingID.map { id in joystick.bindings.contains { $0.id == id } }
+                ?? (request.groupIndex == joystickIndex)
+            guard mine else { return }
+            if !joystick.isExpanded { joystick.isExpanded = true }
+            zonesPart = request.part
+            zonesReturnRow = request.bindingID
+            zonesOpen = true
+            scrollToZones = true
+            AccessibilityNotification.Announcement(String(localized: "Regions: \(partTitle(request.part))")).post()
+        }
         .environment(\.presetButtonFamily, effectiveButtonFamily)
         .environment(\.buttonModelNames, effectiveModelNames)
+        .environment(\.deviceButtonNames, descriptorPadButtonNames)
+    }
+
+    /// The button names of the pad in this group's slot when it is read from
+    /// its descriptor alone (an unknown pad, a flight stick, a button box),
+    /// whose numbers are not a gamepad's.
+    private var descriptorPadButtonNames: [String]? {
+        guard let pad = controllerService.rawHIDGamepadSlots[deviceSlot], let profile = pad.profile,
+              profile.identifier.hasPrefix("generic-hid-") || profile.identifier.hasPrefix("raw-hid-") else { return nil }
+        return profile.physicalButtonNames
+    }
+
+    // MARK: - Zones
+
+    /// The parts of this group's device that zones are drawn on: its
+    /// touchpad, its sticks, its triggers, and the screen when the group
+    /// reads the pointer; any part a row already uses is listed too.
+    private var zoneParts: [ZonePart] {
+        let caps = scaffoldCapabilities
+        let inputs = joystick.bindings.map(\.input)
+        var has = Set<ZonePart>()
+        if caps.touchpad || inputs.contains(where: { $0.type == .touchpadRegion && $0.touchpadSurface != 1 }) { has.insert(.touchpad) }
+        // A Steam Controller's two trackpads: the right one is the main
+        // touch surface, the left one has regions of its own.
+        for pad in caps.trackpads { has.insert(pad.surface == 1 ? .leftTrackpad : .touchpad) }
+        if inputs.contains(where: { $0.type == .touchpadRegion && $0.touchpadSurface == 1 }) { has.insert(.leftTrackpad) }
+        for stick in caps.sticks {
+            if stick.x == 0 { has.insert(.stick(0)) } else if stick.x == 2 { has.insert(.stick(1)) }
+        }
+        if caps.triggers { has.formUnion([.band(4), .band(5)]) }
+        for input in inputs where input.type == .stickRegion { has.insert(ZonePart(regionKey: input.index)) }
+        if joystick.inputKind == .screen || joystick.inputKind == .mouse
+            || inputs.contains(where: { $0.type == .cursorRegion }) { has.insert(.screen) }
+        // Left to right as they sit on the pad: left trigger, left stick,
+        // touchpad, right stick, right trigger; then other axes, the screen.
+        let order: [ZonePart] = [.band(4), .stick(0), .leftTrackpad, .touchpad, .stick(1), .band(5)]
+        let others = has.filter { !order.contains($0) && $0 != .screen }
+            .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+        return order.filter(has.contains) + others + (has.contains(.screen) ? [.screen] : [])
+    }
+
+    /// Under the group, in the Automation section's card: Regions, with
+    /// this device's parts in a column and the chosen part's regions drawn
+    /// and listed beside it.
+    @ViewBuilder
+    private var zonesSection: some View {
+        let listed = zoneParts
+        let parts = zonesPart.map { listed.contains($0) ? listed : listed + [$0] } ?? listed
+        if !parts.isEmpty {
+            let shown = zonesPart.flatMap { parts.contains($0) ? $0 : nil } ?? parts[0]
+            VStack(alignment: .leading, spacing: 6) {
+                DisclosureGroup(isExpanded: $zonesOpen) {
+                    HStack(alignment: .top, spacing: 16) {
+                        zonePartColumn(parts, shown: shown)
+                        Divider()
+                        HStack {
+                            Spacer(minLength: 0)
+                            zoneEditor(shown)
+                                .id(shown)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .padding(.top, 10)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "circle.dashed")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Regions")
+                                .font(.headline)
+                                .accessibilityAddTraits(.isHeader)
+                                // Several groups each have one: say whose.
+                                .accessibilityLabel(String(localized: "Regions of \u{201C}\(resolvedHeaderName)\u{201D}"))
+                            Text(zonesSummary(parts))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        // Back to the row that opened this, where it was.
+                        if zonesOpen, let rowID = zonesReturnRow,
+                           let index = joystick.bindings.firstIndex(where: { $0.id == rowID }) {
+                            Button {
+                                zonesReturnRow = nil
+                                NotificationCenter.default.post(name: BindingRowView.revealRow, object: rowID)
+                                AccessibilityNotification.Announcement(String(localized: "Row \(index + 1)")).post()
+                            } label: {
+                                Label(String(localized: "Back to row \(index + 1)"), systemImage: "chevron.backward")
+                            }
+                            .buttonStyle(.solidSecondaryCompact)
+                        }
+                    }
+                    // The whole header opens and closes it, not only the arrow.
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { zonesOpen.toggle() } }
+                }
+                .padding(12)
+                // The plain card One-Stick Driving uses; only Automation is purple.
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.22), lineWidth: 1))
+            }
+            .background(ScrollIntoViewAnchor(active: scrollToZones) { scrollToZones = false })
+        }
+    }
+
+    /// The parts of the device, one under the other, each with how many
+    /// regions it has; the chosen one is lit.
+    private func zonePartColumn(_ parts: [ZonePart], shown: ZonePart) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(parts) { part in
+                let count = zoneCount(part)
+                Button {
+                    zonesPart = part
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(partTitle(part))
+                            .font(.callout)
+                            .foregroundStyle(part == shown ? Color.primary : Color.secondary)
+                        Spacer(minLength: 8)
+                        if count > 0 {
+                            Text("\(count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                // Said once, by the value.
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(part == shown ? Color.secondary.opacity(0.18) : Color.clear))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(part == shown ? [.isSelected] : [])
+                .accessibilityValue(count == 1 ? String(localized: "1 region") : String(localized: "\(count) regions"))
+            }
+        }
+        .frame(width: 170 * min(1.4, max(1, textScale)), alignment: .leading)
+    }
+
+    /// The rows that read a stick or a trigger: its direction rows and its
+    /// region rows, with what each sends and where it starts to count.
+    private func partRows(_ part: ZonePart) -> [RegionPartRow] {
+        joystick.bindings.enumerated().compactMap { i, b in
+            let input = b.input
+            var regionID: UUID?
+            switch part {
+            case .stick(let st):
+                if input.type == .axis, input.index == st * 2 || input.index == st * 2 + 1 { break }
+                if input.type == .stickRegion, input.index == st { regionID = input.stickRegionID; break }
+                return nil
+            case .band(let a):
+                if input.type == .axis, input.index == a { break }
+                if input.type == .stickRegion, input.index == StickRegionService.bandKeyBase + a { regionID = input.stickRegionID; break }
+                return nil
+            default:
+                return nil
+            }
+            let title: String
+            if let regionID {
+                title = StickRegionService.shared.region(with: regionID)?.region.shownName ?? String(localized: "Region")
+            } else {
+                let axis = ButtonNames.axisName(input.index, family: effectiveButtonFamily) ?? String(localized: "Axis #\(input.index)")
+                title = input.axisDirection.map { "\(axis) \($0.displayName)" } ?? axis
+            }
+            // What it sends, short: the note is said in the row itself.
+            let output = OutputAction.names(b.outputs).joined(separator: " + ")
+            return RegionPartRow(id: b.id, number: i + 1, title: title, output: output,
+                                 regionID: regionID, deadzone: Double(b.deadzone ?? 0.25),
+                                 fullPush: Double(b.outerDeadzone ?? 1))
+        }
+    }
+
+    /// Shows a row in the editor with its Options open.
+    private func jumpToRow(_ id: UUID) {
+        NotificationCenter.default.post(name: BindingRowView.revealRow, object: id)
+        NotificationCenter.default.post(name: Notification.Name("InputConfig.ExpandBindingOptions"), object: id)
+        if let index = joystick.bindings.firstIndex(where: { $0.id == id }) {
+            AccessibilityNotification.Announcement(String(localized: "Row \(index + 1)")).post()
+        }
+    }
+
+    private func zoneCount(_ part: ZonePart) -> Int {
+        switch part {
+        case .touchpad: return TouchpadService.shared.allRegions().filter { $0.surface != 1 }.count
+        case .leftTrackpad: return TouchpadService.shared.allRegions().filter { $0.surface == 1 }.count
+        case .screen: return CursorRegionService.shared.allRegions().count
+        case .stick(let s): return stickZones.regions(forStick: s).count
+        case .band(let a): return stickZones.regions(forStick: StickRegionService.bandKeyBase + a).count
+        }
+    }
+
+    /// The line under the title: the parts that have regions, or the parts.
+    private func zonesSummary(_ parts: [ZonePart]) -> String {
+        let used = parts.filter { zoneCount($0) > 0 }
+        if used.isEmpty { return parts.map(partTitle).joined(separator: ", ") }
+        return used.map { "\(partTitle($0)) \(zoneCount($0))" }.joined(separator: ", ")
+    }
+
+    /// A part's name on this device: a Steam Controller's main touch
+    /// surface is its right trackpad.
+    private func partTitle(_ part: ZonePart) -> String {
+        part == .touchpad && isSteamGroup ? String(localized: "Right trackpad") : part.title
+    }
+
+    /// This group reads a Steam Controller, or was made for one.
+    private var isSteamGroup: Bool {
+        !scaffoldCapabilities.trackpads.isEmpty || effectiveButtonFamily?.isSteam == true
+    }
+
+    @ViewBuilder
+    private func zoneEditor(_ part: ZonePart) -> some View {
+        switch part {
+        case .touchpad:
+            TouchpadCalibrationView(embedded: true, steam: isSteamGroup)
+        case .leftTrackpad:
+            TouchpadCalibrationView(embedded: true, surface: 1, steam: true)
+        case .screen:
+            CursorRegionsView(embedded: true)
+        case .stick(let s):
+            StickRegionsView(startKey: s, slot: deviceSlot, embedded: true,
+                             partRows: partRows(part), onJumpToRow: jumpToRow)
+        case .band(let axis):
+            StickRegionsView(startKey: StickRegionService.bandKeyBase + axis, slot: deviceSlot, embedded: true,
+                             partRows: partRows(part), onJumpToRow: jumpToRow)
+        }
     }
 
     // MARK: - Header
@@ -320,13 +600,13 @@ struct JoystickGroupView: View {
             Button {
                 withAnimation { joystick.isExpanded.toggle() }
             } label: {
-                Image(systemName: joystick.isExpanded ? "chevron.down" : "chevron.right")
+                Image(systemName: joystick.isExpanded ? "chevron.down" : "chevron.forward")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 20)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(joystick.isExpanded ? "Collapse joystick group" : "Expand joystick group")
+            .accessibilityLabel(joystick.isExpanded ? String(localized: "Collapse \(resolvedHeaderName)") : String(localized: "Expand \(resolvedHeaderName)"))
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -340,30 +620,38 @@ struct JoystickGroupView: View {
                     if let waiting = waitingFor {
                         // Pinned to a controller that is away while another
                         // is here: say so, with the one-click way out.
-                        Text("· waiting for \(waiting)")
+                        Text("Waiting for \(waiting)")
                             .font(.callout)
                             .foregroundStyle(.orange)
                             .lineLimit(1)
                         Button("Use the connected controller") {
-                            joystick.customName = nil
-                            joystick.inputKind = .auto
+                            // Set to the pad here that no other group reads:
+                            // Auto-detect read this group's own slot, often
+                            // an empty one.
+                            // Every pad here read by another group: the pin
+                            // stays, rather than being cleared for nothing.
+                            guard let name = standInPadName() else {
+                                GameControllerService.sayEveryPadInUse(); return
+                            }
+                            joystick.customName = name
+                            joystick.inputKind = .controller
                         }
                         .buttonStyle(.link)
                         .font(.callout)
-                        .help("Sets this input device to Auto-detect, so it reads the controller connected now")
-                    } else if joystick.customName != nil, !deviceSubtitle.contains("No controller") {
-                        Text("· \(deviceSubtitle)")
+                        .help("Sets this input device to the controller connected now")
+                    } else if joystick.customName != nil, !GameControllerService.isNoControllerName(deviceSubtitle) {
+                        Text(deviceSubtitle)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                    } else if controllerName.contains("No controller") && !isDeviceIndependentGroup {
-                        Text("· no controller in this slot")
+                    } else if GameControllerService.isNoControllerName(controllerName) && !isDeviceIndependentGroup {
+                        Text("No controller in this slot")
                             .font(.callout)
                             .foregroundStyle(.red.opacity(0.7))
                             .lineLimit(1)
                     }
                 }
-                TextField("What this device does in the preset (optional)", text: $joystick.tag)
+                TextField("What this device does in the preset (optional)", text: .shippedText($joystick.tag))
                     .font(.callout)
                     .textFieldStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -403,7 +691,7 @@ struct JoystickGroupView: View {
     private var waitingFor: String? {
         guard deviceSlot == GameControllerService.noSlot, joystick.inputKind == .controller,
               !controllerService.controllerDetails.isEmpty else { return nil }
-        return joystick.customName
+        return joystick.shownCustomName
     }
 
     private var deviceSlot: Int {
@@ -422,12 +710,13 @@ struct JoystickGroupView: View {
     /// and the line says so instead of claiming a detected device.
     private var scaffoldPrompt: String {
         let caps = scaffoldCapabilities
-        if caps.isEmpty { return caps.note ?? "Nothing to insert for this device." }
+        if caps.isEmpty { return caps.note ?? String(localized: "Nothing to insert for this device.") }
         let device = [caps.deviceArticle, caps.deviceName].filter { !$0.isEmpty }.joined(separator: " ")
         if caps.note != nil {
-            return "No controller is connected to this slot. Inserting adds the rows of \(device): \(caps.summary)."
+            return String(localized: "No controller is connected to this slot. Inserting adds the rows of \(device): \(caps.summary).")
         }
-        return "InputConfig has detected \(device), which has \(caps.summary)."
+        let detected = String(localized: "InputConfig has detected \(device), which has \(caps.summary).")
+        return caps.limitation.map { detected + " " + $0 } ?? detected
     }
 
     private var scaffoldControls: [ControllerScaffold.Control] {
@@ -451,7 +740,7 @@ struct JoystickGroupView: View {
                 .disabled(scaffoldControls.isEmpty)
             Menu("Insert one part") {
                 ForEach(ControllerScaffold.sections(of: scaffoldControls), id: \.self) { section in
-                    Button(section) { addScaffold(scaffoldControls.filter { $0.section == section }) }
+                    Button(ControllerScaffold.shownSection(section)) { addScaffold(scaffoldControls.filter { $0.section == section }) }
                 }
             }
             .disabled(scaffoldControls.isEmpty)
@@ -504,6 +793,7 @@ struct JoystickGroupView: View {
                 Text("New section")
                     .font(.callout.weight(.semibold))
                 TextField("e.g. Camera", text: $newSectionName)
+                    .accessibilityLabel("Section name")
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 220)
                     .onSubmit { commitNewSection() }
@@ -525,12 +815,15 @@ struct JoystickGroupView: View {
         guard !rows.isEmpty else { return }
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { joystick.bindings.append(contentsOf: rows) }
+        // The button that was pressed is gone now, so say what happened.
+        AccessibilityNotification.Announcement(rows.count == 1 ? String(localized: "Added 1 row")
+                                               : String(localized: "Added \(rows.count) rows")).post()
     }
 
     private func sortIntoSections() {
         preSortSnapshot = joystick.bindings
         var t = Transaction(); t.disablesAnimations = true
-        withTransaction(t) { joystick.bindings = ControllerScaffold.grouped(joystick.bindings, family: effectiveButtonFamily) }
+        withTransaction(t) { joystick.bindings = ControllerScaffold.grouped(joystick.bindings, family: effectiveButtonFamily, headings: scaffoldCapabilities.buttonHeadings) }
         postSortSnapshot = joystick.bindings
     }
 
@@ -543,6 +836,7 @@ struct JoystickGroupView: View {
         row.section = name
         var t = Transaction(); t.disablesAnimations = true
         withTransaction(t) { joystick.bindings.append(row) }
+        AccessibilityNotification.Announcement(String(localized: "Section \(name) added with one row")).post()
     }
 
     /// Indices of the run of rows sharing the section that starts at `start`.
@@ -554,21 +848,28 @@ struct JoystickGroupView: View {
         return start..<end
     }
 
-    private func renameSection(startingAt start: Int, to name: String) {
+    private func renameSection(startingAt start: Int, from old: String, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        // A late commit (Save while the name was still being typed) after
+        // rows moved or the heading went: only the heading it was typed on.
+        guard joystick.bindings.indices.contains(start), joystick.bindings[start].section == old else { return }
         for i in sectionRun(startingAt: start) { joystick.bindings[i].section = trimmed }
     }
 
     private func dissolveSection(startingAt start: Int) {
         for i in sectionRun(startingAt: start) { joystick.bindings[i].section = nil }
+        AccessibilityNotification.Announcement(String(localized: "Heading removed, rows kept")).post()
     }
 
-    private func addRow(toSectionStartingAt start: Int) {
+    private func addRow(toSectionEndingAt end: Int) {
+        var start = end
+        while start > 0, joystick.bindings[start - 1].section == joystick.bindings[end].section { start -= 1 }
         let run = sectionRun(startingAt: start)
         var row = BindingModel(input: InputEvent.button(0), outputs: [])
         row.section = joystick.bindings[start].section
         withAnimation { joystick.bindings.insert(row, at: run.upperBound) }
+        AccessibilityNotification.Announcement(String(localized: "Row \(run.upperBound + 1) added to section \(ControllerScaffold.shownSection(row.section ?? ""))")).post()
     }
 
     // MARK: - Stick settings (bulk deadzone)
@@ -593,7 +894,7 @@ struct JoystickGroupView: View {
                 Text("\(Int(bulkDeadzone * 100))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 38, alignment: .trailing)
+                    .frame(width: 38 * max(1, textScale), alignment: .trailing)
             }
             HStack {
                 if axisBindingIndices.isEmpty {
@@ -602,7 +903,7 @@ struct JoystickGroupView: View {
                         .foregroundStyle(.hint)
                 }
                 Spacer()
-                Button("Apply to \(axisBindingIndices.count) axis binding\(axisBindingIndices.count == 1 ? "" : "s")") {
+                Button(axisBindingIndices.count == 1 ? String(localized: "Apply to 1 axis binding") : String(localized: "Apply to \(axisBindingIndices.count) axis bindings")) {
                     for i in axisBindingIndices {
                         joystick.bindings[i].deadzone = Float(bulkDeadzone)
                     }
@@ -622,13 +923,13 @@ struct JoystickGroupView: View {
     ///      controller actually attached to this slot)
     ///   3. fallback to "Input Device N"
     private var resolvedHeaderName: String {
-        if let custom = joystick.customName, !custom.isEmpty { return custom }
+        if let custom = joystick.shownCustomName, !custom.isEmpty { return custom }
         if let mac = joystick.macInputName { return mac }
         let trimmed = controllerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty && !trimmed.contains("No controller") { return trimmed }
+        if !trimmed.isEmpty && !GameControllerService.isNoControllerName(trimmed) { return trimmed }
         // "Joystick" was misleading: a group can hold MIDI, keyboard, and
         // mouse bindings that have nothing to do with a gamepad.
-        return "Input Device \(joystickIndex)"
+        return String(localized: "Input Device \(joystickIndex)")
     }
 
     /// True when every binding in this group comes from a source that does
@@ -675,6 +976,7 @@ struct JoystickGroupView: View {
         let slotted = controllerService.rawHIDGamepadSlots.sorted { $0.key < $1.key }.map(\.value)
         let ids = Set(slotted.map(\.id))
         return (slotted + rawHIDService.connectedGamepads.filter { !ids.contains($0.id) }).map(\.displayName)
+            + controllerService.racingWheelNames.map(\.name)
     }
 
     private var steamConnected: Bool { controllerService.steamControllerSlot != nil }
@@ -686,12 +988,29 @@ struct JoystickGroupView: View {
     @ViewBuilder
     private func transportSection(_ transport: HIDDeviceRegistry.Transport) -> some View {
         let entries = deviceRegistry.entries(on: transport)
-        Section(transport.rawValue) {
-            if entries.isEmpty {
-                Text("No \(transport.rawValue) devices")
+        // A Logitech wheel for Xbox is read through macOS racing wheel
+        // support: not an HID entry, but plugged in over USB. Picked under
+        // Game controllers.
+        let wheels = transport == .usb ? controllerService.racingWheelNames : []
+        Section(transport.title) {
+            if entries.isEmpty && wheels.isEmpty {
+                Text(transport.emptyText)
+            }
+            ForEach(wheels, id: \.slot) { wheel in
+                Text("\(wheel.name) (read through macOS racing wheel support)")
             }
             ForEach(entries) { entry in
-                if entry.isSteamController {
+                if let reason = entry.unreadableReason {
+                    // Not something to pick as keyboard input: say what to
+                    // do instead, as the Devices menu does.
+                    Text("\(entry.name) (\(reason))")
+                } else if !rawHIDService.isReading(anyOf: deviceRegistry.devices(for: entry)),
+                   rawHIDService.isAwaitingInputMonitoring(anyOf: deviceRegistry.devices(for: entry)) {
+                    // Waiting for Input Monitoring: ask for it here too.
+                    Button("\(entry.name) (needs Input Monitoring)\u{2026}") {
+                        RawHIDGamepadService.requestInputMonitoring()
+                    }
+                } else if entry.isSteamController {
                     // Picked under Game controllers; as a mouse it sends
                     // nothing while a preset runs.
                     Text("\(entry.name) (read automatically as a Steam Controller)")
@@ -705,11 +1024,18 @@ struct JoystickGroupView: View {
                     let ownedBySystem = !reading
                         && device.map { rawHIDService.isListedByGameController($0) } == true
                     if reading || ownedBySystem {
-                        Button(ownedBySystem ? "\(entry.name) (read by macOS GameController)" : entry.name) {
+                        Button(ownedBySystem ? String(localized: "\(entry.name) (read by macOS GameController)") : entry.name) {
                             joystick.customName = ownedBySystem
                                 ? (device.flatMap { rawHIDService.gameControllerName(for: $0) } ?? entry.name)
-                                : entry.name
+                                : (readName(for: entry) ?? entry.name)
                             joystick.inputKind = .controller
+                        }
+                    } else if let device, RawHIDGamepadService.blockedByInputMonitoring(device) {
+                        // Opening it needs Input Monitoring: ask, as the
+                        // Devices menu does. Connect did nothing here.
+                        Button("\(entry.name) (needs Input Monitoring)\u{2026}") {
+                            _ = rawHIDService.adopt(device)
+                            RawHIDGamepadService.requestInputMonitoring()
                         }
                     } else {
                         Button("Connect \(entry.name)") { connect(entry) }
@@ -753,8 +1079,22 @@ struct JoystickGroupView: View {
         guard let device = deviceRegistry.adoptableDevice(for: entry),
               rawHIDService.adopt(device) || rawHIDService.isReading(anyOf: deviceRegistry.devices(for: entry))
         else { return }
-        joystick.customName = entry.name
+        joystick.customName = readName(for: entry) ?? entry.name
         joystick.inputKind = .controller
+    }
+
+    /// The name a pad being read raw goes by under Game controllers (its
+    /// profile's name, numbered as that list numbers it), so a pick from
+    /// the USB or Bluetooth list pins the slot that reads it.
+    private func readName(for entry: HIDDeviceRegistry.Entry) -> String? {
+        let keys = Set(deviceRegistry.devices(for: entry).compactMap { RawHIDGamepadService.deviceKey($0) })
+        let slotted = controllerService.rawHIDGamepadSlots.sorted { $0.key < $1.key }.map(\.value)
+        let ids = Set(slotted.map(\.id))
+        let pads = slotted + rawHIDService.connectedGamepads.filter { !ids.contains($0.id) }
+        guard let at = pads.firstIndex(where: { keys.contains($0.id) }) else { return nil }
+        let gc = connectedControllerNames
+        let names = Self.numberedNames(gc + pads.map(\.displayName))
+        return gc.count + at < names.count ? names[gc.count + at] : nil
     }
 
     private var keyboardNames: [String] {
@@ -836,7 +1176,8 @@ struct JoystickGroupView: View {
             }
             Divider()
             Button("Set custom name…") {
-                renameDraft = joystick.customName ?? ""
+                // The name the header shows ("Clavier" for This Mac's keyboard).
+                renameDraft = joystick.shownCustomName ?? ""
                 renamePopoverOpen = true
             }
         } label: {
@@ -853,21 +1194,35 @@ struct JoystickGroupView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Choose a detected device or set a custom name for this slot.")
+        // The group's name: a heading for the VoiceOver rotor.
+        .accessibilityAddTraits(.isHeader)
         .spotlightAnchor(SpotlightID.slotChip)
         .popover(isPresented: $renamePopoverOpen, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Slot name")
                     .font(.headline)
                 TextField("e.g. Player 1, Steve", text: $renameDraft)
+                    .accessibilityLabel("Slot name")
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 220)
+                // The name is also how a group set to one controller finds it.
+                if joystick.inputKind == .controller, joystick.customName != nil {
+                    Text("This input device reads its controller by this name. A new name reads the controller in its own slot instead.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 220, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     Button("Cancel") { renamePopoverOpen = false }
                         .buttonStyle(.solidSecondaryCompact)
                     Spacer()
                     Button("Save") {
                         let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        joystick.customName = trimmed.isEmpty ? nil : trimmed
+                        // Unchanged, the stored English stays: it also picks the device by name.
+                        if trimmed != joystick.shownCustomName {
+                            joystick.customName = trimmed.isEmpty ? nil : trimmed
+                        }
                         renamePopoverOpen = false
                     }
                     .keyboardShortcut(.defaultAction)
@@ -1027,11 +1382,11 @@ struct JoystickGroupView: View {
         let neighborSection = joystick.bindings[to].section
         if neighborSection != joystick.bindings[from].section {
             joystick.bindings[from].section = neighborSection
-            AccessibilityNotification.Announcement("Moved to section \(neighborSection ?? "none")").post()
+            AccessibilityNotification.Announcement(neighborSection.map { String(localized: "Moved to section \($0)") } ?? String(localized: "Moved to section none")).post()
             return
         }
         joystick.bindings.swapAt(from, to)
-        AccessibilityNotification.Announcement("Moved to row \(to + 1)").post()
+        AccessibilityNotification.Announcement(String(localized: "Moved to row \(to + 1)")).post()
     }
 
     private static let listSpace = "bindingList"
@@ -1078,16 +1433,25 @@ private struct EquatableBindingRow: View, Equatable {
     /// The row's serialized input, the key it lights on.
     let liveKey: LiveRowLights.RowLight
     let displayNumber: Int
+    /// A zone row's overlapping direction rows, by number (empty otherwise).
+    let zoneOverlap: [Int]
+    /// A zone row's overlapping zone rows, by number (empty otherwise).
+    let zoneZoneOverlap: [Int]
+    /// A direction row's zone rows that take it over, by number.
+    let zoneTakenBy: [Int]
     let isPulsing: Bool
+    let takesFocus: Bool
     let extraButtons: [GameControllerService.ExtraButton]
     let availablePresets: [(id: UUID, name: String)]
     let slot: Int
+    let faceChoice: String
     let onScan: () -> Void
     let onScanModifier: (Int?) -> Void
     let onRemove: () -> Void
     let onDuplicate: () -> Void
     let onDragChanged: (CGFloat) -> Void
     let onDragEnded: () -> Void
+    let onMove: (Int) -> Void
 
     // nonisolated: Equatable's requirement is not actor-isolated, and the
     // comparison touches only Sendable value-type stored properties (the
@@ -1096,9 +1460,14 @@ private struct EquatableBindingRow: View, Equatable {
         l.snapshot == r.snapshot
             && l.liveKey == r.liveKey
             && l.displayNumber == r.displayNumber
+            && l.zoneOverlap == r.zoneOverlap
+            && l.zoneZoneOverlap == r.zoneZoneOverlap
+            && l.zoneTakenBy == r.zoneTakenBy
             && l.isPulsing == r.isPulsing
+            && l.takesFocus == r.takesFocus
             && l.extraButtons == r.extraButtons
             && l.slot == r.slot
+            && l.faceChoice == r.faceChoice
             && l.availablePresets.count == r.availablePresets.count
             && l.availablePresets.elementsEqual(r.availablePresets) {
                 $0.id == $1.id && $0.name == $1.name
@@ -1118,9 +1487,14 @@ private struct EquatableBindingRow: View, Equatable {
             onDuplicate: onDuplicate,
             onDragChanged: onDragChanged,
             onDragEnded: onDragEnded,
+            onMove: onMove,
             isHighlighted: lit,
             displayNumber: displayNumber,
+            zoneOverlap: zoneOverlap,
+            zoneZoneOverlap: zoneZoneOverlap,
+            zoneTakenBy: zoneTakenBy,
             isPulsing: isPulsing,
+            takesFocus: takesFocus,
             extraButtons: extraButtons,
             availablePresets: availablePresets,
             slot: slot
@@ -1158,6 +1532,10 @@ final class LiveRowLights {
     /// both lit, and nothing showed which one fires.
     struct RowLight: Hashable, Sendable {
         let input: String
+        /// The raw key that means this row is down: its own input, or for an
+        /// inverted axis or motion row the opposite direction, which is what
+        /// the controller reports when the engine fires the row.
+        let rawInput: String
         let held: [String]
         /// The held controls of every other row in the group on this input
         /// that holds any.
@@ -1165,18 +1543,41 @@ final class LiveRowLights {
 
         init(_ row: BindingModel, in rows: [BindingModel], inputKey: String) {
             input = inputKey
+            var raw = inputKey
+            if row.input.type == .axis || row.input.type == .stickRegion {
+                // Lit at the row's own deadzone (the editor's live preview of
+                // the deadzone sheet included), not at the raw set's fixed
+                // half way: GameControllerService.liveAxisRows sets this key.
+                raw = GameControllerService.axisRowKey(row.id)
+            } else if row.invertAxis == true, [.motion, .touchpad].contains(row.input.type),
+               row.input.axisDirection != .none {
+                var flipped = row.input
+                flipped.axisDirection = row.input.axisDirection == .positive ? .negative : .positive
+                raw = flipped.serialized
+            }
+            rawInput = raw
             held = row.modifiers.map(\.serialized)
             rivals = rows.filter { $0.id != row.id && !$0.modifiers.isEmpty && $0.input.serialized == inputKey }
                 .map { $0.modifiers.map(\.serialized) }
         }
 
+        /// `down` holds the raw keys as they are and the engine's firing
+        /// rows' keys marked with a leading "!".
         func isLit(_ down: Set<String>) -> Bool {
-            guard down.contains(input), held.allSatisfy(down.contains) else { return false }
+            func on(_ key: String) -> Bool { down.contains(key) || down.contains("!" + key) }
+            guard down.contains(rawInput) || down.contains("!" + input), held.allSatisfy(on) else { return false }
             let mine = Set(held)
             return !rivals.contains { rival in
                 let theirs = Set(rival)
-                return rival.allSatisfy(down.contains) && (mine.isEmpty || theirs.isStrictSuperset(of: mine))
+                return rival.allSatisfy(on) && (mine.isEmpty || theirs.isStrictSuperset(of: mine))
             }
+        }
+
+        /// Every key this row's light depends on.
+        func reads(_ changed: Set<String>) -> Bool {
+            func touched(_ key: String) -> Bool { changed.contains(key) || changed.contains("!" + key) }
+            return touched(input) || changed.contains(rawInput) || held.contains(where: touched)
+                || rivals.contains { $0.contains(where: touched) }
         }
     }
     private var subscription: AnyCancellable?
@@ -1186,8 +1587,20 @@ final class LiveRowLights {
                                                  ExternalInputDeviceService.shared.$rawActiveInputs,
                                                  ChassisTapActivity.shared.$activeKeys)
             .sink { [weak self] raw, active, external, taps in
-                MainActor.assumeIsolated { self?.update(raw.union(active).union(external).union(taps)) }
+                // The engine's set is marked, so an inverted row lights by
+                // what fires it, not by the raw direction it inverts.
+                MainActor.assumeIsolated { self?.update(raw.union(active.map { "!" + $0 }).union(external).union(taps)) }
             }
+    }
+
+    /// Drops every key once the editor closes: rows are only in the
+    /// editor, and keys piled up across a session, each walked on every
+    /// live-input change.
+    func reset() {
+        subjects.removeAll()
+        #if DEBUG
+        debugRowsLit.removeAll()
+        #endif
     }
 
     func publisher(for key: RowLight) -> AnyPublisher<Bool, Never> {
@@ -1213,9 +1626,7 @@ final class LiveRowLights {
         lit = now
         // Only rows that read a control that changed: their input, a held
         // control, or a rival's held control. The publisher drops repeats.
-        for (key, subject) in subjects
-        where changed.contains(key.input) || key.held.contains(where: changed.contains)
-            || key.rivals.contains(where: { $0.contains(where: changed.contains) }) {
+        for (key, subject) in subjects where key.reads(changed) {
             subject.send(key.isLit(now))
         }
     }
@@ -1288,42 +1699,14 @@ private struct RowDragLift: ViewModifier {
 }
 
 
-/// The heading above a run of rows that share a section. Click the name to
-/// rename it; the plus adds a row to the section; the x lifts the heading
-/// off its rows (the rows stay).
-struct SectionHeadingRow: View {
+/// The close of a section, under its last row: a line from the left to the
+/// plus at the right, which adds a row at the end of the section.
+struct SectionEndRow: View {
     let name: String
-    let onRename: (String) -> Void
     let onAddRow: () -> Void
-    let onDissolve: () -> Void
-
-    @State private var editing = false
-    @State private var draft = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
-            if editing {
-                TextField("Section name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .font(.callout.weight(.semibold))
-                    .focused($focused)
-                    .onSubmit { commit() }
-                    .onChange(of: focused) { _, f in if !f { commit() } }
-                    .frame(maxWidth: 240)
-            } else {
-                Button {
-                    draft = name
-                    editing = true
-                    DispatchQueue.main.async { focused = true }
-                } label: {
-                    Text(name)
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Rename this section")
-            }
             Rectangle()
                 .fill(Color.secondary.opacity(0.25))
                 .frame(height: 1)
@@ -1334,7 +1717,71 @@ struct SectionHeadingRow: View {
             }
             .buttonStyle(.plain)
             .help("Add a row to this section")
-            .accessibilityLabel("Add a row to section \(name)")
+            .accessibilityLabel("Add a row to section \(ControllerScaffold.shownSection(name))")
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
+    }
+}
+
+/// The heading above a run of rows that share a section. Click the name to
+/// rename it; the x lifts the heading off its rows (the rows stay). The
+/// plus that adds a row sits at the section's end (SectionEndRow).
+struct SectionHeadingRow: View {
+    let name: String
+    let onRename: (String) -> Void
+    let onDissolve: () -> Void
+
+    @State private var editing = false
+    @State private var draft = ""
+    /// This heading's own key for the editor's inline-edit hooks: two
+    /// headings of one name (in two groups) cleared each other's.
+    @State private var editKey = "section:" + UUID().uuidString
+    @FocusState private var focused: Bool
+    /// Return hands focus back to the heading's button.
+    @FocusState private var headingFocused: Bool
+
+    var body: some View {
+        // Each render hands its own commit on, which renames the rows the
+        // heading has now.
+        let _ = editing ? EditorInlineEdit.refreshCommit(editKey) { commit() } : ()
+        HStack(spacing: 8) {
+            if editing {
+                TextField("Section name", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.callout.weight(.semibold))
+                    .focused($focused)
+                    .onSubmit {
+                        commit()
+                        DispatchQueue.main.async { headingFocused = true }
+                    }
+                    .onChange(of: focused) { _, f in if !f { commit() } }
+                    .frame(maxWidth: 240)
+            } else {
+                Button {
+                    draft = ControllerScaffold.shownSection(name)
+                    editing = true
+                    DispatchQueue.main.async { focused = true }
+                    EditorInlineEdit.begin(editKey, onCommit: { commit() }) {
+                        draft = ControllerScaffold.shownSection(name)
+                        editing = false
+                        DispatchQueue.main.async { headingFocused = true }
+                        return true
+                    }
+                } label: {
+                    Text(ControllerScaffold.shownSection(name))
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .focused($headingFocused)
+                .help("Rename this section")
+                .accessibilityAddTraits(.isHeader)
+            }
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 1)
             Button(action: onDissolve) {
                 Image(systemName: "xmark.circle")
                     .font(.callout)
@@ -1342,18 +1789,25 @@ struct SectionHeadingRow: View {
             }
             .buttonStyle(.plain)
             .help("Remove this heading (the rows stay)")
-            .accessibilityLabel("Remove heading \(name), keep its rows")
+            .accessibilityLabel("Remove heading \(ControllerScaffold.shownSection(name)), keep its rows")
         }
         .padding(.horizontal, 6)
         .padding(.top, 8)
         .padding(.bottom, 2)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Section \(name)")
+        .accessibilityLabel("Section \(ControllerScaffold.shownSection(name))")
+        // Removed while being typed in (its x, or the group removed): its
+        // hooks go with it, or Save renamed whatever rows took its place.
+        .onDisappear { if editing { EditorInlineEdit.clear(editKey) } }
     }
 
     private func commit() {
         guard editing else { return }
         editing = false
+        EditorInlineEdit.clear(editKey)
+        // Left unchanged, a heading keeps its English key, which the rows
+        // are grouped by, rather than taking the shown translation.
+        guard draft != ControllerScaffold.shownSection(name) else { return }
         onRename(draft)
     }
 }

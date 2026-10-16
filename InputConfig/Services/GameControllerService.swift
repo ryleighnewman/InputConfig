@@ -371,6 +371,9 @@ class GameControllerService: ObservableObject {
     /// values and nothing else (inputconfig.debug.fakeaxes "0:0.2 1:0").
     /// Used to measure deadzones against real engine output. DEBUG only.
     static var debugFixedAxes: [Int: Float]?
+    /// Tests only: the state each slot reports, exactly, in place of any
+    /// device (see TestCapture and the end-to-end engine tests).
+    static var debugScriptedStates: [Int: ControllerState] = [:]
     /// DEBUG / marketing-capture only: inject two clean-named synthetic
     /// controllers (a DualSense Edge in slot 0, a PlayStation Access Controller
     /// in slot 1) so App Store screenshots show a populated sidebar and a
@@ -418,7 +421,7 @@ class GameControllerService: ObservableObject {
                 let names = pad.profile?.physicalButtonNames ?? []
                 controllerNames[slot] = pad.displayName
                 var deckKeys: Int?
-                if case .streamDeck(let format)? = pad.profile?.layout { deckKeys = format.keys }
+                if case .streamDeck(let format)? = pad.profile?.layout { deckKeys = format.controls }
                 controllerDetails[slot] = ControllerInfo(
                     name: pad.displayName, productCategory: "Raw HID",
                     hasExtendedGamepad: deckKeys == nil, hasLight: false, hasBattery: false,
@@ -486,6 +489,21 @@ class GameControllerService: ObservableObject {
                 hasTouchpad: false, hasMicroGamepad: false,
                 physicalButtonNames: ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Minus", "Plus", "Home", "L3", "R3", "Capture"],
                 brand: .switchPro)
+        case _ where kind.hasPrefix("gc:"):
+            // "gc:Name;Category;brand;light;motion;touchpad", any controller
+            // GameController would list, for pages about a specific pad.
+            let p = kind.dropFirst(3).split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+            guard p.count >= 3 else { return nil }
+            let brand = ControllerBrand(rawValue: p[2]) ?? .mfiGeneric
+            let flag = { (i: Int) in p.count > i && p[i] == "1" }
+            let names = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "View", "Menu", "Home", "L3", "R3"]
+            return ControllerInfo(
+                name: p[0], productCategory: p[1],
+                hasExtendedGamepad: true, hasLight: flag(3), hasBattery: true,
+                batteryLevel: 0.85, batteryState: "discharging",
+                buttonCount: names.count, axisCount: 6, supportsMotion: flag(4),
+                hasTouchpad: flag(5), hasMicroGamepad: false,
+                physicalButtonNames: names, brand: brand)
         case "access":
             return ControllerInfo(
                 name: "Access Controller", productCategory: "Access Controller",
@@ -527,6 +545,12 @@ class GameControllerService: ObservableObject {
             manufacturer = "Logitech"
         case "encoder1": profile = generic("Xin-Mo Dual Arcade (player 1)", 0x16C0, 0x05E1, buttons: 10, axes: 2)
         case "encoder2": profile = generic("Xin-Mo Dual Arcade (player 2)", 0x16C0, 0x05E1, buttons: 10, axes: 2)
+        case _ where kind.hasPrefix("raw:"):
+            // "raw:Name;vid;pid;buttons;axes", a pad read from its own reports.
+            let p = kind.dropFirst(4).split(separator: ";").map(String.init)
+            guard p.count >= 5, let vid = Int32(p[1], radix: 16), let pid = Int32(p[2], radix: 16),
+                  let b = Int(p[3]), let a = Int(p[4]) else { return nil }
+            profile = generic(p[0], vid, pid, buttons: b, axes: a)
         case "streamdeck":
             guard let p = ControllerProfileDatabase.streamDeckProfiles.first(where: { $0.identifier == "elgato-stream-deck-0080" }) else { return nil }
             profile = p
@@ -629,7 +653,7 @@ class GameControllerService: ObservableObject {
             if slot < connectedControllers.count {
                 let c = connectedControllers[slot]
                 let nameBlob = ((c.vendorName ?? "") + " " + c.productCategory).lowercased()
-                let isDualSense = nameBlob.contains("dualsense")
+                let isDualSense = nameBlob.contains("dualsense") && ControllerTypeDetector.detect(c) != .accessController
                 let isEdge = nameBlob.contains("edge")
                 if isDualSense {
                     let supplement = supplementalButtons(forSlot: slot)
@@ -639,7 +663,7 @@ class GameControllerService: ObservableObject {
                     // DualSense made the automatic layout offer controls the
                     // pad does not have.
                     let supplementNames: [Int: String] = Dictionary(uniqueKeysWithValues:
-                        (isEdge ? [15, 16, 17, 20, 21] : [15]).map { ($0, ButtonNames.playStation[$0] ?? "Button \($0)") })
+                        (isEdge ? [15, 16, 17, 20, 21] : [15]).map { ($0, ButtonNames.playStation[$0] ?? String(localized: "Button \($0)")) })
                     for (idx, name) in supplementNames where !existingIndices.contains(idx) {
                         let pressed = (supplement[idx] ?? 0) > 0.5
                         out.append(ExtraButton(label: name, index: idx, pressed: pressed))
@@ -655,7 +679,16 @@ class GameControllerService: ObservableObject {
         if let gamepad = rawHIDGamepadSlots[slot] {
             let state = gamepad.state
             let names = gamepad.profile?.physicalButtonNames ?? []
-            let extraKeys = state.buttons.keys.filter { $0 > 12 }.sorted()
+            // The buttons the device has, not only the ones reported so far:
+            // a Stream Deck reports a key only when it changes, and the
+            // names were missing until one was pressed.
+            var keys = Set(state.buttons.keys.filter { $0 > 12 })
+            switch gamepad.profile?.layout {
+            case .generic(let generic)?: keys.formUnion(HIDExtendedLayoutRegistry.extended(for: generic).buttonIndices.filter { $0 > 12 })
+            case .streamDeck(let format)?: keys.formUnion(ControllerProfile.StreamDeckFormat.firstSlot..<(ControllerProfile.StreamDeckFormat.firstSlot + format.controls))
+            default: break
+            }
+            let extraKeys = keys.sorted()
             // A GameControllerDB row puts its paddles on known slots, so
             // they take the family's names (an Elite's P1 is upper right).
             let family = (gamepad.profile?.identifier.hasPrefix("sdl-") ?? false) ? namingFamily(forSlot: slot) : nil
@@ -663,12 +696,20 @@ class GameControllerService: ObservableObject {
             // an N64 pad's C buttons on extra slots).
             let model = modelNames(forSlot: slot)
             return extraKeys.map { idx in
-                let label = model.renamed[idx]
+                let label = model.renamed[idx].map(LayoutText.t)
                     ?? family.flatMap { ButtonNames.name(idx, family: $0) }
-                    ?? (idx < names.count ? names[idx] : "Button \(idx)")
+                    ?? (idx < names.count ? LayoutText.t(names[idx]) : String(localized: "Button \(idx)"))
                 return ExtraButton(label: label,
                                    index: idx,
                                    pressed: (state.buttons[idx] ?? 0) > 0.5)
+            }
+        }
+        // A racing wheel read through macOS racing wheel support: the
+        // buttons it has past the standard block (Xbox, plus, minus, dial).
+        if let wheel = racingWheelSlots[slot] {
+            let pressed = readRacingWheel(wheel).buttons
+            return racingWheelButtons(forSlot: slot).filter { $0.index > 12 }.map { entry in
+                ExtraButton(label: entry.name, index: entry.index, pressed: (pressed[entry.index] ?? 0) > 0.5)
             }
         }
         return []
@@ -699,7 +740,7 @@ class GameControllerService: ObservableObject {
             let extraKeys = state.axes.keys.filter { $0 > 5 }.sorted()
             let family = namingFamily(forSlot: slot)
             return extraKeys.map { idx in
-                ExtraAxis(label: ButtonNames.axisName(idx, family: family) ?? "Axis \(idx)", index: idx,
+                ExtraAxis(label: ButtonNames.axisName(idx, family: family) ?? String(localized: "Axis \(idx)"), index: idx,
                           value: state.axes[idx] ?? 0)
             }
         }
@@ -716,16 +757,16 @@ class GameControllerService: ObservableObject {
         }
         if let family, let named = ButtonNames.name(index, family: family) { return named }
         switch index {
-        case 13: return "Touchpad"
+        case 13: return String(localized: "Touchpad")
         case 14: return "Share"
-        case 15: return "Microphone"
-        case 16: return "Paddle 1"
-        case 17: return "Paddle 2"
-        case 18: return "Paddle 3"
-        case 19: return "Paddle 4"
+        case 15: return String(localized: "Microphone")
+        case 16: return String(localized: "Paddle 1")
+        case 17: return String(localized: "Paddle 2")
+        case 18: return String(localized: "Paddle 3")
+        case 19: return String(localized: "Paddle 4")
         case 20: return "FN1"
         case 21: return "FN2"
-        default: return "Button \(index)"
+        default: return String(localized: "Button \(index)")
         }
     }
 
@@ -741,6 +782,58 @@ class GameControllerService: ObservableObject {
     /// See `syncRawHIDGamepadSlots()`.
     @Published var rawHIDGamepadSlots: [Int: RawHIDGamepad] = [:]
 
+    /// Slot indices for racing wheels read through GameController's
+    /// GCRacingWheel: the Logitech G920 and G923 for Xbox, which speak the
+    /// Xbox protocol and are not HID. Slots are allocated after the raw HID
+    /// pads. See `syncRacingWheelSlots()`.
+    @Published private(set) var racingWheelSlots: [Int: GCRacingWheel] = [:]
+
+    /// A racing wheel GameController lists, in the order it connected, which
+    /// is the order the wheels are given slots in.
+    private struct RacingWheelEntry {
+        let wheel: GCRacingWheel
+        /// New for each connection, for `occupantToken`.
+        let serial: Int
+        /// When acquiring it may be tried again. Acquisition is exclusive,
+        /// so a wheel another app holds is retried now and then, not on
+        /// every sync.
+        var nextAcquireAt: TimeInterval = 0
+        var loggedFailure = false
+        /// Logged once a connection: it is acquired again each time a
+        /// preset starts or the editor opens.
+        var loggedRead = false
+        /// Each button's name to its number, worked out once: the buttons a
+        /// wheel has do not change while it is connected.
+        var buttonIndex: [String: Int] = [:]
+        /// Number and the name the wheel gives it, for the editor's rows.
+        var buttonNames: [(index: Int, name: String)] = []
+    }
+    private var racingWheels: [RacingWheelEntry] = []
+    private var racingWheelWatchStarted = false
+    /// Who reads the wheels right now: a running preset that reads a
+    /// wheel's slot ("read"), or the live snapshot (editor, visualizer,
+    /// Scan). Acquiring a wheel is exclusive, so it is held only while one
+    /// of them is, and let go after, for a game that reads the wheel itself.
+    private var racingWheelReaders: Set<String> = []
+    /// When a preset last read a wheel's slot; "read" ends 2 s after.
+    private var racingWheelLastRead: TimeInterval = 0
+
+    /// Whether the wheel in this slot is held now; the emergency stop's
+    /// check of every slot skips one that is not, so the check alone never
+    /// takes a wheel from a game.
+    func racingWheelIsHeld(_ slot: Int) -> Bool {
+        racingWheelSlots[slot]?.isAcquired == true
+    }
+
+    func setRacingWheelsWanted(_ wanted: Bool, reason: String) {
+        let before = !racingWheelReaders.isEmpty
+        if wanted { racingWheelReaders.insert(reason) } else { racingWheelReaders.remove(reason) }
+        if before != !racingWheelReaders.isEmpty, racingWheelWatchStarted { syncRacingWheelSlots(announce: false) }
+    }
+
+    /// The fallback name of a wheel that gives none.
+    static let racingWheelFallbackName = String(localized: "Racing Wheel")
+
     private var pollTimer: Timer?
     private var detailsTimer: Timer?
     private var steamWatchTimer: Timer?
@@ -749,7 +842,15 @@ class GameControllerService: ObservableObject {
     private var scanCallback: ((InputEvent) -> Void)?
     private var cancellables = Set<AnyCancellable>()
 
+    #if DEBUG
+    /// Tests: how many services are alive, to catch ones never let go.
+    nonisolated(unsafe) static var debugAlive = 0
+    #endif
+
     init() {
+        #if DEBUG
+        Self.debugAlive += 1
+        #endif
         // Apple normally suppresses the Home / PS button event when an app
         // isn't actively claiming the controller. Setting this flag lets us
         // receive Home and other "background" events regardless of whether
@@ -807,6 +908,9 @@ class GameControllerService: ObservableObject {
         // DualShock 3, generic XInput controllers).
         RawHIDGamepadService.shared.start()
         startRawHIDGamepadWatch()
+        // Logitech's wheels for Xbox, which only GameController's racing
+        // wheel support reads.
+        startRacingWheelWatch()
         startAccessoryWatch()
         // Everything else on the bus, for the InputConfig ▸ Devices menu.
         HIDDeviceRegistry.shared.start()
@@ -838,6 +942,9 @@ class GameControllerService: ObservableObject {
     }
 
     deinit {
+        #if DEBUG
+        Self.debugAlive -= 1
+        #endif
         // GameController + connect/disconnect observers are registered
         // against the singleton's lifetime. The service almost always
         // outlives the app process, but adding a clean teardown makes
@@ -898,10 +1005,12 @@ class GameControllerService: ObservableObject {
         ) { [weak self] note in
             // Extract Sendable values before crossing the actor boundary so
             // Swift 6's strict concurrency doesn't flag the Notification.
-            let name = (note.object as? GCController)?.vendorName ?? "Controller"
+            let vendor = (note.object as? GCController)?.vendorName
+            // The English fallback stays the statistics key; spoken, the
+            // word is in the app's language.
+            let name = vendor ?? "Controller"
             Task { @MainActor in
                 StatsService.shared.controllerConnected(name: name)
-                AccessibilityNotification.Announcement("\(name) connected").post()
                 self?.scheduleRefresh()
             }
         }
@@ -924,24 +1033,22 @@ class GameControllerService: ObservableObject {
                 }
                 // Only the pad feeding the touch surface resets it: another
                 // Sony pad powering off let go of a zone held by a finger
-                // resting on the one in use.
+                // resting on the one in use. With no source set every Sony
+                // pad feeds the surface, so the gone pad may own the finger
+                // and its lift never arrives: the surface is reset then too.
                 if goneHadTouchpad {
                     let goneSlot = self.connectedControllers.firstIndex { ObjectIdentifier($0) == goneID }
-                    let otherTouch = self.connectedControllers.contains {
-                        ObjectIdentifier($0) != goneID
-                            && ($0.extendedGamepad is GCDualSenseGamepad || $0.extendedGamepad is GCDualShockGamepad)
-                    }
                     if let source = self.touchpadSourceSlot {
                         if goneSlot == nil || goneSlot == source { TouchpadService.shared.touchSourceDisconnected() }
-                    } else if !otherTouch {
+                    } else {
                         TouchpadService.shared.touchSourceDisconnected()
                     }
                 }
                 let stillConnected = !GCController.controllers().isEmpty
                     || !self.rawHIDGamepadSlots.isEmpty || self.steamControllerSlot != nil
+                    || !self.racingWheelSlots.isEmpty
                 StatsService.shared.controllerDisconnected(
                     name: name, anyStillConnected: stillConnected)
-                AccessibilityNotification.Announcement("\(name) disconnected").post()
                 if let goneID {
                     // Per-controller state keyed by object identity goes
                     // with the controller. Left behind, a later pad can be
@@ -995,6 +1102,50 @@ class GameControllerService: ObservableObject {
         return GCController.controllers()
     }
 
+    /// Where a pad that told us its unique ID or serial sat when it left, for
+    /// two minutes: a pad that drops and reconnects takes its old slot back
+    /// instead of being appended, which handed its player's rows to an
+    /// identical pad. Pads with no such ID keep macOS's order.
+    private var departedSlots: [String: (slot: Int, at: TimeInterval)] = [:]
+    private var padPrints: [ObjectIdentifier: String] = [:]
+
+    private func padFingerprint(_ controller: GCController) -> String? {
+        guard let identity = SonyPadIdentity.of(controller: controller) else { return nil }
+        let id = (identity.uniqueID?.isEmpty == false ? identity.uniqueID : identity.serial) ?? ""
+        return id.isEmpty ? nil : MotionCalibrationService.baseKey(for: controller) + "#" + id
+    }
+
+    /// Pads already here keep their order; a returning pad goes back to the
+    /// slot it left; new pads follow, in macOS's order.
+    private func orderReturningPads(_ pads: [GCController], previous: [GCController]) -> [GCController] {
+        let now = CACurrentMediaTime()
+        departedSlots = departedSlots.filter { now - $0.value.at < 120 }
+        let live = Set(pads.map(ObjectIdentifier.init))
+        for (slot, c) in previous.enumerated() where !live.contains(ObjectIdentifier(c)) {
+            if let print = padPrints[ObjectIdentifier(c)] { departedSlots[print] = (slot, now) }
+        }
+        padPrints = padPrints.filter { live.contains($0.key) }
+        for c in pads where padPrints[ObjectIdentifier(c)] == nil {
+            if let print = padFingerprint(c) { padPrints[ObjectIdentifier(c)] = print }
+        }
+        guard !departedSlots.isEmpty else { return pads }
+        let previousIDs = previous.map(ObjectIdentifier.init)
+        var ordered = pads.filter { previousIDs.contains(ObjectIdentifier($0)) }
+            .sorted { (previousIDs.firstIndex(of: ObjectIdentifier($0)) ?? 0) < (previousIDs.firstIndex(of: ObjectIdentifier($1)) ?? 0) }
+        var returning: [(pad: GCController, slot: Int)] = []
+        var newcomers: [GCController] = []
+        for c in pads where !previousIDs.contains(ObjectIdentifier(c)) {
+            if let print = padPrints[ObjectIdentifier(c)], let left = departedSlots[print] {
+                returning.append((c, left.slot))
+                departedSlots[print] = nil
+            } else {
+                newcomers.append(c)
+            }
+        }
+        for r in returning.sorted(by: { $0.slot < $1.slot }) { ordered.insert(r.pad, at: min(r.slot, ordered.count)) }
+        return ordered + newcomers
+    }
+
     func refreshControllers() {
         // Pads come and go here; their touch-surface lookup is redone.
         touchDpadNames.removeAll()
@@ -1018,10 +1169,21 @@ class GameControllerService: ObservableObject {
             if let bri = lightBrightness[slot] { brightnessByIdentity[key] = bri }
             if rgbCycleActive[slot] == true { rgbActiveByIdentity.insert(key) }
         }
+        let oldControllerSlots = connectedControllers.map(ObjectIdentifier.init)
+        // How long each pad has been connected survives the rebuild: another
+        // pad connecting, a wake or Refresh restarted every pad's uptime.
+        var connectedAtByIdentity: [ObjectIdentifier: Date] = [:]
+        for (slot, c) in connectedControllers.enumerated() {
+            if let since = controllerDetails[slot]?.connectedAt { connectedAtByIdentity[ObjectIdentifier(c)] = since }
+        }
 
         let previousNames = controllerNames
         let previousIdentities = slotIdentities()
-        connectedControllers = GCController.controllers()
+        connectedControllers = orderReturningPads(GCController.controllers(), previous: connectedControllers)
+        #if DEBUG
+        // A test run reads only its scripted pads, never the Mac's own.
+        if TestCapture.inTestRun { connectedControllers = [] }
+        #endif
         controllerNames.removeAll()
         controllerDetails.removeAll()
         cachedExtraButtons.removeAll()
@@ -1051,6 +1213,7 @@ class GameControllerService: ObservableObject {
         lightColors.removeAll()
         lightBrightness.removeAll()
         rgbCycleActive.removeAll()
+        remapLightRestoreState(from: oldControllerSlots)
         // Re-enumerate the in-process LED writer before the per-slot light
         // writes below are queued, so each slot's write is matched against
         // the current pad set (a just-connected pad is not in the old one).
@@ -1070,11 +1233,15 @@ class GameControllerService: ObservableObject {
                 installTouchpadHandlers(for: controller, slot: index)
             }
             installLiveInputHandler(for: controller)
-            controllerNames[index] = controller.vendorName ?? "Controller \(index)"
+            controllerNames[index] = controller.vendorName ?? String(localized: "Controller \(index)")
             controllerDetails[index] = buildControllerInfo(controller)
+            if let since = connectedAtByIdentity[key] { controllerDetails[index]?.connectedAt = since }
             // A running preset's rainbow takes in a pad that connects mid-run.
             if presetRainbow != nil, controllerDetails[index]?.hasLight == true, rgbCycleActive[index] != true {
                 temporaryLightSlots.insert(index)
+                // Its own color comes back when the preset stops, not the
+                // last rainbow frame.
+                if colorBeforePresetRainbow[index] == nil { colorBeforePresetRainbow[index] = .some(lightColors[index]) }
                 startRGBCycle(at: index)
             }
 
@@ -1099,7 +1266,9 @@ class GameControllerService: ObservableObject {
                 // when another pad leaves, and this wrote a departed pad's
                 // details over the one that took its place.
                 if idx < self.connectedControllers.count, self.connectedControllers[idx] === controller {
+                    let since = self.controllerDetails[idx]?.connectedAt
                     self.controllerDetails[idx] = self.buildControllerInfo(controller)
+                    if let since { self.controllerDetails[idx]?.connectedAt = since }
                 }
             }
         }
@@ -1110,13 +1279,26 @@ class GameControllerService: ObservableObject {
         // connectedControllers.count) has just shifted, so without this the
         // virtual slots would overlap or lose their metadata until the next
         // 0.5s sync tick.
-        syncSteamControllerSlot()
-        syncRawHIDGamepadSlots()
+        // Not announced here: the identity diff below says it once, with
+        // the reconnect rule.
+        syncSteamControllerSlot(announce: false)
+        syncRawHIDGamepadSlots(announce: false)
         // Arrivals and departures, for the activity log, by which pad it is,
         // not by slot: a pad that only moved slots was logged as leaving,
         // and with two identical pads the wrong one was named.
         let currentIdentities = slotIdentities()
         let before = Set(previousIdentities.values), now = Set(currentIdentities.values)
+        // A pad that leaves and comes back under the same name in one
+        // refresh is a reconnect: neither is said. Departures are spoken
+        // first, so the last thing heard is never "disconnected" for a pad
+        // that works.
+        let arrivedNames = Set(currentIdentities.filter { !before.contains($0.value) }.compactMap { controllerNames[$0.key] })
+        let departedNames = Set(previousIdentities.filter { !now.contains($0.value) }.compactMap { previousNames[$0.key] })
+        for (slot, id) in previousIdentities where !now.contains(id) {
+            ActivityLog.shared.info("Controllers", "Disconnected \(previousNames[slot] ?? "a controller") from slot \(slot)", slot: slot)
+            guard !arrivedNames.contains(previousNames[slot] ?? "") else { continue }
+            AccessibilityNotification.Announcement(String(localized: "\(previousNames[slot] ?? String(localized: "Controller")) disconnected")).post()
+        }
         for (slot, id) in currentIdentities where !before.contains(id) {
             let name = controllerNames[slot] ?? "Controller"
             let info = controllerDetails[slot]
@@ -1125,9 +1307,11 @@ class GameControllerService: ObservableObject {
             if info?.hasLight == true { caps.append("light bar") }
             if info?.hasTouchpad == true { caps.append("touchpad") }
             ActivityLog.shared.info("Controllers", "Connected \(name) in slot \(slot)" + (caps.isEmpty ? "" : " (" + caps.joined(separator: ", ") + ")"), slot: slot)
-        }
-        for (slot, id) in previousIdentities where !now.contains(id) {
-            ActivityLog.shared.info("Controllers", "Disconnected \(previousNames[slot] ?? "a controller") from slot \(slot)", slot: slot)
+            // Spoken here, from the settled list, for every kind of pad: per
+            // notification, a Bluetooth reconnect said "connected" and then
+            // "disconnected" for the pad that was there.
+            guard !departedNames.contains(controllerNames[slot] ?? "") else { continue }
+            AccessibilityNotification.Announcement(String(localized: "\(controllerNames[slot] ?? String(localized: "Controller")) connected")).post()
         }
         // (The in-process LED writer was re-enumerated above, before the
         // per-slot light writes.)
@@ -1212,6 +1396,12 @@ class GameControllerService: ObservableObject {
     /// controller turned, not on how quickly.
     private struct GyroAccumulator {
         var angle = SIMD3<Float>(repeating: 0)   // radians since last drain
+        /// Seconds the drained samples cover (their own intervals), so the
+        /// rate a switch row compares is the samples' average, not the
+        /// angle over a poll they did not line up with.
+        var covered: Double = 0
+        /// That average from the last poll that had samples.
+        var lastRate = SIMD3<Float>(repeating: 0)
         var lastSample: CFTimeInterval = 0
         var lastDrain: CFTimeInterval = 0
         var samples = 0
@@ -1259,6 +1449,9 @@ class GameControllerService: ObservableObject {
             guard let self, m.hasRotationRate else { return }
             let now = CACurrentMediaTime()
             let r = m.rotationRate
+            // An uncalibrated pad can publish NaN just after connecting;
+            // one such sample would poison the running mean for good.
+            guard r.x.isFinite, r.y.isFinite, r.z.isFinite else { return }
             self.gyroLock.lock()
             var acc = self.gyroAccumulators[key] ?? GyroAccumulator()
             // First sample after a pause has no interval to integrate over;
@@ -1266,6 +1459,7 @@ class GameControllerService: ObservableObject {
             let dt = acc.lastSample == 0 ? 0 : min(0.05, now - acc.lastSample)
             let sample = SIMD3(Float(r.x), Float(r.y), Float(r.z))
             acc.angle += sample * Float(dt)
+            acc.covered += dt
             acc.peak = SIMD3(max(acc.peak.x, abs(sample.x)), max(acc.peak.y, abs(sample.y)), max(acc.peak.z, abs(sample.z)))
             // EMA with a 0.5 s time constant.
             let alpha = dt > 0 ? Float(1 - exp(-dt / 0.5)) : 1
@@ -1318,6 +1512,15 @@ class GameControllerService: ObservableObject {
     /// gravity changes neither pitch nor roll, so only a real tilt moves them.
     private var tiltGravity: [ObjectIdentifier: SIMD3<Float>] = [:]
     static let motionRezeroedNotification = Notification.Name("InputConfig.motionRezeroed")
+    /// A pad's tilt sign was learned or changed: the pointer re-anchors.
+    static let tiltSignLearnedNotification = Notification.Name("InputConfig.tiltSignLearned")
+    /// Per pad (by its calibration identity), the sign found between gyro X
+    /// and Y and the accelerometer's pitch and roll.
+    static let learnedTiltSignsKey = "InputConfig.learnedTiltSigns"
+    static var learnedTiltSigns: [String: [Float]] {
+        get { (UserDefaults.standard.dictionary(forKey: learnedTiltSignsKey) as? [String: [Float]]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: learnedTiltSignsKey) }
+    }
 
     /// The accelerometer's angle for a tilt axis, from the gravity direction
     /// it reports (down, in the controller's frame; (0, 0, -1) when flat).
@@ -1342,6 +1545,21 @@ class GameControllerService: ObservableObject {
         // a negative rotation about up, so a positive rotation about down.
         let rate = gx * g.x + gy * g.y + gz * g.z
         return rate.isFinite ? rate : nil
+    }
+
+    /// Gyro Z as every reader sees it: the turn about gravity. While the
+    /// accelerometer is not reading gravity cleanly (a fast flick adds
+    /// centripetal force) the tracked gravity direction stands in, which
+    /// keeps the same sign; the pad's own Z rate has the opposite sign for
+    /// a pad held flat, so the pointer jerked back for a poll or two in the
+    /// middle of fast turns.
+    private func turnRate(_ controller: GCController, gx: Float, gy: Float, gz: Float, motion: GCMotion) -> Float {
+        if let rate = worldYawRate(gx: gx, gy: gy, gz: gz, motion: motion) { return rate }
+        if let g = tiltGravity[ObjectIdentifier(controller)] {
+            let rate = gx * g.x + gy * g.y + gz * g.z
+            if rate.isFinite { return rate }
+        }
+        return gz
     }
 
     private static func accelAngle(_ channel: MotionChannel, ax: Float, ay: Float, az: Float) -> Float {
@@ -1411,6 +1629,12 @@ class GameControllerService: ObservableObject {
     /// `tiltGravity`). Nil without a usable accelerometer reading. The
     /// absolutes are signed the way the gyro turns (nose up and right side
     /// down positive on the measured frame), as the pointing path expects.
+    /// When the engine last fused each pad's tilt. A display read with no
+    /// recent fuse (no preset running, or none reading this pad) works the
+    /// angles out from gravity itself: the meters stood still or froze at
+    /// the last preset's angle.
+    private var lastFuseAt: [ObjectIdentifier: TimeInterval] = [:]
+
     private func fuseTilt(controller: GCController, motion: GCMotion, rate: SIMD3<Float>,
                           interval: Float) -> (pitch: FusedTilt, roll: FusedTilt)? {
         let a = motion.acceleration
@@ -1419,11 +1643,25 @@ class GameControllerService: ObservableObject {
         guard mag.isFinite, mag > 0.2 else { return nil }
         let measured = accel / mag
         let id = ObjectIdentifier(controller)
+        lastFuseAt[id] = ProcessInfo.processInfo.systemUptime
         let gravityOnly = abs(mag - 1) < 0.1
         let xKey = FusionKey(controller: id, channel: .gyroX)
         let yKey = FusionKey(controller: id, channel: .gyroY)
+        // A pad seen before starts with the way its gyro and accelerometer
+        // were found to relate, rather than learning it again on every
+        // connection, which sent the pointer the wrong way at first and
+        // then leapt when the sign was learned.
+        if axisFusion[xKey] == nil || axisFusion[yKey] == nil {
+            let saved = Self.learnedTiltSigns[MotionCalibrationService.identityKey(for: controller)]
+            for (key, i) in [(xKey, 0), (yKey, 1)] where axisFusion[key] == nil {
+                var seeded = AxisFusion()
+                if let saved, saved.count == 2 { seeded.sign = saved[i] < 0 ? -1 : 1 }
+                axisFusion[key] = seeded
+            }
+        }
         var fx = axisFusion[xKey] ?? AxisFusion()
         var fy = axisFusion[yKey] ?? AxisFusion()
+        let signsBefore = (fx.sign, fy.sign)
         for (channel, gyroRate) in [(MotionChannel.gyroX, rate.x), (.gyroY, rate.y)] {
             var f = channel == .gyroX ? fx : fy
             let accelAngle = Self.accelAngle(channel, ax: measured.x, ay: measured.y, az: measured.z)
@@ -1438,6 +1676,14 @@ class GameControllerService: ObservableObject {
             f.lastAccelAngle = accelAngle; f.lastGyroOnly = f.gyroOnly
             f.lastCorrectedRate = rate
             if channel == .gyroX { fx = f } else { fy = f }
+        }
+        if (fx.sign, fy.sign) != signsBefore {
+            // Remembered for this pad, and the pointer's tilt anchor taken
+            // again where the pad is now, so the new sign does not leap it.
+            var all = Self.learnedTiltSigns
+            all[MotionCalibrationService.identityKey(for: controller)] = [fx.sign, fy.sign]
+            Self.learnedTiltSigns = all
+            NotificationCenter.default.post(name: Self.tiltSignLearnedNotification, object: nil)
         }
         let previous = tiltGravity[id] ?? measured
         // Which way each gyro axis carries the gravity estimate, learned
@@ -1560,7 +1806,7 @@ class GameControllerService: ObservableObject {
     /// poll turned nothing. Filling it from the rate counted that time
     /// twice, and the pointer went up to 1.7 times as far as the pad turned
     /// on pads whose samples come slower than the engine polls.
-    private func drainGyro(for controller: GCController) -> (angle: SIMD3<Float>?, interval: Float, quiet: Bool) {
+    private func drainGyro(for controller: GCController) -> (angle: SIMD3<Float>?, interval: Float, quiet: Bool, rate: SIMD3<Float>?) {
         let key = ObjectIdentifier(controller)
         let now = CACurrentMediaTime()
         gyroLock.lock(); defer { gyroLock.unlock() }
@@ -1571,10 +1817,27 @@ class GameControllerService: ObservableObject {
         // view by every rotation since the engine last ran.
         let stale = acc.lastDrain == 0 || now - acc.lastDrain > 0.25
         let angle: SIMD3<Float>? = acc.samples > 0 && !stale ? acc.angle : nil
-        let quiet = acc.samples == 0 && !stale && acc.lastSample > 0 && now - acc.lastSample < 0.1
-        acc.angle = .zero; acc.samples = 0; acc.lastDrain = now
+        // Any pad that has sent samples and sent none this poll turned
+        // nothing, however long ago the last one was: when samples stall
+        // (a Bluetooth hiccup, sensors switched off) the instantaneous rate
+        // still holds the last value, and integrating it kept the pointer
+        // moving for up to a second after the pad stopped.
+        let quiet = acc.samples == 0 && !stale && acc.lastSample > 0
+        // The rate for switch rows: the samples' own average. Over the poll
+        // it read twice the turn when one 60 Hz sample landed in a 120 Hz
+        // poll (a key chattered at half its deadzone), and a quiet poll fell
+        // back to the last raw rate, which held a key through a stall. The
+        // last average carries over a quiet poll or two, then reads still.
+        var rate: SIMD3<Float>?
+        if angle != nil, acc.covered > 0 {
+            rate = acc.angle / Float(acc.covered)
+            acc.lastRate = rate ?? .zero
+        } else if quiet {
+            rate = now - acc.lastSample < 0.05 ? acc.lastRate : .zero
+        }
+        acc.angle = .zero; acc.covered = 0; acc.samples = 0; acc.lastDrain = now
         gyroAccumulators[key] = acc
-        return (angle, interval, quiet)
+        return (angle, interval, quiet, rate)
     }
 
     /// Ask the controller's `GCMotion` to start reporting gyro and
@@ -1609,9 +1872,13 @@ class GameControllerService: ObservableObject {
         // connection-lifetime constant, and recomputing it per poll frame
         // cost two String.lowercased() allocations per slot.
         let nameBlob = ((controller.vendorName ?? "") + " " + controller.productCategory).lowercased()
-        if nameBlob.contains("dualsense") {
+        // Not an Access controller GameController names as a DualSense: it
+        // has no light bar or Mute, and as one its slot's color and rumble
+        // went to the real DualSense.
+        let accessPad = ControllerTypeDetector.detect(controller) == .accessController
+        if nameBlob.contains("dualsense"), !accessPad {
             dualSenseSlots.insert(index)
-        } else if nameBlob.contains("dualshock") {
+        } else if nameBlob.contains("dualshock"), !accessPad {
             dualShockSlots.insert(index)
         }
         guard let gamepad = controller.extendedGamepad else {
@@ -1853,13 +2120,36 @@ class GameControllerService: ObservableObject {
 
     /// Every connected slot whose controller has this name, lowest first:
     /// exact names, then the names macOS reported, then partial matches.
+    /// A pad switched off in the Live Visualizer is left out while another
+    /// pad matches, so the working one of two identical pads is read.
     func matchingSlots(forDeviceNamed name: String) -> [Int] {
+        let all = allMatchingSlots(forDeviceNamed: name)
+        let live = all.filter { !isIgnored(slot: $0) }
+        return live.isEmpty ? all : live
+    }
+
+    /// Whether some connected pad has exactly this name (or reported it),
+    /// so the name is that pad's own and not a partial match.
+    func hasWholeNameMatch(_ name: String) -> Bool {
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !wanted.isEmpty else { return false }
+        return controllerDetails.values.contains { $0.name.lowercased() == wanted }
+            || controllerNames.values.contains { $0.lowercased() == wanted }
+            || rawHIDGamepadSlots.values.contains { $0.productName.lowercased() == wanted }
+    }
+
+    private func allMatchingSlots(forDeviceNamed name: String) -> [Int] {
         let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
         guard !wanted.isEmpty else { return [] }
         let exact = controllerDetails.filter { $0.value.name.lowercased() == wanted }.map(\.key)
         if !exact.isEmpty { return exact.sorted() }
         let reported = controllerNames.filter { $0.value.lowercased() == wanted }.map(\.key)
         if !reported.isEmpty { return reported.sorted() }
+        // A pad read raw, by the product string USB or Bluetooth lists it
+        // under ("PLAYSTATION(R)3 Controller" for the "DualShock 3" slot),
+        // as a pin picked from those lists in 1.6 stored.
+        let product = rawHIDGamepadSlots.filter { $0.value.productName.lowercased() == wanted }.map(\.key)
+        if !product.isEmpty { return product.sorted() }
         // "Xbox Wireless Controller 2": the second pad of that name, as the
         // device menu numbers them.
         if let space = wanted.lastIndex(of: " "), let n = Int(wanted[wanted.index(after: space)...]), n >= 2 {
@@ -1903,38 +2193,47 @@ class GameControllerService: ObservableObject {
         // out of what a plain "Name" can match. Swapping two identical pads
         // between groups left both reading pad 2.
         var taken = Set<Int>()
-        let ordered = byName.sorted { a, b in
-            let na = unfilledOrNumberedBase(a.key) != nil, nb = unfilledOrNumberedBase(b.key) != nil
-            return na != nb ? na : a.key < b.key
+        // Then whole names, then partial ones: a pin that only holds part
+        // of a pad's name never takes the pad another group reads by its
+        // whole name.
+        func rank(_ name: String) -> Int {
+            if unfilledOrNumberedBase(name) != nil { return 0 }
+            return hasWholeNameMatch(name) ? 1 : 2
         }
+        let ordered = byName.sorted { a, b in
+            let ra = rank(a.key), rb = rank(b.key)
+            return ra != rb ? ra < rb : a.key < b.key
+        }
+        // Auto groups with controller rows read their own number, so a
+        // family stand-in is not sent there.
+        let controllerTypes: Set<InputType> = [.button, .axis, .hat, .motion, .touchpad, .touchpadRegion, .touchpadGesture,
+                                               .stickRegion, .stickGesture]
+        let autoOwn = Set(groups.indices.filter { i in
+            (groups[i].customName ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                && controllerDetails[i] != nil
+                && groups[i].bindings.contains { controllerTypes.contains($0.input.type) }
+        })
+        // Pins whose own pad is away are placed after every name that
+        // matched, so a family stand-in never takes a pad another group
+        // reads by its exact name.
+        var away: [(name: String, indices: [Int])] = []
         for (name, indices) in ordered {
             let all = matchingSlots(forDeviceNamed: name)
             let numbered = unfilledOrNumberedBase(name) != nil
-            if all.isEmpty {
-                // Pad 2 of a name whose pad 1 is here but pad 2 is not reads
-                // nothing; falling back to the group's own number read pad 1
-                // and fired both players' rows.
-                if numbered, unfilledOrNumberedBase(name).map({ base in controllerDetails.values.contains { $0.name.lowercased() == base } }) == true {
-                    for i in indices { result[i] = Self.noSlot }
-                }
-                // A pad of the same family numbers its controls the same
-                // way (an Edge for a DualSense pin, an Elite for an Xbox
-                // one), so it is read as 1.5 read whatever pad was there.
-                for i in indices where result[i] == nil && groups[i].inputKind == .controller {
-                    if let sibling = familySlot(forDeviceNamed: name, avoiding: taken) {
-                        result[i] = sibling
-                        taken.insert(sibling)
-                    }
-                }
-                // A group pinned to a pad that is away reads nothing, and
-                // so claims no slot another group's motion or touchpad rows
-                // could fall back to.
-                for i in indices where result[i] == nil && groups[i].inputKind == .controller && isDevicePin(name) {
-                    result[i] = Self.noSlot
-                }
+            let partial = !numbered && !hasWholeNameMatch(name)
+            // A partial name whose only matches are read by whole name
+            // waits for its own pad instead.
+            if all.isEmpty || (partial && all.allSatisfy { taken.contains($0) }) {
+                away.append((name, indices))
                 continue
             }
             var matches = numbered ? all : all.filter { !taken.contains($0) }
+            // Fewer live pads of that name than groups: a pad switched off
+            // in the Live Visualizer stays a group's (it reads nothing)
+            // rather than that group doubling up on another group's pad.
+            if !numbered, matches.count < indices.count {
+                matches += allMatchingSlots(forDeviceNamed: name).filter { !taken.contains($0) && !matches.contains($0) }
+            }
             if matches.isEmpty { matches = all }
             var free = matches
             for i in indices where free.contains(i) {
@@ -1944,20 +2243,91 @@ class GameControllerService: ObservableObject {
             for i in indices where result[i] == nil {
                 result[i] = free.isEmpty ? matches[0] : free.removeFirst()
             }
-            if numbered { taken.formUnion(indices.compactMap { result[$0] }) }
+            if !partial { taken.formUnion(indices.compactMap { result[$0] }) }
         }
-        let controllerTypes: Set<InputType> = [.button, .axis, .hat, .motion, .touchpad, .touchpadRegion, .touchpadGesture]
+        for (name, indices) in away {
+            let numbered = unfilledOrNumberedBase(name) != nil
+            // Pad 2 of a name whose pad 1 is here but pad 2 is not reads
+            // nothing; falling back to the group's own number read pad 1
+            // and fired both players' rows.
+            if numbered, unfilledOrNumberedBase(name).map({ base in controllerDetails.values.contains { $0.name.lowercased() == base } }) == true {
+                for i in indices { result[i] = Self.noSlot }
+            }
+            // A pad of the same family numbers its controls the same
+            // way (an Edge for a DualSense pin, an Elite for an Xbox
+            // one), so it is read as 1.5 read whatever pad was there.
+            for i in indices where result[i] == nil && groups[i].inputKind == .controller {
+                if let sibling = familySlot(forDeviceNamed: name, avoiding: taken.union(result.values).union(autoOwn)) {
+                    result[i] = sibling
+                    taken.insert(sibling)
+                }
+            }
+            // A group pinned to a pad that is away reads nothing, and
+            // so claims no slot another group's motion or touchpad rows
+            // could fall back to.
+            for i in indices where result[i] == nil && groups[i].inputKind == .controller && isDevicePin(name) {
+                result[i] = Self.noSlot
+            }
+        }
         let claimed = Set(groups.indices.filter { i in
             result[i] == nil && groups[i].bindings.contains { controllerTypes.contains($0.input.type) }
         })
+        let pinned = Set(groups.indices.filter { result[$0] != nil && Self.readsController(groups[$0]) }
+            .compactMap { result[$0] }.filter { $0 != Self.noSlot })
         for (i, g) in groups.enumerated() where result[i] == nil {
-            result[i] = effectiveSlot(for: g, groupIndex: i, avoiding: claimed.subtracting([i]))
+            var slot = effectiveSlot(for: g, groupIndex: i, avoiding: claimed.subtracting([i]).union(pinned))
+            // An Auto group whose own pad another group reads by name takes
+            // the next pad no controller group reads (nor a later Auto
+            // group's own), so one pad never fires both groups' rows.
+            if slot == i, pinned.contains(i), autoOwn.contains(i) {
+                let earlier = groups.indices.filter { $0 < i && Self.readsController(groups[$0]) }.compactMap { result[$0] }
+                let used = pinned.union(earlier).union(claimed.subtracting([i]))
+                slot = controllerDetails.keys.filter { !used.contains($0) && !isIgnored(slot: $0) }.sorted().first ?? Self.noSlot
+            }
+            result[i] = slot
         }
         return result
     }
 
     /// A slot no controller ever holds, for a group that should read nothing.
     static let noSlot = 9_999
+
+    /// effectiveSlots for views that ask many times a frame (the Live
+    /// Visualizer reads its pad through it dozens of times per redraw):
+    /// the same groups within a tenth of a second get the last answer.
+    private var slotCache: (key: [String], at: CFTimeInterval, result: [Int: Int])?
+    func effectiveSlotsCached(for groups: [JoystickMapping]) -> [Int: Int] {
+        let key = groups.map { "\($0.customName ?? "")|\($0.inputKind.rawValue)|\($0.bindings.count)" }
+        let now = CACurrentMediaTime()
+        if let cache = slotCache, cache.key == key, now - cache.at < 0.1 { return cache.result }
+        let result = effectiveSlots(for: groups)
+        slotCache = (key, now, result)
+        return result
+    }
+
+    /// Whether a raw pad's plan already reads this axis 0 to 1 (a Logitech
+    /// wheel's clutch, a descriptor trigger): Rests at one end would then
+    /// make it read half way at rest.
+    func axisReadsOneWay(slot: Int, index: Int) -> Bool {
+        guard let pad = rawHIDGamepadSlots[slot], case .generic(let layout)? = pad.profile?.layout,
+              let plan = layout.extended else { return false }
+        return plan.reports.contains { $0.axes.contains { $0.index == index && $0.unipolar } }
+    }
+
+    /// Whether a group reads a controller: set to one, or Auto with
+    /// controller rows. Keyboard, mouse, MIDI and screen groups do not,
+    /// though they resolve to their own number.
+    static func readsController(_ group: JoystickMapping) -> Bool {
+        switch group.inputKind {
+        case .controller: return true
+        // A touchpad group reads a controller's touchpad when its rows do.
+        case .auto, .touchpad:
+            let types: Set<InputType> = [.button, .axis, .hat, .motion, .touchpad, .touchpadRegion, .touchpadGesture,
+                                         .stickRegion, .stickGesture]
+            return group.bindings.contains { types.contains($0.input.type) }
+        default: return false
+        }
+    }
 
     /// Pads that number every control the same way, by the words in their
     /// names: a group pinned to one reads another of the same family when
@@ -1977,7 +2347,7 @@ class GameControllerService: ObservableObject {
         // "Xbox Wireless Controller 2" is player 2's own pad: player 1's
         // must not stand in for it.
         if let last = name.split(separator: " ").last, Int(last) != nil { return nil }
-        return controllerDetails.filter { !avoiding.contains($0.key) && Self.padFamily($0.value.name) == family }
+        return controllerDetails.filter { !avoiding.contains($0.key) && !isIgnored(slot: $0.key) && Self.padFamily($0.value.name) == family }
             .keys.sorted().first
     }
 
@@ -1989,6 +2359,30 @@ class GameControllerService: ObservableObject {
               let name = groups[index].customName, !controllerDetails.isEmpty,
               effectiveSlots(for: groups)[index] == Self.noSlot else { return nil }
         return name
+    }
+
+    /// Use the connected controller found every pad read by another group.
+    @MainActor static func sayEveryPadInUse() {
+        NSSound.beep()
+        AccessibilityNotification.Announcement(String(localized: "Every connected controller is read by another input device")).post()
+    }
+
+    /// The connected pad a waiting group should read instead, by the name
+    /// the device menu gives it: the lowest slot no other group reads. Nil
+    /// when every connected pad is read by another group.
+    func standInPadName(forGroup index: Int, in groups: [JoystickMapping]) -> String? {
+        let others = Set(effectiveSlots(for: groups).filter { $0.key != index && $0.key < groups.count && Self.readsController(groups[$0.key]) }.map(\.value))
+        let gc = connectedControllers.map { $0.vendorName ?? $0.productCategory }
+        let raw = rawHIDGamepadSlots.sorted { $0.key < $1.key }
+        let wheels = racingWheelNames
+        let names = JoystickGroupView.numberedNames(gc + raw.map(\.value.displayName) + wheels.map(\.name))
+        var bySlot: [Int: String] = [:]
+        for i in gc.indices { bySlot[i] = names[i] }
+        for (j, entry) in raw.enumerated() { bySlot[entry.key] = names[gc.count + j] }
+        for (j, entry) in wheels.enumerated() { bySlot[entry.slot] = names[gc.count + raw.count + j] }
+        if let steam = steamControllerSlot, let name = controllerDetails[steam]?.name { bySlot[steam] = name }
+        guard let slot = bySlot.keys.filter({ !others.contains($0) && !isIgnored(slot: $0) }).sorted().first else { return nil }
+        return bySlot[slot]
     }
 
     /// Names of every pad this Mac has had connected, lowercased, so a
@@ -2055,13 +2449,18 @@ class GameControllerService: ObservableObject {
         // while that controller is away: reading whatever pad sat at its
         // slot fired rows written for another layout.
         if mapping.inputKind == .controller, let name = mapping.customName {
-            if let sibling = familySlot(forDeviceNamed: name) { return sibling }
+            if let sibling = familySlot(forDeviceNamed: name, avoiding: avoiding) { return sibling }
             if isDevicePin(name) { return Self.noSlot }
         }
         let own = controllerDetails[groupIndex]
         let usesMotion = mapping.bindings.contains { $0.input.type == .motion }
+        // Not to the 2015 Steam Controller, which numbers its buttons its
+        // own way: the group's other rows fired the wrong controls there.
+        // Unless the rows are written for it (scanned from it, or drawn as it).
+        let steamRows = mapping.deviceFingerprint == "steam" || mapping.controllerModel == ControllerModelID.steamController2015.rawValue
         if usesMotion, own?.supportsMotion != true,
-           let capable = controllerDetails.filter({ $0.value.supportsMotion && !avoiding.contains($0.key) })
+           let capable = controllerDetails.filter({ $0.value.supportsMotion && !avoiding.contains($0.key) && !isIgnored(slot: $0.key)
+                && (steamRows || namingFamily(forSlot: $0.key) != .steamController) })
             .keys.sorted().first {
             return capable
         }
@@ -2069,7 +2468,8 @@ class GameControllerService: ObservableObject {
             [.touchpad, .touchpadRegion, .touchpadGesture].contains($0.input.type)
         }
         if usesTouchpad, own?.hasTouchpad != true,
-           let capable = controllerDetails.filter({ $0.value.hasTouchpad && !avoiding.contains($0.key) })
+           let capable = controllerDetails.filter({ $0.value.hasTouchpad && !avoiding.contains($0.key) && !isIgnored(slot: $0.key)
+                && (steamRows || namingFamily(forSlot: $0.key) != .steamController) })
             .keys.sorted().first {
             return capable
         }
@@ -2082,12 +2482,13 @@ class GameControllerService: ObservableObject {
         for (i, c) in connectedControllers.enumerated() { out[i] = "gc:\(ObjectIdentifier(c).hashValue)" }
         if let s = steamControllerSlot { out[s] = "steam" }
         for (slot, pad) in rawHIDGamepadSlots { out[slot] = "hid:\(pad.id)" }
+        for slot in racingWheelSlots.keys { out[slot] = occupantToken(forSlot: slot) }
         return out
     }
 
     func controllerName(at index: Int) -> String {
         if index < connectedControllers.count {
-            return connectedControllers[index].vendorName ?? "Controller \(index)"
+            return connectedControllers[index].vendorName ?? String(localized: "Controller \(index)")
         }
         // Steam Controller virtual slot just past the real MFi ones.
         if let steamSlot = steamControllerSlot, index == steamSlot {
@@ -2101,8 +2502,15 @@ class GameControllerService: ObservableObject {
         // Pads read directly (generic USB pads, the GameCube adapter, a
         // Stream Deck) have their own slots; they showed as missing.
         if let gamepad = rawHIDGamepadSlots[index] { return gamepad.displayName }
-        return "No controller in slot \(index)"
+        if let wheel = racingWheelSlots[index] { return wheel.vendorName ?? Self.racingWheelFallbackName }
+        return String(localized: "No controller in slot \(index)")
     }
+
+    /// Whether a name is the "No controller in slot N" placeholder, in the
+    /// app's language (views ask this instead of searching English text).
+    static func isNoControllerName(_ name: String) -> Bool { noControllerNames.contains(name) }
+    private static let noControllerNames: Set<String> =
+        Set((0..<64).map { String(localized: "No controller in slot \($0)") } + (0..<64).map { "No controller in slot \($0)" })
 
     /// Set the controller's light bar color (DualSense, DualShock 4)
     func setControllerLight(at index: Int) {
@@ -2362,7 +2770,11 @@ class GameControllerService: ObservableObject {
         if presetRainbow != nil {
             // The preset's own rainbow gives way to its color; those cycles
             // were the preset's, not the user's, so they are not remembered.
+            // The colors from before the rainbow come back, so the stop does
+            // not keep a rainbow frame as each pad's color.
             presetRainbow = nil
+            for (slot, color) in colorBeforePresetRainbow { lightColors[slot] = color }
+            colorBeforePresetRainbow.removeAll()
         } else {
             // Remember which slots were cycling, so the rainbow comes back when
             // the preset stops instead of being switched off for good.
@@ -2410,6 +2822,35 @@ class GameControllerService: ObservableObject {
     private var temporaryLightSlots: Set<Int> = []
     /// Slots whose rainbow a preset's color paused.
     private var cyclingBeforePresetLight: Set<Int> = []
+
+    /// The colors and rainbows a running preset will put back are kept by
+    /// slot; when pads shift slots they follow their pad, and a pad that
+    /// left takes its entries with it, so the remaining pad does not end
+    /// up in the departed one's color.
+    fileprivate func remapLightRestoreState(from oldSlots: [ObjectIdentifier]) {
+        var newSlot: [ObjectIdentifier: Int] = [:]
+        for (i, c) in connectedControllers.enumerated() { newSlot[ObjectIdentifier(c)] = i }
+        // Slots past the old controller count belong to other readers and
+        // stay as they are.
+        func moved(_ slot: Int) -> Int? {
+            guard slot < oldSlots.count else { return slot }
+            return newSlot[oldSlots[slot]]
+        }
+        func remap<V>(_ d: [Int: V]) -> [Int: V] {
+            var out: [Int: V] = [:]
+            for (k, v) in d { if let n = moved(k) { out[n] = v } }
+            return out
+        }
+        func remap(_ set: Set<Int>) -> Set<Int> { Set(set.compactMap(moved)) }
+        colorBeforePresetRainbow = remap(colorBeforePresetRainbow)
+        temporaryLightSlots = remap(temporaryLightSlots)
+        cyclingBeforePresetLight = remap(cyclingBeforePresetLight)
+        outputLight.standing = remap(outputLight.standing)
+        outputLight.pausedRainbow = remap(outputLight.pausedRainbow)
+        outputLight.startedRainbow = remap(outputLight.startedRainbow)
+        outputLight.stoppedRainbow = remap(outputLight.stoppedRainbow)
+        outputLight.colorBeforeRainbow = remap(outputLight.colorBeforeRainbow)
+    }
 
     /// Put every slot that was showing a temporary color back on its
     /// stored general color. Returns whether anything was reverted.
@@ -2491,6 +2932,9 @@ class GameControllerService: ObservableObject {
         if InProcessLightWriter.shared.ownsAnyDualSense { return }
         guard index < connectedControllers.count,
               let light = connectedControllers[index].light else { return }
+        #if DEBUG
+        if TestCapture.blocksDevices { TestCapture.note("light \(index)"); return }
+        #endif
         light.color = GCColor(red: Float(red) / 255, green: Float(green) / 255, blue: Float(blue) / 255)
     }
 
@@ -2547,6 +2991,27 @@ class GameControllerService: ObservableObject {
     @discardableResult
     func rezeroMotion(slot: Int) -> Bool {
         lastRezeroStoredZero = false
+        // The 2026 Steam Controller's gyro is read directly and keeps its
+        // own zero; it said it had no gyroscope and did nothing.
+        if let steam = steamControllerSlot, slot == steam, SteamControllerService.shared.hasMotion {
+            lastRezeroStoredZero = SteamControllerService.shared.imu.rezeroGyro()
+            ActivityLog.shared.info("Motion", lastRezeroStoredZero
+                ? "Re-zeroed the Steam Controller in slot \(slot)"
+                : "Re-zero: the Steam Controller was moving, keeping its learned zero and re-anchoring the pointer", slot: slot)
+            NotificationCenter.default.post(name: Self.motionRezeroedNotification, object: nil,
+                                            userInfo: ["slot": slot])
+            return true
+        }
+        if slot >= connectedControllers.count, let pad = rawHIDGamepadSlots[slot],
+           pad.profile?.layout == .steamController2026 {
+            lastRezeroStoredZero = pad.rezeroGyro()
+            ActivityLog.shared.info("Motion", lastRezeroStoredZero
+                ? "Re-zeroed \(pad.displayName) in slot \(slot)"
+                : "Re-zero: \(pad.displayName) was moving, keeping its learned zero and re-anchoring the pointer", slot: slot)
+            NotificationCenter.default.post(name: Self.motionRezeroedNotification, object: nil,
+                                            userInfo: ["slot": slot])
+            return true
+        }
         guard slot < connectedControllers.count else { return false }
         let controller = connectedControllers[slot]
         guard let motion = controller.motion, motion.hasRotationRate else {
@@ -2610,10 +3075,21 @@ class GameControllerService: ObservableObject {
     /// MIDI, touchpad gestures, and inputs caught by the raw state poll.
     private(set) var lastScanSlot: Int?
 
+    /// The device behind the scan is the one that answered first: Scan keeps
+    /// listening for a moment while the overlay confirms, and a later input
+    /// on another device changed it (its rest values, its fingerprint and the
+    /// chord check were then read from the wrong device).
+    private var scanSlotTaken = false
+    private func noteScanSlot(_ slot: Int?) {
+        guard !scanSlotTaken else { return }
+        scanSlotTaken = true
+        lastScanSlot = slot
+    }
+
     private func emitScan(_ event: InputEvent, slot: Int?) {
         // A device switched off in the Live Visualizer does not answer Scan.
         if let slot, isIgnored(slot: slot) { return }
-        lastScanSlot = slot
+        noteScanSlot(slot)
         scanCallback?(event)
     }
 
@@ -2641,25 +3117,80 @@ class GameControllerService: ObservableObject {
         if let pad = rawHIDGamepadSlots[slot] {
             return String(format: "hid:%04X:%04X", pad.vendorID, pad.productID)
         }
+        // GCRacingWheel gives no USB IDs; the name tells the models apart.
+        if let wheel = racingWheelSlots[slot] { return "wheel:\(wheel.vendorName ?? "")" }
         return nil
+    }
+
+    /// The identity of this one unit: two pads of the same model (both
+    /// ports of a GameCube adapter, two DualSense pads) share
+    /// `deviceIdentity`, so switching one off switched off both. Adds the
+    /// unit's fingerprint (adapter port, hashed serial) when there is one.
+    private func unitIdentity(at slot: Int) -> String? {
+        guard let coarse = deviceIdentity(at: slot) else { return nil }
+        guard coarse != "steam-controller", let print = deviceFingerprint(forSlot: slot) else { return coarse }
+        return coarse + "|" + print
     }
 
     func isIgnored(slot: Int) -> Bool {
         guard !ignoredDevices.isEmpty, let id = deviceIdentity(at: slot) else { return false }
-        return ignoredDevices.contains(id)
+        // Entries saved before 1.7 name the model only, and still count.
+        if ignoredDevices.contains(id) { return true }
+        guard ignoredDevices.contains(where: { $0.hasPrefix(id + "|") }), let unit = unitIdentity(at: slot) else { return false }
+        return ignoredDevices.contains(unit)
     }
 
     func setIgnored(_ ignored: Bool, slot: Int) {
-        guard let id = deviceIdentity(at: slot) else { return }
-        if ignored { ignoredDevices.insert(id) } else { ignoredDevices.remove(id) }
+        guard let id = deviceIdentity(at: slot), let unit = unitIdentity(at: slot) else { return }
+        if ignored { ignoredDevices.insert(unit) } else { ignoredDevices.remove(unit); ignoredDevices.remove(id) }
+        // A zone or trackpad click held at that moment is let go, the
+        // Steam Controller's own surfaces included.
+        if ignored {
+            TouchpadService.shared.touchSourceDisconnected()
+            if isSteamSlot(slot) { steamTrackpadsLeft() }
+        }
         UserDefaults.standard.set(Array(ignoredDevices).sorted(), forKey: Self.ignoredDevicesKey)
         ActivityLog.shared.info("Devices", "\(controllerName(at: slot)): input \(ignored ? "switched off" : "switched back on") in the Live Visualizer", slot: slot)
     }
 
+    /// Reset Settings and Restore from Backup change the stored list; the
+    /// set in memory follows, or the next switch wrote the old list back.
+    func reloadIgnoredDevicesFromDefaults() {
+        let stored = Set(UserDefaults.standard.stringArray(forKey: Self.ignoredDevicesKey) ?? [])
+        if stored != ignoredDevices { ignoredDevices = stored }
+    }
+
+    /// Every pad's axes as Scan began, so the editor can tell a pedal or
+    /// throttle that was resting at one end from a centered stick.
+    private var scanRestStates: [Int: ControllerState] = [:]
+
+    /// Where an axis rested when Scan began, on the slot that answered.
+    func scanRestValue(slot: Int, axis: Int) -> Float? {
+        scanRestStates[slot]?.axes[axis]
+    }
+
     func startScanning(completion: @escaping (InputEvent) -> Void) {
+        var rest: [Int: ControllerState] = [:]
+        var restSlots = Array(connectedControllers.indices) + Array(rawHIDGamepadSlots.keys) + Array(racingWheelSlots.keys)
+        if let steam = steamControllerSlot { restSlots.append(steam) }
+        #if DEBUG
+        if marketingFakeActive { restSlots += Array(0..<marketingFakeCount) }
+        #endif
+        for slot in Set(restSlots) {
+            if let state = peekControllerState(at: slot) { rest[slot] = state }
+        }
+        scanRestStates = rest
+        // Scan compares each tick with the last; the first tick compares
+        // with what every pad held now, so a control already down when Scan
+        // starts is not a press, even when nothing was reading before.
+        lastScanStates = rest
+        var tokens: [Int: String] = [:]
+        for slot in rest.keys { tokens[slot] = occupantToken(forSlot: slot) ?? "" }
+        lastScanTokens = tokens
         isScanning = true
         scanCallback = completion
         lastScanSlot = nil
+        scanSlotTaken = false
         updateLiveInputPolling()
 
         // Set up value changed handlers on all connected controllers
@@ -2738,7 +3269,7 @@ class GameControllerService: ObservableObject {
         // Find max-magnitude axis across all connected motion controllers.
         // Whichever axis crosses threshold first wins the scan.
         var samples: [(slot: Int, gx: Float, gy: Float, gz: Float)] = []
-        for (slot, controller) in connectedControllers.enumerated() {
+        for (slot, controller) in connectedControllers.enumerated() where !isIgnored(slot: slot) {
             guard let motion = controller.motion, motion.hasRotationRate else { continue }
             let key = MotionCalibrationService.identityKey(for: controller)
             let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
@@ -2746,11 +3277,20 @@ class GameControllerService: ObservableObject {
                 y: Float(motion.rotationRate.y),
                 z: Float(motion.rotationRate.z),
                 forKey: key)
-            samples.append((slot, gx, gy, gz))
+            // Gyro Z as the engine reads it (the turn about gravity), so a
+            // turn to the right scans as the direction that then fires on a
+            // turn to the right; the pad's own Z rate is the reverse when
+            // it lies flat.
+            samples.append((slot, gx, gy, turnRate(controller, gx: gx, gy: gy, gz: gz, motion: motion)))
+        }
+        // The 2015 Steam Controller's gyro, through its helper, scans too.
+        if let slot = steamControllerSlot, !isIgnored(slot: slot) {
+            let m = SteamControllerService.shared.imu.freshMotion(SteamControllerService.shared.motion)
+            if !m.isEmpty { samples.append((slot, m[.gyroX] ?? 0, m[.gyroY] ?? 0, m[.gyroZ] ?? 0)) }
         }
         // The 2026 Steam Controller's gyro, read directly, scans too.
-        for (slot, pad) in rawHIDGamepadSlots where pad.profile?.layout == .steamController2026 {
-            let m = pad.state.motion
+        for (slot, pad) in rawHIDGamepadSlots where pad.profile?.layout == .steamController2026 && !isIgnored(slot: slot) {
+            let m = pad.imu.freshMotion(pad.state.motion)
             samples.append((slot, m[.gyroX] ?? 0, m[.gyroY] ?? 0, m[.gyroZ] ?? 0))
         }
         for (slot, gx, gy, gz) in samples {
@@ -2775,7 +3315,7 @@ class GameControllerService: ObservableObject {
                 event = .motion(.gyroZ, direction: gz > 0 ? .positive : .negative)
             }
             motionScanFiredThisGesture = true
-            lastScanSlot = slot
+            noteScanSlot(slot)
             cb(event)
             return
         }
@@ -3255,6 +3795,9 @@ class GameControllerService: ObservableObject {
     /// loop and the deadzone sheet each drained it too, so a running preset
     /// lost part of every turn and the pointer crept.
     func peekControllerState(at index: Int) -> ControllerState? {
+        #if DEBUG
+        if let scripted = Self.debugScriptedStates[index] { return isIgnored(slot: index) ? ControllerState() : scripted }
+        #endif
         readingForDisplay = true
         defer { readingForDisplay = false }
         return readControllerState(at: index)
@@ -3315,6 +3858,7 @@ class GameControllerService: ObservableObject {
         // Switched off in the Live Visualizer: there, but at rest.
         if isIgnored(slot: index) { return ControllerState() }
         #if DEBUG
+        if let scripted = Self.debugScriptedStates[index] { return scripted }
         // Marketing capture: drive the sticks and triggers along a slow sweep
         // so calibration plots draw a full trail and the live readouts show
         // real numbers instead of a dead 0%. Never compiled into Release.
@@ -3348,7 +3892,20 @@ class GameControllerService: ObservableObject {
         // MFi controller. When a binding targets that slot we ask the
         // SteamControllerService for its synthesized ControllerState.
         if let steamIndex = steamControllerSlot, index == steamIndex {
-            let state = SteamControllerService.shared.makeControllerState()
+            var state = SteamControllerService.shared.makeControllerState()
+            // Its IMU, read through the helper: the rate for display, the
+            // turn since the last read for the engine (0 on a poll with no
+            // new report, as for the 2026 model).
+            // A stalled link reads as rest, not as the last turn.
+            let motion = SteamControllerService.shared.imu.freshMotion(SteamControllerService.shared.motion)
+            if !motion.isEmpty {
+                state.motion = motion
+                if !readingForDisplay {
+                    var turn = SteamControllerService.shared.imu.takeMotionAngle()
+                    for c in [MotionChannel.gyroX, .gyroY, .gyroZ] where motion[c] != nil && turn[c] == nil { turn[c] = 0 }
+                    state.motionAngle = turn
+                }
+            }
             // Both round pads as touch surfaces: right the main one, left
             // the second (button numbers are SteamControllerButton's).
             // On display reads too, so the editor lights taps and Scan
@@ -3369,10 +3926,20 @@ class GameControllerService: ObservableObject {
             if let gamepad = rawHIDGamepadSlots[index] {
                 var state = gamepad.state
                 if gamepad.profile?.layout == .steamController2026 {
+                    // A stalled link reads as rest, not as the last turn.
+                    state.motion = gamepad.imu.freshMotion(state.motion)
                     // The turn since the last frame, and the right trackpad
                     // as the touchpad for Touchpad rows.
                     // A display read leaves the turn for the engine.
-                    state.motionAngle = readingForDisplay ? [:] : gamepad.takeMotionAngle()
+                    if readingForDisplay {
+                        state.motionAngle = [:]
+                    } else {
+                        // A poll with no new report turned 0, not rate x
+                        // poll time: the next report counts that time itself.
+                        var turn = gamepad.takeMotionAngle()
+                        for c in [MotionChannel.gyroX, .gyroY, .gyroZ] where state.motion[c] != nil && turn[c] == nil { turn[c] = 0 }
+                        state.motionAngle = turn
+                    }
                     // Both square pads as touch surfaces: right the main
                     // one, left the second.
                     feedSteamTrackpads(state: state, key: gamepad.id, slot: index,
@@ -3380,6 +3947,16 @@ class GameControllerService: ObservableObject {
                                        left: (touch: 20, x: 6, y: 7, click: 18))
                 }
                 return state
+            }
+            // A Logitech wheel for Xbox, read through GCRacingWheel. A
+            // preset reading it asks for it to be held; the live snapshot
+            // holds it through its own reason.
+            if let wheel = racingWheelSlots[index] {
+                if !readingForDisplay {
+                    racingWheelLastRead = CACurrentMediaTime()
+                    if !racingWheelReaders.contains("read") { setRacingWheelsWanted(true, reason: "read") }
+                }
+                return readRacingWheel(wheel)
             }
             return nil
         }
@@ -3455,135 +4032,6 @@ class GameControllerService: ObservableObject {
 
             // --- Hat (D-pad) ---
             state.hats[0] = (gamepad.dpad.xAxis.value, gamepad.dpad.yAxis.value)
-
-            // --- Motion sensors (gyro + accel + attitude) ---
-            // Populated only when the controller actually exposes motion.
-            // Bindings of type `.motion` consume these via MappingEngine.
-            // Drift correction: subtract the per-controller calibration
-            // baseline (zero gyro/accel at rest) so a still controller
-            // reads exactly 0 on every motion channel.
-            if let motion = controller.motion {
-                let key = MotionCalibrationService.identityKey(for: controller)
-                // Guard the accel read like the gyro block below: a controller
-                // that exposes motion but not gravity/user-acceleration returns
-                // undefined values here, which would feed NaN/garbage into the
-                // calibration and motion bindings.
-                if motion.hasGravityAndUserAcceleration {
-                    let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(
-                        x: Float(motion.userAcceleration.x),
-                        y: Float(motion.userAcceleration.y),
-                        z: Float(motion.userAcceleration.z),
-                        forKey: key)
-                    state.motion[.accelX] = ax
-                    state.motion[.accelY] = ay
-                    state.motion[.accelZ] = az
-                } else {
-                    // A pad that reports only total acceleration: take the
-                    // slowly moving part as gravity and the rest as motion,
-                    // so the accelerometer rows work there too. By elapsed
-                    // time (about 0.1 s to settle), so the engine's reads and
-                    // the editor's display reads, at their different rates,
-                    // move one estimate the same way.
-                    let total = SIMD3(Float(motion.acceleration.x), Float(motion.acceleration.y), Float(motion.acceleration.z))
-                    let id = ObjectIdentifier(controller)
-                    let now = ProcessInfo.processInfo.systemUptime
-                    var g = total
-                    if let last = gravityEstimate[id] {
-                        let dt = Float(min(1, max(0, now - last.at)))
-                        g = last.g + (total - last.g) * (1 - exp(-dt / 0.1))
-                    }
-                    gravityEstimate[id] = (g, now)
-                    let user = total - g
-                    let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(x: user.x, y: user.y, z: user.z, forKey: key)
-                    state.motion[.accelX] = ax
-                    state.motion[.accelY] = ay
-                    state.motion[.accelZ] = az
-                }
-                if motion.hasRotationRate, readingForDisplay {
-                    let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
-                        x: Float(motion.rotationRate.x), y: Float(motion.rotationRate.y),
-                        z: Float(motion.rotationRate.z), forKey: key)
-                    state.motion[.gyroX] = gx
-                    state.motion[.gyroY] = gy
-                    state.motion[.gyroZ] = worldYawRate(gx: gx, gy: gy, gz: gz, motion: motion) ?? gz
-                    // The engine's running estimates, read and left alone.
-                    for channel in [MotionChannel.gyroX, .gyroY, .gyroZ] {
-                        if let fusion = axisFusion[FusionKey(controller: ObjectIdentifier(controller), channel: channel)] {
-                            state.motionAbsolute[channel] = fusion.estimate
-                        }
-                    }
-                } else if motion.hasRotationRate {
-                    // The angle actually turned since the last poll (every
-                    // sensor sample counted) is the truth; the rate is its
-                    // average over the interval. See `GyroAccumulator`.
-                    let drained = drainGyro(for: controller)
-                    let rate = drained.angle.map { $0 / drained.interval }
-                        ?? SIMD3(Float(motion.rotationRate.x), Float(motion.rotationRate.y), Float(motion.rotationRate.z))
-                    let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
-                        x: rate.x, y: rate.y, z: rate.z,
-                        forKey: key)
-                    state.motion[.gyroX] = gx
-                    state.motion[.gyroY] = gy
-                    // Turn this poll: none on a quiet poll (see drainGyro).
-                    let turnTime: Float = drained.quiet ? 0 : drained.interval
-                    state.motionAngle[.gyroX] = gx * turnTime
-                    state.motionAngle[.gyroY] = gy * turnTime
-                    // Gyro Z is "turn left or right": the rotation about
-                    // gravity, whatever way the pad is held, positive when
-                    // pointing right. Pointing a controller left and right is
-                    // a yaw, not a roll; a pointer driven from roll (gyro Y)
-                    // only saw the small sideways tilt that comes with it,
-                    // which is why left and right lagged behind up and down.
-                    // Measured about gravity rather than the pad's own Z so
-                    // a pad held nose-up still turns the pointer sideways.
-                    let yawRate = worldYawRate(gx: gx, gy: gy, gz: gz, motion: motion) ?? gz
-                    state.motion[.gyroZ] = yawRate
-                    state.motionAngle[.gyroZ] = yawRate * turnTime
-                    // No gravity reference for yaw, so its absolute is the
-                    // integrated turn since the last re-zero; the learned
-                    // gyro zero keeps it from creeping.
-                    let yawKey = FusionKey(controller: ObjectIdentifier(controller), channel: .gyroZ)
-                    var yaw = axisFusion[yawKey] ?? AxisFusion()
-                    yaw.estimate += yawRate * turnTime
-                    axisFusion[yawKey] = yaw
-                    state.motionAbsolute[.gyroZ] = yaw.estimate
-                    state.motionCorrection[.gyroZ] = 0
-                    // Pitch gets the accelerometer anchor; the pointer path
-                    // reads the fused change, so a slam the gyro could not
-                    // follow still ends with the pointer where "flat" was.
-                    if let fused = fuseTilt(controller: controller, motion: motion,
-                                            rate: SIMD3(gx, gy, gz), interval: turnTime) {
-                        state.motionAngle[.gyroX] = fused.pitch.gyro
-                        state.motionCorrection[.gyroX] = fused.pitch.correction
-                        state.motionAbsolute[.gyroX] = fused.pitch.absolute
-                        state.motionAngle[.gyroY] = fused.roll.gyro
-                        state.motionCorrection[.gyroY] = fused.roll.correction
-                        state.motionAbsolute[.gyroY] = fused.roll.absolute
-                        if !motion.hasAttitude {
-                            state.motion[.pitchAngle] = fused.pitch.absolute / (.pi / 2)
-                            state.motion[.rollAngle] = fused.roll.absolute / .pi
-                        }
-                    }
-                    learnGyroDrift(controller: controller, motion: motion, corrected: SIMD3(gx, gy, gz),
-                                   interval: drained.interval, key: key)
-                }
-                if motion.hasAttitude {
-                    // Convert quaternion (x,y,z,w) to Euler roll/pitch/yaw.
-                    // The output is in radians; downstream code normalizes
-                    // by dividing by π to land in roughly [-1, 1].
-                    let q = motion.attitude
-                    let qx = Float(q.x), qy = Float(q.y), qz = Float(q.z), qw = Float(q.w)
-                    let roll  = atan2(2 * (qw * qx + qy * qz),
-                                      1 - 2 * (qx * qx + qy * qy))
-                    let pitchArg = 2 * (qw * qy - qz * qx)
-                    let pitch = asin(max(-1.0, min(1.0, pitchArg)))
-                    let yaw   = atan2(2 * (qw * qz + qx * qy),
-                                      1 - 2 * (qy * qy + qz * qz))
-                    state.motion[.rollAngle]  = roll  / .pi   // ≈ -1...1
-                    state.motion[.pitchAngle] = pitch / (.pi / 2)
-                    state.motion[.yawAngle]   = yaw   / .pi
-                }
-            }
         } else {
             // Physical input profile fallback for non-standard controllers.
             // CRITICAL: resolve names with the SAME chain the scan path uses
@@ -3606,6 +4054,184 @@ class GameControllerService: ObservableObject {
             // already up-positive (the app's hat convention).
             for (hatIdx, entry) in profile.dpads.sorted(by: { $0.key < $1.key }).enumerated() {
                 state.hats[hatIdx] = (x: entry.value.xAxis.value, y: entry.value.yAxis.value)
+            }
+        }
+
+        // Read for every controller with sensors, not only those with the
+        // extended gamepad profile: a single Joy-Con is profile only, and
+        // its gyro rows (which Scan binds) never moved.
+        // --- Motion sensors (gyro + accel + attitude) ---
+        // Populated only when the controller actually exposes motion.
+        // Bindings of type `.motion` consume these via MappingEngine.
+        // Drift correction: subtract the per-controller calibration
+        // baseline (zero gyro/accel at rest) so a still controller
+        // reads exactly 0 on every motion channel.
+        if let motion = controller.motion {
+            let key = MotionCalibrationService.identityKey(for: controller)
+            // Guard the accel read like the gyro block below: a controller
+            // that exposes motion but not gravity/user-acceleration returns
+            // undefined values here, which would feed NaN/garbage into the
+            // calibration and motion bindings.
+            if motion.hasGravityAndUserAcceleration {
+                let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(
+                    x: Float(motion.userAcceleration.x),
+                    y: Float(motion.userAcceleration.y),
+                    z: Float(motion.userAcceleration.z),
+                    forKey: key)
+                state.motion[.accelX] = ax
+                state.motion[.accelY] = ay
+                state.motion[.accelZ] = az
+            } else {
+                // A pad that reports only total acceleration: take the
+                // slowly moving part as gravity and the rest as motion,
+                // so the accelerometer rows work there too. By elapsed
+                // time (about 0.1 s to settle), so the engine's reads and
+                // the editor's display reads, at their different rates,
+                // move one estimate the same way.
+                let total = SIMD3(Float(motion.acceleration.x), Float(motion.acceleration.y), Float(motion.acceleration.z))
+                let id = ObjectIdentifier(controller)
+                let now = ProcessInfo.processInfo.systemUptime
+                var g = total
+                if let last = gravityEstimate[id] {
+                    let dt = Float(min(1, max(0, now - last.at)))
+                    g = last.g + (total - last.g) * (1 - exp(-dt / 0.1))
+                }
+                gravityEstimate[id] = (g, now)
+                let user = total - g
+                let (ax, ay, az) = MotionCalibrationService.shared.correctedAccel(x: user.x, y: user.y, z: user.z, forKey: key)
+                state.motion[.accelX] = ax
+                state.motion[.accelY] = ay
+                state.motion[.accelZ] = az
+            }
+            if motion.hasRotationRate, readingForDisplay {
+                let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
+                    x: Float(motion.rotationRate.x), y: Float(motion.rotationRate.y),
+                    z: Float(motion.rotationRate.z), forKey: key)
+                state.motion[.gyroX] = gx
+                state.motion[.gyroY] = gy
+                state.motion[.gyroZ] = turnRate(controller, gx: gx, gy: gy, gz: gz, motion: motion)
+                // The engine's running estimates, read and left alone.
+                for channel in [MotionChannel.gyroX, .gyroY, .gyroZ] {
+                    if let fusion = axisFusion[FusionKey(controller: ObjectIdentifier(controller), channel: channel)] {
+                        state.motionAbsolute[channel] = fusion.estimate
+                    }
+                }
+                // And the tilt angles from them, so the editor's light and
+                // meters follow a tilt row as the engine reads it.
+                if !motion.hasAttitude, let turned = state.motionAbsolute[.gyroZ] {
+                    state.motion[.yawAngle] = remainder(turned, 2 * .pi) / .pi
+                }
+                let id = ObjectIdentifier(controller)
+                let fusing = lastFuseAt[id].map { ProcessInfo.processInfo.systemUptime - $0 < 0.25 } ?? false
+                if !motion.hasAttitude, fusing {
+                    if let p = state.motionAbsolute[.gyroX] { state.motion[.pitchAngle] = p / (.pi / 2) }
+                    if let r = state.motionAbsolute[.gyroY] { state.motion[.rollAngle] = r / .pi }
+                } else if !motion.hasAttitude {
+                    let a = SIMD3(Float(motion.acceleration.x), Float(motion.acceleration.y), Float(motion.acceleration.z))
+                    let mag = (a * a).sum().squareRoot()
+                    if mag.isFinite, mag > 0.2 {
+                        let u = a / mag
+                        let saved = Self.learnedTiltSigns[MotionCalibrationService.identityKey(for: controller)]
+                        let sx: Float = axisFusion[FusionKey(controller: id, channel: .gyroX)]?.sign ?? ((saved?.first ?? 1) < 0 ? -1 : 1)
+                        let sy: Float = axisFusion[FusionKey(controller: id, channel: .gyroY)]?.sign ?? ((saved?.last ?? 1) < 0 ? -1 : 1)
+                        let pitch = sx * Self.accelAngle(.gyroX, ax: u.x, ay: u.y, az: u.z)
+                        let roll = sy * Self.accelAngle(.gyroY, ax: u.x, ay: u.y, az: u.z)
+                        state.motionAbsolute[.gyroX] = pitch
+                        state.motionAbsolute[.gyroY] = roll
+                        state.motion[.pitchAngle] = pitch / (.pi / 2)
+                        state.motion[.rollAngle] = roll / .pi
+                    }
+                }
+            } else if motion.hasRotationRate {
+                // The angle actually turned since the last poll (every
+                // sensor sample counted) is the truth; the rate is its
+                // average over the interval. See `GyroAccumulator`.
+                let drained = drainGyro(for: controller)
+                let measured = drained.angle.map { $0 / drained.interval }
+                    ?? SIMD3(Float(motion.rotationRate.x), Float(motion.rotationRate.y), Float(motion.rotationRate.z))
+                // A NaN sample counts as no turn: fed in, it stayed in
+                // the tilt and yaw estimates until the pad reconnected.
+                let rate = (measured.x.isFinite && measured.y.isFinite && measured.z.isFinite) ? measured : .zero
+                let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
+                    x: rate.x, y: rate.y, z: rate.z,
+                    forKey: key)
+                // Switch rows read the samples' average rate (see drainGyro);
+                // the turn below still comes from the angle the samples made.
+                let even = drained.rate.map { r in
+                    (r.x.isFinite && r.y.isFinite && r.z.isFinite) ? r : SIMD3<Float>.zero
+                }
+                let shown = even.map { MotionCalibrationService.shared.correctedGyro(x: $0.x, y: $0.y, z: $0.z, forKey: key) }
+                state.motion[.gyroX] = shown?.0 ?? gx
+                state.motion[.gyroY] = shown?.1 ?? gy
+                // Turn this poll: none on a quiet poll (see drainGyro).
+                let turnTime: Float = drained.quiet ? 0 : drained.interval
+                state.motionAngle[.gyroX] = gx * turnTime
+                state.motionAngle[.gyroY] = gy * turnTime
+                // Gyro Z is "turn left or right": the rotation about
+                // gravity, whatever way the pad is held, positive when
+                // pointing right. Pointing a controller left and right is
+                // a yaw, not a roll; a pointer driven from roll (gyro Y)
+                // only saw the small sideways tilt that comes with it,
+                // which is why left and right lagged behind up and down.
+                // Measured about gravity rather than the pad's own Z so
+                // a pad held nose-up still turns the pointer sideways.
+                let yawRate = turnRate(controller, gx: gx, gy: gy, gz: gz, motion: motion)
+                state.motion[.gyroZ] = shown.map { turnRate(controller, gx: $0.0, gy: $0.1, gz: $0.2, motion: motion) } ?? yawRate
+                state.motionAngle[.gyroZ] = yawRate * turnTime
+                // No gravity reference for yaw, so its absolute is the
+                // integrated turn since the last re-zero; the learned
+                // gyro zero keeps it from creeping.
+                let yawKey = FusionKey(controller: ObjectIdentifier(controller), channel: .gyroZ)
+                var yaw = axisFusion[yawKey] ?? AxisFusion()
+                // Leftover sensor bias below the rest floor (the one the
+                // relative path uses) is not counted: with no reference for
+                // yaw it crept the pointer sideways in pointing mode while
+                // the pad was held still.
+                if abs(yawRate) >= 0.005 { yaw.estimate += yawRate * turnTime }
+                axisFusion[yawKey] = yaw
+                state.motionAbsolute[.gyroZ] = yaw.estimate
+                state.motionCorrection[.gyroZ] = 0
+                // Yaw angle rows: no pad here reports a heading, so the
+                // turn since the last re-zero, wrapped to a half turn
+                // each way (it was never set, and those rows never fired).
+                if !motion.hasAttitude {
+                    let wrapped = remainder(yaw.estimate, 2 * .pi)
+                    state.motion[.yawAngle] = wrapped / .pi
+                }
+                // Pitch gets the accelerometer anchor; the pointer path
+                // reads the fused change, so a slam the gyro could not
+                // follow still ends with the pointer where "flat" was.
+                if let fused = fuseTilt(controller: controller, motion: motion,
+                                        rate: SIMD3(gx, gy, gz), interval: turnTime) {
+                    state.motionAngle[.gyroX] = fused.pitch.gyro
+                    state.motionCorrection[.gyroX] = fused.pitch.correction
+                    state.motionAbsolute[.gyroX] = fused.pitch.absolute
+                    state.motionAngle[.gyroY] = fused.roll.gyro
+                    state.motionCorrection[.gyroY] = fused.roll.correction
+                    state.motionAbsolute[.gyroY] = fused.roll.absolute
+                    if !motion.hasAttitude {
+                        state.motion[.pitchAngle] = fused.pitch.absolute / (.pi / 2)
+                        state.motion[.rollAngle] = fused.roll.absolute / .pi
+                    }
+                }
+                learnGyroDrift(controller: controller, motion: motion, corrected: SIMD3(gx, gy, gz),
+                               interval: drained.interval, key: key)
+            }
+            if motion.hasAttitude {
+                // Convert quaternion (x,y,z,w) to Euler roll/pitch/yaw.
+                // The output is in radians; downstream code normalizes
+                // by dividing by π to land in roughly [-1, 1].
+                let q = motion.attitude
+                let qx = Float(q.x), qy = Float(q.y), qz = Float(q.z), qw = Float(q.w)
+                let roll  = atan2(2 * (qw * qx + qy * qz),
+                                  1 - 2 * (qx * qx + qy * qy))
+                let pitchArg = 2 * (qw * qy - qz * qx)
+                let pitch = asin(max(-1.0, min(1.0, pitchArg)))
+                let yaw   = atan2(2 * (qw * qz + qx * qy),
+                                  1 - 2 * (qy * qy + qz * qz))
+                state.motion[.rollAngle]  = roll  / .pi   // ≈ -1...1
+                state.motion[.pitchAngle] = pitch / (.pi / 2)
+                state.motion[.yawAngle]   = yaw   / .pi
             }
         }
 
@@ -3773,6 +4399,7 @@ class GameControllerService: ObservableObject {
         }
         DualSenseSupplementService.shared.setPollingWanted(wanted, reason: "live")
         RawHIDGamepadService.shared.setDecodingWanted(wanted, reason: "live")
+        setRacingWheelsWanted(wanted, reason: "live")
     }
 
     private func refreshRawActiveInputs() {
@@ -3801,6 +4428,7 @@ class GameControllerService: ObservableObject {
         if connectedControllers.isEmpty,
            steamControllerSlot == nil,
            rawHIDGamepadSlots.isEmpty,
+           racingWheelSlots.isEmpty,
            !fakeActive,
            !isScanning,
            rawActiveExpiry.isEmpty,
@@ -3815,11 +4443,13 @@ class GameControllerService: ObservableObject {
         // second just for the editor highlight bookkeeping.
         scratchFreshlyActive.removeAll(keepingCapacity: true)
         scratchSnapshots.removeAll(keepingCapacity: true)
+        scratchScanStates.removeAll(keepingCapacity: true)
 
         // Real MFi controllers
         for i in connectedControllers.indices {
             guard let state = peekControllerState(at: i) else { continue }
             scratchSnapshots[i] = state
+            scratchScanStates[i] = state
             accumulate(into: &scratchFreshlyActive, state: state)
             // Bridge any DualSense / DualShock 4 touchpad data the
             // GameController framework reports through to the touchpad
@@ -3834,6 +4464,7 @@ class GameControllerService: ObservableObject {
             for i in 0..<marketingFakeCount {
                 guard let state = peekControllerState(at: i) else { continue }
                 scratchSnapshots[i] = state
+                scratchScanStates[i] = state
                 accumulate(into: &scratchFreshlyActive, state: state)
             }
         }
@@ -3846,7 +4477,10 @@ class GameControllerService: ObservableObject {
             // pad click or a tap is what gets bound.
             if isScanning {
                 for b in [SteamControllerButton.leftPadTouch, .rightPadTouch, .stickActive] { state.buttons[b.rawValue] = nil }
+                // The pads' positions jump at touchdown, before a click.
+                for a in [2, 3, 6, 7] { state.axes[a] = nil }
             }
+            scratchScanStates[slot] = state
             accumulate(into: &scratchFreshlyActive, state: state)
         }
         // Raw HID gamepads (8BitDo XInput, Xbox 360 wired, etc.)
@@ -3861,6 +4495,14 @@ class GameControllerService: ObservableObject {
                 // The trackpads' position and pressure jump at touchdown.
                 for a in 6...11 { state.axes[a] = nil }
             }
+            scratchScanStates[slot] = state
+            accumulate(into: &scratchFreshlyActive, state: state)
+        }
+        // Racing wheels read through GCRacingWheel (Logitech's wheels for Xbox)
+        for slot in racingWheelSlots.keys {
+            guard let state = peekControllerState(at: slot) else { continue }
+            scratchSnapshots[slot] = state
+            scratchScanStates[slot] = state
             accumulate(into: &scratchFreshlyActive, state: state)
         }
         // A controller's re-zero button (chosen in the Motion Calibration
@@ -3886,6 +4528,14 @@ class GameControllerService: ObservableObject {
         // controllers at 30 Hz; copy is a single shallow Dict copy.
         let previousStates = currentStates
         currentStates = scratchSnapshots
+        defer {
+            // What Scan compares against next tick, and which pad held
+            // each slot.
+            lastScanStates = scratchScanStates
+            var tokens: [Int: String] = [:]
+            for slot in scratchScanStates.keys { tokens[slot] = occupantToken(forSlot: slot) ?? "" }
+            lastScanTokens = tokens
+        }
 
         // Bridge supplemental inputs into the scan flow. Some buttons -
         // notably the PS / Home button on DualSense under macOS 26's
@@ -3894,6 +4544,16 @@ class GameControllerService: ObservableObject {
         // still sees those presses and merges them into state.buttons;
         // we detect a 0→1 transition here and fire the scanCallback so
         // the binding editor's Scan button can still capture them.
+        // Axis keys Scan holds back this tick; not marked active, so they
+        // count as fresh once the axis really moves.
+        var heldBackKeys = Set<String>()
+        if !isScanning, !scanAxisFirst.isEmpty { scanAxisFirst.removeAll() }
+        // An axis back near the middle is known now: its next push counts.
+        for (pending, _) in scanAxisFirst {
+            let parts = pending.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2 else { scanAxisFirst[pending] = nil; continue }
+            if abs(scratchSnapshots[parts[0]]?.axes[parts[1]] ?? 0) < 0.5 { scanAxisFirst[pending] = nil }
+        }
         if isScanning, let cb = scanCallback {
             // Find a freshly-active input that wasn't active last tick.
             // Avoid `Set.subtracting`'s new-Set allocation by looping.
@@ -3903,26 +4563,109 @@ class GameControllerService: ObservableObject {
             // it, for a zone inward of the 50 percent a stick needs), and the
             // row was bound to the zone. Zones are picked from the row's menu.
             var firedKey: String?
-            for key in scratchFreshlyActive where !rawActiveInputs.contains(key) {
-                if let type = InputEvent.parse(key)?.type,
-                   type == .touchpadRegion || type == .cursorRegion || type == .stickRegion { continue }
-                firedKey = key
-                break
-            }
-            if let first = firedKey, let event = InputEvent.parse(first) {
-                // Which slot pressed it: the one where it went down this
-                // tick. Two pads holding the same button credited the
-                // lowest slot, even when the other pad made the press.
-                // Runs only when a scan fires.
-                func holds(_ state: ControllerState?) -> Bool {
-                    guard let state else { return false }
-                    var one = Set<String>()
-                    accumulate(into: &one, state: state)
-                    return one.contains(first)
+            // Several new in one tick (a Steam pad's D-pad edge is also its
+            // pad click and a hat; a trigger crossing as a button and an
+            // axis): the most specific wins, the same way every launch,
+            // not the set's order. A hat, then a button (the lower number,
+            // so a D-pad edge before a whole-pad click), then an axis.
+            func rank(_ e: InputEvent) -> Int {
+                switch e.type {
+                case .hat: return 0
+                case .button: return 1
+                case .axis: return 2
+                default: return 3
                 }
-                let slots = scratchSnapshots.keys.sorted()
-                lastScanSlot = slots.first { holds(scratchSnapshots[$0]) && !holds(previousStates[$0]) }
-                    ?? slots.first { holds(scratchSnapshots[$0]) }
+            }
+            // Worked out per device: merged, a control held on one stick (a
+            // throttle at idle reads full) hid the same-numbered control on
+            // another, which then could never be scanned.
+            // From the states Scan sees (touch sensors and pad positions left
+            // out), against the last tick's, per slot. A slot whose pad
+            // changed (pads shifting when one connects) has nothing new this
+            // tick: its held controls are not presses.
+            let slots = scratchScanStates.keys.sorted()
+            var nowBySlot: [Int: Set<String>] = [:]
+            var prevBySlot: [Int: Set<String>] = [:]
+            var samePad = Set<Int>()
+            for slot in slots {
+                var current = Set<String>()
+                if let state = scratchScanStates[slot] { accumulate(into: &current, state: state) }
+                nowBySlot[slot] = current
+                // A pad new to the slot (connected this tick) has nothing new
+                // either: what it holds as it arrives is not a press.
+                if let before = lastScanTokens[slot], before == (occupantToken(forSlot: slot) ?? "") {
+                    samePad.insert(slot)
+                    var before = Set<String>()
+                    if let state = lastScanStates[slot] { accumulate(into: &before, state: state) }
+                    prevBySlot[slot] = before
+                } else {
+                    prevBySlot[slot] = current
+                }
+            }
+            var fresh: [(key: String, event: InputEvent, slot: Int)] = []
+            for slot in slots {
+                for key in nowBySlot[slot] ?? [] {
+                    // Already down last tick: not new, unless it is an axis
+                    // Scan held back on its first value, checked again below.
+                    let pendingAxis = InputEvent.parse(key).map { $0.type == .axis && scanAxisFirst["\(slot):\($0.index)"] != nil } ?? false
+                    if prevBySlot[slot]?.contains(key) == true, !pendingAxis { continue }
+                    // Still lingering from this pad's own last press (a
+                    // bounce) is not new; held only on another pad, it is.
+                    let heldElsewhere = slots.contains { $0 != slot && samePad.contains($0) && (prevBySlot[$0]?.contains(key) ?? false) }
+                    if rawActiveInputs.contains(key), !heldElsewhere, !pendingAxis { continue }
+                    guard let event = InputEvent.parse(key) else { continue }
+                    if event.type == .touchpadRegion || event.type == .cursorRegion || event.type == .stickRegion { continue }
+                    // An axis's first value since the device connected is where
+                    // it rests (a pedal that reports only when moved), not a
+                    // press: it scanned in the resting direction and held the row on.
+                    // It counts once the axis has moved from that first value:
+                    // a pedal that rests at an end stays put, a press moves on.
+                    if event.type == .axis {
+                        let index = event.index
+                        let pending = "\(slot):\(index)"
+                        let seenBefore = !samePad.contains(slot) || lastScanStates[slot]?.axes[index] != nil
+                        if !seenBefore || scanAxisFirst[pending] != nil {
+                            let now = scratchSnapshots[slot]?.axes[index] ?? 0
+                            if let first = scanAxisFirst[pending] {
+                                // Moved, and toward this key's side: a pedal
+                                // leaving -1 is a press of +, not of -.
+                                let toward = event.axisDirection == .negative ? first - now : now - first
+                                if toward < 0.15 { heldBackKeys.insert(key); continue }
+                                scanAxisFirst[pending] = nil
+                            } else {
+                                scanAxisFirst[pending] = now
+                                heldBackKeys.insert(key)
+                                continue
+                            }
+                        }
+                    }
+                    fresh.append((key, event, slot))
+                }
+            }
+            // A Steam pad's trackpad tap or gesture comes from its touch
+            // surfaces, not a slot's state: taken as before, on that pad.
+            let steamSlot = steamControllerSlot
+                ?? rawHIDGamepadSlots.first(where: { $0.value.profile?.layout == .steamController2026 })?.key
+            // A PlayStation pad's gestures reach Scan through its own
+            // callback; taken here too, every tap was delivered twice.
+            let fromSteam = CACurrentMediaTime() - steamGestureAt < 1
+            if fromSteam {
+                for key in scratchFreshlyActive where !rawActiveInputs.contains(key) {
+                    guard let event = InputEvent.parse(key), event.type == .touchpadGesture else { continue }
+                    fresh.append((key, event, steamSlot ?? -1))
+                }
+            }
+            fresh.sort { a, b in
+                let ra = rank(a.event), rb = rank(b.event)
+                if ra != rb { return ra < rb }
+                if a.event.index != b.event.index { return a.event.index < b.event.index }
+                return a.slot != b.slot ? a.slot < b.slot : a.key < b.key
+            }
+            firedKey = fresh.first?.key
+            if let pick = fresh.first {
+                // Which slot pressed it: the one where it went down this tick.
+                noteScanSlot(pick.slot >= 0 ? pick.slot : nil)
+                let event = pick.event
                 cb(event)
             }
         }
@@ -3930,7 +4673,7 @@ class GameControllerService: ObservableObject {
         // Stamp expiry timestamps for everything currently pressed.
         let now = Date()
         let expiryDate = now.addingTimeInterval(rawActiveLingerSeconds)
-        for key in scratchFreshlyActive {
+        for key in scratchFreshlyActive where !heldBackKeys.contains(key) {
             rawActiveExpiry[key] = expiryDate
         }
         // Drop entries whose expiry has passed. Collect into a reused scratch
@@ -3957,6 +4700,14 @@ class GameControllerService: ObservableObject {
     /// Sit at the type level next to other state so they're not
     /// re-allocated on every call.
     private var scratchFreshlyActive: Set<String> = []
+    /// An axis Scan saw for the first time, and the value it first read: it
+    /// counts once it moves from there (see the scan in refreshRawActiveInputs).
+    private var scanAxisFirst: [String: Float] = [:]
+    /// The states Scan reads (touch sensors left out), this tick and last,
+    /// and which pad held each slot last tick.
+    private var scratchScanStates: [Int: ControllerState] = [:]
+    private var lastScanStates: [Int: ControllerState] = [:]
+    private var lastScanTokens: [Int: String] = [:]
     /// Reused across 30 Hz ticks to collect expired raw-active keys without a
     /// fresh Array allocation per tick.
     private var scratchExpiredKeys: [String] = []
@@ -4093,6 +4844,9 @@ class GameControllerService: ObservableObject {
     }
 
     func touchpadFeedAccepted(from controller: GCController?) -> Bool {
+        // A pad switched off in the Live Visualizer feeds nothing, its
+        // touchpad included.
+        if let controller, let slot = connectedControllers.firstIndex(where: { $0 === controller }), isIgnored(slot: slot) { return false }
         guard let source = touchpadSourceSlot else { return true }
         guard let controller,
               let index = connectedControllers.firstIndex(where: { $0 === controller }) else { return false }
@@ -4105,7 +4859,7 @@ class GameControllerService: ObservableObject {
 
     private func feedTouchpadFromController(_ controller: GCController, slot: Int) {
         guard let pad = controller.extendedGamepad else { return }
-        guard touchpadSourceSlot == nil || touchpadSourceSlot == slot else { return }
+        guard !isIgnored(slot: slot), touchpadSourceSlot == nil || touchpadSourceSlot == slot else { return }
 
         // Typed subclasses (DualSense / DualShock 4) are handled by
         // `installTouchpadHandlers`'s event-driven path which runs at
@@ -4209,7 +4963,151 @@ class GameControllerService: ObservableObject {
     /// form a binding stores, so anything that highlights from
     /// `rawActiveInputs` lights up for them as well: touchpad zones and
     /// taps, stick zones, and screen regions while the cursor is sampled.
+    /// Gesture rows in the open editor, with their settings, so a row lights
+    /// when its gesture is made there with no preset running.
+    struct LiveGesture: Hashable { var input: InputEvent; var reach: Double; var windowMs: Int; var flickMs: Int
+        var invert = false }
+    var liveGestures: [LiveGesture] = [] {
+        didSet { if liveGestures != oldValue { liveGestureRecognizers.removeAll() } }
+    }
+    private var liveGestureRecognizers: [String: StickGestureRecognizer] = [:]
+
+    /// The open editor's axis rows, so each lights at its own deadzone with
+    /// no preset running (the raw set lights a stick only past half way),
+    /// and at the deadzone sheet's value while it is being moved.
+    struct LiveAxisRow: Hashable { var id: UUID; var index: Int; var direction: AxisDirection?; var deadzone: Float; var invert: Bool
+        var fullTravel = false
+        /// The region the row waits in (Options, Region), as the engine gates it.
+        var onlyInRegion: UUID? = nil }
+    var liveAxisRows: [LiveAxisRow] = []
+    /// The editor's zone rows that take over their stick, so a direction row
+    /// stays dark while the stick is inside one, as the engine runs it.
+    var liveTakeoverZones: [(key: Int, id: UUID, deadzone: Double, invert: Bool, rowID: UUID, modifiers: [String])] = []
+
+    nonisolated static func axisRowKey(_ id: UUID) -> String { "row " + id.uuidString }
+
+    /// The editor's zone rows, lit by their own deadzone and Invert as the
+    /// engine reads them (the shared zone keys use the default gate).
+    struct LiveZoneRow: Hashable { var id: UUID; var key: Int; var zone: UUID; var deadzone: Double; var invert: Bool }
+    var liveZoneRows: [LiveZoneRow] = []
+
+    private func accumulateZoneRows(into set: inout Set<String>) {
+        guard !liveZoneRows.isEmpty else { return }
+        for row in liveZoneRows {
+            guard let found = StickRegionService.shared.region(with: row.zone) else { continue }
+            for (slot, state) in scratchSnapshots
+            where isInside(found.region, key: row.key, slot: slot, state: state, deadzone: row.deadzone, invert: row.invert) {
+                set.insert(Self.axisRowKey(row.id)); break
+            }
+        }
+    }
+
+    /// Whether a stick or band is inside one of its regions on this slot,
+    /// read as the engine reads a region row.
+    private func isInside(_ region: TouchpadRegion, key: Int, slot: Int, state: ControllerState,
+                          deadzone t: Double, invert: Bool) -> Bool {
+        if StickRegionService.isBandKey(key) {
+            let axis = key - StickRegionService.bandKeyBase
+            guard let v = state.axes[axis] else { return false }
+            let oneWay = StickRegionService.axisIsOneWay(axis) || axisReadsOneWay(slot: slot, index: axis)
+            var f = StickRegionService.travelFraction(axis: axis, value: v, oneWay: oneWay)
+            if invert { f = 1 - f }
+            if !oneWay, Double(abs(v)) < t,
+               region.minY < 0.5 - t / 2 || region.maxY > 0.5 + t / 2 { return false }
+            return region.maxY > region.minY && region.containsTravel(f)
+        }
+        var x = Double(state.axes[key == 1 ? 2 : 0] ?? 0), y = Double(state.axes[key == 1 ? 3 : 1] ?? 0)
+        if invert { x = -x; y = -y }
+        return hypot(x, y) >= t && region.contains(normalizedX: (x + 1) / 2, y: (y + 1) / 2)
+    }
+
+    private func accumulateAxisRows(into set: inout Set<String>) {
+        accumulateZoneRows(into: &set)
+        guard !liveAxisRows.isEmpty else { return }
+        let preview = MappingEngine.deadzonePreview
+        // Per slot, the axes a held takeover zone claims right now.
+        var taken: [Int: Set<Int>] = [:]
+        for (slot, state) in scratchSnapshots {
+            for z in liveTakeoverZones {
+                // A zone row with a second control takes over only while
+                // that control is held, as the engine's pre-pass does.
+                guard z.modifiers.allSatisfy(set.contains),
+                      let found = StickRegionService.shared.region(with: z.id) else { continue }
+                let dz = (preview?.id == z.rowID ? preview.map { Double($0.inner) } : nil) ?? z.deadzone
+                if StickRegionService.isBandKey(z.key) {
+                    let axis = z.key - StickRegionService.bandKeyBase
+                    guard let v = state.axes[axis] else { continue }
+                    let oneWay = StickRegionService.axisIsOneWay(axis) || axisReadsOneWay(slot: slot, index: axis)
+                    var f = StickRegionService.travelFraction(axis: axis, value: v, oneWay: oneWay)
+                    if z.invert { f = 1 - f }
+                    // A two-way band reaching past the deadzone waits for a push.
+                    if !oneWay, abs(Double(v)) < dz,
+                       found.region.minY < 0.5 - dz / 2 || found.region.maxY > 0.5 + dz / 2 { continue }
+                    if found.region.maxY > found.region.minY, found.region.containsTravel(f) { taken[slot, default: []].insert(axis) }
+                } else {
+                    var x = Double(state.axes[z.key == 1 ? 2 : 0] ?? 0), y = Double(state.axes[z.key == 1 ? 3 : 1] ?? 0)
+                    if z.invert { x = -x; y = -y }
+                    if hypot(x, y) >= dz, found.region.contains(normalizedX: (x + 1) / 2, y: (y + 1) / 2) {
+                        taken[slot, default: []].formUnion(z.key == 1 ? [2, 3] : [0, 1])
+                    }
+                }
+            }
+        }
+        for row in liveAxisRows {
+            let t = (preview?.id == row.id ? preview?.inner : nil) ?? row.deadzone
+            for (slot, state) in scratchSnapshots {
+                if taken[slot]?.contains(row.index) == true { continue }
+                guard var v = state.axes[row.index] else { continue }
+                if row.invert { v = -v }
+                // Rests at one end, as the engine reads it: the whole travel.
+                if row.fullTravel, row.index != 4, row.index != 5,
+                   !axisReadsOneWay(slot: slot, index: row.index) {
+                    switch row.direction {
+                    case .positive?: v = max(0, min(1, (v + 1) / 2))
+                    case .negative?: v = -max(0, min(1, (1 - v) / 2))
+                    case nil: break
+                    }
+                }
+                let on: Bool
+                switch row.direction {
+                case .positive?: on = v > t
+                case .negative?: on = v < -t
+                case nil: on = abs(v) > t
+                }
+                // Waiting in a region on its own stick: dark outside it.
+                if on, let gate = row.onlyInRegion, let found = StickRegionService.shared.region(with: gate),
+                   found.stickIndex == StickRegionService.gateKey(forAxis: row.index),
+                   !isInside(found.region, key: found.stickIndex, slot: slot, state: state,
+                             deadzone: 0.25, invert: false) { continue }   // the engine reads the gate at the default deadzone
+                if on { set.insert(Self.axisRowKey(row.id)); break }
+            }
+        }
+    }
+
+    private func accumulateGestures(into set: inout Set<String>) {
+        guard !liveGestures.isEmpty else { return }
+        let now = CACurrentMediaTime()
+        for (i, g) in liveGestures.enumerated() {
+            guard let steps = g.input.gestureSteps, !steps.isEmpty else { continue }
+            for (slot, state) in scratchSnapshots {
+                let key = "\(i)#\(slot)"
+                var r = liveGestureRecognizers[key] ?? StickGestureRecognizer()
+                r.reach = g.reach; r.windowMs = g.windowMs; r.maxFlickMs = g.flickMs
+                var x = Double(state.axes[g.input.index == 1 ? 2 : 0] ?? 0)
+                var y = Double(state.axes[g.input.index == 1 ? 3 : 1] ?? 0)
+                if g.invert { x = -x; y = -y }
+                if r.feed(x: x, y: y, now: now, steps: steps,
+                          matches: { StickGestureRecognizer.stepMatches($0, x: $1, y: $2, stick: g.input.index == 1 ? 1 : 0) }) {
+                    set.insert(g.input.serialized)
+                }
+                liveGestureRecognizers[key] = r
+            }
+        }
+    }
+
     private func accumulateRegions(into set: inout Set<String>) {
+        accumulateGestures(into: &set)
+        accumulateAxisRows(into: &set)
         let pad = TouchpadService.shared.snapshotRegions()
         for id in pad.pressed { set.insert(InputEvent.touchpadRegion(id).serialized) }
         for kind in TouchpadGestureKind.allCases where TouchpadService.shared.peekGesture(kind) {
@@ -4222,7 +5120,13 @@ class GameControllerService: ObservableObject {
             set.insert(InputEvent.touchpadGesture(kind).serialized)
             steamGestureAt = CACurrentMediaTime()
         }
-        // A Steam Controller's left pad, under its own " s1" keys.
+        // A Steam Controller's left pad, under its own " s1" keys: its
+        // regions and its gestures.
+        for id in TouchpadService.second.snapshotRegions().pressed {
+            var e = InputEvent.touchpadRegion(id)
+            e.touchpadSurface = 1
+            set.insert(e.serialized)
+        }
         for kind in TouchpadGestureKind.allCases where TouchpadService.second.peekGesture(kind) {
             var e = InputEvent.touchpadGesture(kind)
             e.touchpadSurface = 1
@@ -4240,9 +5144,25 @@ class GameControllerService: ObservableObject {
         // particular controller, so two pads mapping the same zone both
         // light the row.
         for (stick, list) in StickRegionService.shared.regionsByStick where !list.isEmpty {
+            if StickRegionService.isBandKey(stick) {
+                let axis = stick - StickRegionService.bandKeyBase
+                for (slot, state) in scratchSnapshots {
+                    guard let v = state.axes[axis] else { continue }
+                    let f = StickRegionService.travelFraction(
+                        axis: axis, value: v,
+                        oneWay: StickRegionService.axisIsOneWay(axis) || axisReadsOneWay(slot: slot, index: axis))
+                    for r in list where r.maxY > r.minY && r.containsTravel(f) {
+                        set.insert(InputEvent.stickRegion(stickIndex: stick, id: r.id).serialized)
+                    }
+                }
+                continue
+            }
             for state in scratchSnapshots.values {
                 let x = Double(state.axes[stick * 2] ?? 0)
                 let y = Double(state.axes[stick * 2 + 1] ?? 0)
+                // The engine gates a zone at the row's deadzone (0.25 unless
+                // set), so a zone over the center does not light at rest.
+                guard hypot(x, y) >= 0.25 else { continue }
                 for r in list where r.contains(normalizedX: (x + 1) / 2, y: (y + 1) / 2) {
                     set.insert(InputEvent.stickRegion(stickIndex: stick, id: r.id).serialized)
                 }
@@ -4286,7 +5206,7 @@ class GameControllerService: ObservableObject {
         if let t = steamWatchTimer { RunLoop.main.add(t, forMode: .common) }
     }
 
-    private func syncSteamControllerSlot() {
+    private func syncSteamControllerSlot(announce: Bool = true) {
         let isConnected = SteamControllerService.shared.isConnected
         let desiredSlot = isConnected ? connectedControllers.count : nil
 
@@ -4294,8 +5214,11 @@ class GameControllerService: ObservableObject {
         // (Refresh Controllers, Rescan Devices, waking from sleep) wipes
         // every slot's details, and returning on the slot alone left the
         // Steam Controller unlisted until it disconnected.
+        // Rebuilt once its IMU starts reporting, so motion rows and the
+        // visualizer's motion meters appear for it.
         if desiredSlot == steamControllerSlot,
-           desiredSlot.map({ controllerDetails[$0] != nil }) ?? true { return }
+           desiredSlot.map({ controllerDetails[$0] != nil
+               && controllerDetails[$0]?.supportsMotion == SteamControllerService.shared.hasMotion }) ?? true { return }
 
         // Clean up any prior virtual entry.
         // Only while the entry is still the Steam Controller's: a pad that
@@ -4311,10 +5234,13 @@ class GameControllerService: ObservableObject {
         if steamSlotChanged {
             if desiredSlot != nil, steamControllerSlot == nil {
                 StatsService.shared.controllerConnected(name: "Steam Controller")
+                if announce { AccessibilityNotification.Announcement(String(localized: "\("Steam Controller") connected")).post() }
             } else if desiredSlot == nil, steamControllerSlot != nil {
+                if announce { AccessibilityNotification.Announcement(String(localized: "\("Steam Controller") disconnected")).post() }
                 StatsService.shared.controllerDisconnected(
                     name: "Steam Controller",
-                    anyStillConnected: !connectedControllers.isEmpty || !rawHIDGamepadSlots.isEmpty)
+                    anyStillConnected: !connectedControllers.isEmpty || !rawHIDGamepadSlots.isEmpty
+                        || !racingWheelSlots.isEmpty)
             }
         }
         // The 2015 model leaving mid-touch: a held zone key let go.
@@ -4323,7 +5249,7 @@ class GameControllerService: ObservableObject {
         // Raw HID pads move out of (or back into) that slot now, not on
         // their own timer half a second later, so the slot never reads the
         // Steam Controller under the raw pad's identity.
-        defer { if steamSlotChanged { syncRawHIDGamepadSlots() } }
+        defer { if steamSlotChanged { syncRawHIDGamepadSlots(announce: announce) } }
 
         if let slot = desiredSlot {
             controllerNames[slot] = "Steam Controller"
@@ -4337,12 +5263,12 @@ class GameControllerService: ObservableObject {
                 batteryState: nil,
                 buttonCount: 22,
                 // Stick 0 and 1, right pad 2 and 3, triggers 4 and 5, left
-                // pad 6 and 7. No motion reaches the engine from this driver
-                // (it showed motion in Devices once). Its two trackpads feed
-                // the touch surfaces, so it is a touch source like the 2026
-                // model.
+                // pad 6 and 7. Its gyro and accelerometer reach the engine
+                // once the helper has turned them on and they report. Its
+                // two trackpads feed the touch surfaces, so it is a touch
+                // source like the 2026 model.
                 axisCount: 8,
-                supportsMotion: false,
+                supportsMotion: SteamControllerService.shared.hasMotion,
                 hasTouchpad: true,
                 hasMicroGamepad: false,
                 physicalButtonNames: SteamControllerButton.allCases.filter { $0 != .stickActive }.map(\.displayName),
@@ -4374,7 +5300,7 @@ class GameControllerService: ObservableObject {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func syncRawHIDGamepadSlots() {
+    private func syncRawHIDGamepadSlots(announce: Bool = true) {
         #if DEBUG
         // The marketing capture's synthetic raw pads own the slots meanwhile.
         if !marketingFakeRawSlots.isEmpty { return }
@@ -4401,7 +5327,9 @@ class GameControllerService: ObservableObject {
 
         // Apply if changed. Equality is by slot key set + per-slot id.
         let changed = desired.count != rawHIDGamepadSlots.count
-            || desired.contains(where: { rawHIDGamepadSlots[$0.key]?.id != $0.value.id })
+            // The object too: a GameCube port reseated within one sync gets a
+            // new pad with the same id, and the slot kept reading the old one.
+            || desired.contains(where: { rawHIDGamepadSlots[$0.key]?.id != $0.value.id || rawHIDGamepadSlots[$0.key] !== $0.value })
         if changed {
             // Detach controller info for slots that are no longer used.
             let removedSlots = Set(rawHIDGamepadSlots.keys).subtracting(desired.keys)
@@ -4420,11 +5348,15 @@ class GameControllerService: ObservableObject {
             let oldIDs = Set(rawHIDGamepadSlots.values.map(\.id))
             for pad in desired.values where !oldIDs.contains(pad.id) {
                 StatsService.shared.controllerConnected(name: pad.displayName)
+                // Spoken like a Game Controller pad's arrival.
+                if announce { AccessibilityNotification.Announcement(String(localized: "\(pad.displayName) connected")).post() }
             }
             for pad in rawHIDGamepadSlots.values where !desiredIDs.contains(pad.id) {
+                if announce { AccessibilityNotification.Announcement(String(localized: "\(pad.displayName) disconnected")).post() }
                 StatsService.shared.controllerDisconnected(
                     name: pad.displayName,
-                    anyStillConnected: !connectedControllers.isEmpty || !desired.isEmpty || steamControllerSlot != nil)
+                    anyStillConnected: !connectedControllers.isEmpty || !desired.isEmpty || steamControllerSlot != nil
+                        || !racingWheelSlots.isEmpty)
             }
             rawHIDGamepadSlots = desired
         }
@@ -4441,7 +5373,7 @@ class GameControllerService: ObservableObject {
         func batteryStale(_ slot: Int, _ gamepad: RawHIDGamepad) -> Bool {
             guard let b = gamepad.battery, let info = controllerDetails[slot] else { return false }
             return info.batteryLevel != Float(b.level) / 100
-                || info.batteryState != (b.charging ? "Charging" : "Discharging")
+                || info.batteryState != b.state
         }
         for (slot, gamepad) in rawHIDGamepadSlots where changed || controllerDetails[slot] == nil || batteryStale(slot, gamepad) {
             let steam2026 = gamepad.profile?.layout == .steamController2026
@@ -4449,9 +5381,10 @@ class GameControllerService: ObservableObject {
             let names = gamepad.profile?.physicalButtonNames
                 ?? ControllerProfileDatabase.xinputButtonNames
             // A Stream Deck's names start with 22 gamepad placeholders before
-            // its keys; it has its keys and no gamepad.
+            // its keys; it has its keys (and a Plus its dials and touch strip)
+            // and no gamepad.
             var streamDeckKeys: Int?
-            if case .streamDeck(let format)? = gamepad.profile?.layout { streamDeckKeys = format.keys }
+            if case .streamDeck(let format)? = gamepad.profile?.layout { streamDeckKeys = format.controls }
             controllerNames[slot] = gamepad.displayName
             controllerDetails[slot] = ControllerInfo(
                 name: gamepad.displayName,
@@ -4460,8 +5393,15 @@ class GameControllerService: ObservableObject {
                 hasLight: false,
                 hasBattery: battery != nil,
                 batteryLevel: battery.map { Float($0.level) / 100 },
-                batteryState: battery.map { $0.charging ? "Charging" : "Discharging" },
-                buttonCount: streamDeckKeys ?? names.count,
+                batteryState: battery.map(\.state),
+                // How many buttons a descriptor pad has, not its highest number
+                // (they are not in a row) and counting array buttons.
+                buttonCount: streamDeckKeys ?? {
+                    if case .generic(let generic)? = gamepad.profile?.layout, generic.extended != nil {
+                        return Set(HIDExtendedLayoutRegistry.extended(for: generic).buttonIndices).count
+                    }
+                    return names.count
+                }(),
                 axisCount: Self.rawHIDAxisCount(gamepad),
                 supportsMotion: steam2026,
                 hasTouchpad: steam2026,
@@ -4473,7 +5413,12 @@ class GameControllerService: ObservableObject {
                 // so a HORIPAD for Switch gets Nintendo letters and a
                 // DualShock 3 PlayStation symbols, with Nintendo's vendor ID
                 // as the fallback; it showed "Unknown" for every one.
+                // GameCube pads number their buttons their own way: as a
+                // Switch Pro the Smart Preset Maker put its rows on the wrong
+                // buttons, so they are no brand it builds for.
                 brand: steam2026 ? .steamController
+                    : gamepad.profile?.layout == .switch2GameCube
+                        || gamepad.profile?.identifier.hasPrefix("nintendo-gamecube-adapter") == true ? .unknown
                     : gamepad.profile?.layout == .switch2Pro ? .switchPro
                     : (ControllerTypeDetector.brand(fromName: "\(gamepad.manufacturer ?? "") \(gamepad.productName)")
                         ?? (gamepad.vendorID == 0x057E ? .switchPro
@@ -4483,6 +5428,344 @@ class GameControllerService: ObservableObject {
                 extraAxisCount: steam2026 ? 6 : (Self.rawHIDAxisIndices(gamepad)?.filter { $0 >= 6 }.count ?? 0)
             )
         }
+        // Racing wheels sit after the raw pads, so they move when the raw
+        // pads do, in the same pass.
+        syncRacingWheelSlots(announce: announce)
+    }
+
+    // MARK: - Racing wheels (GCRacingWheel)
+
+    /// GameController lists Logitech's wheels for Xbox (G920, G923 for
+    /// Xbox) as GCRacingWheel, never as a GCController. Their connect and
+    /// disconnect notifications resync the slots at once; the raw HID
+    /// watch's 2 Hz sync keeps them in place as other pads come and go.
+    private func startRacingWheelWatch() {
+        #if DEBUG
+        // A test run never touches the Mac's own devices.
+        if TestCapture.inTestRun { return }
+        #endif
+        guard !racingWheelWatchStarted else { return }
+        racingWheelWatchStarted = true
+        for name in [Notification.Name.GCRacingWheelDidConnect, .GCRacingWheelDidDisconnect] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                // The wheel is looked up again on the main actor from
+                // connectedRacingWheels, so nothing from the notification
+                // crosses over.
+                Task { @MainActor in self?.syncRacingWheelSlots() }
+            }
+        }
+        syncRacingWheelSlots(announce: false)
+    }
+
+    /// Whether the Mac's racing wheels may be read: never in a test run.
+    private var readsRealRacingWheels: Bool {
+        #if DEBUG
+        if TestCapture.inTestRun { return false }
+        #endif
+        return racingWheelWatchStarted
+    }
+
+    private func syncRacingWheelSlots(announce: Bool = true) {
+        #if DEBUG
+        // The marketing capture's synthetic raw pads own the slots meanwhile.
+        if !marketingFakeRawSlots.isEmpty { return }
+        #endif
+        let present = readsRealRacingWheels ? Array(GCRacingWheel.connectedRacingWheels).filter { !$0.isSnapshot } : []
+        let presentIDs = Set(present.map(ObjectIdentifier.init))
+        racingWheels.removeAll { !presentIDs.contains(ObjectIdentifier($0.wheel)) }
+        // Newcomers after the wheels already here, by name when several
+        // arrive at once (the set has no order).
+        let known = Set(racingWheels.map { ObjectIdentifier($0.wheel) })
+        for wheel in present.filter({ !known.contains(ObjectIdentifier($0)) })
+            .sorted(by: { ($0.vendorName ?? "") < ($1.vendorName ?? "") }) {
+            nextConnectionSerial += 1
+            racingWheels.append(RacingWheelEntry(wheel: wheel, serial: nextConnectionSerial))
+        }
+
+        // A wheel is read only while acquired, and acquired only while
+        // something reads it; otherwise it is let go, so a game can have it.
+        let now = CACurrentMediaTime()
+        // A preset that stopped reading the wheel (stopped, or switched to
+        // one that does not) lets it go.
+        if racingWheelReaders.contains("read"), now - racingWheelLastRead > 2 { racingWheelReaders.remove("read") }
+        let wanted = !racingWheelReaders.isEmpty
+        if !wanted {
+            for i in racingWheels.indices {
+                if racingWheels[i].wheel.isAcquired { racingWheels[i].wheel.relinquishDevice() }
+                racingWheels[i].nextAcquireAt = 0
+                racingWheels[i].loggedFailure = false
+            }
+        }
+        for i in racingWheels.indices where wanted && !racingWheels[i].wheel.isAcquired && now >= racingWheels[i].nextAcquireAt {
+            let wheel = racingWheels[i].wheel
+            let name = wheel.vendorName ?? Self.racingWheelFallbackName
+            do {
+                try wheel.acquireDevice()
+                racingWheels[i].loggedFailure = false
+                if !racingWheels[i].loggedRead {
+                    racingWheels[i].loggedRead = true
+                    ActivityLog.shared.info("Controllers", "\(name) is read through macOS racing wheel support")
+                }
+            } catch {
+                racingWheels[i].nextAcquireAt = now + 5
+                if !racingWheels[i].loggedFailure {
+                    racingWheels[i].loggedFailure = true
+                    ActivityLog.shared.warning("Controllers", "\(name) could not be opened: \(error.localizedDescription). Another app may be using it; trying again every few seconds")
+                }
+            }
+        }
+        var namesLearned = false
+        for i in racingWheels.indices where racingWheels[i].wheel.isAcquired && racingWheels[i].buttonIndex.isEmpty {
+            namesLearned = true
+            let buttons = Self.racingWheelButtonElements(racingWheels[i].wheel.wheelInput)
+            let index = Self.racingWheelButtonIndices(buttons.map(\.name))
+            racingWheels[i].buttonIndex = index
+            racingWheels[i].buttonNames = buttons.compactMap { b in index[b.name].map { ($0, b.label) } }
+                .sorted { $0.index < $1.index }
+        }
+
+        // Every wheel macOS lists keeps its slot, held or not, so presets
+        // and the editor see it while it is let go.
+        let reading = racingWheels
+        let baseIndex = max(connectedControllers.count + (steamControllerSlot != nil ? 1 : 0),
+                            (rawHIDGamepadSlots.keys.max() ?? -1) + 1)
+        let desired = Dictionary(uniqueKeysWithValues: reading.enumerated().map { (baseIndex + $0.offset, $0.element.wheel) })
+        let changed = desired.count != racingWheelSlots.count
+            || desired.contains(where: { racingWheelSlots[$0.key] !== $0.value })
+        if changed {
+            // Only a slot still holding a wheel's details: a raw pad that
+            // moved into it has written its own.
+            for slot in Set(racingWheelSlots.keys).subtracting(desired.keys)
+            where controllerDetails[slot]?.productCategory == Self.racingWheelCategory
+                && slot >= connectedControllers.count && slot != steamControllerSlot && rawHIDGamepadSlots[slot] == nil {
+                controllerDetails.removeValue(forKey: slot)
+                controllerNames.removeValue(forKey: slot)
+            }
+            let oldIDs = Set(racingWheelSlots.values.map(ObjectIdentifier.init))
+            let newIDs = Set(desired.values.map(ObjectIdentifier.init))
+            for wheel in desired.values where !oldIDs.contains(ObjectIdentifier(wheel)) {
+                let name = wheel.vendorName ?? Self.racingWheelFallbackName
+                StatsService.shared.controllerConnected(name: name)
+                if announce { AccessibilityNotification.Announcement(String(localized: "\(name) connected")).post() }
+            }
+            for wheel in racingWheelSlots.values where !newIDs.contains(ObjectIdentifier(wheel)) {
+                let name = wheel.vendorName ?? Self.racingWheelFallbackName
+                if announce { AccessibilityNotification.Announcement(String(localized: "\(name) disconnected")).post() }
+                StatsService.shared.controllerDisconnected(
+                    name: name,
+                    anyStillConnected: !connectedControllers.isEmpty || !rawHIDGamepadSlots.isEmpty
+                        || steamControllerSlot != nil || !desired.isEmpty)
+            }
+            racingWheelSlots = desired
+            // The Devices menu stops listing these wheels as unreadable.
+            HIDDeviceRegistry.shared.setRacingWheelsRead(desired.count)
+        }
+
+        // Published like a raw pad's details, and again after a refresh
+        // wiped them.
+        for (slot, wheel) in racingWheelSlots where changed || namesLearned || controllerDetails[slot] == nil {
+            let input = wheel.wheelInput
+            let names = racingWheelButtons(forSlot: slot)
+            let name = wheel.vendorName ?? Self.racingWheelFallbackName
+            controllerNames[slot] = name
+            controllerDetails[slot] = ControllerInfo(
+                name: name,
+                productCategory: Self.racingWheelCategory,
+                hasExtendedGamepad: false,
+                hasLight: false,
+                hasBattery: false,
+                batteryLevel: nil,
+                batteryState: nil,
+                // The buttons it has, as the editor lists them, not the
+                // highest number (the Xbox button is 24).
+                buttonCount: names.count,
+                // Steering 0, clutch 1, brake 4, gas 5, as LogitechWheel
+                // puts every Logitech wheel read raw.
+                axisCount: input.clutchPedal != nil || input.brakePedal != nil || input.acceleratorPedal != nil ? 6 : 1,
+                supportsMotion: false,
+                hasTouchpad: false,
+                hasMicroGamepad: false,
+                physicalButtonNames: names.map(\.name),
+                brand: .unknown,
+                // The axes it has: steering and clutch, brake and gas.
+                stickAxisCount: 1 + (input.clutchPedal != nil ? 1 : 0),
+                triggerCount: (input.brakePedal != nil ? 1 : 0) + (input.acceleratorPedal != nil ? 1 : 0),
+                extraAxisCount: 0
+            )
+        }
+    }
+
+    /// The product category a racing wheel's details carry.
+    static let racingWheelCategory = "Racing Wheel"
+
+    /// Each racing wheel read through macOS racing wheel support, in slot
+    /// order, by the name the device menus give it.
+    var racingWheelNames: [(slot: Int, name: String)] {
+        racingWheelSlots.keys.sorted().map { slot in
+            (slot, racingWheelSlots[slot]?.vendorName ?? controllerDetails[slot]?.name ?? Self.racingWheelFallbackName)
+        }
+    }
+
+    /// The buttons of a racing wheel in a slot, numbered, with the names the
+    /// wheel gives them: for the editor's rows.
+    func racingWheelButtons(forSlot slot: Int) -> [(index: Int, name: String)] {
+        guard let wheel = racingWheelSlots[slot] else { return [] }
+        var out = racingWheels.first { $0.wheel === wheel }?.buttonNames ?? []
+        // A pattern shifter's gears sit on buttons 12 to 17 and reverse on
+        // 18, read and heard by Scan, so the editor lists them too.
+        if wheel.wheelInput.shifter?.patternInput != nil {
+            for g in 1...6 { out.append((Self.racingWheelFirstGearButton + g - 1, String(localized: "Gear \(g)"))) }
+            out.append((Self.racingWheelReverseButton, String(localized: "Reverse")))
+        }
+        return out
+    }
+
+    /// Whether the racing wheel in a slot has a pedal of each kind, and a
+    /// D-pad, for the editor's rows.
+    func racingWheelControls(forSlot slot: Int) -> (gas: Bool, brake: Bool, clutch: Bool, dpad: Bool)? {
+        guard let input = racingWheelSlots[slot]?.wheelInput else { return nil }
+        return (input.acceleratorPedal != nil, input.brakePedal != nil, input.clutchPedal != nil,
+                !input.dpads.isEmpty)
+    }
+
+    /// The wheel's buttons, pedals left out (they are buttons to
+    /// GameController but axes here), each with the name it is numbered by
+    /// and the name shown for it.
+    private static func racingWheelButtonElements(_ input: GCRacingWheelInput) -> [(element: any GCButtonElement, name: String, label: String)] {
+        let pedals: [AnyObject] = [input.acceleratorPedal, input.brakePedal, input.clutchPedal].compactMap { $0 as AnyObject? }
+        // By name too, in case GameController hands the pedals back as
+        // other objects in the button list.
+        var out: [(element: any GCButtonElement, name: String, label: String)] = []
+        for element in input.buttons where !pedals.contains(where: { $0 === (element as AnyObject) })
+            && !element.aliases.contains(where: { $0.localizedCaseInsensitiveContains("pedal") }) {
+            // The name the numbering knows, else the first alias in order,
+            // so the same wheel gets the same name every time.
+            let aliases = element.aliases.sorted()
+            guard let name = aliases.first(where: { racingWheelKnownButtons[$0] != nil }) ?? aliases.first ?? element.localizedName
+            else { continue }
+            out.append((element, name, element.localizedName ?? name))
+        }
+        return out
+    }
+
+    /// The live state of a racing wheel, numbered as `racingWheelState`.
+    private func readRacingWheel(_ wheel: GCRacingWheel) -> ControllerState {
+        guard wheel.isAcquired else { return ControllerState() }
+        let input = wheel.wheelInput
+        var reading = RacingWheelReading()
+        reading.angle = input.wheel.absoluteInput?.value ?? 0
+        reading.maximumDegreesOfRotation = input.wheel.maximumDegreesOfRotation
+        reading.accelerator = input.acceleratorPedal?.pressedInput.value
+        reading.brake = input.brakePedal?.pressedInput.value
+        reading.clutch = input.clutchPedal?.pressedInput.value
+        if let dpad = input.dpads.first {
+            reading.hat = (x: dpad.xAxis.value, y: dpad.yAxis.value)
+        }
+        for b in Self.racingWheelButtonElements(input) {
+            reading.buttons[b.name] = b.element.pressedInput.value
+        }
+        // A pattern shifter only; a sequential one reports a change, not a
+        // position, and is not read yet.
+        if let pattern = input.shifter?.patternInput { reading.gear = pattern.position }
+        let index = racingWheels.first { $0.wheel === wheel }?.buttonIndex
+            ?? Self.racingWheelButtonIndices(Array(reading.buttons.keys))
+        return Self.racingWheelState(reading, buttonIndex: index)
+    }
+
+    /// What a racing wheel reports at one moment, as plain values, so the
+    /// mapping to a ControllerState can be checked without a wheel.
+    struct RacingWheelReading {
+        /// Degrees from center, as GCSteeringWheelElement reports it.
+        var angle: Float = 0
+        /// How far the wheel turns lock to lock, in degrees.
+        var maximumDegreesOfRotation: Float = 900
+        /// Each pedal 0 released to 1 floored; nil for a pedal not there.
+        var accelerator: Float?
+        var brake: Float?
+        var clutch: Float?
+        /// The D-pad, up positive; nil without one.
+        var hat: (x: Float, y: Float)?
+        /// Each button's value, 0 to 1, by the name it is numbered by.
+        var buttons: [String: Float] = [:]
+        /// A pattern shifter's position: -1 reverse, 0 neutral, 1 and up
+        /// the gears. nil without a pattern shifter.
+        var gear: Int?
+    }
+
+    /// The G29's button numbers (see Layout+LogitechG29) for the Xbox
+    /// wheel's buttons that sit where a G29 button does, so a preset made
+    /// for the PlayStation and PC G29 or G923 works on the Xbox wheels: A
+    /// where Cross is, X where Square is, B where Circle is, Y where
+    /// Triangle is, View and Menu where Share and Options are, the stick
+    /// buttons where L3 and R3 are, the Xbox button where PS is.
+    nonisolated static let racingWheelKnownButtons: [String: Int] = [
+        "Button A": 0, "Button X": 1, "Button B": 2, "Button Y": 3,
+        "Right Paddle": 4, "Left Paddle": 5,
+        "Right Shoulder": 6, "Left Shoulder": 7,
+        "Button Options": 8, "Button Menu": 9,
+        "Right Thumbstick Button": 10, "Left Thumbstick Button": 11,
+        "Button Home": 24,
+    ]
+    /// The G29 numbers its shifter's gears 1 to 6 on buttons 12 to 17 and
+    /// reverse on 18; the Xbox wheels' gears go to the same buttons.
+    nonisolated static let racingWheelFirstGearButton = 12
+    nonisolated static let racingWheelReverseButton = 18
+    /// Buttons the G29 has no place for are numbered after its 25, in name
+    /// order, so the same wheel numbers them the same way every time.
+    nonisolated static let racingWheelFirstExtraButton = 25
+
+    /// Each button name to its number: the G29's number where the button has
+    /// one there, else the next number from 25 in sorted name order. A name
+    /// whose G29 number is already taken counts as an extra. D-pad
+    /// directions are left out: the D-pad is hat 0.
+    nonisolated static func racingWheelButtonIndices(_ names: [String]) -> [String: Int] {
+        var out: [String: Int] = [:]
+        var taken = Set<Int>()
+        var next = racingWheelFirstExtraButton
+        let sorted = Set(names).filter { !$0.hasPrefix("Direction Pad") }.sorted()
+        for name in sorted {
+            if let index = racingWheelKnownButtons[name], !taken.contains(index) {
+                out[name] = index
+                taken.insert(index)
+            }
+        }
+        for name in sorted where out[name] == nil {
+            out[name] = next
+            next += 1
+        }
+        return out
+    }
+
+    /// A racing wheel's reading on the plan LogitechWheel.normalize gives
+    /// every Logitech wheel read raw: steering on axis 0 (-1 full left, 1
+    /// full right, the angle over half the rotation range), clutch on axis 1,
+    /// brake on axis 4, gas on axis 5 (each 0 released, 1 floored), the
+    /// D-pad on hat 0, the buttons by `buttonIndex`, and a pattern
+    /// shifter's gear on the G29's gear buttons.
+    nonisolated static func racingWheelState(_ reading: RacingWheelReading, buttonIndex: [String: Int]) -> ControllerState {
+        func unit(_ v: Float) -> Float { v.isFinite ? min(max(v, 0), 1) : 0 }
+        var state = ControllerState()
+        // A wheel that reports no range is taken as 900 degrees, the range
+        // of every wheel GCRacingWheel reads.
+        let range = reading.maximumDegreesOfRotation.isFinite && reading.maximumDegreesOfRotation > 0
+            ? reading.maximumDegreesOfRotation : 900
+        let steering = reading.angle / (range / 2)
+        state.axes[0] = steering.isFinite ? min(max(steering, -1), 1) : 0
+        if let clutch = reading.clutch { state.axes[1] = unit(clutch) }
+        if let brake = reading.brake { state.axes[4] = unit(brake) }
+        if let gas = reading.accelerator { state.axes[5] = unit(gas) }
+        if let hat = reading.hat { state.hats[0] = hat }
+        for (name, value) in reading.buttons {
+            guard let index = buttonIndex[name] else { continue }
+            state.buttons[index] = max(state.buttons[index] ?? 0, unit(value))
+        }
+        // Every gear button reads, 0 or 1, while a shifter is there, so
+        // a gear let go of reads released.
+        if let gear = reading.gear {
+            for g in 1...6 { state.buttons[racingWheelFirstGearButton + g - 1] = gear == g ? 1 : 0 }
+            state.buttons[racingWheelReverseButton] = gear < 0 ? 1 : 0
+        }
+        return state
     }
 
     /// The family the controller in a slot names its buttons in (see
@@ -4509,8 +5792,13 @@ class GameControllerService: ObservableObject {
         guard byBrand == .none else { return byBrand }
         // The recognized model's own names and missing buttons (an Xbox One
         // has no Share, a Series pad no paddles), from its layout.
-        return ControllerLayoutResolver.cachedMatch(service: self, slot: slot)?
-            .modelNames(on: ControllerLayoutResolver.readPath(service: self, slot: slot)) ?? .none
+        // A racing wheel's drawing is experimental, hidden in a Release
+        // build; its button names must not depend on whether it is drawn,
+        // or its X and B read swapped and its paddles as LB and RB.
+        let layout = racingWheelSlots[slot] != nil
+            ? ControllerLayoutResolver.cachedMatchIncludingHidden(service: self, slot: slot).flatMap(ControllerLayoutCatalog.anyLayout)
+            : ControllerLayoutResolver.cachedMatch(service: self, slot: slot)
+        return layout?.modelNames(on: ControllerLayoutResolver.readPath(service: self, slot: slot)) ?? .none
     }
 
     /// The family and model names a slot's rows are shown with, for a
@@ -4535,9 +5823,15 @@ class GameControllerService: ObservableObject {
             if let id = gamepad.profile?.identifier, id.hasPrefix("nintendo-gamecube-adapter-port") {
                 key += "/" + id.replacingOccurrences(of: "nintendo-gamecube-adapter-", with: "")
             }
+            // So do the players of a two-player adapter: switching one off
+            // switched off both.
+            if let id = gamepad.profile?.identifier, let range = id.range(of: "-player", options: .backwards) {
+                key += "/" + String(id[id.index(after: range.lowerBound)...])
+            }
             return "hid:" + key
         }
         if slot == steamControllerSlot { return "steam" }
+        if let wheel = racingWheelSlots[slot] { return "wheel:" + (wheel.vendorName ?? "") }
         guard slot < connectedControllers.count else { return nil }
         let controller = connectedControllers[slot]
         var key = "gc:" + MotionCalibrationService.baseKey(for: controller)
@@ -4553,6 +5847,9 @@ class GameControllerService: ObservableObject {
     func occupantToken(forSlot slot: Int) -> String? {
         if let gamepad = rawHIDGamepadSlots[slot] { return "hid:\(gamepad.id)" }
         if slot == steamControllerSlot { return "steam" }
+        if let wheel = racingWheelSlots[slot], let entry = racingWheels.first(where: { $0.wheel === wheel }) {
+            return "wheel:\(entry.serial)"
+        }
         guard slot < connectedControllers.count else { return nil }
         return "gc:\(connectionSerial(for: connectedControllers[slot]))"
     }

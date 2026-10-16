@@ -30,20 +30,29 @@ struct MouseDiagramView: View {
     /// inspector (the popover listing those rows, each a way to the editor)
     /// for the kinds the part stands for, under the given name. Parts no
     /// row uses stay as they are. nil leaves the whole diagram read-only.
-    var inspect: ((_ kinds: Set<String>, _ name: String, _ part: AnyView) -> AnyView)? = nil
+    /// The key is the part's own (a legend line and the drawing name the
+    /// same button, and one key opened both popovers at once).
+    var inspect: ((_ kinds: Set<String>, _ name: String, _ key: String, _ part: AnyView) -> AnyView)? = nil
 
     /// A part wrapped for clicking when a row uses any of its kinds.
     @ViewBuilder
-    private func clickable<Part: View>(_ kinds: Set<String>, _ name: String,
+    private func clickable<Part: View>(legend: Bool = false, _ kinds: Set<String>, _ name: String,
                                        @ViewBuilder _ part: () -> Part) -> some View {
         if let inspect, !kinds.isDisjoint(with: boundKinds) {
-            inspect(kinds, name, AnyView(part()))
+            // Named, so a bound part is not a bare "button".
+            inspect(kinds, name, (legend ? "legend-" : "") + name, AnyView(part().accessibilityLabel(name)))
         } else {
             part()
         }
     }
 
-    var body: some View {
+    /// The app's direction, read outside the pinned drawing, for the legend.
+    @Environment(\.layoutDirection) private var appDirection
+
+    // A drawing of real hardware: never mirrored for right-to-left languages.
+    var body: some View { drawing.environment(\.layoutDirection, .leftToRight) }
+
+    @ViewBuilder private var drawing: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(spacing: 6) {
                 mouseBody
@@ -53,12 +62,14 @@ struct MouseDiagramView: View {
                 // The trackpad clicks, double clicks, force clicks, and
                 // scrolls with two fingers, so it lists all of those rows.
                 clickable(["btn0", "btn1", "doubleClick", "pressure", "deepPress", "scrollGesture",
-                           "scrollUp", "scrollDown", "scrollLeft", "scrollRight"], "Trackpad") { trackpadBody }
+                           "scrollUp", "scrollDown", "scrollLeft", "scrollRight"], String(localized: "Trackpad")) { trackpadBody }
                 Text("Trackpad").font(.caption2).foregroundStyle(.hint)
-                clickable(["scrollGesture"], "Scroll gesture") { scrollGestureChip }
-                clickable(["pressure", "deepPress"], "Force Touch") { forceTouchGauge }
+                clickable(["scrollGesture"], String(localized: "Scroll gesture")) { scrollGestureChip }
+                clickable(["pressure", "deepPress"], String(localized: "Force Touch")) { forceTouchGauge }
             }
+            // A list of labels, not hardware: in the app's own direction.
             legend
+                .environment(\.layoutDirection, appDirection)
         }
     }
 
@@ -109,7 +120,7 @@ struct MouseDiagramView: View {
         .frame(width: 110, height: 76)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Trackpad")
-        .accessibilityValue(forced ? "force click" : clicked ? "clicked" : rightClicked ? "two-finger click" : scrolling ? "scrolling" : "idle")
+        .accessibilityValue(forced ? String(localized: "force click") : clicked ? String(localized: "clicked") : rightClicked ? String(localized: "two-finger click") : scrolling ? String(localized: "scrolling") : String(localized: "idle"))
     }
 
     /// The stylized mouse silhouette. Body is a vertical rounded
@@ -129,14 +140,14 @@ struct MouseDiagramView: View {
             .stroke(Color.secondary.opacity(0.35), lineWidth: 0.5)
             .frame(width: 90, height: 140)
 
-            clickable(["btn0"], "Left click") {
+            clickable(["btn0"], String(localized: "Left click")) {
                 buttonRegion(active: pressedButtons.contains(0), bound: boundKinds.contains("btn0"))
                     .frame(width: 44, height: 60)
                     .clipShape(RoundedCorner(radius: 22, corners: [.topLeft]))
             }
             .position(x: 23, y: 32)
 
-            clickable(["btn1"], "Right click") {
+            clickable(["btn1"], String(localized: "Right click")) {
                 buttonRegion(active: pressedButtons.contains(1), bound: boundKinds.contains("btn1"))
                     .frame(width: 44, height: 60)
                     .clipShape(RoundedCorner(radius: 22, corners: [.topRight]))
@@ -145,14 +156,14 @@ struct MouseDiagramView: View {
 
             // Scroll wheel with all four directions.
             VStack(spacing: 2) {
-                clickable(["scrollUp"], "Scroll up") {
+                clickable(["scrollUp"], String(localized: "Scroll up")) {
                     arrow("chevron.up", on: activeKinds.contains("scrollUp"), bound: boundKinds.contains("scrollUp"))
                 }
                 HStack(spacing: 2) {
-                    clickable(["scrollLeft"], "Scroll left") {
+                    clickable(["scrollLeft"], String(localized: "Scroll left")) {
                         arrow("chevron.left", on: activeKinds.contains("scrollLeft"), bound: boundKinds.contains("scrollLeft"))
                     }
-                    clickable(["btn2"], "Middle click") {
+                    clickable(["btn2"], String(localized: "Middle click")) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(pressedButtons.contains(2)
@@ -164,11 +175,11 @@ struct MouseDiagramView: View {
                         }
                         .frame(width: 8, height: 16)
                     }
-                    clickable(["scrollRight"], "Scroll right") {
+                    clickable(["scrollRight"], String(localized: "Scroll right")) {
                         arrow("chevron.right", on: activeKinds.contains("scrollRight"), bound: boundKinds.contains("scrollRight"))
                     }
                 }
-                clickable(["scrollDown"], "Scroll down") {
+                clickable(["scrollDown"], String(localized: "Scroll down")) {
                     arrow("chevron.down", on: activeKinds.contains("scrollDown"), bound: boundKinds.contains("scrollDown"))
                 }
             }
@@ -176,7 +187,7 @@ struct MouseDiagramView: View {
 
             // Side buttons 4 and 5 on the left edge.
             ForEach([3, 4], id: \.self) { b in
-                clickable(["btn\(b)"], "Side button \(b + 1)") {
+                clickable(["btn\(b)"], String(localized: "Side button \(b + 1)")) {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(pressedButtons.contains(b)
                               ? Color.green.opacity(0.8)
@@ -187,7 +198,7 @@ struct MouseDiagramView: View {
             }
 
             // Motion ring at the bottom, lit on any move.
-            clickable(["move"], "Motion") {
+            clickable(["move"], String(localized: "Motion")) {
                 Circle()
                     .stroke(activeKinds.contains("move")
                             ? Color.green
@@ -218,8 +229,8 @@ struct MouseDiagramView: View {
     /// What a finger scroll is doing: lit while fingers are on, dimmer while
     /// the scroll coasts on momentum, quiet otherwise.
     private var scrollGestureChip: some View {
-        let text = scrollGesture == .fingers ? "Scrolling, fingers on"
-                 : (scrollGesture == .momentum ? "Scrolling, momentum" : "No scroll gesture")
+        let text = scrollGesture == .fingers ? String(localized: "Scrolling, fingers on")
+                 : (scrollGesture == .momentum ? String(localized: "Scrolling, momentum") : String(localized: "No scroll gesture"))
         let on = scrollGesture != .none
         return Text(text)
             .font(.caption2)
@@ -235,7 +246,7 @@ struct MouseDiagramView: View {
     /// is a click or a force click. Reads only while this window is in
     /// front, since macOS gives trackpad force to the front app alone.
     private var forceTouchGauge: some View {
-        let stageText = pressureStage >= 2 ? "Force click" : (pressureStage == 1 ? "Click" : "Force Touch")
+        let stageText = pressureStage >= 2 ? String(localized: "Force click") : (pressureStage == 1 ? String(localized: "Click") : String(localized: "Force Touch"))
         let lit = pressureStage >= 2 || activeKinds.contains("deepPress")
         return VStack(spacing: 3) {
             ZStack(alignment: .leading) {
@@ -249,7 +260,7 @@ struct MouseDiagramView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Force Touch")
-        .accessibilityValue(String(format: "%.0f percent, %@", pressure * 100, stageText))
+        .accessibilityValue(String(localized: "\(String(format: "%.0f", pressure * 100)) percent, \(stageText)"))
     }
 
     /// Legend next to the silhouette. Each row dims when the slot's
@@ -257,41 +268,41 @@ struct MouseDiagramView: View {
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
             // Each line a bound input names opens its rows too.
-            clickable(["btn0"], "Left click") {
+            clickable(legend: true, ["btn0"], String(localized: "Left click")) {
                 legendItem(symbol: "1", label: "Left click", bound: boundKinds.contains("btn0"), on: pressedButtons.contains(0))
             }
-            clickable(["btn1"], "Right click") {
+            clickable(legend: true, ["btn1"], String(localized: "Right click")) {
                 legendItem(symbol: "2", label: "Right click", bound: boundKinds.contains("btn1"), on: pressedButtons.contains(1))
             }
-            clickable(["btn2"], "Middle click") {
+            clickable(legend: true, ["btn2"], String(localized: "Middle click")) {
                 legendItem(symbol: "3", label: "Middle click", bound: boundKinds.contains("btn2"), on: pressedButtons.contains(2))
             }
-            clickable(["btn3"], "Side button 4") {
+            clickable(legend: true, ["btn3"], String(localized: "Side button 4")) {
                 legendItem(symbol: "4", label: "Side button 4", bound: boundKinds.contains("btn3"), on: pressedButtons.contains(3))
             }
-            clickable(["btn4"], "Side button 5") {
+            clickable(legend: true, ["btn4"], String(localized: "Side button 5")) {
                 legendItem(symbol: "5", label: "Side button 5", bound: boundKinds.contains("btn4"), on: pressedButtons.contains(4))
             }
-            clickable(["scrollUp", "scrollDown"], "Scroll up and down") {
+            clickable(legend: true, ["scrollUp", "scrollDown"], String(localized: "Scroll up and down")) {
                 legendItem(symbol: "▲▼", label: "Scroll up / down",
                            bound: boundKinds.contains("scrollUp") || boundKinds.contains("scrollDown"),
                            on: activeKinds.contains("scrollUp") || activeKinds.contains("scrollDown"))
             }
-            clickable(["scrollLeft", "scrollRight"], "Scroll left and right") {
+            clickable(legend: true, ["scrollLeft", "scrollRight"], String(localized: "Scroll left and right")) {
                 legendItem(symbol: "◀▶", label: "Scroll left / right",
                            bound: boundKinds.contains("scrollLeft") || boundKinds.contains("scrollRight"),
                            on: activeKinds.contains("scrollLeft") || activeKinds.contains("scrollRight"))
             }
-            clickable(["move"], "Motion") {
+            clickable(legend: true, ["move"], String(localized: "Motion")) {
                 legendItem(symbol: "↔︎", label: "Motion", bound: boundKinds.contains("move"), on: activeKinds.contains("move"))
             }
-            clickable(["doubleClick"], "Double click") {
+            clickable(legend: true, ["doubleClick"], String(localized: "Double click")) {
                 legendItem(symbol: "2×", label: "Double click", bound: boundKinds.contains("doubleClick"), on: activeKinds.contains("doubleClick"))
             }
-            clickable(["scrollGesture"], "Scroll gesture") {
+            clickable(legend: true, ["scrollGesture"], String(localized: "Scroll gesture")) {
                 legendItem(symbol: "≋", label: "Scroll gesture", bound: boundKinds.contains("scrollGesture"), on: scrollGesture != .none)
             }
-            clickable(["deepPress", "pressure"], "Force click") {
+            clickable(["deepPress", "pressure"], String(localized: "Force click")) {
                 legendItem(symbol: "◉", label: "Force click",
                            bound: boundKinds.contains("deepPress") || boundKinds.contains("pressure"),
                            on: pressureStage >= 2)
@@ -300,7 +311,7 @@ struct MouseDiagramView: View {
         .font(.caption2)
     }
 
-    private func legendItem(symbol: String, label: String, bound: Bool, on: Bool) -> some View {
+    private func legendItem(symbol: String, label: LocalizedStringKey, bound: Bool, on: Bool) -> some View {
         HStack(spacing: 6) {
             Text(symbol)
                 .frame(width: 18, alignment: .center)
@@ -309,6 +320,10 @@ struct MouseDiagramView: View {
                 .foregroundStyle(on ? Color.green : (bound ? Color.primary : Color.secondary))
         }
         .contentShape(Rectangle())
+        // Its state in words, not only in green.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(label))
+        .accessibilityValue(on ? String(localized: "active") : (bound ? String(localized: "bound") : String(localized: "not bound")))
     }
 }
 

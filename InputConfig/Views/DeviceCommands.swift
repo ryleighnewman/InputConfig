@@ -58,12 +58,18 @@ struct DevicesMenuContent: View {
         // One or Series GIP before macOS 15) cannot be connected; they are
         // listed so the user learns why instead of seeing nothing.
         let unreadable = transport == .usb ? registry.unreadablePads : []
-        Text(transport.rawValue)
-        if entries.isEmpty && unreadable.isEmpty {
-            Text("No \(transport.rawValue) devices")
+        // A Logitech wheel for Xbox is read through macOS racing wheel
+        // support: not an HID device here, but plugged in over USB.
+        let wheels = transport == .usb ? controllers.racingWheelNames : []
+        Text(transport.title)
+        if entries.isEmpty && unreadable.isEmpty && wheels.isEmpty {
+            Text(transport.emptyText)
         } else {
             ForEach(entries) { entry in
                 deviceItem(entry)
+            }
+            ForEach(wheels, id: \.slot) { wheel in
+                Text("\(wheel.name) (read through macOS racing wheel support)")
             }
             ForEach(unreadable) { pad in
                 Button("\(pad.name) (\(pad.reason))") { }
@@ -98,7 +104,20 @@ struct DevicesMenuContent: View {
         // with GameController attaching and detaching.
         let ownedBySystem = !reading && !controllers.connectedControllers.isEmpty
             && device.map { gamepads.isListedByGameController($0) } == true
-        if entry.isSteamController {
+        if let reason = entry.unreadableReason {
+            // Nothing can read it (a Steam Controller on its Bluetooth
+            // firmware): listed as the non-HID USB pads are, disabled, with
+            // what to do instead, not as the keyboard its lizard mode shows.
+            Button("\(entry.name) (\(reason))") { }
+                .disabled(true)
+        } else if !reading, gamepads.isAwaitingInputMonitoring(anyOf: interfaces) {
+            // A pad waiting for Input Monitoring, whatever its first
+            // collection says it is (a keyboard-first arcade stick, a 2026
+            // Steam Controller over Bluetooth): this is the only place to ask.
+            Button("\(entry.name) (needs Input Monitoring)\u{2026}") {
+                RawHIDGamepadService.requestInputMonitoring()
+            }
+        } else if entry.isSteamController {
             // Its own helper reads it as a controller; its keyboard and
             // mouse interfaces are only lizard mode.
             Text("\(entry.name) (read automatically as a Steam Controller)")
@@ -115,11 +134,10 @@ struct DevicesMenuContent: View {
             // opens the pane. The pad is read when InputConfig comes back to
             // the front.
             Button("\(entry.name) (needs Input Monitoring)\u{2026}") {
-                if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeUnknown {
-                    _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-                } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-                    NSWorkspace.shared.open(url)
-                }
+                // Queued first, so it is read and remembered once access
+                // is on, as the editor's device menu does.
+                _ = RawHIDGamepadService.shared.adopt(device)
+                RawHIDGamepadService.requestInputMonitoring()
             }
         } else if device != nil || reading {
             // Checkmark = InputConfig is reading this device. Toggling on
@@ -161,7 +179,9 @@ struct DevicesMenuContent: View {
             // Every source is connected as soon as it appears; the list
             // shows what the app can hear.
             ForEach(sources) { source in
+                // Shown as information: there is nothing to switch off.
                 Toggle(isOn: .constant(true)) { Text(source.name) }
+                    .disabled(true)
             }
         }
         Button("Reconnect MIDI Sources") {

@@ -42,12 +42,14 @@ extension ControllerLayout {
         controls: steam2015Controls,
         offBody: [
             OffBodyInput(serialized: "btn 22", reason: "Internal flag: the left pad and the stick are in use together (hardware bit 23), used to split their shared axes", copy: true),
-            OffBodyInput(serialized: "mtn gyroX +", reason: "Gyroscope inside the body: the helper parses it but does not switch IMU reports on yet, so no motion reaches presets"),
-            OffBodyInput(serialized: "mtn gyroY +", reason: "Gyroscope inside the body: the helper parses it but does not switch IMU reports on yet, so no motion reaches presets"),
-            OffBodyInput(serialized: "mtn gyroZ +", reason: "Gyroscope inside the body: the helper parses it but does not switch IMU reports on yet, so no motion reaches presets"),
-            OffBodyInput(serialized: "mtn accelX +", reason: "Accelerometer inside the body: not read yet"),
-            OffBodyInput(serialized: "mtn accelY +", reason: "Accelerometer inside the body: not read yet"),
-            OffBodyInput(serialized: "mtn accelZ +", reason: "Accelerometer inside the body: not read yet"),
+            OffBodyInput(serialized: "mtn gyroX +", reason: "Gyroscope inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn gyroY +", reason: "Gyroscope inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn gyroZ +", reason: "Gyroscope inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn accelX +", reason: "Accelerometer inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn accelY +", reason: "Accelerometer inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn accelZ +", reason: "Accelerometer inside the body, read through the helper (experimental)"),
+            OffBodyInput(serialized: "mtn rollAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
+            OffBodyInput(serialized: "mtn pitchAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
         ],
         // Only the helper's virtual slot is this controller; it is also the
         // only slot given the .steamController brand. The USB IDs cover a
@@ -59,7 +61,7 @@ extension ControllerLayout {
             [.vidPid(vendor: 0x28DE, products: [0x1102, 0x1142])],
         ],
         matchPriority: 20,
-        readability: .partial("Read by InputConfig's Steam Controller helper over USB or the wireless dongle. Both trackpads are touch surfaces (the right one the main, the left the second); the gyro, haptics and Bluetooth LE mode are not used"),
+        readability: .partial("Read by InputConfig's Steam Controller helper over USB or the wireless dongle. Both trackpads are touch surfaces (the right one the main, the left the second); the gyro and accelerometer come through the helper (experimental); haptics and Bluetooth LE mode are not used"),
         approximate: true,
         sources: [
             "store.steampowered.com/app/353370 (Valve's straight-on product render)",

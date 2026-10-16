@@ -3,9 +3,12 @@ import Combine
 
 /// A single binding row with fixed-width columns for consistent alignment.
 struct BindingRowView: View {
+    /// Key names follow the input source; a change to it redraws the row.
+    @ObservedObject private var keyboardLayout = KeyboardLayoutService.shared
     /// The preset's controller family, set by the editor; names the face buttons.
     @Environment(\.presetButtonFamily) private var presetButtonFamily
     @Environment(\.buttonModelNames) private var buttonModelNames
+    @Environment(\.deviceButtonNames) private var deviceButtonNames
     @SwiftUI.Binding var binding: BindingModel
     let onScan: () -> Void
     /// Scan for the chord's second control (any input on any device).
@@ -20,14 +23,28 @@ struct BindingRowView: View {
     /// points, then a single end call. The parent owns the ordering.
     var onDragChanged: ((CGFloat) -> Void)? = nil
     var onDragEnded: (() -> Void)? = nil
+    /// Moves the row up (-1) or down (+1) without a drag: the handle's
+    /// menu, its arrow keys, and an accessibility action.
+    var onMove: ((Int) -> Void)? = nil
     var isHighlighted: Bool = false
     /// 1-based position of this binding within its joystick group. Drives the
     /// "#N" chip at the start of every row so the Live Visualizer can refer
     /// to a specific row by number.
     var displayNumber: Int = 0
+    /// For a zone row: the numbers of the stick's direction rows the zone
+    /// overlaps, worked out by the group (rows do not see each other).
+    var zoneOverlap: [Int] = []
+    /// For a zone row: the numbers of the zone rows whose zones share part
+    /// of this one.
+    var zoneZoneOverlap: [Int] = []
+    /// For a direction row: the zone rows that take it over inside their
+    /// zones.
+    var zoneTakenBy: [Int] = []
     /// True while this row is the target of a jump-to-binding pulse triggered
     /// by clicking on the Live Visualizer. Shows a yellow ring for ~1.2 s.
     var isPulsing: Bool = false
+    /// Set after the row above it was removed: focus moves here.
+    var takesFocus: Bool = false
 
     /// Named extra buttons exposed by the controller for this slot.
     /// Passed in as a plain value type by the parent so we don't have
@@ -54,19 +71,32 @@ struct BindingRowView: View {
 
     /// True while this row's Mac key or mouse button Scan listens.
     @State private var externalScanning = false
+    /// Seconds left on that scan, shown on the row so the limit is seen,
+    /// not only spoken; and a short visible note when it ran out.
+    @State private var externalScanLeft = 0
+    @State private var externalScanTimedOut = false
+    /// Seconds until a fixed click point is taken, shown on its menu.
+    @State private var clickPointLeft: Int?
+    /// Which output the countdown is for, so only its menu shows it.
+    @State private var clickPointTarget: String?
     @State private var showAdvanced = false
     @State private var showMacroEditor = false
     @State private var liveOuterDeadzone: Double?
     @State private var showDeadzoneCalibration = false
     /// Region editors opened straight from the input pickers, so defining a
     /// missing cursor/stick region doesn't require a detour through Settings.
-    @State private var showCursorRegionsEditor = false
-    @State private var showStickRegionsEditor = false
+    @State private var showGestureRecorder = false
+    /// The axis and direction a row read before a zone was picked for it,
+    /// so "Whole stick or trigger, no zone" puts back exactly that.
+    @State private var axisBeforeZone: (index: Int, direction: AxisDirection?, invert: Bool?)?
     /// Drives the firing arrow's left-to-right sweep while highlighted.
     @State private var arrowShoot = false
-    /// Set by the row menu's Extra actions shortcuts: once Options has
-    /// opened, the editor scrolls the Extra actions group into view.
-    @State private var scrollToExtraActions = false
+    /// The Options box a menu choice just turned on ("feedback", "macro",
+    /// "extra"): once Options has opened, the editor scrolls it into view
+    /// and it glows once in the accent color, so the eye finds it.
+    static let revealRow = Notification.Name("InputConfig.RevealRow")
+    @State private var spotlightBox: String?
+    @State private var spotlightGlow: String?
 
     /// Live mirrors of slider values, updated every drag tick so the value
     /// shown next to each slider follows the thumb in real time. The
@@ -79,9 +109,14 @@ struct BindingRowView: View {
 
     // Fixed column widths for perfect alignment
     private let dragWidth: CGFloat = 20
-    private let numberColWidth: CGFloat = 40
+    /// Grows with Text Size, like the other columns, so "#12" and "Notes" fit.
+    private var numberColWidth: CGFloat { Self.numberColWidth(scale: textScale) }
+    static func numberColWidth(scale: CGFloat) -> CGFloat { 40 * max(1, scale) }
     /// Where sub-rows (note, Options) start: under the Scan column, past the
     /// handle and the number, so every line of the row shares one left edge.
+    /// Where the Options boxes start: just inside the row, so the left box
+    /// uses the width under the drag handle and row number too.
+    private var optionsInset: CGFloat { 10 }
     private var leftGutter: CGFloat {
         dragWidth + colGap + (displayNumber > 0 ? numberColWidth + colGap : 0)
     }
@@ -127,7 +162,7 @@ struct BindingRowView: View {
     /// Left edge of the Input box and its width, for the INPUT / OUTPUT
     /// header the group draws above its rows. Derived from the same column
     /// widths as the row itself, so the header cannot drift.
-    static let inputBoxLeading: CGFloat = 10 + 20 + 8 + 40 + 8
+    static func inputBoxLeading(scale: CGFloat) -> CGFloat { 10 + 20 + 8 + numberColWidth(scale: scale) + 8 }
     /// The input columns grow with Text Size, so everything placed from
     /// them takes the same scale.
     static func inputBoxWidth(scale: CGFloat) -> CGFloat {
@@ -140,18 +175,18 @@ struct BindingRowView: View {
     /// end: the Input bracket runs from just after the number chip to just
     /// before the arrow, the Output bracket from just after the arrow to the
     /// row's right edge. Measured from the row box's left edge.
-    static let inputBracketLeading: CGFloat = 10 + 20 + 8 + 30
+    static func inputBracketLeading(scale: CGFloat) -> CGFloat { 10 + 20 + 8 + numberColWidth(scale: scale) - 10 }
     static func inputBracketWidth(scale: CGFloat) -> CGFloat {
-        inputBoxLeading + inputBoxWidth(scale: scale) - 4 - inputBracketLeading
+        inputBoxLeading(scale: scale) + inputBoxWidth(scale: scale) - 4 - inputBracketLeading(scale: scale)
     }
     static func outputBracketLeading(scale: CGFloat) -> CGFloat {
-        inputBoxLeading + inputBoxWidth(scale: scale) + arrowSlotWidth + 4
+        inputBoxLeading(scale: scale) + inputBoxWidth(scale: scale) + arrowSlotWidth + 4
     }
     static let bracketTrailing: CGFloat = 10
     /// How much wider the editor gets at this Text Size: the input and
     /// output columns that scale.
     static func extraEditorWidth(scale: CGFloat) -> CGFloat {
-        (54 + 116 + 124 + 130 + 156) * (max(1, scale) - 1)
+        (40 + 54 + 116 + 124 + 130 + 156) * (max(1, scale) - 1)
     }
 
     /// No `.onHover` here on purpose. A row-level hover flag looks cheap, but
@@ -164,6 +199,30 @@ struct BindingRowView: View {
     /// scrolling row costs nothing beyond moving.
     var body: some View {
         rowBody
+            // One named container per row for VoiceOver ("Row 3, A to
+            // Space"), so a row's start and what it maps are heard before
+            // its parts, and its Move actions have a home.
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(rowAccessibilityLabel)
+            // Jumped to from search or the Live Visualizer: VoiceOver goes there.
+            .accessibilityFocused($jumpFocus)
+            .onChange(of: takesFocus) { _, on in
+                guard on else { return }
+                jumpFocus = true
+                keyboardFocus = true
+            }
+            .onChange(of: isPulsing) { _, on in
+                guard on else { return }
+                // Keyboard focus too: a search or visualizer jump left it in
+                // the search field, dozens of Tabs away from the row.
+                keyboardFocus = true
+                // The focus move reads the row; the announcement is for a
+                // screen reader without VoiceOver's focus (Speak Selection).
+                jumpFocus = true
+                if !NSWorkspace.shared.isVoiceOverEnabled {
+                    AccessibilityNotification.Announcement(rowAccessibilityLabel).post()
+                }
+            }
     }
 
     private var rowBody: some View {
@@ -210,6 +269,19 @@ struct BindingRowView: View {
                     )
                     .help("Drag to reorder")
                     .accessibilityLabel("Reorder handle")
+                    .accessibilityHint("Drag to reorder, or use Move Up and Move Down")
+                    // Without dragging: a right-click menu (pointer, dwell and
+                    // Voice Control), the arrow keys once focused (keyboard),
+                    // and actions (VoiceOver, Switch Control).
+                    .contextMenu {
+                        Button("Move Up") { onMove?(-1) }
+                        Button("Move Down") { onMove?(1) }
+                    }
+                    .focusable(onMove != nil)
+                    .onKeyPress(.upArrow) { onMove?(-1); return onMove == nil ? .ignored : .handled }
+                    .onKeyPress(.downArrow) { onMove?(1); return onMove == nil ? .ignored : .handled }
+                    .accessibilityAction(named: "Move Up") { onMove?(-1) }
+                    .accessibilityAction(named: "Move Down") { onMove?(1) }
 
                 // Row number chip - matches the number shown in the Live
                 // Visualizer popover so users can find the right row when
@@ -245,7 +317,9 @@ struct BindingRowView: View {
                 Button("Scan", action: onScan)
                     .buttonStyle(.solidSecondaryCompact)
                     .frame(width: scanColWidth, alignment: .center)
+                    .focused($keyboardFocus)
                     .accessibilityLabel("Scan binding \(displayNumber)")
+                    .accessibilityInputLabels([Text("Scan"), Text("Scan binding \(displayNumber)")])
                     .accessibilityHint("Press a button, key, or axis on your controller to record this binding")
 
                 // COL 2: Input Type. A lazy Menu (matching KeyCodePicker and
@@ -254,11 +328,12 @@ struct BindingRowView: View {
                 // scrolling the binding list hitch as rows materialized.
                 // Grouped so the first decision on every row is no longer an
                 // undifferentiated 11-item list.
-                Menu {
+                SearchableMenu(choices: { inputTypeSearchChoices }) {
                     Section("Controller") {
                         inputTypeChoice(.button)
                         inputTypeChoice(.axis)
                         inputTypeChoice(.hat)
+                        inputTypeChoice(.stickGesture)
                     }
                     Section("Touchpad") {
                         inputTypeChoice(.touchpad)
@@ -275,40 +350,46 @@ struct BindingRowView: View {
                         inputTypeChoice(.extKey)
                         inputTypeChoice(.extMouse)
                     }
-                    Section("Zones") {
+                    // Stick zones and trigger bands are part of an axis, picked
+                    // in the axis menu; a screen region is its own input.
+                    Section("Screen") {
                         inputTypeChoice(.cursorRegion)
-                        inputTypeChoice(.stickRegion)
                     }
                     Section("MIDI") {
                         inputTypeChoice(.midi)
                     }
                 } label: {
-                    menuChevronLabel(binding.input.type.displayName)
+                    menuChevronLabel(typeMenuTitle)
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
                 .frame(width: typeColWidth, alignment: .leading)
                 .accessibilityLabel("Input type")
-                .accessibilityValue(binding.input.type.displayName)
+                .accessibilityValue(typeMenuTitle)
+                // Voice Control answers to the word shown first.
+                .accessibilityInputLabels([Text(typeMenuTitle), Text("Input type"),
+                                           Text("Input type \(displayNumber)")])
 
                 // COL 3: Index
                 indexPicker
                     .frame(width: indexColWidth, alignment: .leading)
                     .accessibilityLabel(indexPickerAccessibilityLabel)
                     .accessibilityValue(indexPickerAccessibilityValue)
+                    .accessibilityInputLabels([Text(indexPickerAccessibilityValue), Text(indexPickerAccessibilityLabel)])
 
                 // COL 4: Direction (or empty spacer for Button type)
                 directionPicker
                     .frame(width: dirColWidth, alignment: .leading)
                     .accessibilityLabel(directionPickerAccessibilityLabel)
                     .accessibilityValue(directionPickerAccessibilityValue)
+                    .accessibilityInputLabels([Text(directionPickerAccessibilityValue), Text(directionPickerAccessibilityLabel)])
 
                 }
                 .padding(.horizontal, Self.boxPadH)
                 .padding(.vertical, Self.boxPadV)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Input")
-                .accessibilityValue(isHighlighted ? "Firing" : "")
+                .accessibilityValue(isHighlighted ? String(localized: "Firing") : "")
 
                 // Fixed-position arrow right after the input columns. The two
                 // flexible `maxWidth: .infinity` halves that used to center it
@@ -327,8 +408,7 @@ struct BindingRowView: View {
                     // A row laid out by "every control" waits here for its
                     // output; picking one creates it with that type's
                     // defaults, and the normal controls take over.
-                    Menu {
-                        outputTypeMenuItems(select: { type in
+                    outputMenu(select: { type in
                             var action = OutputAction(type: .key, keyCode: 4)
                             action.type = type
                             action.fillDefaultsForType()
@@ -347,8 +427,7 @@ struct BindingRowView: View {
                             binding.outputs = [action]
                         }, setKey: { code in
                             binding.outputs = [OutputAction(type: .key, keyCode: code)]
-                        })
-                    } label: {
+                        }) {
                         HStack(spacing: 4) {
                             Image(systemName: "plus.circle")
                             Text("Choose an output")
@@ -367,35 +446,36 @@ struct BindingRowView: View {
                     HStack(spacing: gap) {
                         outputIconCell(for: binding.outputs[0])
 
-                        Menu {
-                            outputTypeMenuItems(select: { firstOutputTypeBinding.wrappedValue = $0 },
-                                                selectSystemKind: { kind in
-                                                    guard !binding.outputs.isEmpty else { return }
-                                                    binding.outputs[0].type = .systemAction
-                                                    binding.outputs[0].systemActionKind = kind
-                                                },
-                                                setParameter: { text in
-                                                    guard !binding.outputs.isEmpty else { return }
-                                                    binding.outputs[0].text = text
-                                                },
-                                                setAppAction: { kind, presetID in
-                                                    guard !binding.outputs.isEmpty else { return }
-                                                    binding.outputs[0].type = .appAction
-                                                    binding.outputs[0].appActionKind = kind
-                                                    binding.outputs[0].targetPresetID = presetID
-                                                },
-                                                setKey: { code in
-                                                    guard !binding.outputs.isEmpty else { return }
-                                                    binding.outputs[0].type = .key
-                                                    binding.outputs[0].keyCode = code
-                                                })
-                        } label: {
+                        outputMenu(select: { firstOutputTypeBinding.wrappedValue = $0 },
+                                   selectSystemKind: { kind in
+                                       guard !binding.outputs.isEmpty else { return }
+                                       binding.outputs[0].type = .systemAction
+                                       binding.outputs[0].systemActionKind = kind
+                                   },
+                                   setParameter: { text in
+                                       guard !binding.outputs.isEmpty else { return }
+                                       binding.outputs[0].text = text
+                                   },
+                                   setAppAction: { kind, presetID in
+                                       guard !binding.outputs.isEmpty else { return }
+                                       binding.outputs[0].type = .appAction
+                                       binding.outputs[0].appActionKind = kind
+                                       binding.outputs[0].targetPresetID = presetID
+                                   },
+                                   setKey: { code in
+                                       guard !binding.outputs.isEmpty else { return }
+                                       binding.outputs[0].type = .key
+                                       binding.outputs[0].keyCode = code
+                                   },
+                                   keyInShortcut: OutputAction.isShortcut(Array(binding.outputs.dropFirst()))) {
                             menuChevronLabel(outputMenuTitle(binding.outputs[0]))
                         }
                         .menuStyle(.borderlessButton)
                         .controlSize(.small)
                         .accessibilityLabel("Output type")
-                        .accessibilityValue(binding.outputs[0].type.displayName)
+                        .accessibilityValue(outputMenuTitle(binding.outputs[0]))
+                        .accessibilityInputLabels([Text(outputMenuTitle(binding.outputs[0])), Text("Output type"),
+                                                   Text("Output type \(displayNumber)")])
                     }
                     .frame(width: outTypeColWidth, alignment: .leading)
 
@@ -441,7 +521,8 @@ struct BindingRowView: View {
 
                     if let onDuplicate {
                         CopyIconButton(action: onDuplicate,
-                                       helpText: "Duplicate this binding")
+                                       helpText: "Duplicate this binding",
+                                       announcement: nil)
                             .accessibilityLabel("Duplicate this binding")
                     }
 
@@ -452,6 +533,7 @@ struct BindingRowView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Remove binding")
+                    .accessibilityInputLabels([Text("Remove binding"), Text("Remove binding \(displayNumber)")])
                 }
                 .frame(width: actionsWidth + 18, alignment: .trailing)
             }
@@ -462,6 +544,18 @@ struct BindingRowView: View {
             // mapping row above and the Options disclosure below.
             noteRow
                 .padding(.vertical, 3)
+
+            // Tap the Mac reads a sensor only some MacBooks have; the row says so.
+            if binding.input.type == .chassisTap {
+                HStack(alignment: .firstTextBaseline, spacing: colGap) {
+                    Color.clear.frame(width: numberColWidth, height: 1)
+                    Text(Self.tapTheMacDisclaimer)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.bottom, 3)
+            }
 
             // Advanced options
             advancedSection
@@ -504,18 +598,24 @@ struct BindingRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .debugExpandOptions($showAdvanced)
-        .modifier(DebugToggleOptionsModifier(displayNumber: displayNumber, toggle: toggleOptions))
+        .modifier(DebugToggleOptionsModifier(displayNumber: displayNumber, toggle: toggleOptions, adjustLive: { showDeadzoneCalibration = true }))
         .sheet(isPresented: $showDeadzoneCalibration) {
             DeadzoneCalibrationView(
-                axisIndex: binding.input.index,
+                axisIndex: binding.input.type == .stickRegion ? zoneRowAxis : binding.input.index,
                 deadzone: deadzoneCalibrationBinding,
                 outerDeadzone: outerDeadzoneBinding,
                 isInverted: binding.invertAxis ?? false,
                 onClose: { showDeadzoneCalibration = false },
-                slot: slot
+                slot: slot,
+                rowID: binding.id,
+                zonesKey: zonesSheetKey,
+                direction: binding.input.type == .axis ? binding.input.axisDirection : nil,
+                fullTravel: binding.fullTravel == true
             )
             .glassBackground()
         }
+        // The group's Regions section sends you back here.
+        .modifier(RevealRowOnRequest(rowID: binding.id))
         .onReceive(NotificationCenter.default.publisher(
             for: Notification.Name("InputConfig.ExpandBindingOptions"))) { note in
             // Tutorial / external trigger to auto-expand this row's
@@ -523,7 +623,7 @@ struct BindingRowView: View {
             // without having to click. Notification's object is the
             // target binding's UUID; we only react if it matches us.
             if let id = note.object as? UUID, id == binding.id {
-                withAnimation(.easeInOut(duration: 0.4)) { showAdvanced = true }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.4)) { showAdvanced = true }
             }
         }
         // The live mirrors only follow a drag. Once the row's committed
@@ -541,15 +641,29 @@ struct BindingRowView: View {
         }
     }
 
+    @AccessibilityFocusState private var jumpFocus: Bool
+    /// Keyboard focus on the row's Scan button, for the same jumps.
+    @FocusState private var keyboardFocus: Bool
+
+    private var rowAccessibilityLabel: String {
+        let input = MappingEngine.spokenInputName(binding.input, family: presetButtonFamily)
+        let outputs = binding.outputs.isEmpty ? String(localized: "nothing bound")
+            : OutputAction.names(binding.outputs).map(HotKeySpec.spokenKey).joined(separator: " + ")
+        return String(localized: "Row \(displayNumber), \(input) to \(outputs)")
+    }
+
     // MARK: - Per-binding note
 
     /// Bridges the optional `binding.note` to a non-optional String the
     /// TextField can edit. Writing an all-whitespace value clears it back to
     /// nil so empty notes don't bloat the saved preset.
     private var noteBinding: SwiftUI.Binding<String> {
+        // A built-in row's note shows in the app's language and stays
+        // English on disk unless the person changes it.
         SwiftUI.Binding(
-            get: { binding.note ?? "" },
+            get: { ShippedText.t(binding.note ?? "") },
             set: { newValue in
+                guard newValue != ShippedText.t(binding.note ?? "") else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 binding.note = trimmed.isEmpty ? nil : newValue
             }
@@ -566,6 +680,10 @@ struct BindingRowView: View {
     /// list hitch. Clicking the note swaps the field in.
     @State private var editingNote = false
     @FocusState private var noteFieldFocused: Bool
+    /// Return in the note field hands focus back to the note's button, not
+    /// to nothing (the field it was in goes away).
+    @FocusState private var noteButtonFocused: Bool
+    @FocusState private var phraseFocused: Bool
 
     @ViewBuilder
     private var noteRow: some View {
@@ -581,30 +699,41 @@ struct BindingRowView: View {
                 TextField("Add a note (what this control does)", text: noteBinding)
                     .textFieldStyle(.plain)
                     .font(.callout)
-                    .foregroundStyle((binding.note?.isEmpty ?? true) ? .tertiary : .secondary)
+                    .foregroundStyle((binding.note?.isEmpty ?? true) ? AnyShapeStyle(.hint) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .focused($noteFieldFocused)
-                    .onSubmit { editingNote = false }
+                    .onSubmit {
+                        editingNote = false
+                        EditorInlineEdit.clear(binding.id)
+                        DispatchQueue.main.async { noteButtonFocused = true }
+                    }
                     .onChange(of: noteFieldFocused) { _, focused in
-                        if !focused { editingNote = false }
+                        if !focused { editingNote = false; EditorInlineEdit.clear(binding.id) }
                     }
             } else {
                 Button {
                     editingNote = true
                     DispatchQueue.main.async { noteFieldFocused = true }
+                    EditorInlineEdit.begin(binding.id) {
+                        editingNote = false
+                        DispatchQueue.main.async { noteButtonFocused = true }
+                        return true
+                    }
                 } label: {
                     Text((binding.note?.isEmpty ?? true)
-                         ? "Add a note (what this control does)"
-                         : (binding.note ?? ""))
+                         ? String(localized: "Add a note (what this control does)")
+                         : ShippedText.t(binding.note ?? ""))
                         .font(.callout)
-                        .foregroundStyle((binding.note?.isEmpty ?? true) ? .tertiary : .secondary)
+                        .foregroundStyle((binding.note?.isEmpty ?? true) ? AnyShapeStyle(.hint) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .focused($noteButtonFocused)
                 .accessibilityLabel("Note")
-                .accessibilityValue((binding.note?.isEmpty ?? true) ? "empty" : (binding.note ?? ""))
+                .accessibilityInputLabels([Text("Note"), Text((binding.note?.isEmpty ?? true) ? String(localized: "Add a note") : ShippedText.t(binding.note ?? ""))])
+                .accessibilityValue((binding.note?.isEmpty ?? true) ? String(localized: "empty") : ShippedText.t(binding.note ?? ""))
                 .accessibilityHint("Edit the note for this binding")
             }
         }
@@ -612,11 +741,69 @@ struct BindingRowView: View {
         .padding(.top, 3)
     }
 
+    // MARK: - Dropdown search
+
+    /// The input type menu's choices, for its Search.
+    private var inputTypeSearchChoices: [MenuSearchChoice] {
+        let sections: [(LocalizedStringResource, [InputType])] = [
+            ("Controller", [.button, .axis, .hat, .stickGesture]),
+            ("Touchpad", [.touchpad, .touchpadRegion, .touchpadGesture]),
+            ("This Mac", [.chassisTap]),
+            ("Motion", [.motion]),
+            ("Keyboard and mouse", [.extKey, .extMouse]),
+            ("Screen", [.cursorRegion]),
+            ("MIDI", [.midi]),
+        ]
+        return sections.flatMap { section, types in
+            types.map { type in
+                MenuSearchChoice(title: Self.inputTypeMenuName(type), path: String(localized: section)) { chooseInputType(type) }
+            }
+        }
+    }
+
+    /// The button menu's choices: this controller's extras, the standard
+    /// names, then every index.
+    private var buttonIndexSearchChoices: [MenuSearchChoice] {
+        var out = extraButtons.map { extra in
+            MenuSearchChoice(title: String(localized: "\(extra.label) (#\(extra.index))"),
+                             path: String(localized: "This controller")) { binding.input.index = extra.index }
+        }
+        out += familyButtonLabels.map { entry in
+            MenuSearchChoice(title: String(localized: "\(entry.label) (#\(entry.index))"),
+                             path: String(localized: "Standard")) { binding.input.index = entry.index }
+        }
+        for group in 0..<4 {
+            let path = MenuSearchChoice.path(String(localized: "All indices"),
+                                             String(localized: "Buttons \(group * 32) to \(group * 32 + 31)"))
+            out += ((group * 32)..<(group * 32 + 32)).map { i in
+                MenuSearchChoice(title: String(localized: "Button \(i)"), path: path,
+                                 keywords: buttonMenuLabel(for: i)) { binding.input.index = i }
+            }
+        }
+        return out
+    }
+
+    private func axisChoiceTitle(_ i: Int) -> String {
+        ButtonNames.axisName(i, family: presetButtonFamily).map { "\($0) (#\(i))" } ?? String(localized: "Axis #\(i)")
+    }
+
+    private func axisSearchChoices(_ pick: @escaping (Int) -> Void) -> [MenuSearchChoice] {
+        (0..<16).map { i in MenuSearchChoice(title: axisChoiceTitle(i)) { pick(i) } }
+    }
+
+    private func chooseMotionChannel(_ channel: MotionChannel) {
+        binding.input.motionChannel = channel
+        // Measured from the grip is for tilt angles only.
+        if ![.pitchAngle, .rollAngle, .yawAngle].contains(channel) { binding.fromNeutral = nil }
+    }
+
     // MARK: - Index Picker (fixed width)
 
     @ViewBuilder
     private var indexPicker: some View {
         switch binding.input.type {
+        case .stickGesture:
+            stickGesturePicker
         case .chassisTap:
             Menu {
                 Button("Single tap") { binding.input.index = 1 }
@@ -639,7 +826,7 @@ struct BindingRowView: View {
             // 2. "Standard" - canonical MFi labels for the well-known
             //    button indices (A/B/X/Y, LB/RB, Start/Back/Home...).
             // 3. "All Indices" - generic Button 0-63 fallback.
-            Menu {
+            SearchableMenu(choices: { buttonIndexSearchChoices }) {
                 if !extraButtons.isEmpty {
                     Section("This controller") {
                         // extraButtonsSnapshot already returns the array sorted
@@ -680,14 +867,14 @@ struct BindingRowView: View {
         case .axis:
             // Named for the controller family (Left stick X, L2, Right
             // trackpad X on a Steam Controller), the number kept beside it.
-            Menu {
+            SearchableMenu(choices: { axisSearchChoices { setAxisIndex($0) } }) {
                 ForEach(0..<16, id: \.self) { i in
-                    Button(ButtonNames.axisName(i, family: presetButtonFamily).map { "\($0) (#\(i))" } ?? "Axis #\(i)") {
-                        binding.input.index = i
+                    Button(axisChoiceTitle(i)) {
+                        setAxisIndex(i)
                     }
                 }
             } label: {
-                menuLabel(ButtonNames.axisName(binding.input.index, family: presetButtonFamily) ?? "Axis #\(binding.input.index)")
+                menuLabel(ButtonNames.axisName(binding.input.index, family: presetButtonFamily) ?? String(localized: "Axis #\(binding.input.index)"))
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
@@ -724,12 +911,20 @@ struct BindingRowView: View {
             // the short `displayName` ("Gyro Z") so it fits the
             // fixed-width index column without overlapping the next
             // column.
-            Menu {
-                ForEach(MotionChannel.allCases) { channel in
-                    Button(channel.menuDescription) {
-                        binding.input.motionChannel = channel
+            SearchableMenu(choices: {
+                MotionChannel.allCases.map { channel in
+                    MenuSearchChoice(title: channel.menuDescription, keywords: channel.displayName) { chooseMotionChannel(channel) }
+                } + MotionSetup.allCases.map { setup in
+                    MenuSearchChoice(title: setup.title, path: String(localized: "Set Up Full Gyro")) {
+                        MotionSetupAction.perform?(binding.id, setup)
                     }
                 }
+            }) {
+                ForEach(MotionChannel.allCases) { channel in
+                    Button(channel.menuDescription) { chooseMotionChannel(channel) }
+                }
+                Divider()
+                motionSetupSection
             } label: {
                 menuLabel((binding.input.motionChannel ?? .gyroY).displayName)
             }
@@ -738,13 +933,34 @@ struct BindingRowView: View {
             .fixedSize()
 
         case .touchpadRegion:
-            // Pick from defined regions by name. If none are defined yet, the
-            // menu shows a hint so users know to open Calibrate Touchpad.
+            // Pick from defined regions by name; the zones are drawn in this
+            // group's Zones section, a click away.
             Menu {
                 let regions = TouchpadService.shared.allRegions()
                 if regions.isEmpty {
                     Text("This preset has no touchpad regions yet")
-                    Text("Open Options › Calibrate Touchpad to draw some")
+                    Button("Draw touchpad regions\u{2026}") { showZones(.touchpad) }
+                } else if regions.contains(where: { $0.surface == 1 }) || presetButtonFamily?.isSteam == true {
+                    // A Steam Controller: each trackpad's own regions; the
+                    // region picked says which pad the row reads.
+                    Section(String(localized: "Right trackpad")) {
+                        ForEach(regions.filter { $0.surface != 1 }) { region in
+                            Button {
+                                binding.input.touchpadRegionID = region.id
+                                binding.input.touchpadSurface = nil
+                            } label: { regionMenuLabel(region) }
+                        }
+                    }
+                    Section(String(localized: "Left trackpad")) {
+                        ForEach(regions.filter { $0.surface == 1 }) { region in
+                            Button {
+                                binding.input.touchpadRegionID = region.id
+                                binding.input.touchpadSurface = 1
+                            } label: { regionMenuLabel(region) }
+                        }
+                    }
+                    Divider()
+                    Button("Edit touchpad regions\u{2026}") { showZones(binding.input.touchpadSurface == 1 ? .leftTrackpad : .touchpad) }
                 } else {
                     ForEach(regions) { region in
                         Button {
@@ -753,6 +969,8 @@ struct BindingRowView: View {
                             regionMenuLabel(region)
                         }
                     }
+                    Divider()
+                    Button("Edit touchpad regions\u{2026}") { showZones(.touchpad) }
                 }
             } label: {
                 regionMenuLabel(name: touchpadRegionDisplayName,
@@ -787,7 +1005,7 @@ struct BindingRowView: View {
                 }
                 Divider()
                 Button("Edit screen regions…") {
-                    showCursorRegionsEditor = true
+                    showZones(.screen)
                 }
             } label: {
                 regionMenuLabel(name: cursorRegionDisplayName,
@@ -796,72 +1014,38 @@ struct BindingRowView: View {
             .menuStyle(.borderlessButton)
             .controlSize(.small)
             .fixedSize()
-            .sheet(isPresented: $showCursorRegionsEditor) {
-                CursorRegionsView()
-                    .glassBackground()
-            }
 
         case .stickRegion:
-            // Parallel to `.cursorRegion` but the regions are zones in
-            // the joystick stick's X/Y plane. The index field carries
-            // the stick selection (0 = left, 1 = right); the picker
-            // groups regions by stick so users can see both sticks'
-            // regions at once.
+            // A zone row's stick or trigger. Only the zone's own stick, or its own trigger: picking one
+            // makes the row a direction row on it again.
             Menu {
-                let leftRegions = StickRegionService.shared.regions(forStick: 0)
-                let rightRegions = StickRegionService.shared.regions(forStick: 1)
-                if leftRegions.isEmpty && rightRegions.isEmpty {
-                    Text("No stick regions defined")
-                } else {
-                    if !leftRegions.isEmpty {
-                        Section("Left stick") {
-                            ForEach(leftRegions) { region in
-                                Button {
-                                    binding.input.index = 0
-                                    binding.input.stickRegionID = region.id
-                                } label: {
-                                    regionMenuLabel(region)
-                                }
-                            }
-                        }
+                ForEach(zoneRowAxes, id: \.self) { i in
+                    Button(axisChoiceTitle(i)) {
+                        useWholeAxis(index: i)
                     }
-                    if !rightRegions.isEmpty {
-                        Section("Right stick") {
-                            ForEach(rightRegions) { region in
-                                Button {
-                                    binding.input.index = 1
-                                    binding.input.stickRegionID = region.id
-                                } label: {
-                                    regionMenuLabel(region)
-                                }
-                            }
-                        }
-                    }
-                }
-                Divider()
-                Button("Edit stick zones…") {
-                    showStickRegionsEditor = true
                 }
             } label: {
-                regionMenuLabel(name: stickRegionDisplayName,
-                                colorIndex: stickRegionColorIndex)
+                menuLabel(zoneRowStickName)
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
             .fixedSize()
-            .sheet(isPresented: $showStickRegionsEditor) {
-                StickRegionsView()
-                    .glassBackground()
-            }
 
         case .extKey:
             // HID usage code. Most users won't remember a code by number, so
             // we surface a Scan affordance: if the user clicks "Scan" the next
             // physical key press on any detected keyboard becomes the binding.
-            Menu {
+            SearchableMenu(choices: {
+                let common = String(localized: "Common keys")
+                return commonHIDKeys.map { entry in
+                    MenuSearchChoice(title: KeyCodeMap.name(for: entry.code), path: common,
+                                     keywords: entry.label) { binding.input.index = entry.code }
+                } + [MenuSearchChoice(title: String(localized: "Press any key on detected keyboard\u{2026}"),
+                                      path: String(localized: "Scan")) { scanForExternalKey() }]
+            }) {
                 Section("Common keys") {
                     ForEach(commonHIDKeys, id: \.code) { entry in
-                        Button("\(entry.label) (code \(entry.code))") {
+                        Button("\(KeyCodeMap.name(for: entry.code)) (code \(entry.code))") {
                             binding.input.index = entry.code
                         }
                     }
@@ -872,7 +1056,9 @@ struct BindingRowView: View {
                     }
                 }
             } label: {
-                menuLabel(externalScanning ? "Press a key\u{2026}" : KeyCodeMap.name(for: binding.input.index))
+                menuLabel(externalScanning ? String(localized: "Press a key\u{2026} \(externalScanLeft)")
+                          : externalScanTimedOut ? String(localized: "Timed out")
+                          : KeyCodeMap.name(for: binding.input.index))
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
@@ -886,6 +1072,11 @@ struct BindingRowView: View {
                         binding.input.extMouseKind = kind
                         // Reset the index for kinds that don't need one.
                         if kind != .button && kind != .doubleClick { binding.input.index = 0 }
+                        // A move or scroll row reads one way, the "+" it
+                        // shows; with none stored it fired both ways.
+                        if kind != .button && kind != .doubleClick, binding.input.axisDirection == nil {
+                            binding.input.axisDirection = .positive
+                        }
                     }
                 }
             } label: {
@@ -912,8 +1103,8 @@ struct BindingRowView: View {
                     Button("Left trackpad") { binding.input.touchpadSurface = 1 }
                 }
             } label: {
-                menuLabel((steam ? (binding.input.touchpadSurface == 1 ? "Left: " : "Right: ") : "")
-                          + (binding.input.touchpadGestureKind?.displayName ?? "Two-finger tap"))
+                menuLabel((steam ? (binding.input.touchpadSurface == 1 ? String(localized: "Left: ") : String(localized: "Right: ")) : "")
+                          + (binding.input.touchpadGestureKind?.displayName ?? String(localized: "Two-finger tap")))
             }
             .menuStyle(.borderlessButton)
             .controlSize(.small)
@@ -941,12 +1132,14 @@ struct BindingRowView: View {
         .accessibilityLabel("Trackpad")
     }
 
-    /// 12 most-used HID Keyboard / Keypad usage codes for the dropdown.
+    /// The most-used HID Keyboard / Keypad usage codes for the dropdown, and
+    /// the Globe key, tapped or held as fn.
     private var commonHIDKeys: [(label: String, code: Int)] {
         [
             ("A", 4), ("S", 22), ("D", 7), ("W", 26),
             ("Space", 44), ("Return", 40), ("Escape", 41), ("Tab", 43),
-            ("Left", 80), ("Right", 79), ("Up", 82), ("Down", 81)
+            ("Left", 80), ("Right", 79), ("Up", 82), ("Down", 81),
+            ("Globe", KeyCodeMap.globeKeyCode), ("fn", KeyCodeMap.globeFnCode)
         ]
     }
 
@@ -960,10 +1153,10 @@ struct BindingRowView: View {
     /// What macOS calls each mouse button number.
     static func mouseButtonName(_ index: Int) -> String {
         switch index {
-        case 0: return "Left click"
-        case 1: return "Right click"
-        case 2: return "Middle click"
-        default: return "Button \(index &+ 1)"
+        case 0: return String(localized: "Left click")
+        case 1: return String(localized: "Right click")
+        case 2: return String(localized: "Middle click")
+        default: return String(localized: "Button \(index &+ 1)")
         }
     }
 
@@ -974,9 +1167,28 @@ struct BindingRowView: View {
             // next VoiceOver command bound Control or Option to the row.
             // Caps Lock too, which VoiceOver can use as its modifier.
             if NSWorkspace.shared.isVoiceOverEnabled, [57, 224, 226, 228, 230].contains(code) { return nil }
+            // fn comes first on a Globe tap too, whose own key follows the
+            // release: fn alone is taken only if that key does not come.
+            if code == KeyCodeMap.globeFnCode {
+                DispatchQueue.main.async {
+                    let at = Date()
+                    Self.pendingFnAt = at
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        guard Self.pendingFnAt == at, externalScanning else { return }
+                        Self.pendingFnAt = nil
+                        binding.input.index = code
+                        binding.input.extDeviceID = dev
+                        Self.announce(String(localized: "Set to \(HotKeySpec.spokenKey(KeyCodeMap.name(for: code)))"))
+                        Self.cancelActiveScan()
+                    }
+                }
+                return nil
+            }
+            DispatchQueue.main.async { Self.pendingFnAt = nil }
             return (code, dev)
         }
     }
+    private static var pendingFnAt: Date?
 
     private func scanForExternalMouseButton() {
         scanExternal(mouse: true) { event in
@@ -999,12 +1211,17 @@ struct BindingRowView: View {
         // Shown on the row's menu and spoken, since keys and clicks in this
         // window go to the scan until it ends.
         externalScanning = true
+        externalScanTimedOut = false
         Self.activeScanEnded = { externalScanning = false }
         let scanSeconds = ScanTiming.macInputSeconds
-        let ends = "Scan ends in \(scanSeconds) seconds."
-        Self.announce(keyboard ? "Press the key to use. \(ends)" : "Press the mouse button to use. \(ends)")
+        externalScanLeft = scanSeconds
+        Self.activeScanTick = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            externalScanLeft = max(0, externalScanLeft - 1)
+        }
+        let ends = String(localized: "Scan ends in \(scanSeconds) seconds.")
+        Self.announce(keyboard ? String(localized: "Press the key to use. \(ends)") : String(localized: "Press the mouse button to use. \(ends)"))
         let captured: (Int) -> Void = { index in
-            Self.announce("Set to \(keyboard ? KeyCodeMap.name(for: index) : Self.mouseButtonName(index))")
+            Self.announce(String(localized: "Set to \(keyboard ? HotKeySpec.spokenKey(KeyCodeMap.name(for: index)) : Self.mouseButtonName(index))"))
         }
         // A press already down when Scan was clicked must not count, so
         // events in the first instant are ignored.
@@ -1064,8 +1281,12 @@ struct BindingRowView: View {
         // A hard deadline (5 seconds unless Settings changed it). Fires on
         // the main run loop so it always runs even if no events arrive.
         Self.activeScanTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(scanSeconds), repeats: false) { _ in
-            Self.announce("Scan timed out. Nothing was set.")
+            Self.announce(String(localized: "Scan timed out. Nothing was set."))
+            NSSound.beep()
             Self.cancelActiveScan()
+            // Seen on the row for a few seconds, not only spoken.
+            externalScanTimedOut = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { externalScanTimedOut = false }
         }
     }
 
@@ -1074,15 +1295,16 @@ struct BindingRowView: View {
     /// previous subscription instead of stacking them.
     private static var activeScanCancellable: AnyCancellable?
     private static var activeScanTimer: Timer?
+    private static var activeScanTick: Timer?
     private static var activeScanKeyMonitor: Any?
     private static var activeScanMouseMonitor: Any?
     /// Clears the scanning row's "Press a key" label when the scan ends.
     private static var activeScanEnded: (() -> Void)?
 
-    private static func announce(_ text: String) {
+    private static func announce(_ text: String, priority: NSAccessibilityPriorityLevel = .high) {
         guard let window = NSApp?.keyWindow ?? NSApp?.mainWindow else { return }
         NSAccessibility.post(element: window, notification: .announcementRequested,
-                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+                             userInfo: [.announcement: text, .priority: priority.rawValue])
     }
 
     /// Cancel any in-flight external-input scan. Called from
@@ -1094,6 +1316,8 @@ struct BindingRowView: View {
         activeScanCancellable = nil
         activeScanTimer?.invalidate()
         activeScanTimer = nil
+        activeScanTick?.invalidate()
+        activeScanTick = nil
         if let monitor = activeScanKeyMonitor {
             NSEvent.removeMonitor(monitor)
             activeScanKeyMonitor = nil
@@ -1111,18 +1335,18 @@ struct BindingRowView: View {
     private var touchpadRegionDisplayName: String {
         if let id = binding.input.touchpadRegionID,
            let r = TouchpadService.shared.region(with: id) {
-            return r.name
+            return r.shownName
         }
-        return "Pick region"
+        return String(localized: "Pick region")
     }
 
     private var cursorRegionDisplayName: String {
         if let id = binding.input.cursorRegionID,
            let r = CursorRegionService.shared.region(with: id) {
-            if let d = r.display { return "\(r.name) on \(d.name)" }
-            return r.name
+            if let d = r.display { return String(localized: "\(r.shownName) on \(d.name)") }
+            return r.shownName
         }
-        return "Pick a screen region"
+        return String(localized: "Pick a screen region")
     }
 
     /// Regions that apply to every display first, then one group per
@@ -1130,13 +1354,13 @@ struct BindingRowView: View {
     static func screenRegionSections(_ regions: [TouchpadRegion]) -> [(title: String, regions: [TouchpadRegion])] {
         var out: [(String, [TouchpadRegion])] = []
         let any = regions.filter { $0.display == nil }
-        if !any.isEmpty { out.append(("Every display", any)) }
+        if !any.isEmpty { out.append((String(localized: "Every display"), any)) }
         var seen: [DisplayKey] = []
         for r in regions {
             guard let d = r.display, !seen.contains(d) else { continue }
             seen.append(d)
             let attached = CursorRegionService.shared.isDisplayAttached(d)
-            out.append((attached ? d.name : "\(d.name) (not connected)", regions.filter { $0.display == d }))
+            out.append((attached ? d.name : String(localized: "\(d.name) (not connected)"), regions.filter { $0.display == d }))
         }
         return out
     }
@@ -1153,6 +1377,174 @@ struct BindingRowView: View {
         guard let id = binding.input.touchpadRegionID,
               let r = TouchpadService.shared.region(with: id) else { return nil }
         return r.colorIndex
+    }
+
+    /// The type column's name: a stick zone or trigger band is shown as the
+    /// Axis it belongs to.
+    private var typeMenuTitle: String {
+        binding.input.type == .stickRegion ? InputType.axis.displayName : binding.input.type.displayName
+    }
+
+    /// How this zone shares its stick with the stick's direction rows, said
+    /// plainly with the rows it overlaps, and the switch to let both fire.
+    @ViewBuilder
+    private var zoneSharingOptions: some View {
+        let shares = binding.zoneSharesStick != false
+        let rows = zoneOverlap.map { "#\($0)" }.joined(separator: ", ")
+        VStack(alignment: .leading, spacing: 6) {
+            Text(isBandRow
+                 ? (zoneOverlap.isEmpty
+                    ? String(localized: "No other row on this control reaches into this band.")
+                    : zoneOverlap.count == 1
+                    ? (shares
+                       ? String(localized: "This band overlaps row \(rows). While the control is inside it, this row and that row both fire.")
+                       : String(localized: "This band overlaps row \(rows). While the control is inside it, only this row fires; that row waits until the control leaves the band."))
+                    : shares
+                    ? String(localized: "This band overlaps rows \(rows). While the control is inside it, this row and those rows all fire.")
+                    : String(localized: "This band overlaps rows \(rows). While the control is inside it, only this row fires; those rows wait until the control leaves the band."))
+                 : zoneOverlap.isEmpty
+                 ? String(localized: "No direction row on this stick reaches into this region.")
+                 : zoneOverlap.count == 1
+                 ? (shares
+                    ? String(localized: "This region overlaps row \(rows). While the stick is inside it, this row and that row both fire.")
+                    : String(localized: "This region overlaps row \(rows). While the stick is inside it, only this row fires; that row waits until the stick leaves the region."))
+                 : shares
+                 ? String(localized: "This region overlaps rows \(rows). While the stick is inside it, this row and those rows all fire.")
+                 : String(localized: "This region overlaps rows \(rows). While the stick is inside it, only this row fires; those rows wait until the stick leaves the region."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !zoneZoneOverlap.isEmpty {
+                let zoneRows = zoneZoneOverlap.map { "#\($0)" }.joined(separator: ", ")
+                Text(zoneZoneOverlap.count == 1
+                     ? String(localized: "It also overlaps the region of row \(zoneRows). Where the two meet, both rows fire.")
+                     : String(localized: "It also overlaps the regions of rows \(zoneRows). Where they meet, each of those rows fires too."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            let shareExplanation = isBandRow
+                ? String(localized: "Off: inside the band only this row fires, the way a chord takes over its button's plain row. On: the band and the other rows both fire.")
+                : String(localized: "Off: inside the region only this row fires, the way a chord takes over its button's plain row. On: the region and the direction rows both fire.")
+            Toggle(isOn: SwiftUI.Binding(
+                get: { binding.zoneSharesStick != false },
+                set: { binding.zoneSharesStick = $0 ? nil : false })) {
+                Text(isBandRow
+                     ? String(localized: "Let the control's other rows fire in this band too")
+                     : String(localized: "Let the stick's direction rows fire in this region too"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help(shareExplanation)
+            .accessibilityInputLabels([Text("Let rows fire"), Text("Share")])
+            .accessibilityHint(shareExplanation)
+        }
+    }
+
+    /// The zones a row on this axis can use instead of a direction: the
+    /// plane zones of the stick the axis belongs to, and the axis's own
+    /// bands, with the way to draw more.
+    @ViewBuilder
+    private func zoneChoices(forAxis axis: Int) -> some View {
+        let svc = StickRegionService.shared
+        let stick: Int? = (0...1).contains(axis) ? 0 : ((2...3).contains(axis) ? 1 : nil)
+        let plane = stick.map { svc.regions(forStick: $0) } ?? []
+        let bandKey = StickRegionService.bandKeyBase + axis
+        let bands = svc.regions(forStick: bandKey)
+        if !plane.isEmpty, let stick {
+            Section(stick == 1 ? String(localized: "Right stick regions") : String(localized: "Left stick regions")) {
+                ForEach(plane) { region in
+                    Button { chooseZone(key: stick, region.id) } label: { regionMenuLabel(region) }
+                }
+            }
+        }
+        if !bands.isEmpty {
+            Section(String(localized: "\(StickRegionService.axisDisplayName(axis)) regions")) {
+                ForEach(bands) { region in
+                    Button { chooseZone(key: bandKey, region.id) } label: { regionMenuLabel(region) }
+                }
+            }
+        }
+        Button(plane.isEmpty && bands.isEmpty
+               ? String(localized: "Draw a region on this stick or trigger\u{2026}")
+               : String(localized: "Edit regions\u{2026}")) {
+            showZones(ZonePart(regionKey: zonesSheetKey))
+        }
+    }
+
+    /// The zones sheet's tab for an axis: its stick, or its own bands.
+    private func zonesKey(forAxis axis: Int) -> Int {
+        if (0...1).contains(axis) { return 0 }
+        if (2...3).contains(axis) { return 1 }
+        return StickRegionService.bandKeyBase + axis
+    }
+
+    /// The axis a zone row stands for, for its zone menu: the axis it came
+    /// from, or the stick's X axis, or the band's own axis.
+    /// The key the zones sheet opens on: a zone row's own zone key, else
+    /// the key of the row's axis.
+    private var zonesSheetKey: Int {
+        binding.input.type == .stickRegion ? binding.input.index : zonesKey(forAxis: binding.input.index)
+    }
+
+    private var zoneRowAxis: Int {
+        let key = binding.input.index
+        if StickRegionService.isBandKey(key) { return key - StickRegionService.bandKeyBase }
+        return axisBeforeZone?.index ?? (key == 1 ? 2 : 0)
+    }
+
+    /// The axes a zone row can go back to: its stick's X and Y, or the
+    /// band's own axis.
+    private var zoneRowAxes: [Int] {
+        let key = binding.input.index
+        if StickRegionService.isBandKey(key) { return [key - StickRegionService.bandKeyBase] }
+        return key == 1 ? [2, 3] : [0, 1]
+    }
+
+    private var zoneRowStickName: String {
+        let key = binding.input.index
+        if StickRegionService.isBandKey(key) {
+            return StickRegionService.axisDisplayName(key - StickRegionService.bandKeyBase)
+        }
+        return key == 1 ? String(localized: "Right stick") : String(localized: "Left stick")
+    }
+
+    /// The zone's own name, for the direction column.
+    private var stickRegionShortName: String {
+        if let id = binding.input.stickRegionID, let lookup = StickRegionService.shared.region(with: id) {
+            return lookup.region.shownName
+        }
+        return String(localized: "Pick a region")
+    }
+
+    /// The row fires while its stick or trigger is inside the zone.
+    private func chooseZone(key: Int, _ id: UUID) {
+        if binding.input.type == .axis {
+            axisBeforeZone = (binding.input.index, binding.input.axisDirection, binding.invertAxis)
+            // Invert would turn the zone half a turn round.
+            binding.invertAxis = nil
+        }
+        binding.input.type = .stickRegion
+        // A zone picked here takes over its stick; Options can let it share.
+        binding.zoneSharesStick = false
+        binding.input.index = key
+        binding.input.stickRegionID = id
+        binding.input.axisDirection = nil
+    }
+
+    /// Back from a zone to the whole axis it was on: a stick's X axis, or
+    /// the band's own axis.
+    private func useWholeAxis(index: Int? = nil, direction: AxisDirection? = nil) {
+        let axis = index ?? zoneRowAxis
+        let before = axisBeforeZone
+        binding.input.type = .axis
+        binding.input.stickRegionID = nil
+        binding.input.index = axis
+        binding.input.axisDirection = direction ?? (before?.index == axis ? before?.direction : nil) ?? .positive
+        if before?.index == axis { binding.invertAxis = before?.invert }
+        axisBeforeZone = nil
     }
 
     private var stickRegionColorIndex: Int? {
@@ -1180,7 +1572,10 @@ struct BindingRowView: View {
     /// The Standard list for this row's slot: its family, its model's own
     /// names, the Face button names setting.
     private var familyButtonLabels: [(index: Int, label: String)] {
-        Self.standardButtonLabels(for: presetButtonFamily, model: buttonModelNames)
+        // A pad read from its descriptor alone has no A or Cross: its
+        // buttons are named as Scan and the Automatic rows name them.
+        if let names = deviceButtonNames { return names.enumerated().map { (index: $0.offset, label: $0.element) } }
+        return Self.standardButtonLabels(for: presetButtonFamily, model: buttonModelNames)
     }
 
     /// Closed-menu label. Prefers the connected controller's named
@@ -1193,10 +1588,15 @@ struct BindingRowView: View {
         if let std = familyButtonLabels.first(where: { $0.index == index }) {
             return std.label
         }
-        return "Button \(index)"
+        return String(localized: "Button \(index)")
     }
 
     /// "Single tap" / "Double tap" / "Triple tap" for the index column.
+    /// Said wherever a Tap the Mac row or the feature is shown.
+    static var tapTheMacDisclaimer: String {
+        String(localized: "Works only on some MacBooks: tested on M4 MacBooks; it did not work on an M1 Pro in our testing.")
+    }
+
     private var chassisTapLabel: String {
         TapCalibrationView.gestureName(max(1, min(5, binding.input.index)))
     }
@@ -1204,10 +1604,12 @@ struct BindingRowView: View {
     private var stickRegionDisplayName: String {
         if let id = binding.input.stickRegionID,
            let lookup = StickRegionService.shared.region(with: id) {
-            let stick = lookup.stickIndex == 1 ? "Right" : "Left"
-            return "\(stick): \(lookup.region.name)"
+            let stick = StickRegionService.isBandKey(lookup.stickIndex)
+                ? StickRegionService.axisDisplayName(lookup.stickIndex - StickRegionService.bandKeyBase)
+                : (lookup.stickIndex == 1 ? String(localized: "Right") : String(localized: "Left"))
+            return "\(stick): \(lookup.region.shownName)"
         }
-        return "Pick stick region"
+        return String(localized: "Pick stick region")
     }
 
     /// MIDI: the first column picks the message family and its number
@@ -1215,23 +1617,25 @@ struct BindingRowView: View {
     /// have no number and the menu collapses to just the family.
     @ViewBuilder
     private var midiIndexPicker: some View {
-        Menu {
+        SearchableMenu(choices: {
+            let message = String(localized: "Message")
+            var out = MIDIInputKind.allCases.map { kind in
+                MenuSearchChoice(title: kind.displayName, path: message) { chooseMIDIKind(kind) }
+            }
+            let kind = binding.input.midiKind ?? .note
+            out += Self.midiNumberChoices(for: kind).map { pair in
+                MenuSearchChoice(title: pair.1, path: kind.displayName) { binding.input.index = pair.0 }
+            }
+            return out
+        }) {
             Section("Message") {
                 ForEach(MIDIInputKind.allCases) { kind in
-                    Button(kind.displayName) {
-                        binding.input.midiKind = kind
-                        // Reset the number to something sensible for the
-                        // new family so the row never shows "CC 60".
-                        if kind == .note { binding.input.index = 60 }
-                        else if kind == .cc { binding.input.index = 1 }
-                        else if kind == .transport { binding.input.index = 0xFA; binding.input.midiChannel = nil }
-                        else { binding.input.index = 0 }
-                    }
+                    Button(kind.displayName) { chooseMIDIKind(kind) }
                 }
             }
             let kind = binding.input.midiKind ?? .note
             if kind.usesNumber {
-                Section(kind == .note ? "Note" : (kind == .cc ? "Controller" : (kind == .transport ? "Transport" : "Program"))) {
+                Section(kind == .note ? String(localized: "Note") : (kind == .cc ? String(localized: "Controller") : (kind == .transport ? String(localized: "Transport") : String(localized: "Program")))) {
                     // Live devices make Scan the better path, so this menu
                     // stays short: common values, not all 128.
                     ForEach(Self.midiNumberChoices(for: kind), id: \.0) { pair in
@@ -1246,14 +1650,27 @@ struct BindingRowView: View {
         .controlSize(.small)
     }
 
+    private func chooseMIDIKind(_ kind: MIDIInputKind) {
+        binding.input.midiKind = kind
+        // Reset the number to something sensible for the
+        // new family so the row never shows "CC 60".
+        if kind == .note { binding.input.index = 60 }
+        else if kind == .cc { binding.input.index = 1 }
+        else if kind == .transport { binding.input.index = 0xFA; binding.input.midiChannel = nil }
+        else { binding.input.index = 0 }
+        // Pressure only rises; a "-" row sent its outputs
+        // nothing but 0.
+        if kind == .aftertouch { binding.input.axisDirection = .positive }
+    }
+
     private var midiIndexLabel: String {
         let kind = binding.input.midiKind ?? .note
         switch kind {
         case .note:          return MIDIService.noteName(binding.input.index)
-        case .cc:            return "CC \(binding.input.index)"
-        case .programChange: return "Prog \(binding.input.index)"
-        case .pitchBend:     return "Pitch Bend"
-        case .aftertouch:    return "Aftertouch"
+        case .cc:            return String(localized: "CC \(binding.input.index)")
+        case .programChange: return String(localized: "Prog \(binding.input.index)")
+        case .pitchBend:     return String(localized: "Pitch Bend")
+        case .aftertouch:    return String(localized: "Aftertouch")
         case .transport:     return MIDIInputKind.transportName(binding.input.index)
         }
     }
@@ -1265,12 +1682,12 @@ struct BindingRowView: View {
         case .note:
             return (36...84).map { ($0, MIDIService.noteName($0)) }
         case .cc:
-            var out = MIDIService.commonCCs.map { ($0.number, "CC \($0.number): \($0.name)") }
+            var out = MIDIService.commonCCs.map { ($0.number, String(localized: "CC \($0.number): \($0.name)")) }
             let common = Set(MIDIService.commonCCs.map(\.number))
-            out += (0...127).filter { !common.contains($0) }.map { ($0, "CC \($0)") }
+            out += (0...127).filter { !common.contains($0) }.map { ($0, String(localized: "CC \($0)")) }
             return out
         case .programChange:
-            return (0...127).map { ($0, "Program \($0)") }
+            return (0...127).map { ($0, String(localized: "Program \($0)")) }
         case .transport:
             return [0xFA, 0xFB, 0xFC].map { ($0, MIDIInputKind.transportName($0)) }
         case .pitchBend, .aftertouch:
@@ -1295,7 +1712,7 @@ struct BindingRowView: View {
     /// MIDI: the second column picks the channel (or Any).
     @ViewBuilder
     private var midiChannelPicker: some View {
-        Menu {
+        SearchableMenu(choices: { midiChannelSearchChoices }) {
             // Device section first: this is where users look to confirm
             // their MIDI keyboard was detected at all.
             Section("Device") {
@@ -1343,7 +1760,7 @@ struct BindingRowView: View {
             // Continuous controllers can be bound as a half-axis, so
             // offer the direction alongside the channel rather than
             // adding a fourth column just for MIDI.
-            if (binding.input.midiKind ?? .note).isContinuous {
+            if (binding.input.midiKind ?? .note).isContinuous, binding.input.midiKind != .aftertouch {
                 Section("Direction") {
                     ForEach(AxisDirection.allCases) { dir in
                         Button(dir.displayName) { binding.input.axisDirection = dir }
@@ -1357,24 +1774,67 @@ struct BindingRowView: View {
         .controlSize(.small)
     }
 
+    /// The channel menu's choices, for its Search.
+    private var midiChannelSearchChoices: [MenuSearchChoice] {
+        let kind = binding.input.midiKind ?? .note
+        let deviceMenu = String(localized: "Device")
+        var out = [MenuSearchChoice(title: String(localized: "Any device"), path: deviceMenu) { binding.input.midiDeviceID = nil }]
+        out += Self.midiDeviceTitles(MIDIInputService.shared.connectedDevices()).map { entry in
+            MenuSearchChoice(title: entry.title, path: deviceMenu) { binding.input.midiDeviceID = entry.device.id }
+        }
+        if kind != .transport {
+            out.append(MenuSearchChoice(title: String(localized: "Any channel")) { binding.input.midiChannel = nil })
+            out += (1...16).map { ch in
+                MenuSearchChoice(title: String(localized: "Channel \(ch)"), path: String(localized: "Channel")) { binding.input.midiChannel = ch }
+            }
+        }
+        if kind == .cc {
+            out += MIDICCMode.allCases.map { mode in
+                MenuSearchChoice(title: mode.displayName, path: String(localized: "Knob mode")) {
+                    binding.input.midiCCMode = (mode == .threshold) ? nil : mode
+                }
+            }
+            if binding.input.midiCCMode == .relative {
+                let step = String(localized: "Turn step")
+                out += [
+                    MenuSearchChoice(title: String(localized: "Fine (2 units per nudge)"), path: step) { binding.input.midiTurnStep = 2 },
+                    MenuSearchChoice(title: String(localized: "Normal (4 units per nudge)"), path: step) { binding.input.midiTurnStep = nil },
+                    MenuSearchChoice(title: String(localized: "Coarse (8 units per nudge)"), path: step) { binding.input.midiTurnStep = 8 },
+                    MenuSearchChoice(title: String(localized: "Chunky (16 units per nudge)"), path: step) { binding.input.midiTurnStep = 16 },
+                ]
+            }
+        }
+        if kind.isContinuous, binding.input.midiKind != .aftertouch {
+            out += AxisDirection.allCases.map { dir in
+                MenuSearchChoice(title: dir.displayName, path: String(localized: "Direction")) { binding.input.axisDirection = dir }
+            }
+        }
+        return out
+    }
+
     /// Channel-column label: channel (or Any), prefixed with the knob
     /// mode badge when a CC binding uses a non-default mode, so a Dial
     /// or Turn binding is recognizable without opening the menu.
     private var midiChannelLabel: String {
         if (binding.input.midiKind ?? .note) == .transport {
-            guard let id = binding.input.midiDeviceID else { return "Any device" }
-            return MIDIInputService.shared.connectedDevices().first { $0.id == id }?.name ?? "Missing device"
+            guard let id = binding.input.midiDeviceID else { return String(localized: "Any device") }
+            return MIDIInputService.shared.connectedDevices().first { $0.id == id }?.name ?? String(localized: "Missing device")
         }
-        var ch = binding.input.midiChannel.map { "Ch \($0)" } ?? "Any ch"
+        var ch = binding.input.midiChannel.map { String(localized: "Ch \($0)") } ?? String(localized: "Any ch")
         // A row pinned to one device says which, or that it is missing,
         // since it fires for nothing else.
         if let id = binding.input.midiDeviceID {
             let device = MIDIInputService.shared.connectedDevices().first { $0.id == id }
-            ch = "\(device?.name ?? "Missing device") \u{00B7} \(ch)"
+            ch = "\(device?.name ?? String(localized: "Missing device")), \(ch)"
         }
-        if (binding.input.midiKind ?? .note) == .cc,
-           let badge = binding.input.midiCCMode?.badge {
-            return "\(badge) \u{00B7} \(ch)"
+        // A knob or bend row's direction, so a "+" and a "-" row on the
+        // same control do not look the same.
+        let kind = binding.input.midiKind ?? .note
+        if kind.isContinuous, kind != .aftertouch, let dir = binding.input.axisDirection {
+            ch += " \(dir.displayName)"
+        }
+        if kind == .cc, let badge = binding.input.midiCCMode?.badge {
+            return "\(badge), \(ch)"
         }
         return ch
     }
@@ -1386,19 +1846,20 @@ struct BindingRowView: View {
     /// this before the value so the control never announces a bare number.
     private var indexPickerAccessibilityLabel: String {
         switch binding.input.type {
-        case .button: return "Button"
-        case .axis: return "Axis"
-        case .hat: return "Hat"
-        case .touchpad: return "Finger"
-        case .motion: return "Motion channel"
-        case .touchpadRegion: return "Touchpad zone"
-        case .cursorRegion: return "Screen region"
-        case .stickRegion: return "Stick region"
-        case .extKey: return "Key"
-        case .extMouse: return "Mouse input"
-        case .touchpadGesture: return "Gesture"
-        case .chassisTap: return "Tap count"
-        case .midi: return "MIDI message"
+        case .button: return String(localized: "Button")
+        case .axis: return String(localized: "Axis")
+        case .hat: return String(localized: "Hat")
+        case .touchpad: return String(localized: "Finger")
+        case .motion: return String(localized: "Motion channel")
+        case .touchpadRegion: return String(localized: "Touchpad region")
+        case .cursorRegion: return String(localized: "Screen region")
+        case .stickRegion: return String(localized: "Stick or axis")
+        case .stickGesture: return String(localized: "Flicks")
+        case .extKey: return String(localized: "Key")
+        case .extMouse: return String(localized: "Mouse input")
+        case .touchpadGesture: return String(localized: "Gesture")
+        case .chassisTap: return String(localized: "Tap count")
+        case .midi: return String(localized: "MIDI message")
         }
     }
 
@@ -1409,13 +1870,15 @@ struct BindingRowView: View {
         case .button:
             return buttonMenuLabel(for: binding.input.index)
         case .axis:
-            return "Axis \(binding.input.index)"
+            // As the closed menu reads: the family's name for the axis.
+            return ButtonNames.axisName(binding.input.index, family: presetButtonFamily)
+                ?? String(localized: "Axis \(binding.input.index)")
         case .hat:
-            return "Hat \(binding.input.index)"
+            return String(localized: "Hat \(binding.input.index)")
         case .touchpad:
             // A Steam row names its pad, as the picker on screen does.
-            if presetButtonFamily?.isSteam == true { return binding.input.touchpadSurface == 1 ? "Left pad" : "Right pad" }
-            return (binding.input.touchpadFinger ?? binding.input.index) == 1 ? "Finger 2" : "Finger 1"
+            if presetButtonFamily?.isSteam == true { return binding.input.touchpadSurface == 1 ? String(localized: "Left pad") : String(localized: "Right pad") }
+            return (binding.input.touchpadFinger ?? binding.input.index) == 1 ? String(localized: "Finger 2") : String(localized: "Finger 1")
         case .motion:
             return (binding.input.motionChannel ?? .gyroY).displayName
         case .touchpadRegion:
@@ -1425,17 +1888,19 @@ struct BindingRowView: View {
         case .chassisTap:
             return chassisTapLabel
         case .stickRegion:
-            return stickRegionDisplayName
+            return zoneRowStickName
+        case .stickGesture:
+            return binding.input.displayName
         case .midi:
             return binding.input.displayName
         case .extKey:
-            return KeyCodeMap.name(for: binding.input.index)
+            return HotKeySpec.spokenKey(KeyCodeMap.name(for: binding.input.index))
         case .extMouse:
             return (binding.input.extMouseKind ?? .button).displayName
         case .touchpadGesture:
-            let kind = binding.input.touchpadGestureKind?.displayName ?? "Two-finger tap"
+            let kind = binding.input.touchpadGestureKind?.displayName ?? String(localized: "Two-finger tap")
             if presetButtonFamily?.isSteam == true {
-                return (binding.input.touchpadSurface == 1 ? "Left trackpad, " : "Right trackpad, ") + kind
+                return (binding.input.touchpadSurface == 1 ? String(localized: "Left trackpad, ") : String(localized: "Right trackpad, ")) + kind
             }
             return kind
         }
@@ -1447,17 +1912,19 @@ struct BindingRowView: View {
     private var directionPickerAccessibilityLabel: String {
         switch binding.input.type {
         case .extKey:
-            return "Keyboard device"
+            return String(localized: "Keyboard device")
         case .extMouse:
             switch binding.input.extMouseKind ?? .button {
-            case .button, .doubleClick: return "Mouse button"
-            case .moveX, .moveY, .scrollX, .scrollY: return "Direction"
-            case .pressure, .deepPress, .scrollGesture: return "Mouse input"
+            case .button, .doubleClick: return String(localized: "Mouse button")
+            case .moveX, .moveY, .scrollX, .scrollY: return String(localized: "Direction")
+            case .pressure, .deepPress, .scrollGesture: return String(localized: "Mouse input")
             }
         case .touchpad:
-            return "Axis and direction"
+            return String(localized: "Axis and direction")
+        case .stickRegion:
+            return String(localized: "Region")
         default:
-            return "Direction"
+            return String(localized: "Direction")
         }
     }
 
@@ -1465,17 +1932,19 @@ struct BindingRowView: View {
     /// closed-menu label for the active input type.
     private var directionPickerAccessibilityValue: String {
         switch binding.input.type {
-        case .button, .touchpadRegion, .cursorRegion, .stickRegion, .touchpadGesture, .chassisTap:
-            return "Not applicable"
+        case .stickRegion:
+            return stickRegionShortName
+        case .button, .touchpadRegion, .cursorRegion, .stickGesture, .touchpadGesture, .chassisTap:
+            return String(localized: "Not applicable")
         case .midi:
-            return binding.input.midiChannel.map { "Channel \($0)" } ?? "Any channel"
+            return binding.input.midiChannel.map { String(localized: "Channel \($0)") } ?? String(localized: "Any channel")
         case .axis, .motion:
-            return axisDirectionBinding.wrappedValue.displayName
+            return axisDirectionBinding.wrappedValue.spokenName
         case .hat:
             return hatDirectionBinding.wrappedValue.displayName
         case .touchpad:
             let axisLabel = (binding.input.touchpadAxis ?? .x).rawValue.uppercased()
-            let dirLabel = (binding.input.axisDirection ?? .positive).displayName
+            let dirLabel = (binding.input.axisDirection ?? .positive).spokenName
             return "\(axisLabel) \(dirLabel)"
         case .extKey:
             return externalDeviceLabel(kind: .keyboard)
@@ -1483,9 +1952,9 @@ struct BindingRowView: View {
             switch binding.input.extMouseKind ?? .button {
             case .button, .doubleClick: return Self.mouseButtonName(binding.input.index)
             case .moveX, .moveY, .scrollX, .scrollY:
-                return (binding.input.axisDirection ?? .positive).displayName
-            case .pressure, .deepPress: return "Built-in trackpad"
-            case .scrollGesture: return "Trackpad or Magic Mouse"
+                return (binding.input.axisDirection ?? .positive).spokenName
+            case .pressure, .deepPress: return String(localized: "Built-in trackpad")
+            case .scrollGesture: return String(localized: "Trackpad or Magic Mouse")
             }
         }
     }
@@ -1500,12 +1969,17 @@ struct BindingRowView: View {
             Color.clear
 
         case .axis:
-            // Lazy Menu instead of Picker for the same scroll-perf reason
-            // as the type menus: NSPopUpButtons pre-build on row creation.
+            // How the stick fires this row: one direction, or a zone drawn on
+            // it. Both are here, side by side, so they read as the two ways
+            // to use a stick. Lazy Menu for the same scroll-perf reason as
+            // the type menus: NSPopUpButtons pre-build on row creation.
             Menu {
-                ForEach(AxisDirection.allCases) { dir in
-                    Button(dir.displayName) { axisDirectionBinding.wrappedValue = dir }
+                Section("Direction") {
+                    ForEach(AxisDirection.allCases) { dir in
+                        Button(dir.displayName) { axisDirectionBinding.wrappedValue = dir }
+                    }
                 }
+                zoneChoices(forAxis: binding.input.index)
             } label: {
                 menuChevronLabel(axisDirectionBinding.wrappedValue.displayName)
             }
@@ -1531,12 +2005,48 @@ struct BindingRowView: View {
             // Same shape as `.touchpadRegion`: button-like, no direction.
             Color.clear
 
-        case .stickRegion:
-            // Stick region also acts like a button (pressed while
-            // stick is inside the rect). The stick index is carried in
-            // the InputEvent's `index` field and chosen from the region
-            // picker, so no direction widget is needed here either.
+        case .stickGesture:
+            // The stick is picked in the flicks menu.
             Color.clear
+
+        case .stickRegion:
+            // A region row: said as a region ("Region: Up"), so it never
+            // reads as the plain direction of the same name, with the
+            // region's color beside it, which opens it in the Regions editor.
+            HStack(spacing: 4) {
+                if let colorIndex = stickRegionColorIndex {
+                    Button {
+                        showZones(ZonePart(regionKey: binding.input.index))
+                    } label: {
+                        regionSwatch(colorIndex)
+                            .padding(3)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show this region in the Regions editor")
+                    .accessibilityLabel("Show region \(stickRegionShortName)")
+                    .accessibilityInputLabels([Text("Show region"), Text("Show region \(stickRegionShortName)")])
+                }
+                Menu {
+                    Section("Direction") {
+                        ForEach(AxisDirection.allCases) { dir in
+                            Button(dir.displayName) { useWholeAxis(direction: dir) }
+                        }
+                    }
+                    zoneChoices(forAxis: zoneRowAxis)
+                } label: {
+                    menuLabel(binding.input.stickRegionID == nil ? stickRegionShortName
+                              : String(localized: "Region: \(stickRegionShortName)"))
+                }
+                .menuStyle(.borderlessButton)
+                .controlSize(.small)
+                .accessibilityLabel(directionPickerAccessibilityLabel)
+                .accessibilityValue(directionPickerAccessibilityValue)
+                .accessibilityInputLabels([Text(directionPickerAccessibilityValue), Text(directionPickerAccessibilityLabel)])
+            }
+            // Two controls: the column's name goes on the menu, and the
+            // jump button keeps its own.
+            .accessibilityElement(children: .contain)
 
         case .motion:
             // Motion inputs read like axes: pick + or - polarity.
@@ -1583,7 +2093,12 @@ struct BindingRowView: View {
                 // Buttons are numbered the way macOS reports them: 0 is the
                 // main click, 1 the secondary, 2 the middle, then the side
                 // buttons. The menu names them so nobody has to know that.
-                Menu {
+                SearchableMenu(choices: {
+                    (0..<32).map { btn in
+                        MenuSearchChoice(title: Self.mouseButtonName(btn),
+                                         path: btn < 8 ? "" : String(localized: "More buttons")) { binding.input.index = btn }
+                    } + [MenuSearchChoice(title: String(localized: "Scan: press a mouse button\u{2026}")) { scanForExternalMouseButton() }]
+                }) {
                     ForEach(0..<8, id: \.self) { btn in
                         Button(Self.mouseButtonName(btn)) { binding.input.index = btn }
                     }
@@ -1599,7 +2114,9 @@ struct BindingRowView: View {
                     Divider()
                     Section("Device") { externalDeviceMenuItems(kind: .mouse) }
                 } label: {
-                    menuLabel(externalScanning ? "Press a button\u{2026}" : Self.mouseButtonName(binding.input.index))
+                    menuLabel(externalScanning ? String(localized: "Press a button\u{2026} \(externalScanLeft)")
+                              : externalScanTimedOut ? String(localized: "Timed out")
+                              : Self.mouseButtonName(binding.input.index))
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
@@ -1668,12 +2185,12 @@ struct BindingRowView: View {
            let name = ExternalInputDeviceService.shared.deviceName(for: id) {
             return name
         }
-        return "Any \(kind.rawValue)"
+        return kind.anyDevice
     }
 
     @ViewBuilder
     private func externalDeviceMenuItems(kind: ExternalInputDeviceService.Kind) -> some View {
-        Button("Any \(kind.rawValue)") {
+        Button(kind.anyDevice) {
             binding.input.extDeviceID = nil
         }
         let matching = ExternalInputDeviceService.shared.devices.filter { $0.kind == kind }
@@ -1744,7 +2261,11 @@ struct BindingRowView: View {
     private func outputValueControlsBody(at index: Int, current: OutputAction, in list: OutputList) -> some View {
         switch current.type {
         case .key:
-            KeyCodePicker(selectedCode: keyCodeBinding(at: index, in: list))
+            // Command or Control among the other outputs: this key, once
+            // picked, is sent as a shortcut by its character.
+            KeyCodePicker(selectedCode: keyCodeBinding(at: index, in: list),
+                          inShortcut: OutputAction.isShortcut(outputs(in: list).enumerated()
+                              .filter { $0.offset != index }.map(\.element)))
                 .accessibilityLabel("Key")
 
         case .absoluteVolume:
@@ -1777,7 +2298,7 @@ struct BindingRowView: View {
                 }
                 .labelsHidden()
                 .controlSize(.small)
-                .frame(width: 160)
+                .frame(width: 160 * max(1, textScale))
                 .accessibilityLabel("App action")
                 if current.appActionKind == .activatePreset {
                     Picker("", selection: targetPresetBinding(at: index, in: list)) {
@@ -1795,7 +2316,11 @@ struct BindingRowView: View {
 
         case .mouseButton:
             // Lazy Menu: only builds the 32 button options when opened.
-            Menu {
+            SearchableMenu(choices: {
+                (0..<32).map { i in
+                    MenuSearchChoice(title: mouseButtonName(i)) { updateOutput(index, in: list) { $0.mouseButtonIndex = i } }
+                }
+            }) {
                 ForEach(0..<32, id: \.self) { i in
                     Button(mouseButtonName(i)) {
                         updateOutput(index, in: list) { $0.mouseButtonIndex = i }
@@ -1824,12 +2349,15 @@ struct BindingRowView: View {
                     Text("Left").tag("0 -")
                 }
                 .labelsHidden()
-                .frame(width: 64)
+                // Sized to its longest direction: "Nach oben" and "Nach
+                // unten" must not both cut to "Nach…".
+                .fixedSize()
                 .controlSize(.small)
 
                 Image(systemName: "speedometer")
                     .font(.callout)
                     .foregroundStyle(.hint)
+                    .accessibilityHidden(true)
                     .fixedSize()
                     .hoverHelp("Output speed")
 
@@ -1840,10 +2368,11 @@ struct BindingRowView: View {
                     onLiveChange: { liveSpeed[liveSpeedKey(index, list)] = $0 }
                 )
                     .frame(minWidth: 60, idealWidth: 90)
+                    .accessibilityValue(String(localized: "Speed \(Int(speedBinding(at: index, in: list).wrappedValue))"))
 
                 TextField("Speed", value: liveSpeedBinding(at: index, in: list), format: .number)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 56)
+                    .frame(width: 56 * max(1, textScale))
                     .controlSize(.small)
                     .multilineTextAlignment(.center)
             }
@@ -1856,14 +2385,18 @@ struct BindingRowView: View {
                 Text("Left").tag("0 -")
             }
             .labelsHidden()
-            .frame(width: 70)
+            .fixedSize()
             .controlSize(.small)
 
         case .midiNote:
             HStack(spacing: 6) {
                 fieldLabel("Note")
                 // Lazy Menu so the 128 note options only build when opened.
-                Menu {
+                SearchableMenu(choices: {
+                    MIDIService.notePickerLabels.map { entry in
+                        MenuSearchChoice(title: entry.label) { updateOutput(index, in: list) { $0.midiNote = entry.number } }
+                    }
+                }) {
                     ForEach(MIDIService.notePickerLabels, id: \.number) { entry in
                         Button(entry.label) {
                             updateOutput(index, in: list) { $0.midiNote = entry.number }
@@ -1874,13 +2407,13 @@ struct BindingRowView: View {
                     menuLabel("\(MIDIService.noteName(note)) (\(note))")
                 }
                 .menuStyle(.borderlessButton)
-                .frame(width: 100)
+                .frame(width: 100 * max(1, textScale))
                 .controlSize(.small)
 
                 fieldLabel("Vel")
                 TextField("Velocity", value: midiVelocityBinding(at: index, in: list), format: .number)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 44)
+                    .frame(width: 44 * max(1, textScale))
                     .controlSize(.small)
                     .multilineTextAlignment(.center)
 
@@ -1891,7 +2424,7 @@ struct BindingRowView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 50)
+                .frame(width: 50 * max(1, textScale))
                 .controlSize(.small)
             }
 
@@ -1899,7 +2432,11 @@ struct BindingRowView: View {
             HStack(spacing: 6) {
                 fieldLabel("CC")
                 // Lazy Menu so the 128 CC options only build when opened.
-                Menu {
+                SearchableMenu(choices: {
+                    MIDIService.ccPickerLabels.map { entry in
+                        MenuSearchChoice(title: entry.label) { updateOutput(index, in: list) { $0.midiCCNumber = entry.number } }
+                    }
+                }) {
                     ForEach(MIDIService.ccPickerLabels, id: \.number) { entry in
                         Button(entry.label) {
                             updateOutput(index, in: list) { $0.midiCCNumber = entry.number }
@@ -1925,8 +2462,26 @@ struct BindingRowView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 50)
+                .frame(width: 50 * max(1, textScale))
                 .controlSize(.small)
+
+                // A press sends this value (an axis or a MIDI knob follows
+                // its own position instead). A hold or double tap action,
+                // and the tap of a row that has them, is a press either way.
+                let followsPosition = (binding.input.type == .axis || MappingEngine.isContinuousMIDI(binding.input))
+                    && list == .main && binding.holdOutputs == nil && binding.doubleTapOutputs == nil
+                if !followsPosition {
+                    fieldLabel("Value")
+                    TextField("", value: SwiftUI.Binding(
+                        get: { current.midiCCValue ?? 127 },
+                        set: { v in updateOutput(index, in: list) { $0.midiCCValue = max(0, min(127, v)) } }
+                    ), format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 44 * max(1, textScale))
+                    .controlSize(.small)
+                    .accessibilityLabel("CC value sent on press")
+                    .help("The value sent on press; letting go sends 0.")
+                }
             }
 
         case .midiPitchBend:
@@ -1938,7 +2493,7 @@ struct BindingRowView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 50)
+                .frame(width: 50 * max(1, textScale))
                 .controlSize(.small)
                 Text("Use with a continuous axis for smooth bend.")
                     .font(.callout)
@@ -1948,7 +2503,11 @@ struct BindingRowView: View {
         case .midiProgramChange:
             HStack(spacing: 6) {
                 fieldLabel("Program")
-                Menu {
+                SearchableMenu(choices: {
+                    (0...127).map { p in
+                        MenuSearchChoice(title: "\(p)") { updateOutput(index, in: list) { $0.midiProgramNumber = p } }
+                    }
+                }) {
                     ForEach(0...127, id: \.self) { p in
                         Button("\(p)") { updateOutput(index, in: list) { $0.midiProgramNumber = p } }
                     }
@@ -1966,7 +2525,7 @@ struct BindingRowView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 50)
+                .frame(width: 50 * max(1, textScale))
                 .controlSize(.small)
             }
 
@@ -1979,7 +2538,7 @@ struct BindingRowView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 100)
+                .frame(width: 100 * max(1, textScale))
                 .controlSize(.small)
                 Text("Sends a real-time transport message to the DAW.")
                     .font(.callout)
@@ -2051,7 +2610,7 @@ struct BindingRowView: View {
             }
             .labelsHidden()
             .controlSize(.small)
-            .frame(width: 130)
+            .frame(width: 130 * max(1, textScale))
 
             if current.resolvedLightMode != .rainbowToggle {
                 ColorPicker("", selection: lightColorBinding(at: index, in: list), supportsOpacity: false)
@@ -2059,7 +2618,11 @@ struct BindingRowView: View {
                     .controlSize(.small)
                     .accessibilityLabel("Light bar color")
 
-                Menu {
+                SearchableMenu(choices: {
+                    RGBLightColor.namedSwatches.map { swatch in
+                        MenuSearchChoice(title: swatch.name) { updateOutput(index, in: list) { $0.lightColor = swatch.color } }
+                    }
+                }) {
                     ForEach(RGBLightColor.namedSwatches, id: \.name) { swatch in
                         Button {
                             updateOutput(index, in: list) { $0.lightColor = swatch.color }
@@ -2073,11 +2636,11 @@ struct BindingRowView: View {
                     }
                 } label: {
                     let c = current.resolvedLightColor
-                    menuLabel(c.isNamedSwatch ? c.nearestName : "Custom")
+                    menuLabel(c.isNamedSwatch ? c.nearestName : String(localized: "Custom"))
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
-                .frame(width: 84)
+                .frame(width: 84 * max(1, textScale))
                 .accessibilityLabel("Light bar swatches")
             } else {
                 Text("Speed follows the rainbow setting")
@@ -2118,38 +2681,39 @@ struct BindingRowView: View {
             HStack(spacing: gap) {
                 outputIconCell(for: output)
 
-                Menu {
-                    outputTypeMenuItems(select: { outputTypeBinding(at: index, in: list).wrappedValue = $0 },
-                                        selectSystemKind: { kind in
-                                            updateOutput(index, in: list) {
-                                                $0.type = .systemAction
-                                                $0.systemActionKind = kind
-                                            }
-                                        },
-                                        setParameter: { text in
-                                            updateOutput(index, in: list) { $0.text = text }
-                                        },
-                                        setAppAction: { kind, presetID in
-                                            updateOutput(index, in: list) {
-                                                $0.type = .appAction
-                                                $0.appActionKind = kind
-                                                $0.targetPresetID = presetID
-                                            }
-                                        },
-                                        setKey: { code in
-                                            updateOutput(index, in: list) {
-                                                $0.type = .key
-                                                $0.keyCode = code
-                                            }
-                                        },
-                                        list: list)
-                } label: {
+                outputMenu(select: { outputTypeBinding(at: index, in: list).wrappedValue = $0 },
+                           selectSystemKind: { kind in
+                               updateOutput(index, in: list) {
+                                   $0.type = .systemAction
+                                   $0.systemActionKind = kind
+                               }
+                           },
+                           setParameter: { text in
+                               updateOutput(index, in: list) { $0.text = text }
+                           },
+                           setAppAction: { kind, presetID in
+                               updateOutput(index, in: list) {
+                                   $0.type = .appAction
+                                   $0.appActionKind = kind
+                                   $0.targetPresetID = presetID
+                               }
+                           },
+                           setKey: { code in
+                               updateOutput(index, in: list) {
+                                   $0.type = .key
+                                   $0.keyCode = code
+                               }
+                           },
+                           keyInShortcut: OutputAction.isShortcut(outputs(in: list).enumerated()
+                               .filter { $0.offset != index }.map(\.element)),
+                           list: list) {
                     menuChevronLabel(current.map(outputMenuTitle) ?? OutputType.key.displayName)
                 }
                 .menuStyle(.borderlessButton)
                 .controlSize(.small)
                 .accessibilityLabel("Output type")
-                .accessibilityValue(current?.type.displayName ?? OutputType.key.displayName)
+                .accessibilityValue(current.map(outputMenuTitle) ?? OutputType.key.displayName)
+                .accessibilityInputLabels([Text(current.map(outputMenuTitle) ?? OutputType.key.displayName), Text("Output type")])
             }
             .frame(width: outTypeColWidth, alignment: .leading)
 
@@ -2183,6 +2747,8 @@ struct BindingRowView: View {
             .foregroundStyle(outputColor(for: output))
             .frame(width: iconCell - 4, height: 13)
             .frame(width: iconCell, height: 18)
+            // The menu beside it names the output.
+            .accessibilityHidden(true)
     }
 
     // MARK: - Advanced Section
@@ -2196,8 +2762,11 @@ struct BindingRowView: View {
                     toggleOptions()
                 } label: {
                     HStack(spacing: 3) {
-                        Image(systemName: "chevron.right")
+                        Image(systemName: "chevron.forward")
                             .font(.callout)
+                            // Turned to point down when open. SwiftUI mirrors
+                            // the rotation in right-to-left too, so 90 is right
+                            // for the forward chevron both ways.
                             .rotationEffect(.degrees(showAdvanced ? 90 : 0))
                         Text("Options")
                             .font(.callout)
@@ -2206,6 +2775,13 @@ struct BindingRowView: View {
                     .fixedSize()
                 }
                 .buttonStyle(.plain)
+                // Open or closed, and what is set, for VoiceOver: the chevron's
+                // turn and the summary beside it are visual only.
+                .accessibilityLabel("Options")
+                .accessibilityInputLabels([Text("Options"), Text("Options \(displayNumber)")])
+                .accessibilityValue(showAdvanced ? String(localized: "Expanded")
+                                    : (advancedOptionsSummary.isEmpty ? String(localized: "Collapsed") : advancedOptionsSummary))
+                .accessibilityHint("Shows this row's deadzone, press mode, macro, feedback and extra actions")
                 // Collapsed summary of WHICH options are set, replacing the
                 // old bare asterisk that said only that something was.
                 if !showAdvanced && (hasAdvancedOptions || binding.input.type == .axis) {
@@ -2249,13 +2825,15 @@ struct BindingRowView: View {
 
     private var hasAdvancedOptions: Bool {
         !binding.modifiers.isEmpty ||
-        binding.deadzone != nil || binding.invertAxis == true ||
+        binding.deadzone != nil || binding.invertAxis == true || fullTravelShown || fromNeutralShown ||
         binding.toggleMode == true || binding.turboEnabled == true ||
         binding.sensitivityCurve != nil || (binding.repeatCount ?? 1) > 1 ||
         (binding.macroSteps?.isEmpty == false) ||
         binding.variableSensitivity != nil || (binding.rampMs ?? 0) > 0 ||
         binding.holdOutputs != nil || binding.doubleTapOutputs != nil ||
-        binding.hapticEnabled == true || binding.speechEnabled == true
+        binding.hapticEnabled == true || binding.speechEnabled == true ||
+        binding.outerDeadzone != nil || binding.keyRepeat == true || binding.blockOriginal == true ||
+        (binding.input.type == .stickRegion && binding.zoneSharesStick == false)
     }
 
     /// One-line summary of the configured advanced options, shown next to
@@ -2264,52 +2842,65 @@ struct BindingRowView: View {
     private var advancedOptionsSummary: String {
         var parts: [String] = []
         if let dz = binding.deadzone {
-            parts.append("Deadzone \(Int((dz * 100).rounded()))%")
+            parts.append(String(localized: "Deadzone \(Int((dz * 100).rounded()))%"))
         } else if binding.input.type == .axis {
             // Shown at the default too, so the setting is visible without opening Options.
-            parts.append("Deadzone 25%")
+            parts.append(String(localized: "Deadzone 25%"))
         }
-        if binding.invertAxis == true { parts.append("Inverted") }
+        if binding.invertAxis == true { parts.append(String(localized: "Inverted")) }
+        if let full = binding.outerDeadzone, binding.input.type == .axis {
+            parts.append(String(localized: "Full push at \(Int((full * 100).rounded()))%"))
+        }
+        if binding.input.type == .stickRegion, binding.zoneSharesStick == false {
+            parts.append(isBandRow ? String(localized: "Takes over the control") : String(localized: "Takes over the stick"))
+        }
+        if binding.keyRepeat == true, showsKeyRepeatToggle { parts.append(String(localized: "Repeats keys")) }
+        if binding.blockOriginal == true, showsBlockOriginalToggle { parts.append(String(localized: "Blocks the button")) }
+        if !zoneTakenBy.isEmpty {
+            parts.append(String(localized: "Waits in region of \(zoneTakenBy.map { "#\($0)" }.joined(separator: ", "))"))
+        }
+        if fullTravelShown { parts.append(String(localized: "Whole travel")) }
+        if fromNeutralShown { parts.append(String(localized: "From the grip")) }
         if let curve = binding.sensitivityCurve, curve != .linear {
-            parts.append(curve == .exponential ? "Smooth curve" : "Aggressive curve")
+            parts.append(curve == .exponential ? String(localized: "Smooth curve") : String(localized: "Aggressive curve"))
         }
-        if binding.variableSensitivity == true { parts.append("Variable") }
-        if let r = binding.rampMs, r > 0 { parts.append(String(format: "Ramp-up %.2g s", Double(r) / 1000)) }
+        if binding.variableSensitivity == true { parts.append(String(localized: "Variable")) }
+        if let r = binding.rampMs, r > 0 { parts.append(String(format: String(localized: "Ramp-up %.3g s"), locale: .current, Double(r) / 1000)) }
         if !binding.modifiers.isEmpty {
-            parts.append("With " + binding.modifiers.map { modifierName($0) }.joined(separator: " + "))
+            parts.append(String(localized: "With \(binding.modifiers.map { modifierName($0) }.joined(separator: " + "))"))
         }
         if binding.toggleMode == true && binding.turboEnabled == true {
-            parts.append("Auto every \(turboIntervalMs) ms")
+            parts.append(String(localized: "Auto every \(turboIntervalMs) ms"))
         } else {
-            if binding.toggleMode == true { parts.append("Toggle") }
-            if binding.turboEnabled == true { parts.append("Every \(turboIntervalMs) ms") }
+            if binding.toggleMode == true { parts.append(String(localized: "Toggle")) }
+            if binding.turboEnabled == true { parts.append(String(localized: "Every \(turboIntervalMs) ms")) }
         }
-        if let n = binding.turboMaxCount, n > 0, binding.turboEnabled == true { parts.append("\(n)x then stop") }
-        if (binding.repeatCount ?? 1) > 1, repeatApplies { parts.append("Repeat x\(binding.repeatCount ?? 1)") }
+        if let n = binding.turboMaxCount, n > 0, binding.turboEnabled == true { parts.append(String(localized: "\(n)x then stop")) }
+        if (binding.repeatCount ?? 1) > 1, repeatApplies { parts.append(String(localized: "Repeat x\(binding.repeatCount ?? 1)")) }
         if let steps = binding.macroSteps, !steps.isEmpty {
-            parts.append("Macro \(steps.count) \(steps.count == 1 ? "step" : "steps")")
+            parts.append(steps.count == 1 ? String(localized: "Macro 1 step") : String(localized: "Macro \(steps.count) steps"))
         }
         if let hold = binding.holdOutputs, !hold.isEmpty {
-            parts.append("Hold " + hold.map(\.displayName).joined(separator: " + "))
+            parts.append(String(localized: "Hold \(OutputAction.names(hold).joined(separator: " + "))"))
         }
         if let double = binding.doubleTapOutputs, !double.isEmpty {
-            parts.append("2x " + double.map(\.displayName).joined(separator: " + "))
+            parts.append(String(localized: "2x \(OutputAction.names(double).joined(separator: " + "))"))
         }
         if binding.hapticEnabled == true {
             if let ms = binding.hapticDurationMs, ms >= FeedbackService.transientCutoffMs {
-                parts.append("Vibrate \(hapticDurationLabel(Double(ms)))")
+                parts.append(String(localized: "Vibrate \(hapticDurationLabel(Double(ms)))"))
             } else {
-                parts.append("Vibrate")
+                parts.append(String(localized: "Vibrate"))
             }
         }
-        if binding.speechEnabled == true { parts.append("Speak") }
-        return parts.joined(separator: " \u{00B7} ")
+        if binding.speechEnabled == true { parts.append(String(localized: "Speak")) }
+        return parts.joined(separator: ", ")
     }
 
     /// Where the row's arrow sits, measured from the row's left edge; the
     /// options divider goes exactly under it.
     private var arrowCenterX: CGFloat {
-        let boxEnd: CGFloat = BindingRowView.inputBoxLeading + BindingRowView.inputBoxWidth(scale: textScale)
+        let boxEnd: CGFloat = BindingRowView.inputBoxLeading(scale: textScale) + BindingRowView.inputBoxWidth(scale: textScale)
         let half: CGFloat = BindingRowView.arrowSlotWidth / 2
         // The column constants overshoot the arrow's real center by 15 pt
         // (the input box lays out narrower than the sum of its column
@@ -2318,11 +2909,28 @@ struct BindingRowView: View {
         return boxEnd + half - 15
     }
 
+    /// The row's small live picture, the way into the full Adjust live
+    /// sheet. Follows the sliders while they move.
+    private var rowPreview: some View {
+        MiniDeadzonePreview(
+            axisIndex: binding.input.type == .stickRegion ? zoneRowAxis : binding.input.index,
+            direction: binding.input.type == .axis ? (binding.input.axisDirection ?? .positive) : nil,
+            inner: liveDeadzone ?? Double(binding.deadzone.map(Double.init) ?? defaultDeadzone),
+            outer: liveOuterDeadzone ?? Double(binding.outerDeadzone ?? 1.0),
+            isInverted: binding.invertAxis == true,
+            slot: slot,
+            zoneID: binding.input.type == .stickRegion ? binding.input.stickRegionID : nil,
+            fullTravel: binding.fullTravel == true
+        ) {
+            showDeadzoneCalibration = true
+        }
+    }
+
     private var advancedOptionsRow: some View {
         // Two columns under the row's own Input and Output headings, split by
         // a divider that sits on the row's arrow: how the control is read on
         // the left, what the row sends on the right.
-        let leftWidth = max(220, arrowCenterX - leftGutter - 0.5)
+        let leftWidth = max(220, arrowCenterX - optionsInset - 0.5)
         return HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) { inputSideOptions }
                 .frame(width: leftWidth - 16, alignment: .leading)
@@ -2332,7 +2940,7 @@ struct BindingRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, Self.arrowSlotWidth / 2 + 4)
         }
-        .padding(.leading, leftGutter)
+        .padding(.leading, optionsInset)
     }
 
     /// Repeat keys while held, and Block the button's own action, where
@@ -2352,8 +2960,11 @@ struct BindingRowView: View {
     }
 
     private var showsBlockOriginalToggle: Bool {
+        // Only Any mouse or the Mac's own: the engine blocks nothing on a
+        // row set to one particular mouse.
         binding.input.type == .extMouse && (binding.input.extMouseKind ?? .button) == .button
             && binding.input.index >= 2
+            && [nil, "any", ExternalInputDeviceService.builtInMouseID].contains(binding.input.extDeviceID)
     }
 
     @ViewBuilder
@@ -2398,17 +3009,34 @@ struct BindingRowView: View {
                     direction: binding.input.axisDirection,
                     invert: binding.invertAxis ?? false,
                     deadzone: liveDeadzone ?? binding.deadzone.map(Double.init)
-                        ?? (MappingEngine.drivesPointer(binding) ? 0.05 : MappingEngine.motionSwitchDeadzone))
+                        ?? (MappingEngine.drivesPointer(binding) ? 0.05 : MappingEngine.motionSwitchDeadzone),
+                    fromNeutral: binding.fromNeutral == true,
+                    drivesPointer: MappingEngine.drivesPointer(binding))
                 advancedAxisOptions
             }
         } else if binding.input.type == .axis {
-            optionsBox(isTriggerAxis ? "Trigger" : "Stick") { advancedAxisOptions }
+            optionsBox(isTriggerAxis ? "Trigger" : "Stick") {
+                HStack(alignment: .top, spacing: 12) {
+                    rowPreview
+                    VStack(alignment: .leading, spacing: 8) { advancedAxisOptions }
+                }
+            }
         } else if binding.input.type == .stickRegion {
-            optionsBox("Stick zone") { advancedAxisOptions }
+            optionsBox(isBandRow ? "Band" : "Stick region") {
+                HStack(alignment: .top, spacing: 12) {
+                    if !isBandRow { rowPreview }
+                    VStack(alignment: .leading, spacing: 8) {
+                        zoneSharingOptions
+                        advancedAxisOptions
+                    }
+                }
+            }
+        } else if binding.input.type == .stickGesture {
+            optionsBox("Stick gesture") { stickGestureOptions }
         } else if binding.input.type == .touchpad {
             optionsBox("Finger movement") { advancedAxisOptions }
         }
-        if ![.motion, .axis, .stickRegion, .touchpad].contains(binding.input.type),
+        if ![.motion, .axis, .stickRegion, .stickGesture, .touchpad].contains(binding.input.type),
            showsKeyRepeatToggle || showsBlockOriginalToggle {
             optionsBox("Press") {
                 VStack(alignment: .leading, spacing: 8) { pressRowToggles }
@@ -2421,22 +3049,28 @@ struct BindingRowView: View {
            binding.input.touchpadSurface != 1, presetButtonFamily?.isSteam != true {
             optionsBox("Touchpad") {
                 HStack(spacing: 10) {
-                    Text("Swipe to every edge once so a swipe moves the pointer the same distance in every direction, and draw tap zones.")
+                    Text("Draw tap regions on the touchpad; each one works like a button.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    TouchpadCalibrateButton()
+                    TouchpadRegionsButton { showZones(.touchpad) }
                 }
             }
         }
         if binding.input.type == .chassisTap {
             optionsBox("Tap the Mac") {
                 HStack(spacing: 10) {
-                    Text("Watch your knocks on a live trace and set how firm a tap has to be. The setting is shared by every preset.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Watch your knocks on a live trace and set how firm a tap has to be. The setting is shared by every preset.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(Self.tapTheMacDisclaimer)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Spacer(minLength: 0)
                     TapCalibrateButton()
                 }
@@ -2445,45 +3079,66 @@ struct BindingRowView: View {
         if ![.extKey, .extMouse, .midi].contains(binding.input.type) {
             optionsBox("Second control") { modifierPicker }
         }
+        // A direction row can wait for a region of its own stick or trigger.
+        if binding.input.type == .axis, gateRegionKey != nil {
+            optionsBox("Region") { regionGatePicker }
+        }
     }
 
     /// Right column: everything about what the row sends.
     @ViewBuilder
     private var outputSideOptions: some View {
         optionsBox("How it fires") { pressBehaviorOptions }
-        optionsBox("Macro") { macroOptions }
-        optionsBox("Feedback") {
+        optionsBox("Macro", spotlightID: "macro") { macroOptions }
+        optionsBox("Feedback", spotlightID: "feedback") {
             advancedFeedbackOptions
             if binding.speechEnabled == true {
                 speechDetailRow
             }
         }
         // Last, because a full output editor can open inside it.
-        optionsBox("Extra actions") { tapHoldOptions }
-            .background(ScrollIntoViewAnchor(active: scrollToExtraActions) {
-                scrollToExtraActions = false
-            })
+        optionsBox("Extra actions", spotlightID: "extra") { tapHoldOptions }
+    }
+
+    /// Opens Options and points at the box a choice just turned on.
+    private func spotlight(_ box: String) {
+        showAdvanced = true
+        spotlightGlow = nil
+        spotlightBox = box
     }
 
     /// One area of the Options panel: its title at the top-left and its
     /// controls inside one rounded box, so each area reads as a unit
     /// instead of a run of headings and hairlines.
-    private func optionsBox<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func optionsBox<Content: View>(_ title: LocalizedStringKey, spotlightID: String? = nil,
+                                           @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.07)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.12), lineWidth: 1))
+        .overlay {
+            if let spotlightID, spotlightGlow == spotlightID {
+                OptionsSpotlight(sweeps: !reduceMotion) {
+                    if spotlightGlow == spotlightID { spotlightGlow = nil }
+                }
+            }
+        }
+        .background(ScrollIntoViewAnchor(active: spotlightID != nil && spotlightBox == spotlightID) {
+            spotlightBox = nil
+            spotlightGlow = spotlightID
+        })
     }
 
     /// A short label beside a parameter field. Fixed so it never wraps
     /// letter-by-letter when the output column gets narrow.
-    private func fieldLabel(_ text: String) -> some View {
+    private func fieldLabel(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(.callout)
             .foregroundStyle(.hint)
@@ -2498,6 +3153,7 @@ struct BindingRowView: View {
             HStack(spacing: 3) {
                 Image(systemName: "waveform")
                     .font(.callout)
+                    .accessibilityHidden(true)
                 Text("Vibrate")
                     .font(.callout)
             }
@@ -2519,10 +3175,14 @@ struct BindingRowView: View {
                     onLiveChange: { liveHaptic = $0 }
                 )
                     .frame(width: 60)
-                Text(String(format: "%.0f%%", (liveHaptic ?? Double(binding.hapticIntensity ?? 0.6)) * 100))
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.hint)
-                    .frame(width: 30)
+                    .accessibilityValue(String(localized: "\(Int(((liveHaptic ?? Double(binding.hapticIntensity ?? 0.6)) * 100).rounded())) percent"))
+                    .voiceNames("Strength", "Vibration strength")
+                percentField("Strength percent",
+                             shown: liveHaptic ?? Double(binding.hapticIntensity ?? 0.6),
+                             range: 0.1...1.0, style: .hint, width: 30) {
+                    liveHaptic = $0
+                    hapticIntensityBinding.wrappedValue = $0
+                }
             }
             HStack(spacing: 4) {
                 Text("Duration")
@@ -2535,10 +3195,15 @@ struct BindingRowView: View {
                     onLiveChange: { liveHapticDuration = $0 }
                 )
                     .frame(width: 60)
+                    .accessibilityValue(spokenHapticDuration(liveHapticDuration ?? Double(binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)))
+                    .voiceNames("Duration", "Vibration duration")
                 Text(hapticDurationLabel(liveHapticDuration ?? Double(binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.hint)
-                    .frame(width: 44, alignment: .leading)
+                    // Room for "Tap" and the unit in every language.
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(minWidth: 44, alignment: .leading)
             }
             .hoverHelp("Tap is a single short pulse. Longer settings rumble for that long, up to two seconds.")
         }
@@ -2548,6 +3213,7 @@ struct BindingRowView: View {
             HStack(spacing: 3) {
                 Image(systemName: "speaker.wave.2")
                     .font(.callout)
+                    .accessibilityHidden(true)
                 Text("Speak")
                     .font(.callout)
             }
@@ -2565,6 +3231,8 @@ struct BindingRowView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             TextField("Phrase to speak", text: speechTextBinding)
+                .focused($phraseFocused)
+                .voiceNames("Phrase", "Phrase to speak")
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
                 .frame(maxWidth: 200)
@@ -2592,7 +3260,8 @@ struct BindingRowView: View {
     }
 
     private func appActionKinds(for list: OutputList) -> [AppActionKind] {
-        list == .main ? AppActionKind.allCases : AppActionKind.allCases.filter { $0 != .holdMuteMotion }
+        // The held gates act only while the row's own input is held.
+        list == .main ? AppActionKind.allCases : AppActionKind.allCases.filter { $0 != .holdMuteMotion && $0 != .holdEnableMotion }
     }
 
     /// Output-type menu grouped Keyboard / Mouse / MIDI / App, so keyboard-
@@ -2607,6 +3276,7 @@ struct BindingRowView: View {
                                      setParameter: @escaping (String) -> Void = { _ in },
                                      setAppAction: @escaping (AppActionKind, UUID?) -> Void = { _, _ in },
                                      setKey: @escaping (Int) -> Void = { _ in },
+                                     keyInShortcut: Bool = false,
                                      list: OutputList = .main) -> some View {
         Section("Keyboard") {
             Menu(OutputType.key.displayName) {
@@ -2615,7 +3285,8 @@ struct BindingRowView: View {
                 ForEach(KeyCodeMap.groups, id: \.self) { group in
                     Menu(group) {
                         ForEach(KeyCodeMap.allKeys.filter { $0.group == group }) { key in
-                            Button(key.name) { setKey(key.code) }
+                            Button(KeyCodeMap.outputName(for: key.code, inShortcut: keyInShortcut)) { setKey(key.code) }
+                                .accessibilityLabel(HotKeySpec.spokenKey(KeyCodeMap.outputName(for: key.code, inShortcut: keyInShortcut)))
                         }
                     }
                 }
@@ -2664,54 +3335,19 @@ struct BindingRowView: View {
             Section("Feedback") {
                 // A row can do nothing but vibrate or speak: the engine fires
                 // feedback on every press whether or not the row has outputs.
-                Button(binding.hapticEnabled == true ? "Vibrate (on)" : "Vibrate the controller") {
-                    binding.hapticEnabled = true
-                    if binding.hapticIntensity == nil { binding.hapticIntensity = 0.6 }
-                    showAdvanced = true
-                }
-                Button(binding.speechEnabled == true ? "Speak a phrase (on)" : "Speak a phrase") {
-                    binding.speechEnabled = true
-                    showAdvanced = true
-                }
+                Button(vibrateChoiceTitle) { turnOnVibrate() }
+                Button(speakChoiceTitle) { turnOnSpeech() }
             }
             // Same rules as the Options panel: hold and double tap work on a
             // plain row (not toggle or repeat, not a macro), and a macro takes
             // over the row. These shortcuts used to make rows that did nothing.
             Section("Extra actions") {
                 let hasMacro = binding.macroSteps?.isEmpty == false
-                Button("Different action when held\u{2026}") {
-                    binding.toggleMode = nil
-                    binding.turboEnabled = nil
-                    if binding.holdOutputs?.isEmpty != false {
-                        binding.holdOutputs = [OutputAction(type: .key, keyCode: 41)]
-                    }
-                    if binding.holdThresholdMs == nil { binding.holdThresholdMs = 300 }
-                    openExtraActions()
-                }
-                .disabled(hasMacro)
-                Button("Action on a double tap\u{2026}") {
-                    binding.toggleMode = nil
-                    binding.turboEnabled = nil
-                    if binding.doubleTapOutputs?.isEmpty != false {
-                        binding.doubleTapOutputs = [OutputAction(type: .key, keyCode: 40)]
-                    }
-                    if binding.doubleTapWindowMs == nil { binding.doubleTapWindowMs = 300 }
-                    openExtraActions()
-                }
-                .disabled(hasMacro)
-                Button("Run a sequence of steps (macro)\u{2026}") {
-                    if !hasMacro {
-                        // A step presses a key or a button; any other first
-                        // output would make a step that does nothing.
-                        let seed = binding.outputs.first(where: { $0.type == .key || $0.type == .mouseButton })
-                            ?? OutputAction(type: .key, keyCode: 44)
-                        binding.macroSteps = [MacroStep(action: seed)]
-                        binding.holdOutputs = nil
-                        binding.doubleTapOutputs = nil
-                        binding.turboEnabled = nil
-                    }
-                    showAdvanced = true
-                }
+                Button("Different action when held\u{2026}") { addHoldAction() }
+                    .disabled(hasMacro || neverHeld)
+                Button("Action on a double tap\u{2026}") { addDoubleTapAction() }
+                    .disabled(hasMacro)
+                Button("Run a sequence of steps (macro)\u{2026}") { startMacro() }
             }
         }
         // Every list may color the light: a hold shows it while held, and a
@@ -2748,7 +3384,161 @@ struct BindingRowView: View {
         }
     }
 
+    private var vibrateChoiceTitle: String {
+        binding.hapticEnabled == true ? String(localized: "Vibrate (on)") : String(localized: "Vibrate the controller")
+    }
+
+    private var speakChoiceTitle: String {
+        binding.speechEnabled == true ? String(localized: "Speak a phrase (on)") : String(localized: "Speak a phrase")
+    }
+
+    private func turnOnVibrate() {
+        binding.hapticEnabled = true
+        if binding.hapticIntensity == nil { binding.hapticIntensity = 0.6 }
+        spotlight("feedback")
+    }
+
+    private func turnOnSpeech() {
+        binding.speechEnabled = true
+        spotlight("feedback")
+    }
+
+    private func addHoldAction() {
+        binding.toggleMode = nil
+        binding.turboEnabled = nil
+        if binding.holdOutputs?.isEmpty != false {
+            binding.holdOutputs = [OutputAction(type: .key, keyCode: 41)]
+        }
+        if binding.holdThresholdMs == nil { binding.holdThresholdMs = 300 }
+        openExtraActions()
+    }
+
+    private func addDoubleTapAction() {
+        binding.toggleMode = nil
+        binding.turboEnabled = nil
+        if binding.doubleTapOutputs?.isEmpty != false {
+            binding.doubleTapOutputs = [OutputAction(type: .key, keyCode: 40)]
+        }
+        if binding.doubleTapWindowMs == nil { binding.doubleTapWindowMs = 300 }
+        openExtraActions()
+    }
+
+    private func startMacro() {
+        if binding.macroSteps?.isEmpty != false {
+            // A step presses a key or a button; any other first
+            // output would make a step that does nothing.
+            let seed = binding.outputs.first(where: { $0.type == .key || $0.type == .mouseButton })
+                ?? OutputAction(type: .key, keyCode: 44)
+            binding.macroSteps = [MacroStep(action: seed)]
+            binding.holdOutputs = nil
+            binding.doubleTapOutputs = nil
+            binding.turboEnabled = nil
+        }
+        spotlight("macro")
+    }
+
+    /// An output dropdown: the grouped menu, with Search over all of it.
+    private func outputMenu<MenuLabel: View>(select: @escaping (OutputType) -> Void,
+                                             selectSystemKind: @escaping (SystemActionKind) -> Void,
+                                             setParameter: @escaping (String) -> Void = { _ in },
+                                             setAppAction: @escaping (AppActionKind, UUID?) -> Void = { _, _ in },
+                                             setKey: @escaping (Int) -> Void = { _ in },
+                                             keyInShortcut: Bool = false,
+                                             list: OutputList = .main,
+                                             @ViewBuilder label: @escaping () -> MenuLabel) -> some View {
+        SearchableMenu(choices: {
+            outputSearchChoices(select: select, selectSystemKind: selectSystemKind, setAppAction: setAppAction,
+                                setKey: setKey, keyInShortcut: keyInShortcut, list: list)
+        }) {
+            outputTypeMenuItems(select: select, selectSystemKind: selectSystemKind, setParameter: setParameter,
+                                setAppAction: setAppAction, setKey: setKey, keyInShortcut: keyInShortcut, list: list)
+        } label: {
+            label()
+        }
+    }
+
+    /// Everything outputTypeMenuItems offers, nested choices included, in
+    /// its order, for the dropdown's Search.
+    private func outputSearchChoices(select: @escaping (OutputType) -> Void,
+                                     selectSystemKind: @escaping (SystemActionKind) -> Void,
+                                     setAppAction: @escaping (AppActionKind, UUID?) -> Void,
+                                     setKey: @escaping (Int) -> Void,
+                                     keyInShortcut: Bool,
+                                     list: OutputList) -> [MenuSearchChoice] {
+        typealias C = MenuSearchChoice
+        var out: [C] = []
+        let keyboard = String(localized: "Keyboard")
+        let keyMenu = C.path(keyboard, OutputType.key.displayName)
+        out.append(C(title: OutputType.key.displayName, path: keyboard) { select(.key) })
+        for group in KeyCodeMap.groups {
+            for key in KeyCodeMap.keysByGroup[group] ?? [] {
+                let name = KeyCodeMap.outputName(for: key.code, inShortcut: keyInShortcut)
+                out.append(C(title: name, path: C.path(keyMenu, group),
+                             keywords: key.name + " " + HotKeySpec.spokenKey(name)) { setKey(key.code) })
+            }
+        }
+        out.append(C(title: OutputType.typeText.displayName, path: keyboard) { select(.typeText) })
+        let mouse = String(localized: "Mouse")
+        for type in [OutputType.mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep] where offersOutputType(type, in: list) {
+            out.append(C(title: type.displayName, path: mouse) { select(type) })
+        }
+        let midi = String(localized: "MIDI")
+        for type in [OutputType.midiNote, .midiCC, .midiPitchBend, .midiProgramChange, .midiTransport] {
+            out.append(C(title: type.displayName, path: midi) { select(type) })
+        }
+        let appMenu = C.path(String(localized: "App"), OutputType.appAction.displayName)
+        for kind in appActionKinds(for: list) {
+            if kind == .activatePreset {
+                for entry in availablePresets {
+                    out.append(C(title: entry.name, path: C.path(appMenu, kind.displayName)) { setAppAction(kind, entry.id) })
+                }
+            } else {
+                out.append(C(title: kind.displayName, path: appMenu) { setAppAction(kind, nil) })
+            }
+        }
+        if list == .main {
+            let feedback = String(localized: "Feedback")
+            out.append(C(title: vibrateChoiceTitle, path: feedback) { turnOnVibrate() })
+            out.append(C(title: speakChoiceTitle, path: feedback) { turnOnSpeech() })
+            let extra = String(localized: "Extra actions")
+            let hasMacro = binding.macroSteps?.isEmpty == false
+            if !hasMacro && !neverHeld {
+                out.append(C(title: String(localized: "Different action when held\u{2026}"), path: extra) { addHoldAction() })
+            }
+            if !hasMacro {
+                out.append(C(title: String(localized: "Action on a double tap\u{2026}"), path: extra) { addDoubleTapAction() })
+            }
+            out.append(C(title: String(localized: "Run a sequence of steps (macro)\u{2026}"), path: extra) { startMacro() })
+        }
+        if offersOutputType(.lightBar, in: list) {
+            out.append(C(title: OutputType.lightBar.displayName, path: String(localized: "Controller"),
+                         systemImage: "light.beacon.max.fill") { select(.lightBar) })
+        }
+        let system = String(localized: "System")
+        if offersOutputType(.absoluteVolume, in: list) {
+            out.append(C(title: OutputType.absoluteVolume.displayName, path: system) { select(.absoluteVolume) })
+        }
+        for group in SystemActionKind.grouped {
+            for kind in group.kinds {
+                out.append(C(title: kind.displayName, path: C.path(system, group.category),
+                             systemImage: kind.iconName) { selectSystemKind(kind) })
+            }
+        }
+        return out
+    }
+
+    /// While a deadzone slider here is dragged, the row lights and a
+    /// running preset fires by it, as with the full sheet's sliders.
+    private func previewDeadzone() {
+        let inner = liveDeadzone ?? Double(binding.deadzone.map(Double.init) ?? defaultDeadzone)
+        let outer = liveOuterDeadzone ?? Double(binding.outerDeadzone ?? 1.0)
+        MappingEngine.deadzonePreview = (binding.id, Float(inner), Float(outer))
+    }
+
     private func clearLiveMirrors() {
+        // The dragged value is the row's own now (or the drag was dropped);
+        // the full sheet clears its own preview when it closes.
+        if !showDeadzoneCalibration, MappingEngine.deadzonePreview?.id == binding.id { MappingEngine.deadzonePreview = nil }
         if !liveSpeed.isEmpty { liveSpeed = [:] }
         if liveHaptic != nil { liveHaptic = nil }
         if liveHapticDuration != nil { liveHapticDuration = nil }
@@ -2757,60 +3547,137 @@ struct BindingRowView: View {
     }
 
     /// Selects an input type from the lazy type menu.
+    /// Clears the options the row's input type has no control for, after a
+    /// type change or a Scan: a stick's Invert, curve or deadzone carried
+    /// to a button row could not be seen or changed there, yet the summary
+    /// still listed it and Duplicate copied it on.
+    static func clearOptionsWithoutControls(_ row: inout BindingModel) {
+        let type = row.input.type
+        // A scan onto an axis of another stick: its old region is not this one's.
+        if type == .axis, let gate = row.onlyInRegion,
+           let found = StickRegionService.shared.region(with: gate),
+           found.stickIndex != StickRegionService.gateKey(forAxis: row.input.index) {
+            row.onlyInRegion = nil
+        }
+        if type != .axis {
+            row.onlyInRegion = nil
+            row.sensitivityCurve = nil
+            row.outerDeadzone = nil
+            row.rampMs = nil
+            row.variableSensitivity = nil
+            row.fullTravel = nil
+        }
+        if ![.axis, .motion, .stickRegion, .touchpad, .stickGesture].contains(type) {
+            row.deadzone = nil
+            row.invertAxis = nil
+        }
+        if type != .motion { row.fromNeutral = nil }
+    }
+
     private func inputTypeChoice(_ type: InputType) -> some View {
-        Button(type.displayName) {
-            let previous = binding.input.type
-            binding.input.type = type
-            // The old index means something else in the new type: a tap row
-            // made from Button 0 listened for zero taps, a touchpad row read
-            // button 3 as its finger, and a hat past 15 had no picker entry.
-            if type == .chassisTap, previous != .chassisTap { binding.input.index = 1 }
-            if type == .touchpad, binding.input.touchpadFinger == nil {
-                // A Steam pad reports one finger only.
-                let steam = presetButtonFamily?.isSteam == true
-                binding.input.touchpadFinger = !steam && (0...1).contains(binding.input.index) ? binding.input.index : 0
-                if steam { binding.input.index = 0 }
+        Button(Self.inputTypeMenuName(type)) { chooseInputType(type) }
+    }
+
+    /// An input type as its menu lists it: Hat says what a hat is, since
+    /// not everyone knows the word. The row itself keeps the short name.
+    static func inputTypeMenuName(_ type: InputType) -> String {
+        type == .hat ? String(localized: "Hat (D-pad or thumb switch)") : type.displayName
+    }
+
+    private func chooseInputType(_ type: InputType) {
+        let previous = binding.input.type
+        binding.input.type = type
+        if type != previous { Self.clearOptionsWithoutControls(&binding) }
+        // A zone, key, mouse, MIDI or region row's number is not a
+        // controller button: a band on L2 became "Button 104", which no
+        // pad sends, and the row never fired.
+        if type == .button, [.stickRegion, .extKey, .extMouse, .midi, .cursorRegion, .touchpadRegion].contains(previous) {
+            binding.input.index = 0
+            binding.input.stickRegionID = nil
+        }
+        // The old index means something else in the new type: a tap row
+        // made from Button 0 listened for zero taps, a touchpad row read
+        // button 3 as its finger, and a hat past 15 had no picker entry.
+        if type == .chassisTap, previous != .chassisTap { binding.input.index = 1 }
+        if type == .axis, previous == .stickRegion { useWholeAxis() }
+        if type == .axis, previous == .stickGesture { binding.input.index = binding.input.index == 1 ? 2 : 0 }
+        // Variable and Ramp-up are shown on stick rows only; an Off
+        // carried to a touchpad row could not be turned back on.
+        if type == .touchpad, previous == .axis {
+            binding.variableSensitivity = nil
+            binding.rampMs = nil
+        }
+        if type == .touchpad, binding.input.touchpadFinger == nil {
+            // A Steam pad reports one finger only.
+            let steam = presetButtonFamily?.isSteam == true
+            binding.input.touchpadFinger = !steam && (0...1).contains(binding.input.index) ? binding.input.index : 0
+            if steam { binding.input.index = 0 }
+        }
+        if type == .hat, !(0...15).contains(binding.input.index) { binding.input.index = 0 }
+        // A gesture is on a stick: a right stick axis row becomes a right
+        // stick gesture, anything else the left stick.
+        if type == .stickGesture, previous != .stickGesture {
+            binding.input.index = previous == .axis && (2...3).contains(binding.input.index) ? 1
+                : (previous == .stickRegion && binding.input.index == 1 ? 1 : 0)
+            if binding.input.gestureSteps == nil { binding.input.gestureSteps = [] }
+        }
+        // Seed defaults when switching INTO MIDI so the row doesn't
+        // inherit the previous type's index (button 0 would show as
+        // note C-2) and so the message family is never nil.
+        // A Mac key, mouse or MIDI row has no Second control box, so a
+        // chord left from a controller row could not be seen or removed,
+        // and the row fired only while that controller button was held.
+        if [.extKey, .extMouse, .midi].contains(type), !binding.modifiers.isEmpty {
+            binding.setModifiers([])
+        }
+        if type == .extMouse, binding.input.axisDirection == nil {
+            binding.input.axisDirection = .positive
+        }
+        if type == .midi {
+            // No Invert or Deadzone controls on a MIDI row: an earlier
+            // stick's would stay on, unseen.
+            if previous != .midi {
+                binding.invertAxis = nil
+                binding.deadzone = nil
+                binding.outerDeadzone = nil
+                binding.sensitivityCurve = nil
+                binding.variableSensitivity = nil
+                binding.rampMs = nil
             }
-            if type == .hat, !(0...15).contains(binding.input.index) { binding.input.index = 0 }
-            // Seed defaults when switching INTO MIDI so the row doesn't
-            // inherit the previous type's index (button 0 would show as
-            // note C-2) and so the message family is never nil.
-            if type == .midi {
-                if binding.input.midiKind == nil {
-                    binding.input.midiKind = .note
-                    binding.input.index = 60          // middle C
-                }
-                if binding.input.axisDirection == nil {
-                    binding.input.axisDirection = .positive
-                }
+            if binding.input.midiKind == nil {
+                binding.input.midiKind = .note
+                binding.input.index = 60          // middle C
             }
-            // Axis and Hat need the same treatment. Only Scan used to produce a
-            // directed event, so a row switched to Axis by hand kept
-            // axisDirection == nil, which the engine reads as "either
-            // direction" while the picker renders "+". A Hat row left with
-            // hatDirection == nil matched nothing at all and silently never
-            // fired, even though the UI showed "Hat 0 Up".
-            if type == .axis, binding.input.axisDirection == nil {
+            if binding.input.axisDirection == nil {
                 binding.input.axisDirection = .positive
             }
-            if type == .hat, binding.input.hatDirection == nil {
-                binding.input.hatDirection = .up
-            }
-            // Motion and Touchpad rows show a default channel or axis but
-            // the engine needs the real value, so a row switched by hand
-            // read "Gyro Y +" or "X +" and never fired.
-            if type == .motion {
-                if binding.input.motionChannel == nil { binding.input.motionChannel = .gyroY }
-                if binding.input.axisDirection == nil { binding.input.axisDirection = .positive }
-            }
-            if type == .touchpad {
-                if binding.input.touchpadAxis == nil { binding.input.touchpadAxis = .x }
-                if binding.input.axisDirection == nil { binding.input.axisDirection = .positive }
-            }
-            if type == .touchpadGesture, binding.input.touchpadGestureKind == nil {
-                // A Steam pad reports one finger, so it cannot make a two-finger tap.
-                binding.input.touchpadGestureKind = presetButtonFamily?.isSteam == true ? .oneFingerTap : .twoFingerTap
-            }
+        }
+        // Axis and Hat need the same treatment. Only Scan used to produce a
+        // directed event, so a row switched to Axis by hand kept
+        // axisDirection == nil, which the engine reads as "either
+        // direction" while the picker renders "+". A Hat row left with
+        // hatDirection == nil matched nothing at all and silently never
+        // fired, even though the UI showed "Hat 0 Up".
+        if type == .axis, binding.input.axisDirection == nil {
+            binding.input.axisDirection = .positive
+        }
+        if type == .hat, binding.input.hatDirection == nil {
+            binding.input.hatDirection = .up
+        }
+        // Motion and Touchpad rows show a default channel or axis but
+        // the engine needs the real value, so a row switched by hand
+        // read "Gyro Y +" or "X +" and never fired.
+        if type == .motion {
+            if binding.input.motionChannel == nil { binding.input.motionChannel = .gyroY }
+            if binding.input.axisDirection == nil { binding.input.axisDirection = .positive }
+        }
+        if type == .touchpad {
+            if binding.input.touchpadAxis == nil { binding.input.touchpadAxis = .x }
+            if binding.input.axisDirection == nil { binding.input.axisDirection = .positive }
+        }
+        if type == .touchpadGesture, binding.input.touchpadGestureKind == nil {
+            // A Steam pad reports one finger, so it cannot make a two-finger tap.
+            binding.input.touchpadGestureKind = presetButtonFamily?.isSteam == true ? .oneFingerTap : .twoFingerTap
         }
     }
 
@@ -2827,11 +3694,64 @@ struct BindingRowView: View {
         }
     }
 
+    /// The stick (0, 1) or band key (100 plus the axis) whose regions a
+    /// direction row on this axis can wait for.
+    private var gateRegionKey: Int? {
+        StickRegionService.gateKey(forAxis: binding.input.index)
+    }
+
+    /// A new axis on another stick or band drops the region the row waited
+    /// in: it belongs to the old stick.
+    private func setAxisIndex(_ i: Int) {
+        if StickRegionService.gateKey(forAxis: i) != StickRegionService.gateKey(forAxis: binding.input.index) {
+            binding.onlyInRegion = nil
+        }
+        binding.input.index = i
+    }
+
+    /// Anywhere, or only while the stick is inside one region.
+    @ViewBuilder
+    private var regionGatePicker: some View {
+        let key = gateRegionKey ?? 0
+        let regions = StickRegionService.shared.regions(forStick: key)
+        let chosen = binding.onlyInRegion.flatMap { id in regions.first { $0.id == id } }
+        HStack(spacing: 8) {
+            Menu {
+                Button(String(localized: "Anywhere")) { binding.onlyInRegion = nil }
+                if !regions.isEmpty { Divider() }
+                ForEach(regions) { region in
+                    Button { binding.onlyInRegion = region.id } label: { regionMenuLabel(region) }
+                }
+                Divider()
+                Button("Draw a region on this stick or trigger\u{2026}") { showZones(ZonePart(regionKey: key)) }
+            } label: {
+                Text(chosen?.shownName ?? String(localized: "Anywhere"))
+                    .font(.callout)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Region")
+            .accessibilityValue(chosen?.shownName ?? String(localized: "Anywhere"))
+            .accessibilityInputLabels([Text("Region"), Text(chosen?.shownName ?? String(localized: "Anywhere"))])
+            Spacer(minLength: 0)
+        }
+        Text(chosen == nil
+             ? String(localized: "Fires anywhere past the deadzone, or only inside a region you pick.")
+             : String(localized: "Fires only while the stick is inside \(chosen?.shownName ?? "")."))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Shows one part's zones in this row's group, in the editor itself.
+    private func showZones(_ part: ZonePart) {
+        ShowZonesRequest(bindingID: binding.id, part: part).post()
+    }
+
     /// Opens Options on the Extra actions group, for the row menu's
     /// shortcuts that just turned one of them on.
     private func openExtraActions() {
-        showAdvanced = true
-        scrollToExtraActions = true
+        spotlight("extra")
     }
 
     /// The extra actions, each an if-then: when the control is held, or
@@ -2850,8 +3770,12 @@ struct BindingRowView: View {
         }
         .toggleStyle(.checkbox)
         .controlSize(.regular)
-        .disabled(macroOwned)
-        .hoverHelp("A quick tap sends the row's normal output. Holding past the time set here sends this action instead, held until you let go.")
+        .disabled(macroOwned || (neverHeld && binding.holdOutputs == nil))
+        .help(binding.input.type == .stickGesture
+              ? String(localized: "A gesture is not held, so it has no held action.")
+              : neverHeld
+              ? String(localized: "This control is not held, so it has no held action.")
+              : String(localized: "A quick tap sends the row's normal output. Holding past the time set here sends this action instead, held until you let go."))
 
         if binding.holdOutputs != nil {
             VStack(alignment: .leading, spacing: 6) {
@@ -2860,8 +3784,9 @@ struct BindingRowView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     TextField("Hold threshold in milliseconds", value: holdThresholdBinding, format: .number)
+                        .accessibilityHint("50 to 5000 milliseconds")
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 56)
+                        .frame(width: 56 * max(1, textScale))
                         .controlSize(.regular)
                         .multilineTextAlignment(.center)
                     Text("ms sends")
@@ -2892,8 +3817,9 @@ struct BindingRowView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     TextField("Double tap window in milliseconds", value: doubleTapWindowBinding, format: .number)
+                        .accessibilityHint("100 to 2000 milliseconds")
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 56)
+                        .frame(width: 56 * max(1, textScale))
                         .controlSize(.regular)
                         .multilineTextAlignment(.center)
                     Text("ms sends")
@@ -2920,11 +3846,13 @@ struct BindingRowView: View {
                     setOutputs(outputs(in: list) + [OutputAction(type: .key, keyCode: 4)], in: list)
                 }
             } label: {
-                Label(items.isEmpty ? "Add an output" : "Add another output", systemImage: "plus.circle")
+                Label(items.isEmpty ? String(localized: "Add an output") : String(localized: "Add another output"), systemImage: "plus.circle")
                     .font(.callout)
             }
             .buttonStyle(.solidSecondaryCompact)
-            .accessibilityLabel(list == .hold ? "Add an output to the hold action" : "Add an output to the double tap action")
+            .accessibilityLabel(list == .hold ? String(localized: "Add an output to the hold action") : String(localized: "Add an output to the double tap action"))
+            .accessibilityInputLabels([Text(items.isEmpty ? String(localized: "Add an output") : String(localized: "Add another output")),
+                                       Text(list == .hold ? String(localized: "Add an output to the hold action") : String(localized: "Add an output to the double tap action"))])
         }
     }
 
@@ -2945,10 +3873,20 @@ struct BindingRowView: View {
         )
     }
 
+    /// A typed number kept in range, saying so when it was moved: the field
+    /// redrew silently and the person believed their value was set.
+    static func clamped(_ value: Int, _ range: ClosedRange<Int>) -> Int {
+        let kept = min(range.upperBound, max(range.lowerBound, value))
+        if kept != value {
+            AccessibilityNotification.Announcement(String(localized: "Set to \(kept). The allowed range is \(range.lowerBound) to \(range.upperBound).")).post()
+        }
+        return kept
+    }
+
     private var holdThresholdBinding: SwiftUI.Binding<Int> {
         SwiftUI.Binding(
             get: { binding.holdThresholdMs ?? 300 },
-            set: { binding.holdThresholdMs = max(50, min(5000, $0)) }
+            set: { binding.holdThresholdMs = Self.clamped($0, 50...5000) }
         )
     }
 
@@ -2969,7 +3907,7 @@ struct BindingRowView: View {
     private var doubleTapWindowBinding: SwiftUI.Binding<Int> {
         SwiftUI.Binding(
             get: { binding.doubleTapWindowMs ?? 300 },
-            set: { binding.doubleTapWindowMs = max(100, min(2000, $0)) }
+            set: { binding.doubleTapWindowMs = Self.clamped($0, 100...2000) }
         )
     }
 
@@ -2977,7 +3915,7 @@ struct BindingRowView: View {
     /// it tints green and moves toward the output side, then settles back
     /// when the input releases.
     private var firingArrow: some View {
-        Image(systemName: "arrow.right")
+        Image(systemName: "arrow.forward")
             .font(.callout)
             .foregroundStyle(isHighlighted ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tertiary))
             // Static when Reduce Motion is on; the green tint alone signals firing.
@@ -3005,12 +3943,18 @@ struct BindingRowView: View {
         binding.input.type == .motion && MappingEngine.drivesPointer(binding) ? 0.05 : 0.25
     }
 
+    /// A zone on one axis's travel rather than on a stick's plane.
+    private var isBandRow: Bool {
+        binding.input.type == .stickRegion && StickRegionService.isBandKey(binding.input.index)
+    }
+
     @ViewBuilder
     private var advancedAxisOptions: some View {
         // Deadzone: the setting people come to Options for, so it leads, is
         // labeled in full strength, and says in one line what it does.
-        // Not on touchpad rows: the engine never reads it there.
-        if binding.input.type != .touchpad {
+        // Not on touchpad rows, nor on a band, which is its own threshold:
+        // the engine never reads it there.
+        if binding.input.type != .touchpad && !isBandRow {
         HStack(spacing: 4) {
             Text("Deadzone")
                 .font(.callout.weight(.medium))
@@ -3019,45 +3963,37 @@ struct BindingRowView: View {
                 value: deadzoneBinding,
                 in: 0.01...0.9,
                 step: 0.01,
-                onLiveChange: { liveDeadzone = $0 }
+                onLiveChange: { liveDeadzone = $0; previewDeadzone() }
             )
                 .frame(minWidth: 140, maxWidth: 220)
-            let dzPct = String(format: "%.0f%%", (liveDeadzone ?? Double(binding.deadzone.map(Double.init) ?? defaultDeadzone)) * 100)
-            Text(dzPct)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 34)
-            // Visible "Calibrate" button, axis bindings only (the
-            // calibration view samples stick / trigger axes). The icon
-            // differs for triggers (1D pressure gauge) vs joysticks
-            // (2D circle) so the user can tell at a glance which kind
-            // of input this binding uses.
-            if binding.input.type == .axis {
-                Button {
-                    showDeadzoneCalibration = true
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: isTriggerAxis ? "gauge.with.dots.needle.50percent" : "scope")
-                            .font(.callout)
-                        Text("Adjust live\u{2026}")
-                            .font(.callout)
-                    }
-                    .foregroundStyle(.tint)
-                }
-                .buttonStyle(.solidSecondaryCompact)
-                .hoverHelp(isTriggerAxis
-                      ? "Set the deadzone while you watch the trigger: pull it, let go, and drag the line until a resting finger stays below it."
-                      : "Set the deadzone while you watch the stick: let go of it, see where it rests, and drag the ring until the resting dot is inside it.")
+                .accessibilityValue(String(localized: "\(Int(((liveDeadzone ?? Double(binding.deadzone.map(Double.init) ?? defaultDeadzone)) * 100).rounded())) percent"))
+            // The percent can be typed as well as dragged to, for Voice
+            // Control and anyone who cannot land a slider within 1%.
+            percentField("Deadzone percent",
+                         shown: liveDeadzone ?? Double(binding.deadzone.map(Double.init) ?? defaultDeadzone),
+                         range: 0.01...0.9, style: .secondary, width: 34) {
+                liveDeadzone = $0
+                deadzoneBinding.wrappedValue = $0
             }
         }
         }
         if binding.input.type == .axis {
             Text(isTriggerAxis
-                 ? "How far the trigger is pulled before this row reacts. Raise it if the row fires when a finger just rests on the trigger."
-                 : "How far the stick moves before this row reacts. Raise it if the pointer or camera drifts when you let go; lower it if small pushes do nothing.")
+                 ? String(localized: "How far the trigger is pulled before this row reacts. Raise it if the row fires when a finger just rests on the trigger.")
+                 : String(localized: "How far the stick moves before this row reacts. Raise it if the pointer or camera drifts when you let go; lower it if small pushes do nothing."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            // The other side of a zone's takeover, said on the row it stops.
+            if !zoneTakenBy.isEmpty {
+                let rows = zoneTakenBy.map { "#\($0)" }.joined(separator: ", ")
+                Text(zoneTakenBy.count == 1
+                     ? String(localized: "Inside the region of row \(rows), this row waits while that row fires.")
+                     : String(localized: "Inside the regions of rows \(rows), this row waits while those rows fire."))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
 
         // Full push: the engine treats anything past this as all the way, so
@@ -3071,15 +4007,18 @@ struct BindingRowView: View {
                     value: outerDeadzoneBinding,
                     in: 0.2...1.0,
                     step: 0.01,
-                    onLiveChange: { liveOuterDeadzone = $0 }
+                    onLiveChange: { liveOuterDeadzone = $0; previewDeadzone() }
                 )
                     .frame(minWidth: 140, maxWidth: 220)
-                Text(String(format: "%.0f%%", (liveOuterDeadzone ?? Double(binding.outerDeadzone ?? 1.0)) * 100))
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.hint)
-                    .frame(width: 30)
+                    .accessibilityValue(String(localized: "\(Int(((liveOuterDeadzone ?? Double(binding.outerDeadzone ?? 1.0)) * 100).rounded())) percent"))
+                percentField("Full push percent",
+                             shown: liveOuterDeadzone ?? Double(binding.outerDeadzone ?? 1.0),
+                             range: 0.2...1.0, style: .hint, width: 30) {
+                    liveOuterDeadzone = $0
+                    outerDeadzoneBinding.wrappedValue = $0
+                }
             }
-            .hoverHelp("How far the control has to move to count as fully pushed. Lower it for a worn stick or a short-throw trigger.")
+            .hoverHelp("How far the control has to move to count as fully pushed. Past it the row keeps working, at full strength. Lower it for a worn stick or a short-throw trigger.")
         }
 
         pressRowToggles
@@ -3095,7 +4034,57 @@ struct BindingRowView: View {
             }
             .toggleStyle(.checkbox)
             .controlSize(.small)
-            .hoverHelp(invertExplanation)
+            .help(invertExplanation)
+        }
+
+        // Every motion row offers the ready-made sets of rows, for someone
+        // who does not know which channel does what.
+        if binding.input.type == .motion {
+            Menu {
+                ForEach(MotionSetup.allCases) { setup in
+                    Button(setup.title) { MotionSetupAction.perform?(binding.id, setup) }
+                }
+            } label: {
+                Label("Set Up Full Gyro", systemImage: "gyroscope")
+                    .font(.callout)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.small)
+            .fixedSize()
+            .help("Adds the rows a full motion setup needs to this device: gyro aim for the pointer, tilt to move with the arrow keys, or one row per shake and jab. Rows the device already has are skipped.")
+        }
+
+        // Tilt angle rows: level can be the grip instead of lying flat.
+        if binding.input.type == .motion,
+           [.pitchAngle, .rollAngle, .yawAngle].contains(binding.input.motionChannel ?? .gyroY) {
+            Toggle(isOn: SwiftUI.Binding(
+                get: { binding.fromNeutral == true },
+                set: { binding.fromNeutral = $0 ? true : nil }
+            )) {
+                Text("Level is how you hold it")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("Measure the lean from where the controller is held, instead of from lying flat, so a normal grip reads as level. Level is taken when the preset starts, at a re-zero, and whenever motion comes back on after Pause Motion, Motion Only While Held or Motion On / Off.")
+        }
+
+        // A pedal, throttle or lever that rests at one end: the row reads
+        // its whole travel. Not on the trigger slots, which already do.
+        if binding.input.type == .axis, !isTriggerAxis, binding.input.axisDirection != .none,
+           !axisAlreadyOneWay || binding.fullTravel == true {
+            Toggle(isOn: SwiftUI.Binding(
+                get: { binding.fullTravel == true },
+                set: { binding.fullTravel = $0 ? true : nil }
+            )) {
+                Text("Rests at one end (pedal or throttle)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("For a pedal, throttle or lever that rests at one end: the row reads its whole travel, nothing at rest and full at the far end. Scan turns this on when the control was resting at an end.")
         }
 
         // Curve and Variable apply only on the engine's axis paths.
@@ -3112,8 +4101,9 @@ struct BindingRowView: View {
                 }
                 .labelsHidden()
                 .controlSize(.small)
-                .frame(width: 80)
+                .frame(width: 80 * max(1, textScale))
             }
+            .hoverHelp("How speed grows as you push: Linear is even, Smooth stays slow near the center for fine aim, Aggressive gets fast sooner.")
 
             // Variable Sensitivity (scale output by axis depth)
             Toggle(isOn: variableSensitivityBinding) {
@@ -3136,15 +4126,39 @@ struct BindingRowView: View {
                     ThrottledSlider("Ramp-up", value: rampBinding, in: 0...1500, step: 50)
                         .controlSize(.small)
                         .frame(width: 110)
-                        .accessibilityValue((binding.rampMs ?? 0) == 0 ? "Off" : String(format: "%.2g seconds", Double(binding.rampMs ?? 0) / 1000))
-                    Text((binding.rampMs ?? 0) == 0 ? "Off" : String(format: "%.2g s", Double(binding.rampMs ?? 0) / 1000))
+                        .accessibilityValue((binding.rampMs ?? 0) == 0 ? String(localized: "Off") : String(format: String(localized: "%.3g seconds"), locale: .current, Double(binding.rampMs ?? 0) / 1000))
+                    Text((binding.rampMs ?? 0) == 0 ? String(localized: "Off") : String(format: String(localized: "%.3g s"), locale: .current, Double(binding.rampMs ?? 0) / 1000))
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.hint)
-                        .frame(width: 42, alignment: .leading)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(minWidth: 42, alignment: .leading)
                 }
                 .hoverHelp("The pointer starts at a fifth of its speed and builds to full speed over this long of holding the stick, so a short push makes a small move you can stop on a target. Off keeps the speed constant.")
             }
         }
+    }
+
+    /// A slider's percent, drawn as the plain number it always was but
+    /// typable: click it, type 15 and press Return.
+    private func percentField<S: ShapeStyle>(_ label: LocalizedStringKey, shown: Double, range: ClosedRange<Double>,
+                              style: S, width: CGFloat,
+                              set: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 0) {
+            TextField(label, value: SwiftUI.Binding(
+                get: { (shown * 100).rounded() },
+                set: { set(min(range.upperBound, max(range.lowerBound, $0 / 100))) }),
+                format: .number.precision(.fractionLength(0)))
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .labelsHidden()
+                .accessibilityLabel(label)
+            Text(verbatim: "%").accessibilityHidden(true)
+        }
+        .font(.callout.monospacedDigit())
+        .foregroundStyle(style)
+        // Room for "100%", growing with Text Size like the columns.
+        .frame(width: (width + 10) * max(1, textScale))
     }
 
     private var rampBinding: SwiftUI.Binding<Double> {
@@ -3160,12 +4174,14 @@ struct BindingRowView: View {
     @ViewBuilder
     private var modifierPicker: some View {
         let mods = binding.modifiers
+        let modNames = LocalizedList.and(mods.map { modifierName($0) })
         ForEach(Array(mods.enumerated()), id: \.offset) { i, mod in
             HStack(spacing: 8) {
                 Image(systemName: "plus.square.on.square")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text(i == 0 ? "While also holding" : "and")
+                    .accessibilityHidden(true)
+                Text(i == 0 ? String(localized: "While also holding") : String(localized: "and"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 118, alignment: .leading)
@@ -3179,7 +4195,7 @@ struct BindingRowView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.hint)
-                .accessibilityLabel("Remove this held control")
+                .accessibilityLabel(String(localized: "Remove \(modifierName(mod))", comment: "Takes a held control out of the chord; the control's name"))
             }
         }
         if mods.count < BindingModel.maxModifiers {
@@ -3187,11 +4203,12 @@ struct BindingRowView: View {
                 Image(systemName: "plus.square.on.square")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text(mods.isEmpty ? "While also holding" : "and")
+                    .accessibilityHidden(true)
+                Text(mods.isEmpty ? String(localized: "While also holding") : String(localized: "and"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 118, alignment: .leading)
-                modifierMenu(label: mods.isEmpty ? "Nothing\u{2026}" : "Add another\u{2026}", tinted: false, slot: nil) { event in
+                modifierMenu(label: mods.isEmpty ? String(localized: "Nothing\u{2026}") : String(localized: "Add another\u{2026}"), tinted: false, slot: nil) { event in
                     binding.setModifiers(binding.modifiers + [event])
                 }
                 Button("Scan") { onScanModifier(nil) }
@@ -3200,8 +4217,10 @@ struct BindingRowView: View {
             }
         }
         Text(mods.isEmpty
-             ? "This row fires on its own. Add up to three controls here and it fires only while all of them are held, like Triangle + D-pad up."
-             : "Fires only while \(mods.map { modifierName($0) }.joined(separator: " and ")) \(mods.count == 1 ? "is" : "are") held. A plain row on the same control stays quiet while the chord is held.")
+             ? String(localized: "Waits for up to three other controls, held with this one.")
+             : (mods.count == 1
+                ? String(localized: "Fires only while \(modNames) is held. A plain row on the same control stays quiet while the chord is held.")
+                : String(localized: "Fires only while \(modNames) are held. A plain row on the same control stays quiet while the chord is held.")))
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -3210,7 +4229,13 @@ struct BindingRowView: View {
     /// The menu of controls a chord slot can take.
     private func modifierMenu(label: String, tinted: Bool, slot: Int?,
                               pick: @escaping (InputEvent) -> Void) -> some View {
-        Menu {
+        SearchableMenu(choices: {
+            familyButtonLabels.map { entry in
+                MenuSearchChoice(title: buttonMenuLabel(for: entry.index)) { pick(InputEvent(type: .button, index: entry.index)) }
+            } + extraButtons.filter { e in !familyButtonLabels.contains { $0.index == e.index } }.map { extra in
+                MenuSearchChoice(title: extra.label) { pick(InputEvent(type: .button, index: extra.index)) }
+            } + [MenuSearchChoice(title: String(localized: "Scan for any control\u{2026}")) { onScanModifier(slot) }]
+        }) {
             ForEach(familyButtonLabels, id: \.index) { entry in
                 Button(buttonMenuLabel(for: entry.index)) {
                     pick(InputEvent(type: .button, index: entry.index))
@@ -3252,26 +4277,30 @@ struct BindingRowView: View {
         // With a macro, only the modes the engine runs a macro in: turbo
         // and auto-click skipped the macro or sent both, and hold never ran.
         let hasMacro = binding.macroSteps?.isEmpty == false
+        // A gesture is over the moment it lands: nothing is held, so the
+        // modes that read a hold are not offered.
+        let gesture = neverHeld
         Picker("Press mode", selection: pressModeBinding) {
-            Text("Fires while held").tag(PressMode.normal)
+            Text(gesture ? "Sends a quick press" : "Fires while held").tag(PressMode.normal)
             Text("Toggles on and off").tag(PressMode.toggle)
-            if !hasMacro || pressMode == .turbo {
+            if (!hasMacro && !gesture) || pressMode == .turbo {
                 Text("Repeats while held").tag(PressMode.turbo)
             }
             if !hasMacro || pressMode == .autoClick {
-                Text("Repeats until pressed again").tag(PressMode.autoClick)
+                Text(gesture ? "Repeats until done again" : "Repeats until pressed again").tag(PressMode.autoClick)
             }
-            if !hasMacro || pressMode == .hold {
+            if (!hasMacro && !gesture) || pressMode == .hold {
                 Text("Different action when held").tag(PressMode.hold)
             }
         }
         .labelsHidden()
-        .frame(width: 260)
+        .frame(width: 260 * max(1, textScale))
         .controlSize(.regular)
+        .accessibilityInputLabels([Text(pressModeTitle), Text("Press mode")])
         .hoverHelp("What a press of this control does.")
 
         Text(hasMacro && ![PressMode.normal, .toggle].contains(pressMode)
-             ? "This row runs a macro, which only fires while held or toggles on and off. Pick one of those, or remove the macro."
+             ? String(localized: "This row runs a macro, which only fires while held or toggles on and off. Pick one of those, or remove the macro.")
              : pressModeExplanation)
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -3291,11 +4320,12 @@ struct BindingRowView: View {
                 .foregroundStyle(.secondary)
             TextField("", value: repeatCountBinding, format: .number)
                 .accessibilityLabel("Repeat count")
+                .accessibilityHint("1 to 100")
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 56)
+                .frame(width: 56 * max(1, textScale))
                 .controlSize(.regular)
                 .multilineTextAlignment(.center)
-            Text((binding.repeatCount ?? 1) > 1 ? "times per press" : "time per press")
+            Text((binding.repeatCount ?? 1) > 1 ? String(localized: "times per press") : String(localized: "time per press"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -3307,8 +4337,9 @@ struct BindingRowView: View {
                     .foregroundStyle(.secondary)
                 TextField("", value: repeatDelayBinding, format: .number)
                     .accessibilityLabel("Milliseconds between repeats")
+                    .accessibilityHint("10 to 5000 milliseconds")
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 56)
+                    .frame(width: 56 * max(1, textScale))
                     .controlSize(.regular)
                     .multilineTextAlignment(.center)
                 Text("ms between repeats")
@@ -3332,6 +4363,7 @@ struct BindingRowView: View {
             HStack(spacing: 5) {
                 Image(systemName: "bolt.fill")
                     .font(.callout)
+                    .accessibilityHidden(true)
                 Text("Run a sequence of steps (macro)")
                     .font(.callout)
             }
@@ -3369,14 +4401,15 @@ struct BindingRowView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             TextField("Repeat interval in milliseconds", value: turboIntervalBinding, format: .number)
+                .accessibilityHint("5 to 60000 milliseconds")
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 64)
+                .frame(width: 64 * max(1, textScale))
                 .controlSize(.regular)
                 .multilineTextAlignment(.center)
             Text("ms")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text(String(format: "(%.1f per second)", 1000.0 / Double(max(5, turboIntervalMs))))
+            Text(String(format: String(localized: "(%.1f per second)"), locale: .current, 1000.0 / Double(max(5, turboIntervalMs))))
                 .font(.callout)
                 .foregroundStyle(.hint)
         }
@@ -3387,7 +4420,7 @@ struct BindingRowView: View {
                 .foregroundStyle(.secondary)
             TextField("Random variation in milliseconds", value: turboJitterBinding, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 56)
+                .frame(width: 56 * max(1, textScale))
                 .controlSize(.regular)
                 .multilineTextAlignment(.center)
             Text("ms either way")
@@ -3401,10 +4434,10 @@ struct BindingRowView: View {
                 .foregroundStyle(.secondary)
             TextField("Stop after this many presses", value: turboMaxCountBinding, format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 56)
+                .frame(width: 56 * max(1, textScale))
                 .controlSize(.regular)
                 .multilineTextAlignment(.center)
-            Text((binding.turboMaxCount ?? 0) > 0 ? "presses" : "presses (0 keeps going)")
+            Text((binding.turboMaxCount ?? 0) > 0 ? String(localized: "presses") : String(localized: "presses (0 keeps going)"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -3424,29 +4457,29 @@ struct BindingRowView: View {
                     $0.clickY = nil
                 }
             }
-            Button("At a fixed point: use the pointer's position now") {
+            Button("At a fixed point: the pointer's position in a few seconds") {
                 captureClickPoint(at: index, in: list)
             }
         } label: {
-            menuLabel(fixed
-                      ? String(format: "at %.0f, %.0f", current?.clickX ?? 0, current?.clickY ?? 0)
-                      : "at pointer")
+            menuLabel((clickPointTarget == "\(index)-\(list)" ? clickPointLeft : nil).map { String(localized: "Taking the spot in \($0)\u{2026}") } ?? (fixed
+                      ? String(format: String(localized: "at %.0f, %.0f"), locale: .current, current?.clickX ?? 0, current?.clickY ?? 0)
+                      : String(localized: "at pointer")))
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)
         .fixedSize()
-        .hoverHelp("Click wherever the pointer is, or always at one spot on screen. To set the spot, pick the second option and move the pointer there; a countdown is spoken and the spot is taken after three seconds. Or type the spot in the X and Y fields.")
+        .hoverHelp("Click wherever the pointer is, or always at one spot on screen. To set the spot, pick the second option and move the pointer there; a countdown shows on this menu and is spoken, and the spot is taken when it ends. Or type the spot in the X and Y fields.")
         if fixed {
             // The spot typed in directly, for anyone who cannot hold the
             // pointer still on a target through the countdown.
             HStack(spacing: 4) {
                 Text("X").font(.caption).foregroundStyle(.secondary)
                 TextField("X", value: clickCoordinate(index, \.clickX, in: list), format: .number.grouping(.never))
-                    .frame(width: 56)
+                    .frame(width: 56 * max(1, textScale))
                     .accessibilityLabel("Click point X, in points from the left of the main display")
                 Text("Y").font(.caption).foregroundStyle(.secondary)
                 TextField("Y", value: clickCoordinate(index, \.clickY, in: list), format: .number.grouping(.never))
-                    .frame(width: 56)
+                    .frame(width: 56 * max(1, textScale))
                     .accessibilityLabel("Click point Y, in points from the top of the main display")
             }
             .textFieldStyle(.roundedBorder)
@@ -3467,12 +4500,22 @@ struct BindingRowView: View {
     /// the user can move the pointer to the target first. Stored in
     /// CoreGraphics coordinates (origin top-left) to match the click events.
     private func captureClickPoint(at index: Int, in list: OutputList = .main) {
-        // A spoken countdown instead of a silent two seconds, so a
-        // VoiceOver user knows when the spot is taken.
-        Self.announce("Move the pointer to the spot. Taken in 3 seconds.")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { Self.announce("2") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { Self.announce("1") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+        // A countdown seen on the menu and spoken, so nobody is surprised
+        // by when the spot is taken. Switch Control glides the pointer
+        // slowly, so it gets longer.
+        let total = NSWorkspace.shared.isSwitchControlEnabled ? 10 : 3
+        Self.announce(String(localized: "Move the pointer to the spot. Taken in \(total) seconds."))
+        clickPointLeft = total
+        clickPointTarget = "\(index)-\(list)"
+        for step in 1..<total {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(step)) {
+                clickPointLeft = total - step
+                // Queued behind the instruction rather than cutting it off.
+                if total - step <= 2 { Self.announce("\(total - step)", priority: .medium) }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(total)) {
+            clickPointLeft = nil
             guard output(at: index, in: list) != nil else { return }
             let location = NSEvent.mouseLocation
             let height = NSScreen.screens.first?.frame.height ?? NSScreen.main?.frame.height ?? 0
@@ -3481,7 +4524,8 @@ struct BindingRowView: View {
                 $0.clickX = x
                 $0.clickY = y
             }
-            Self.announce("Spot set at \(Int(x)), \(Int(y))")
+            NSSound(named: "Tink")?.play()
+            Self.announce(String(localized: "Spot set at \(Int(x)), \(Int(y))"))
         }
     }
 
@@ -3494,7 +4538,7 @@ struct BindingRowView: View {
         SwiftUI.Binding(
             get: { turboIntervalMs },
             set: { ms in
-                let clamped = max(5, min(60_000, ms))
+                let clamped = Self.clamped(ms, 5...60_000)
                 binding.turboIntervalMs = clamped
                 // Keep the older rate field in step for anything that reads it.
                 binding.turboRate = max(1, min(60, Int((1000.0 / Double(clamped)).rounded())))
@@ -3517,18 +4561,42 @@ struct BindingRowView: View {
     }
 
     /// Plain-language answer to "what does this do", under the menu.
+    /// A stick gesture, a touchpad gesture, a tap on the Mac, a MIDI program
+    /// change or transport message, or a knob in Turn mode: pressed for a
+    /// moment and never held (MappingEngine.isOneShot), so hold, turbo and a
+    /// held action never or always fired on them.
+    private var neverHeld: Bool {
+        binding.input.type == .stickGesture || MappingEngine.isOneShot(binding.input)
+    }
+
     private var pressModeExplanation: String {
+        if neverHeld, binding.input.type != .stickGesture {
+            switch pressMode {
+            case .normal: return String(localized: "Each time it happens, the output is pressed and let go once.")
+            case .toggle: return String(localized: "Each time it happens, the output turns on, and the next time off.")
+            case .autoClick: return String(localized: "It starts the output firing over and over, and the next time stops it.")
+            case .turbo, .hold: return String(localized: "This control is not held, so this does nothing here. Pick another way for it to fire.")
+            }
+        }
+        if binding.input.type == .stickGesture {
+            switch pressMode {
+            case .normal: return String(localized: "Each time the gesture is made, the output is pressed and let go once.")
+            case .toggle: return String(localized: "The gesture turns the output on and leaves it on. Making it again turns it off.")
+            case .autoClick: return String(localized: "The gesture starts the output firing over and over, and making it again stops it.")
+            case .turbo, .hold: return String(localized: "A gesture is not held, so this does nothing here. Pick another way for it to fire.")
+            }
+        }
         switch pressMode {
         case .normal:
-            return "The output is held down for as long as you hold the control, and released when you let go."
+            return String(localized: "The output is held down for as long as you hold the control, and released when you let go.")
         case .toggle:
-            return "One press turns the output on and leaves it on. The next press turns it off."
+            return String(localized: "One press turns the output on and leaves it on. The next press turns it off.")
         case .turbo:
-            return "The output fires over and over while you hold the control, at the rate below."
+            return String(localized: "The output fires over and over while you hold the control, at the rate below.")
         case .autoClick:
-            return "Press once to start the output firing over and over, and press again to stop it. An auto-clicker: put a click on this row and it clicks for you."
+            return String(localized: "Press once to start the output firing over and over, and press again to stop it. An auto-clicker: put a click on this row and it clicks for you.")
         case .hold:
-            return "A quick tap sends the normal output. Holding past the time set under Extra actions sends something else instead, so one control can do two jobs."
+            return String(localized: "A quick tap sends the normal output. Holding past the time set under Extra actions sends something else instead, so one control can do two jobs.")
         }
     }
 
@@ -3595,11 +4663,43 @@ struct BindingRowView: View {
     /// joystick circle styles.
     private var invertExplanation: String {
         switch binding.input.type {
-        case .motion: return "Read the tilt the other way round: this row fires when the controller moves opposite to its named direction."
-        case .touchpad: return "Read the finger the other way round: a swipe left counts as right and up as down for this row."
-        case .stickRegion: return "Mirror the stick before checking the zone, so the zone is entered from the opposite side."
-        default: return "Read the stick backwards for this row: pushed left counts as right and up as down, and variable speed follows the reversed value. It is per row, so the row for the other direction is unaffected."
+        case .motion: return String(localized: "Read the tilt the other way round: this row fires when the controller moves opposite to its named direction.")
+        case .touchpad: return String(localized: "Read the finger the other way round: a swipe left counts as right and up as down for this row.")
+        case .stickGesture:
+            return String(localized: "Mirror the stick before reading the gesture: a flick up counts as down and a flick left as right.")
+        case .stickRegion:
+            return isBandRow
+                ? String(localized: "Turn the travel over before checking the band, so a band at the top fires at the bottom.")
+                : String(localized: "Mirror the stick before checking the region, so the region is entered from the opposite side.")
+        default: return String(localized: "Read the stick backwards for this row: pushed left counts as right and up as down, and variable speed follows the reversed value. It is per row, so the row for the other direction is unaffected.")
         }
+    }
+
+    /// Ready-made motion rows for this row's group (see MotionSetup).
+    @ViewBuilder
+    private var motionSetupSection: some View {
+        Section("Set Up Full Gyro") {
+            ForEach(MotionSetup.allCases) { setup in
+                Button(setup.title) { MotionSetupAction.perform?(binding.id, setup) }
+            }
+        }
+    }
+
+    /// The two options as the engine uses them, and only where their
+    /// toggles are shown.
+    /// The pad behind the row reads this axis 0 to 1 already. Read through
+    /// the engine's service, not observed, so rows do not redraw on input.
+    private var axisAlreadyOneWay: Bool {
+        guard binding.input.type == .axis, let service = MappingEngine.current?.controllerServiceForSettings else { return false }
+        return service.axisReadsOneWay(slot: slot, index: binding.input.index)
+    }
+
+    private var fullTravelShown: Bool {
+        binding.fullTravel == true && binding.input.type == .axis && !isTriggerAxis && binding.input.axisDirection != .none
+    }
+    private var fromNeutralShown: Bool {
+        binding.fromNeutral == true && binding.input.type == .motion
+            && [.pitchAngle, .rollAngle, .yawAngle].contains(binding.input.motionChannel ?? .gyroY)
     }
 
     private var isTriggerAxis: Bool {
@@ -3689,14 +4789,14 @@ struct BindingRowView: View {
     private var repeatCountBinding: SwiftUI.Binding<Int> {
         SwiftUI.Binding(
             get: { binding.repeatCount ?? 1 },
-            set: { binding.repeatCount = $0 <= 1 ? nil : max(1, min(100, $0)) }
+            set: { binding.repeatCount = $0 <= 1 ? nil : Self.clamped($0, 1...100) }
         )
     }
 
     private var repeatDelayBinding: SwiftUI.Binding<Int> {
         SwiftUI.Binding(
             get: { binding.repeatDelayMs ?? 100 },
-            set: { binding.repeatDelayMs = max(10, min(5000, $0)) }
+            set: { binding.repeatDelayMs = Self.clamped($0, 10...5000) }
         )
     }
 
@@ -3735,9 +4835,27 @@ struct BindingRowView: View {
         )
     }
 
+    /// The press mode picker's shown choice, which Voice Control answers to.
+    private var pressModeTitle: String {
+        switch pressMode {
+        case .normal: return String(localized: "Fires while held")
+        case .toggle: return String(localized: "Toggles on and off")
+        case .turbo: return String(localized: "Repeats while held")
+        case .autoClick: return String(localized: "Repeats until pressed again")
+        case .hold: return String(localized: "Different action when held")
+        }
+    }
+
+    /// The vibration length as VoiceOver says it, in words, not "ms".
+    private func spokenHapticDuration(_ ms: Double) -> String {
+        if ms < Double(FeedbackService.transientCutoffMs) { return String(localized: "Tap") }
+        if ms >= 1000 { return String(localized: "\((ms / 1000).formatted(.number.precision(.fractionLength(1)))) seconds") }
+        return String(localized: "\(Int(ms)) milliseconds")
+    }
+
     private func hapticDurationLabel(_ ms: Double) -> String {
-        ms < Double(FeedbackService.transientCutoffMs) ? "Tap" :
-            ms >= 1000 ? String(format: "%.1f s", ms / 1000) : "\(Int(ms)) ms"
+        ms < Double(FeedbackService.transientCutoffMs) ? String(localized: "Tap") :
+            ms >= 1000 ? String(format: String(localized: "%.1f s"), locale: .current, ms / 1000) : String(localized: "\(Int(ms)) ms")
     }
 
     private var speechBinding: SwiftUI.Binding<Bool> {
@@ -3749,8 +4867,14 @@ struct BindingRowView: View {
 
     private var speechTextBinding: SwiftUI.Binding<String> {
         SwiftUI.Binding(
-            get: { binding.speechText ?? "" },
-            set: { binding.speechText = $0.isEmpty ? nil : $0 }
+            // A built-in phrase in the app's language, English on disk.
+            // Shown as typed while it is being typed: passing through a
+            // shipped word ("Hello") swapped the field to its translation.
+            get: { phraseFocused ? (binding.speechText ?? "") : ShippedText.phrase(binding.speechText ?? "") },
+            set: { new in
+                let shown = phraseFocused ? (binding.speechText ?? "") : ShippedText.phrase(binding.speechText ?? "")
+                if new != shown { binding.speechText = new.isEmpty ? nil : new }
+            }
         )
     }
 
@@ -3799,8 +4923,9 @@ struct BindingRowView: View {
                 steps.append(MacroStep(action: OutputAction(type: .key, keyCode: 4)))
                 binding.macroSteps = steps
                 binding.turboEnabled = nil
+                AccessibilityNotification.Announcement(String(localized: "Step \(steps.count) added")).post()
             } label: {
-                Label((binding.macroSteps?.isEmpty ?? true) ? "Add a step" : "Add another step",
+                Label((binding.macroSteps?.isEmpty ?? true) ? String(localized: "Add a step") : String(localized: "Add another step"),
                       systemImage: "plus.circle")
                     .font(.callout)
             }
@@ -3839,7 +4964,8 @@ struct BindingRowView: View {
             }
             .labelsHidden()
             .controlSize(.small)
-            .frame(width: 84)
+            .frame(width: 84 * max(1, textScale))
+            .accessibilityLabel("Step \(index + 1) action")
             .hoverHelp("Tap presses and releases. Hold down keeps the key held while later steps run (for chords like Cmd+C). Release lets go of a held key.")
 
             Picker("Step type", selection: macroStepTypeBinding(at: index)) {
@@ -3853,11 +4979,13 @@ struct BindingRowView: View {
             }
             .labelsHidden()
             .controlSize(.small)
-            .frame(width: 100)
+            .frame(width: 100 * max(1, textScale))
 
             if step.action.type == .key {
-                KeyCodePicker(selectedCode: macroStepKeyBinding(at: index))
-                    .frame(width: 90)
+                KeyCodePicker(selectedCode: macroStepKeyBinding(at: index),
+                              inShortcut: !(macroStep(at: index)?.modifiers ?? []).allSatisfy { !KeyCodeMap.shortcutModifierCodes.contains($0) },
+                              voiceRole: "Step \(index + 1) key")
+                    .frame(width: 90 * max(1, textScale))
                     .accessibilityLabel("Step \(index + 1) key")
                 ShortcutModifierToggles(outputs: macroStepShortcutBinding(at: index), defaultKey: 4)
             } else if step.action.type == .mouseButton {
@@ -3868,7 +4996,7 @@ struct BindingRowView: View {
                 }
                 .labelsHidden()
                 .controlSize(.small)
-                .frame(width: 90)
+                .frame(width: 90 * max(1, textScale))
             }
 
             HStack(spacing: 2) {
@@ -3879,7 +5007,7 @@ struct BindingRowView: View {
                 .buttonStyle(.plain)
                 .disabled(index == 0)
                 .hoverHelp("Move step up")
-                .accessibilityLabel("Move step up")
+                .accessibilityLabel("Move step \(index + 1) up")
 
                 Button { moveMacroStep(at: index, by: 1) } label: {
                     Image(systemName: "chevron.down")
@@ -3888,7 +5016,7 @@ struct BindingRowView: View {
                 .buttonStyle(.plain)
                 .disabled(index >= (binding.macroSteps?.count ?? 0) - 1)
                 .hoverHelp("Move step down")
-                .accessibilityLabel("Move step down")
+                .accessibilityLabel("Move step \(index + 1) down")
 
                 Button { duplicateMacroStep(at: index) } label: {
                     Image(systemName: "plus.square.on.square")
@@ -3896,7 +5024,7 @@ struct BindingRowView: View {
                 }
                 .buttonStyle(.plain)
                 .hoverHelp("Duplicate step")
-                .accessibilityLabel("Duplicate step")
+                .accessibilityLabel("Duplicate step \(index + 1)")
             }
             .foregroundStyle(.secondary)
 
@@ -3905,13 +5033,14 @@ struct BindingRowView: View {
                 guard index < steps.count else { return }
                 steps.remove(at: index)
                 binding.macroSteps = steps.isEmpty ? nil : steps
+                AccessibilityNotification.Announcement(String(localized: "Step \(index + 1) removed")).post()
             } label: {
                 Image(systemName: "xmark.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Remove this macro step")
+            .accessibilityLabel("Remove step \(index + 1)")
 
             Spacer()
         }
@@ -3920,17 +5049,19 @@ struct BindingRowView: View {
             fieldLabel("Wait")
             TextField("", value: macroDelayBinding(at: index), format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 52)
+                .frame(width: 52 * max(1, textScale))
                 .controlSize(.small)
                 .multilineTextAlignment(.center)
                 .accessibilityLabel("Wait before this step, milliseconds")
+                .voiceNames("Wait", "Wait before this step, milliseconds")
             fieldLabel("ms before it fires, then hold it for")
             TextField("", value: macroHoldBinding(at: index), format: .number)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 52)
+                .frame(width: 52 * max(1, textScale))
                 .controlSize(.small)
                 .multilineTextAlignment(.center)
                 .accessibilityLabel("Hold this step, milliseconds")
+                .voiceNames("Hold", "Hold this step, milliseconds")
             fieldLabel("ms")
         }
         }
@@ -3942,6 +5073,7 @@ struct BindingRowView: View {
         guard steps.indices.contains(index), steps.indices.contains(target) else { return }
         steps.swapAt(index, target)
         binding.macroSteps = steps
+        AccessibilityNotification.Announcement(String(localized: "Moved to step \(target + 1)")).post()
     }
 
     private func duplicateMacroStep(at index: Int) {
@@ -3951,6 +5083,7 @@ struct BindingRowView: View {
                              eventKind: src.eventKind, modifiers: src.modifiers)
         steps.insert(copy, at: index + 1)
         binding.macroSteps = steps
+        AccessibilityNotification.Announcement(String(localized: "Step duplicated as step \(index + 2)")).post()
     }
 
     // MARK: - Macro Bindings
@@ -4071,10 +5204,168 @@ struct BindingRowView: View {
     }
 
     /// One region in a picker: its color, then its name.
+    // MARK: - Stick gesture
+
+    private var gestureSteps: [GestureStep] { binding.input.gestureSteps ?? [] }
+
+    /// The flicks as arrows ("↓ ↓"), zones by name.
+    private var gestureLabel: String {
+        let stick = binding.input.index == 1 ? String(localized: "Right") : String(localized: "Left")
+        if gestureSteps.isEmpty { return String(localized: "\(stick): pick flicks") }
+        let parts = gestureSteps.map { step -> String in
+            if let d = step.direction { return d.arrow }
+            if let id = step.zone, let found = StickRegionService.shared.region(with: id) { return found.region.shownName }
+            return "?"
+        }
+        return "\(stick): " + parts.joined(separator: " ")
+    }
+
+    static let gestureDirectionOrder: [StickDirection] = [.up, .down, .left, .right, .upLeft, .upRight, .downLeft, .downRight]
+
+    private var stickGesturePicker: some View {
+        Menu {
+            Picker("Stick", selection: SwiftUI.Binding(
+                get: { binding.input.index == 1 ? 1 : 0 },
+                set: { stick in
+                    if stick != (binding.input.index == 1 ? 1 : 0) {
+                        binding.input.gestureSteps = gestureSteps.filter { step in
+                            guard let id = step.zone else { return true }
+                            return StickRegionService.shared.region(with: id)?.stickIndex == stick
+                        }
+                    }
+                    binding.input.index = stick
+                })) {
+                Text("Left stick").tag(0)
+                Text("Right stick").tag(1)
+            }
+            .pickerStyle(.inline)
+            Section("Add a flick") {
+                ForEach(Self.gestureDirectionOrder) { d in
+                    Button("\(d.arrow)  \(d.displayName)") { appendGestureStep(GestureStep(direction: d)) }
+                }
+                let zones = StickRegionService.shared.regions(forStick: binding.input.index == 1 ? 1 : 0)
+                if !zones.isEmpty {
+                    Menu("Into a region") {
+                        ForEach(zones) { zone in
+                            Button { appendGestureStep(GestureStep(zone: zone.id)) } label: { regionMenuLabel(zone) }
+                        }
+                    }
+                }
+            }
+            .disabled(gestureSteps.count >= GestureStep.maxSteps)
+            Section {
+                Button("Record a gesture\u{2026}") { showGestureRecorder = true }
+                Button("Remove the last flick") { binding.input.gestureSteps = Array(gestureSteps.dropLast()) }
+                    .disabled(gestureSteps.isEmpty)
+                Button("Clear") { binding.input.gestureSteps = [] }
+                    .disabled(gestureSteps.isEmpty)
+            }
+        } label: {
+            menuLabel(gestureLabel)
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .fixedSize()
+        .accessibilityLabel("Stick gesture")
+        .accessibilityValue(binding.input.displayName)
+        .help("The flicks that make up this gesture, in order")
+        .sheet(isPresented: $showGestureRecorder) { gestureRecorderSheet }
+    }
+
+    /// The recorder, with the row's own stick, timing and Invert.
+    private var gestureRecorderSheet: some View {
+        StickGestureRecorder(stick: binding.input.index == 1 ? 1 : 0, slot: slot,
+                             reach: binding.gestureReach ?? 0.8,
+                             longestFlickMs: binding.gestureFlickMs ?? 400,
+                             windowMs: binding.gestureWindowMs ?? 600,
+                             inverted: binding.invertAxis == true) { steps in
+            binding.input.gestureSteps = steps
+        }
+        .glassBackground()
+    }
+
+    private func appendGestureStep(_ step: GestureStep) {
+        guard gestureSteps.count < GestureStep.maxSteps else { return }
+        binding.input.gestureSteps = gestureSteps + [step]
+    }
+
+    @ViewBuilder
+    private var stickGestureOptions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("A flick goes out past the reach and comes back to the middle. Each flick must start within the time between flicks of the last one ending.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text("Reach")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                ThrottledSlider("Reach", value: SwiftUI.Binding(
+                    get: { binding.gestureReach ?? 0.8 },
+                    set: { binding.gestureReach = abs($0 - 0.8) < 0.005 ? nil : $0 }),
+                    in: 0.3...1.0, step: 0.05)
+                    .frame(minWidth: 120, maxWidth: 200)
+                Text((binding.gestureReach ?? 0.8).formatted(.percent.precision(.fractionLength(0))))
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 40, alignment: .leading)
+            }
+            HStack(spacing: 6) {
+                Text("Time between flicks")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                TextField("Time between flicks in milliseconds", value: SwiftUI.Binding(
+                    get: { binding.gestureWindowMs ?? 600 },
+                    set: { binding.gestureWindowMs = Self.clamped($0, 150...3000) }), format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 60 * max(1, textScale))
+                    .accessibilityHint("150 to 3000 milliseconds")
+                Text("ms").font(.callout).foregroundStyle(.secondary)
+            }
+            Toggle(isOn: SwiftUI.Binding(
+                get: { (binding.gestureFlickMs ?? 400) > 0 },
+                set: { binding.gestureFlickMs = $0 ? nil : 0 })) {
+                Text("Quick flicks only")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .hoverHelp("A push held out longer than this is a push, not a flick, and starts the gesture over, so steering or pointing with the stick never counts.")
+            if (binding.gestureFlickMs ?? 400) > 0 {
+                HStack(spacing: 6) {
+                    Text("Longest flick")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    TextField("Longest flick in milliseconds", value: SwiftUI.Binding(
+                        get: { binding.gestureFlickMs ?? 400 },
+                        set: { binding.gestureFlickMs = Self.clamped($0, 50...3000) }), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60 * max(1, textScale))
+                        .accessibilityHint("50 to 3000 milliseconds")
+                    Text("ms").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            if gestureSteps.contains(where: { $0.direction == .down }) {
+                Text("One-Stick Driving shifts into reverse on two snaps back. If this preset drives with the same stick, turn that off in its driving settings or use another gesture.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Toggle(isOn: invertBinding) {
+                Text("Invert direction")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help(invertExplanation)
+        }
+    }
+
     private func regionMenuLabel(_ region: TouchpadRegion) -> some View {
         HStack(spacing: 6) {
             regionSwatch(region.colorIndex)
-            Text(region.name)
+            Text(region.shownName)
         }
     }
 
@@ -4144,28 +5435,30 @@ struct BindingRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
+                // Whole on hover, since a large Text Size cuts off the shortcut.
+                .help(systemActionExplainer(kind))
         }
     }
 
     private func systemActionExplainer(_ kind: SystemActionKind) -> String {
         switch kind {
-        case .volumeUp, .volumeDown: return "Nudges the Mac's volume one step per press"
-        case .muteToggle: return "Toggles the Mac's output mute"
-        case .playPause, .nextTrack, .previousTrack: return "Sends the keyboard's media key"
-        case .brightnessUp, .brightnessDown: return "Nudges the built-in display's brightness"
-        case .missionControl: return "Opens Mission Control"
-        case .launchpad: return "Opens Launchpad"
-        case .spotlight: return "Presses Cmd+Space"
-        case .lockScreen: return "Locks the screen (Ctrl+Cmd+Q)"
-        case .screenshotMenu: return "Opens the screenshot toolbar (Cmd+Shift+5)"
+        case .volumeUp, .volumeDown: return String(localized: "Nudges the Mac's volume one step per press")
+        case .muteToggle: return String(localized: "Toggles the Mac's output mute")
+        case .playPause, .nextTrack, .previousTrack: return String(localized: "Sends the keyboard's media key")
+        case .brightnessUp, .brightnessDown: return String(localized: "Nudges the built-in display's brightness")
+        case .missionControl: return String(localized: "Opens Mission Control")
+        case .launchpad: return String(localized: "Opens Launchpad")
+        case .spotlight: return String(localized: "Presses Cmd+Space")
+        case .lockScreen: return String(localized: "Locks the screen (Ctrl+Cmd+Q)")
+        case .screenshotMenu: return String(localized: "Opens the screenshot toolbar (Cmd+Shift+5)")
         case .keyboardBrightnessUp, .keyboardBrightnessDown:
-            return "Nudges the keyboard backlight"
+            return String(localized: "Nudges the keyboard backlight")
         case .startDictation:
-            return "Presses the dictation key, same as F5"
-        case .speakSelection: return "Speaks the selected text (Option+Esc)"
-        case .zoomToggle: return "Turns screen zoom on and off (Option+Cmd+8)"
-        case .zoomIn: return "Zooms the screen in (Option+Cmd+=)"
-        case .zoomOut: return "Zooms the screen out (Option+Cmd+-)"
+            return String(localized: "Presses the dictation key, same as F5")
+        case .speakSelection: return String(localized: "Speaks the selected text (Option+Esc)")
+        case .zoomToggle: return String(localized: "Turns screen zoom on and off (Option+Cmd+8)")
+        case .zoomIn: return String(localized: "Zooms the screen in (Option+Cmd+=)")
+        case .zoomOut: return String(localized: "Zooms the screen out (Option+Cmd+-)")
         case .runShortcut, .openApp, .openURL: return ""
         }
     }
@@ -4210,12 +5503,12 @@ struct BindingRowView: View {
 
     private func mouseButtonName(_ index: Int) -> String {
         switch index {
-        case 0: return "0: Main Click"
-        case 1: return "1: Secondary"
-        case 2: return "2: Middle"
-        case 3: return "3: Back"
-        case 4: return "4: Forward"
-        case 5: return "5: Extra"
+        case 0: return String(localized: "0: Main Click")
+        case 1: return String(localized: "1: Secondary")
+        case 2: return String(localized: "2: Middle")
+        case 3: return String(localized: "3: Back")
+        case 4: return String(localized: "4: Forward")
+        case 5: return String(localized: "5: Extra")
         default: return "\(index)"
         }
     }
@@ -4415,7 +5708,7 @@ struct BindingRowView: View {
 /// into `NSHostingView.layout` and `AccessibilityNode.updateFocus` work on
 /// every display cycle. Static structure is measurably cheaper.
 extension View {
-    func hoverHelp(_ text: String) -> some View {
+    func hoverHelp(_ text: LocalizedStringKey) -> some View {
         help(text)
     }
 
@@ -4547,12 +5840,24 @@ struct MotionRowPanel: View {
     let direction: AxisDirection?
     let invert: Bool
     let deadzone: Double
+    /// A tilt row measured from the grip: the meter shows the lean from the
+    /// angle first read, taken again at a re-zero, as the engine does.
+    var fromNeutral: Bool = false
+    /// A pointer row moves on anything past the sensor's noise; its
+    /// deadzone only slows or smooths small movement, it cuts nothing off.
+    var drivesPointer: Bool = false
 
     @EnvironmentObject private var controllerService: GameControllerService
     @State private var value: Float = 0
+    @State private var neutral: Float?
     @State private var hasMotion = false
     @State private var showCalibration = false
     @State private var zeroFlashUntil: Date?
+    /// One timer for the panel's life, not a new one per redraw.
+    private let tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
+    /// The last Quick Zero found the pad moving, so nothing was stored.
+    @State private var zeroMoved = false
+    @State private var zeroUnavailable = false
 
     /// Full-scale of the bar per channel: gyro rates in rad/s, the rest
     /// already normalized to about -1...1.
@@ -4571,9 +5876,22 @@ struct MotionRowPanel: View {
         }
     }
 
+    /// The reading as VoiceOver says it: the unit as words, and the sign
+    /// as plus or minus, which a voice drops when written.
+    private var spokenReading: String {
+        let number = abs(value).formatted(.number.precision(.fractionLength(2)))
+        let signed = value < 0 ? String(localized: "minus \(number)") : number
+        switch channel {
+        case .gyroX, .gyroY, .gyroZ: return signed + String(localized: " radians per second")
+        case .accelX, .accelY, .accelZ: return String(localized: "\(signed) g-force")
+        default: return signed
+        }
+    }
+
     /// The engine's own check for a switch-style motion row.
     private var firing: Bool {
-        MappingEngine.motionFires(value: value, direction: direction, invert: invert, deadzone: Float(deadzone))
+        if drivesPointer { return abs(value) >= 0.005 }
+        return MappingEngine.motionFires(value: value, direction: direction, invert: invert, deadzone: Float(deadzone))
     }
 
     var body: some View {
@@ -4585,26 +5903,51 @@ struct MotionRowPanel: View {
                     .frame(width: 132, alignment: .leading)
                 meter
                     .frame(width: 170, height: 12)
-                Text(hasMotion ? String(format: "%+.2f %@", value, unit) : "no motion")
+                Text(hasMotion ? String(format: "%+.2f %@", locale: .current, value, unit) : String(localized: "no motion"))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(firing ? Color.green : Color.secondary)
-                    .frame(width: 96, alignment: .leading)
+                    .frame(minWidth: 96, alignment: .leading)
+                    .fixedSize()
             }
+            // The green bar and readout in words: whether a tilt passes the deadzone.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(channel.menuDescription)
+            .accessibilityValue(hasMotion
+                ? String(localized: "\(spokenReading), \(firing ? String(localized: "fires") : String(localized: "inside the deadzone"))")
+                : String(localized: "no motion"))
             Text(hasMotion
-                 ? "Move the controller the way this row should fire. The bar turns green when it would; the gray band is the deadzone."
-                 : "Connect a controller with motion (DualSense, DualShock 4, or the 2026 Steam Controller) to see it move.")
+                 ? String(localized: "Move the controller the way this row should fire. The bar turns green when it would; the gray band is the deadzone.")
+                 : String(localized: "Connect a controller with motion (a DualSense, DualShock 4, Switch Pro Controller, Joy-Con or Steam Controller) to see it move."))
                 .font(.callout)
                 .foregroundStyle(.hint)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 Button {
-                    if controllerService.rezeroMotion(slot: slot) {
+                    // A moving pad is only re-anchored and stores no zero, so
+                    // it is not reported as zeroed.
+                    let ok = controllerService.rezeroMotion(slot: slot)
+                    if ok, controllerService.lastRezeroStoredZero {
+                        zeroMoved = false
+                        zeroUnavailable = false
                         zeroFlashUntil = Date().addingTimeInterval(2)
+                        AccessibilityNotification.Announcement(String(localized: "Zeroed")).post()
+                    } else if ok {
+                        zeroMoved = true
+                        zeroUnavailable = false
+                        zeroFlashUntil = nil
+                        AccessibilityNotification.Announcement(String(localized: "Moving, hold it still and try again")).post()
+                    } else {
+                        // A pad it cannot zero (no gyro, or read directly):
+                        // not "moving", which no amount of holding still fixes.
+                        zeroMoved = false
+                        zeroUnavailable = true
+                        zeroFlashUntil = nil
+                        AccessibilityNotification.Announcement(String(localized: "Quick Zero is not available for this controller; it zeroes itself when it rests")).post()
                     }
                 } label: {
                     HStack(spacing: 3) {
-                        Image(systemName: "scope").font(.callout)
+                        Image(systemName: "scope").font(.callout).accessibilityHidden(true)
                         Text("Quick Zero").font(.callout)
                     }
                     .foregroundStyle(.tint)
@@ -4617,7 +5960,7 @@ struct MotionRowPanel: View {
                     showCalibration = true
                 } label: {
                     HStack(spacing: 3) {
-                        Image(systemName: "gyroscope").font(.callout)
+                        Image(systemName: "gyroscope").font(.callout).accessibilityHidden(true)
                         Text("Calibrate").font(.callout)
                     }
                     .foregroundStyle(.tint)
@@ -4629,13 +5972,43 @@ struct MotionRowPanel: View {
                     Label("Zeroed", systemImage: "checkmark.circle.fill")
                         .font(.callout)
                         .foregroundStyle(.green)
+                } else if zeroMoved {
+                    Text("Moving, hold it still and try again")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if zeroUnavailable {
+                    Text("Quick Zero is not available for this controller; it zeroes itself when it rests")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: GameControllerService.motionRezeroedNotification)) { _ in
+            neutral = nil
+        }
+        .onChange(of: channel) { _, _ in neutral = nil }
+        .onChange(of: fromNeutral) { _, _ in neutral = nil }
+        .onReceive(tick) { _ in
+            // Written only when they change: rewriting them 30 times a second
+            // redrew the panel even with no controller.
             let motion = controllerService.currentStates[slot]?.motion
-            hasMotion = !(motion?.isEmpty ?? true)
-            value = motion?[channel] ?? 0
+            let has = !(motion?.isEmpty ?? true)
+            if has != hasMotion { hasMotion = has }
+            var v = motion?[channel] ?? 0
+            if fromNeutral, [.pitchAngle, .rollAngle, .yawAngle].contains(channel), motion?[channel] != nil {
+                // The running preset's level when it has one, so the meter
+                // and the row agree; else the angle this meter first read.
+                if let engineLevel = MappingEngine.current?.angleNeutral(readSlot: slot, channel: channel) {
+                    neutral = engineLevel
+                } else if neutral == nil {
+                    neutral = v
+                }
+                v -= neutral ?? v
+                if channel == .yawAngle { v = MappingEngine.wrapHalfTurn(v) }
+            }
+            if v != value { value = v }
             if let until = zeroFlashUntil, until <= Date() { zeroFlashUntil = nil }
         }
         .sheet(isPresented: $showCalibration) {
@@ -4692,11 +6065,18 @@ struct MotionRowPanel: View {
 private struct DebugToggleOptionsModifier: ViewModifier {
     let displayNumber: Int
     let toggle: () -> Void
+    let adjustLive: () -> Void
     func body(content: Content) -> some View {
         #if DEBUG
         content.onReceive(DistributedNotificationCenter.default().publisher(
             for: Notification.Name("inputconfig.debug.toggleoptions"))) { note in
             if let n = Int(note.object as? String ?? ""), n == displayNumber { toggle() }
+        }
+        // `post inputconfig.debug.adjustlive <row number>` opens that row's
+        // Adjust live sheet.
+        .onReceive(DistributedNotificationCenter.default().publisher(
+            for: Notification.Name("inputconfig.debug.adjustlive"))) { note in
+            if let n = Int(note.object as? String ?? ""), n == displayNumber { adjustLive() }
         }
         // `post inputconfig.debug.scrollrow <row number>` scrolls the editor
         // so that row sits at the top of the sheet, for article captures.
@@ -4743,7 +6123,7 @@ struct DebugScrollRowAnchor: NSViewRepresentable {
 /// menu's Extra actions shortcuts open Options on a group that can sit below
 /// the window's edge, and the editor's ScrollViewReader lives in its parent,
 /// so this asks the enclosing AppKit scroll view instead.
-private struct ScrollIntoViewAnchor: NSViewRepresentable {
+struct ScrollIntoViewAnchor: NSViewRepresentable {
     let active: Bool
     let onDone: () -> Void
 
@@ -4769,28 +6149,75 @@ private struct ScrollIntoViewAnchor: NSViewRepresentable {
     }
 }
 
-/// Opens the touchpad calibrator from a touchpad row's Options.
-private struct TouchpadCalibrateButton: View {
-    @EnvironmentObject private var presetStore: PresetStore
-    @State private var showing = false
+/// One glow over an Options box: it lights in the accent color, a sheen
+/// sweeps across it left to right (left out with Reduce Motion), and it
+/// fades, so a box a menu choice just turned on is easy to find.
+private struct OptionsSpotlight: View {
+    let sweeps: Bool
+    let done: () -> Void
+    @State private var lit = false
+    @State private var sweep: CGFloat = -0.4
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10)
+        ZStack {
+            shape.fill(Color.accentColor.opacity(0.14))
+            if sweeps {
+                GeometryReader { geo in
+                    LinearGradient(colors: [.clear, Color.accentColor.opacity(0.4), .clear],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: geo.size.width * 0.35)
+                        .offset(x: geo.size.width * sweep)
+                }
+                .clipShape(shape)
+            }
+            shape.strokeBorder(Color.accentColor, lineWidth: 2)
+        }
+        .opacity(lit ? 1 : 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.25)) { lit = true }
+            if sweeps { withAnimation(.easeInOut(duration: 0.9)) { sweep = 1.05 } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
+                withAnimation(.easeIn(duration: 0.8)) { lit = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) { done() }
+            }
+        }
+    }
+}
+
+/// Scrolls a row into view when the Regions section's Back button asks.
+private struct RevealRowOnRequest: ViewModifier {
+    let rowID: UUID
+    @State private var reveal = false
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: BindingRowView.revealRow)) { note in
+                if let id = note.object as? UUID, id == rowID { reveal = true }
+            }
+            .background(ScrollIntoViewAnchor(active: reveal) { reveal = false })
+    }
+}
+
+/// Shows the touchpad regions from a touchpad row's Options.
+private struct TouchpadRegionsButton: View {
+    /// Shows the group's Regions section on the touchpad.
+    let open: () -> Void
     var body: some View {
         Button {
-            showing = true
+            open()
         } label: {
             HStack(spacing: 3) {
-                Image(systemName: "rectangle.and.hand.point.up.left.fill").font(.callout)
-                Text("Calibrate Touchpad").font(.callout)
+                Image(systemName: "rectangle.and.hand.point.up.left.fill").font(.callout).accessibilityHidden(true)
+                Text("Edit touchpad regions").font(.callout)
             }
             .foregroundStyle(.tint)
         }
         .buttonStyle(.solidSecondaryCompact)
         .fixedSize()
-        .help("Calibrate the touchpad surface and draw tap regions")
-        .sheet(isPresented: $showing) {
-            TouchpadCalibrationView()
-                .environmentObject(presetStore)
-                .glassBackground()
-        }
+        .help("Draw and name this preset's touchpad regions")
     }
 }
 
@@ -4802,7 +6229,7 @@ private struct TapCalibrateButton: View {
             showing = true
         } label: {
             HStack(spacing: 3) {
-                Image(systemName: "hand.tap").font(.callout)
+                Image(systemName: "hand.tap").font(.callout).accessibilityHidden(true)
                 Text("Calibrate Taps").font(.callout)
             }
             .foregroundStyle(.tint)
@@ -4866,10 +6293,10 @@ private struct ShortcutModifierToggles: View {
     }
 
     private static let items = [
-        Item(code: 224, symbol: "\u{2303}", name: "Control"),
-        Item(code: 226, symbol: "\u{2325}", name: "Option"),
-        Item(code: 225, symbol: "\u{21E7}", name: "Shift"),
-        Item(code: 227, symbol: "\u{2318}", name: "Command"),
+        Item(code: 224, symbol: "\u{2303}", name: String(localized: "Control")),
+        Item(code: 226, symbol: "\u{2325}", name: String(localized: "Option")),
+        Item(code: 225, symbol: "\u{21E7}", name: String(localized: "Shift")),
+        Item(code: 227, symbol: "\u{2318}", name: String(localized: "Command")),
     ]
 
     var body: some View {
@@ -4908,6 +6335,11 @@ private struct PresetButtonFamilyKey: EnvironmentKey {
 private struct ButtonModelNamesKey: EnvironmentKey {
     static let defaultValue: ButtonNames.ModelNames = .none
 }
+/// The button names of a pad read from its descriptor alone, by number,
+/// when the slot's device is one; nil for every pad numbered like a gamepad.
+private struct DeviceButtonNamesKey: EnvironmentKey {
+    static let defaultValue: [String]? = nil
+}
 extension EnvironmentValues {
     var presetButtonFamily: FaceLetters? {
         get { self[PresetButtonFamilyKey.self] }
@@ -4916,6 +6348,10 @@ extension EnvironmentValues {
     var buttonModelNames: ButtonNames.ModelNames {
         get { self[ButtonModelNamesKey.self] }
         set { self[ButtonModelNamesKey.self] = newValue }
+    }
+    var deviceButtonNames: [String]? {
+        get { self[DeviceButtonNamesKey.self] }
+        set { self[DeviceButtonNamesKey.self] = newValue }
     }
 }
 
@@ -4929,10 +6365,14 @@ private struct SystemListChooser: View {
     @ObservedObject private var lists = SystemListsCache.shared
 
     var body: some View {
-        Menu {
+        SearchableMenu(choices: {
+            (list == .shortcuts ? lists.shortcuts : lists.apps).map { name in
+                MenuSearchChoice(title: name) { pick(name) }
+            }
+        }) {
             let names = list == .shortcuts ? lists.shortcuts : lists.apps
             if names.isEmpty {
-                Text(list == .shortcuts ? "No Shortcuts found" : "No applications found")
+                Text(list == .shortcuts ? String(localized: "No Shortcuts found") : String(localized: "No applications found"))
             } else {
                 ForEach(names, id: \.self) { name in
                     Button(name) { pick(name) }

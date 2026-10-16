@@ -11,7 +11,7 @@ struct GamingUtilitiesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Used by presets that don't set their own.")
+            Text("These apply to every preset while it runs, but not over InputConfig, the Finder or System Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -22,7 +22,8 @@ struct GamingUtilitiesPanel: View {
             }
             if guardSvc.edgeConfineEnabled {
                 sliderRow("Margin", value: $guardSvc.edgeBufferPx, range: 1...200, step: 1,
-                          text: "\(Int(guardSvc.edgeBufferPx)) px")
+                          text: String(localized: "\(Int(guardSvc.edgeBufferPx)) px"),
+                          spoken: String(localized: "\(Int(guardSvc.edgeBufferPx)) pixels"))
             }
 
             // Recenter
@@ -32,7 +33,8 @@ struct GamingUtilitiesPanel: View {
             if guardSvc.autoRecenterEnabled {
                 HStack(spacing: 10) {
                     sliderRow("Every", value: $guardSvc.recenterIntervalMs, range: 50...2000, step: 10,
-                              text: "\(Int(guardSvc.recenterIntervalMs)) ms")
+                              text: String(localized: "\(Int(guardSvc.recenterIntervalMs)) ms"),
+                              spoken: String(localized: "\(Int(guardSvc.recenterIntervalMs)) milliseconds"))
                     Button {
                         guardSvc.warpToAnchor()
                     } label: {
@@ -51,7 +53,7 @@ struct GamingUtilitiesPanel: View {
             // Speed
             Label("Pointer speed for stick and gyro motion", systemImage: "speedometer")
             sliderRow("Speed", value: $guardSvc.sensitivityMultiplier, range: 0.1...5.0, step: 0.05,
-                      text: String(format: "×%.2f", guardSvc.sensitivityMultiplier))
+                      text: String(format: "×%.2f", locale: .current, guardSvc.sensitivityMultiplier))
 
             Text("Keeping the pointer off screen edges keeps game cameras turning. Speed multiplies every Mouse Motion row, not the Mac's pointer speed.")
                 .font(.caption)
@@ -62,6 +64,7 @@ struct GamingUtilitiesPanel: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(.green)
+                        .accessibilityHidden(true)
                     Text("A preset is running; these are live.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -72,8 +75,8 @@ struct GamingUtilitiesPanel: View {
 
     /// Label, slider, value: one indented line under its toggle, the same
     /// shape for every slider on the panel.
-    private func sliderRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>,
-                           step: Double, text: String) -> some View {
+    private func sliderRow(_ label: LocalizedStringKey, value: Binding<Double>, range: ClosedRange<Double>,
+                           step: Double, text: String, spoken: String? = nil) -> some View {
         HStack(spacing: 10) {
             Text(label)
                 .font(.callout)
@@ -81,7 +84,7 @@ struct GamingUtilitiesPanel: View {
                 .frame(minWidth: 52, alignment: .leading)
             Slider(value: value, in: range, step: step) { EmptyView() }
                 .accessibilityLabel(label)
-                .accessibilityValue(text)
+                .accessibilityValue(spoken ?? text)
             Text(text)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)

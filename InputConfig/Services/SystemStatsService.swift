@@ -12,6 +12,47 @@ import IOKit.ps
 ///
 /// Everything is read via public Darwin APIs - no private symbols, no
 /// extra entitlements. Safe for App Store distribution.
+/// Short durations in the app's language, the largest unit or two:
+/// "47s", "12m", "5h 12m", "3d 4h" in English.
+enum DurationText {
+    static func short(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds))
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .abbreviated
+        let shown: Int
+        switch s {
+        case ..<60: f.allowedUnits = [.second]; shown = s
+        case ..<3600: f.allowedUnits = [.minute]; shown = s / 60 * 60
+        case ..<86400: f.allowedUnits = [.hour, .minute]; shown = s / 60 * 60
+        default: f.allowedUnits = [.day, .hour]; shown = s / 3600 * 3600
+        }
+        return f.string(from: TimeInterval(shown)) ?? "\(s)"
+    }
+}
+
+/// The power source and battery state in the app's language. They are kept
+/// as IOKit's English words ("AC Power", "Charging") so the tints and
+/// comparisons keep working, and translated only where they are shown.
+enum PowerText {
+    static func source(_ raw: String) -> String {
+        switch raw {
+        case kIOPSACPowerValue: return String(localized: "AC Power")
+        case kIOPSBatteryPowerValue: return String(localized: "Battery Power")
+        case "UPS Power": return String(localized: "UPS Power")   // kIOPSUPSPowerValue
+        default: return raw
+        }
+    }
+
+    static func state(_ raw: String) -> String {
+        switch raw {
+        case "On AC": return String(localized: "On AC")
+        case "On battery": return String(localized: "On battery")
+        case "Charging": return String(localized: "Charging")
+        default: return raw
+        }
+    }
+}
+
 @MainActor
 final class SystemStatsService: ObservableObject {
 

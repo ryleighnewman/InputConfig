@@ -119,19 +119,54 @@ final class MotionCalibrationService: @unchecked Sendable {
     /// A calibration stored under the model key by an older version is
     /// still found (see `resolvedKey`).
     static func identityKey(for controller: GCController) -> String {
+        // Every read of a pad with motion asks for this key (the engine at
+        // up to 240 Hz plus the editor's 30 Hz display, twice for a pad
+        // without attitude), and each call built the model string, SHA-256
+        // hashed the serial and formatted the digest: about a dozen
+        // allocations and a digest per read, for the same string every time
+        // (150 digests a second with one DualSense running and the editor
+        // open). The key is kept per controller with the identity it was
+        // built from, so a read costs one lock and two string compares; the
+        // hash runs again only when the identity changes (a Bluetooth
+        // pad's serial arrives late) or a new pad appears.
+        let identity = SonyPadIdentity.of(controller: controller)
+        let id = ObjectIdentifier(controller)
+        keyCacheLock.lock()
+        if let hit = keyCache[id], hit.controller === controller,
+           hit.uniqueID == identity?.uniqueID, hit.serial == identity?.serial {
+            keyCacheLock.unlock()
+            return hit.key
+        }
+        keyCacheLock.unlock()
         let base = baseKey(for: controller)
-        if let identity = SonyPadIdentity.of(controller: controller) {
+        var key = base
+        if let identity {
             // Hashed: these keys go to disk and into backups, and a raw
             // serial is often the pad's Bluetooth address.
             // The unique ID first: it comes from GameController and is there
             // on the first read, while the serial arrives only once the HID
             // lineage fills in, so keying on the serial first stored a
             // calibration under one key and looked it up under another.
-            if let unique = identity.uniqueID, !unique.isEmpty { return base + "#" + DeviceSerial.hashed(unique) }
-            if let serial = identity.serial, !serial.isEmpty { return base + "#" + DeviceSerial.hashed(serial) }
+            if let unique = identity.uniqueID, !unique.isEmpty { key = base + "#" + DeviceSerial.hashed(unique) }
+            else if let serial = identity.serial, !serial.isEmpty { key = base + "#" + DeviceSerial.hashed(serial) }
         }
-        return base
+        keyCacheLock.lock()
+        // Entries of pads that went away are dropped as a new one arrives.
+        keyCache = keyCache.filter { $0.value.controller != nil }
+        keyCache[id] = KeyCacheEntry(controller: controller, uniqueID: identity?.uniqueID,
+                                     serial: identity?.serial, key: key)
+        keyCacheLock.unlock()
+        return key
     }
+
+    private struct KeyCacheEntry {
+        weak var controller: GCController?
+        let uniqueID: String?
+        let serial: String?
+        let key: String
+    }
+    private static let keyCacheLock = NSLock()
+    nonisolated(unsafe) private static var keyCache: [ObjectIdentifier: KeyCacheEntry] = [:]
 
     /// The model key inside a per-pad key, or nil for a model key.
     private static func legacyKey(of key: String) -> String? {
@@ -731,7 +766,7 @@ final class ChassisTapService: @unchecked Sendable {
                     if self.generation == myGen { self.isRunning = false }
                     let wanted = !self.reasons.isEmpty
                     self.lock.unlock()
-                    let message = self.lastError ?? "The chassis sensor could not be opened"
+                    let message = self.lastError ?? String(localized: "The chassis sensor could not be opened")
                     if message != self.lastOpenError {
                         self.lastOpenError = message
                         ActivityLog.shared.error("Tap the Mac", message)
@@ -931,18 +966,18 @@ final class ChassisTapService: @unchecked Sendable {
         lastError = nil
         wakeDriver()
         guard let service = findAccelerometer() else {
-            lastError = "No chassis accelerometer is published on this Mac"
+            lastError = String(localized: "No chassis accelerometer is published on this Mac")
             return nil
         }
         defer { IOObjectRelease(service) }
         guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, service) else {
-            lastError = "IOHIDDeviceCreate failed"
+            lastError = String(localized: "IOHIDDeviceCreate failed")
             return nil
         }
         let rc = IOHIDDeviceOpen(dev, 0)
         guard rc == kIOReturnSuccess else {
-            lastError = String(format: "IOHIDDeviceOpen failed (0x%x)%@", rc,
-                               rc == kIOReturnNotPrivileged ? ", not privileged" : rc == kIOReturnExclusiveAccess ? ", exclusive access" : "")
+            lastError = String(format: String(localized: "IOHIDDeviceOpen failed (0x%x)%@"), locale: .current, rc,
+                               rc == kIOReturnNotPrivileged ? String(localized: ", not privileged") : rc == kIOReturnExclusiveAccess ? String(localized: ", exclusive access") : "")
             return nil
         }
         lock.lock(); device = dev; lock.unlock()

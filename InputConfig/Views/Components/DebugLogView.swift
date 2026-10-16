@@ -61,6 +61,9 @@ struct DebugLogView: View {
                 statusBar
             }
         }
+        // One named stop for VoiceOver, so the log's start and end are clear.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Activity Log")
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.2))
@@ -88,13 +91,13 @@ struct DebugLogView: View {
                             isExpanded.toggle()
                         }
                     } label: {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .frame(width: 16)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(isExpanded ? "Collapse log" : "Expand log")
+                    .accessibilityLabel(isExpanded ? String(localized: "Collapse log") : String(localized: "Expand log"))
                 }
 
                 Image(systemName: "terminal.fill")
@@ -102,6 +105,7 @@ struct DebugLogView: View {
                     .foregroundStyle(.green)
                 Text("Log")
                     .font(.subheadline)
+                    .accessibilityAddTraits(.isHeader)
 
                 statusChips
 
@@ -263,22 +267,22 @@ struct DebugLogView: View {
         HStack(spacing: 6) {
             if mappingEngine.isRunning {
                 chip(icon: "play.fill",
-                     text: (mappingEngine.activePreset?.name ?? "Running") + " \u{00B7} \(mappingEngine.currentPollHz) Hz",
+                     text: (mappingEngine.activePreset?.shownName ?? String(localized: "Running")) + ", " + String(localized: "\(mappingEngine.currentPollHz) Hz"),
                      tint: .green)
             } else {
-                chip(icon: "pause.fill", text: "No preset", tint: .secondary)
+                chip(icon: "pause.fill", text: String(localized: "No preset"), tint: .secondary)
             }
             // Every slot with a device, raw HID and Steam pads included,
             // and the name of the one there is, whichever slot it sits in.
             let slots = controllerService.controllerDetails.keys.sorted()
             let count = slots.count
             chip(icon: "gamecontroller.fill",
-                 text: count == 0 ? "No controller"
-                    : (count == 1 ? (slots.first.flatMap { controllerService.controllerNames[$0] } ?? "1 controller")
-                                  : "\(count) controllers"),
+                 text: count == 0 ? String(localized: "No controller")
+                    : (count == 1 ? (slots.first.flatMap { controllerService.controllerNames[$0] } ?? String(localized: "1 controller"))
+                                  : String(localized: "\(count) controllers")),
                  tint: count == 0 ? .secondary : .blue)
             if !accessibility.isTrusted {
-                chip(icon: "exclamationmark.triangle.fill", text: "No Accessibility access", tint: .red)
+                chip(icon: "exclamationmark.triangle.fill", text: String(localized: "No Accessibility access"), tint: .red)
             }
             if log.errorCount > 0 || log.warningCount > 0 {
                 Button {
@@ -293,22 +297,24 @@ struct DebugLogView: View {
                 .help("Show only warnings and errors")
             }
             if !mappingEngine.activeInputs.isEmpty {
-                chip(icon: "bolt.fill", text: "\(mappingEngine.activeInputs.count)", tint: .green)
+                chip(icon: "bolt.fill", text: "\(mappingEngine.activeInputs.count)", tint: .green,
+                     spoken: String(localized: "\(mappingEngine.activeInputs.count) inputs active"))
             }
         }
     }
 
     private var problemsText: String {
         var parts: [String] = []
-        if log.errorCount > 0 { parts.append("\(log.errorCount) error\(log.errorCount == 1 ? "" : "s")") }
-        if log.warningCount > 0 { parts.append("\(log.warningCount) warning\(log.warningCount == 1 ? "" : "s")") }
+        if log.errorCount > 0 { parts.append(log.errorCount == 1 ? String(localized: "1 error") : String(localized: "\(log.errorCount) errors")) }
+        if log.warningCount > 0 { parts.append(log.warningCount == 1 ? String(localized: "1 warning") : String(localized: "\(log.warningCount) warnings")) }
         return parts.joined(separator: ", ")
     }
 
-    private func chip(icon: String, text: String, tint: Color) -> some View {
+    private func chip(icon: String, text: String, tint: Color, spoken: String? = nil) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon)
                 .font(.system(size: 8))
+                .accessibilityHidden(true)
             Text(text)
                 .font(.caption2)
                 .lineLimit(1)
@@ -317,6 +323,9 @@ struct DebugLogView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Capsule().fill(tint.opacity(0.15)))
+        // One element, read with what the number counts.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(spoken ?? text)
     }
 
     // MARK: - Log Content
@@ -338,6 +347,8 @@ struct DebugLogView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
             }
+            // Keys scroll back through the log.
+            .focusable()
             .frame(height: standalone ? nil : logHeight)
             .frame(maxHeight: standalone ? .infinity : nil)
             .background(
@@ -366,10 +377,10 @@ struct DebugLogView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary.opacity(0.5))
             Text(log.entries.isEmpty
-                 ? "Connect a controller or activate a preset and what happens shows up here"
-                 : "No matching log entries")
+                 ? String(localized: "Connect a controller or activate a preset and what happens shows up here")
+                 : String(localized: "No matching log entries"))
                 .font(.caption)
-                .foregroundStyle(.secondary.opacity(0.6))
+                .foregroundStyle(.hint)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
@@ -386,8 +397,8 @@ struct DebugLogView: View {
     /// on the one surface a person goes to when something is wrong.
     private static func levelName(_ level: ActivityLog.Level) -> String? {
         switch level {
-        case .error: return "Error"
-        case .warning: return "Warning"
+        case .error: return String(localized: "Error")
+        case .warning: return String(localized: "Warning")
         default: return nil
         }
     }
@@ -456,7 +467,7 @@ struct DebugLogView: View {
 
     private var statusBar: some View {
         HStack(spacing: 12) {
-            Text("\(filteredLog.count) entries")
+            Text(filteredLog.count == 1 ? String(localized: "1 entry") : String(localized: "\(filteredLog.count) entries"))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
             if showEventsOnly || showProblemsOnly || !filterText.isEmpty {
@@ -490,11 +501,13 @@ struct DebugLogView: View {
     private func saveReport() {
         let panel = NSSavePanel()
         let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.calendar = Calendar(identifier: .gregorian)
         stamp.dateFormat = "yyyy-MM-dd HH.mm"
         panel.nameFieldStringValue = "InputConfig Log \(stamp.string(from: Date())).txt"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
-        panel.message = "One text file with this Mac, the app, what is connected, and the log."
+        panel.message = String(localized: "One text file with this Mac, the app, what is connected, and the log.")
         let text = reportText()
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
@@ -504,8 +517,10 @@ struct DebugLogView: View {
                 // Cleared on schedule: the badge only went away on a redraw,
                 // so it could stay up long after its two seconds.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.1) { savedFlashUntil = nil }
+                AccessibilityNotification.Announcement(String(localized: "Report saved")).post()
             } catch {
                 ActivityLog.shared.error("Log", "The report could not be saved: \(error.localizedDescription)")
+                AccessibilityNotification.Announcement(String(localized: "The report could not be saved. Choose another folder.")).post()
             }
         }
     }
@@ -536,7 +551,7 @@ final class ActivityLogWindowController {
             .appAccessibility()
         let hosting = NSHostingController(rootView: root)
         let w = NSWindow(contentViewController: hosting)
-        w.title = "Activity Log"
+        w.title = String(localized: "Activity Log")
         w.setContentSize(NSSize(width: 860, height: 420))
         w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
         w.titlebarAppearsTransparent = true

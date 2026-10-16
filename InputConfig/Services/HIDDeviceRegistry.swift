@@ -57,6 +57,24 @@ final class HIDDeviceRegistry: ObservableObject {
         case bluetooth = "Bluetooth"
         case usb = "USB"
         case other = "Other"
+
+        /// What the menus show; rawValue stays the stable identifier.
+        var title: String {
+            switch self {
+            case .bluetooth: return rawValue
+            case .usb: return rawValue
+            case .other: return String(localized: "Other")
+            }
+        }
+
+        /// The line under an empty section, one whole sentence per kind.
+        var emptyText: String {
+            switch self {
+            case .bluetooth: return String(localized: "No Bluetooth devices")
+            case .usb: return String(localized: "No USB devices")
+            case .other: return String(localized: "No other devices")
+            }
+        }
     }
 
     /// What a device's primary usage says it is, which decides whether the
@@ -80,13 +98,13 @@ final class HIDDeviceRegistry: ObservableObject {
 
         var label: String {
             switch self {
-            case .gamepad: return "game controller"
-            case .keyboard: return "keyboard, use Keyboard Key input"
-            case .pointer: return "mouse, use Mouse input"
-            case .consumer: return "arrives as media keys: bind Keyboard Key › Play / Pause"
-            case .vendor: return "vendor-specific device"
-            case .config: return "configuration channel"
-            case .other: return "device"
+            case .gamepad: return String(localized: "game controller")
+            case .keyboard: return String(localized: "keyboard, use Keyboard Key input")
+            case .pointer: return String(localized: "mouse, use Mouse input")
+            case .consumer: return String(localized: "arrives as media keys: bind Keyboard Key › Play / Pause")
+            case .vendor: return String(localized: "vendor-specific device")
+            case .config: return String(localized: "configuration channel")
+            case .other: return String(localized: "device")
             }
         }
     }
@@ -107,6 +125,13 @@ final class HIDDeviceRegistry: ObservableObject {
         var isSteamController: Bool {
             vendorID == 0x28DE && [0x1102, 0x1142, 0x1302, 0x1303, 0x1304, 0x1305].contains(productID)
         }
+
+        /// Why the menus cannot connect this device at all, or nil when
+        /// they can. Such a device is listed, disabled, with this reason,
+        /// instead of as the keyboard or mouse its other interfaces suggest.
+        var unreadableReason: String? {
+            HIDDeviceRegistry.unreadableReason(vendorID: vendorID, productID: productID)
+        }
         /// The kinds of the interfaces this device exposes, best first.
         let kinds: [Kind]
 
@@ -125,7 +150,11 @@ final class HIDDeviceRegistry: ObservableObject {
         /// and no gamepad interface reaches presets through the Keyboard Key
         /// or Mouse input types; opening its vendor channel reads the
         /// configuration protocol, not the buttons.
-        var adoptableKind: Kind? { HIDDeviceRegistry.adoptableKind(kinds, name: name) }
+        /// A device listed as unreadable is never opened, so a remembered
+        /// one cannot be reopened through its vendor channel either.
+        var adoptableKind: Kind? {
+            unreadableReason == nil ? HIDDeviceRegistry.adoptableKind(kinds, name: name) : nil
+        }
 
         static func == (l: Entry, r: Entry) -> Bool {
             l.id == r.id && l.name == r.name && l.transport == r.transport && l.kinds == r.kinds
@@ -144,6 +173,17 @@ final class HIDDeviceRegistry: ObservableObject {
 
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var unreadablePads: [UnreadablePad] = []
+
+    /// How many of Logitech's wheels for Xbox GameController's racing wheel
+    /// support is reading right now (GameControllerService sets it). That
+    /// many are left out of the unreadable list, since they work.
+    private(set) var racingWheelsRead = 0
+
+    func setRacingWheelsRead(_ count: Int) {
+        guard count != racingWheelsRead else { return }
+        racingWheelsRead = count
+        refreshUnreadablePads()
+    }
 
     private var manager: IOHIDManager?
     /// Interfaces per entry, in adoption priority order.
@@ -222,6 +262,26 @@ final class HIDDeviceRegistry: ObservableObject {
             unreadable.append(UnreadablePad(id: UInt64(0xFA4E_0100 + unreadable.count), name: name, vendorID: 0x045E, productID: 0x028E, reason: reason))
         }
         let keyboard = { add("Magic Keyboard", 0x004C, 0x029C, .bluetooth, [.keyboard, .consumer], .listed) }
+        // "custom:Name;usb;reading|Name;bt;listed|Name;usb;im|Name;usb;xusb|Name;usb;gip"
+        if scenario.hasPrefix("custom:") {
+            for item in scenario.dropFirst(7).split(separator: "|") {
+                let p = item.split(separator: ";").map(String.init)
+                guard p.count >= 3 else { continue }
+                let transport: Transport = p[1] == "bt" ? .bluetooth : .usb
+                switch p[2] {
+                case "reading": add(p[0], 0x0079, 0x0011, transport, [.gamepad], .reading)
+                case "listed": add(p[0], 0x004C, 0x029C, transport, p[0].lowercased().contains("mouse") ? [.pointer, .vendor] : [.keyboard, .consumer], .listed)
+                case "im": add(p[0], 0x0F0D, 0x0092, transport, [.gamepad], .needsInputMonitoring)
+                case "xusb": pad(p[0], xusb)
+                case "gip": pad(p[0], gip)
+                default: break
+                }
+            }
+            debugFakeStates = states
+            entries = list
+            unreadablePads = unreadable
+            return
+        }
         switch scenario {
         case "basic":
             keyboard(); add("USB Gamepad", 0x0079, 0x0011, .usb, [.gamepad], .reading)
@@ -290,6 +350,22 @@ final class HIDDeviceRegistry: ObservableObject {
         }
     }
 
+    /// The original Steam Controller on Valve's Bluetooth LE firmware. Its
+    /// controller reports over Bluetooth are a different format from the
+    /// wired and dongle ones the helper reads, and nothing here reads them
+    /// yet; what macOS shows of it is only the keyboard and mouse of
+    /// lizard mode.
+    nonisolated static let steamControllerBLEProductID: Int32 = 0x1106
+
+    /// Why a HID device cannot be connected from the menus, or nil when it
+    /// can (see `Entry.unreadableReason`).
+    nonisolated static func unreadableReason(vendorID: Int32, productID: Int32) -> String? {
+        if vendorID == 0x28DE && productID == steamControllerBLEProductID {
+            return String(localized: "Steam Controller in Bluetooth mode: connect it with its USB cable or the wireless dongle to use it in InputConfig")
+        }
+        return nil
+    }
+
     nonisolated static func adoptableKind(_ kinds: [Kind], name: String) -> Kind? {
         if kinds.contains(.gamepad) { return .gamepad }
         if keyboardOrPointer(kinds, name: name) != nil { return nil }
@@ -335,6 +411,9 @@ final class HIDDeviceRegistry: ObservableObject {
             // product key for another Mac (see the backup in SettingsView);
             // writing it here connected every identical pad.
             set.insert(key)
+            // Connected by hand in 1.7, so read the 1.7 way.
+            var mine = Set(UserDefaults.standard.stringArray(forKey: rememberedBy17Key) ?? [])
+            if mine.insert(key).inserted { UserDefaults.standard.set(Array(mine).sorted(), forKey: rememberedBy17Key) }
         } else {
             set.remove(key)
             // Forgetting also drops an older vendor and product key for it.
@@ -346,6 +425,51 @@ final class HIDDeviceRegistry: ObservableObject {
         UserDefaults.standard.set(Array(set).sorted(), forKey: rememberedKey)
     }
 
+    /// The devices connected by hand before 1.7, taken once at the first
+    /// 1.7 launch. One that 1.6 had to read bit by bit keeps that reading,
+    /// so the bit numbers its presets use stay right.
+    static let bitwiseBefore17Key = "InputConfig.handDevicesBefore17"
+
+    /// Taken at start, before anything this version connects is remembered.
+    static func noteHandDevicesBefore17() {
+        let d = UserDefaults.standard
+        if d.object(forKey: bitwiseBefore17Key) == nil {
+            d.set(Array(rememberedPairs()).sorted(), forKey: bitwiseBefore17Key)
+        }
+    }
+
+    /// The devices this version connected by hand. A remembered device not
+    /// in it was connected by 1.6 or earlier, whenever that was: after a
+    /// downgrade and update again, or a 1.6 restore of a 1.7 backup, the
+    /// one-time list above no longer covered it.
+    static let rememberedBy17Key = "InputConfig.handDevicesBy17"
+
+    static func wasRememberedBefore17(_ device: IOHIDDevice) -> Bool {
+        noteHandDevicesBefore17()
+        let d = UserDefaults.standard
+        let vid = (IOHIDDeviceGetProperty(device, kIOHIDVendorIDKey as CFString) as? NSNumber)?.int32Value
+        let pid = (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? NSNumber)?.int32Value
+        let pair = vid.flatMap { v in pid.map { pairKey(vendorID: v, productID: $0) } }
+        let key = rememberKey(for: device)
+        func holds(_ set: Set<String>) -> Bool {
+            (key.map(set.contains) ?? false) || (pair.map(set.contains) ?? false)
+        }
+        if holds(Set(d.stringArray(forKey: bitwiseBefore17Key) ?? [])) { return true }
+        guard isRemembered(device) else { return false }
+        return !holds(Set(d.stringArray(forKey: rememberedBy17Key) ?? []))
+    }
+
+    /// Opens every attached device the hand-connection list names and that
+    /// is not read yet, as its attach does: a backup restore brings the list
+    /// back while the devices are already plugged in.
+    func adoptRememberedNow() {
+        let gamepads = RawHIDGamepadService.shared
+        for entry in entries {
+            guard let best = adoptableDevice(for: entry), Self.isRemembered(best), !gamepads.isOpen(best) else { continue }
+            gamepads.adopt(best, remember: false)
+        }
+    }
+
     static func isRemembered(_ device: IOHIDDevice) -> Bool {
         let set = rememberedPairs()
         guard !set.isEmpty, let key = rememberKey(for: device) else { return false }
@@ -355,6 +479,17 @@ final class HIDDeviceRegistry: ObservableObject {
             return set.contains(pairKey(vendorID: vid, productID: pid))
         }
         return false
+    }
+
+    /// The one name a HID device goes by in the menus, the editor's lists,
+    /// the chip and the sidebar: its product string trimmed, else the
+    /// manufacturer with "device", else the vendor and product IDs.
+    nonisolated static func deviceName(product: String?, manufacturer: String?, vendorID: Int32, productID: Int32) -> String {
+        if let name = product?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        if let maker = manufacturer?.trimmingCharacters(in: .whitespacesAndNewlines), !maker.isEmpty {
+            return String(localized: "\(maker) device")
+        }
+        return String(format: String(localized: "HID device %04X:%04X"), locale: .current, vendorID, productID)
     }
 
     // MARK: - Callbacks
@@ -418,7 +553,7 @@ final class HIDDeviceRegistry: ObservableObject {
         // Griffin PowerMate) declare a Consumer collection but send their
         // buttons and wheels as ordinary fields that never become media keys,
         // so they are connected like a gamepad.
-        if kind == .consumer && (vid == 0x0B33 || vid == 0x077D) { kind = .vendor }
+        if kind == .consumer && (vid == 0x0B33 || vid == 0x077D || vid == 0x05F3) { kind = .vendor }
 
         let manufacturer = (prop(kIOHIDManufacturerKey) as? String)?.trimmingCharacters(in: .whitespaces)
         let serial = (prop(kIOHIDSerialNumberKey) as? String) ?? ""
@@ -430,10 +565,8 @@ final class HIDDeviceRegistry: ObservableObject {
         let entryID = String(format: "%04x:%04x:%@", vid, pid,
                              serial.isEmpty ? String(location) : serial + "@" + String(location))
         let displayName: String = {
-            if isHeadsetBridge { return "Bluetooth headset buttons" }
-            if let name, !name.isEmpty { return name }
-            if let manufacturer, !manufacturer.isEmpty { return "\(manufacturer) device" }
-            return String(format: "HID device %04X:%04X", vid, pid)
+            if isHeadsetBridge { return String(localized: "Bluetooth headset buttons") }
+            return Self.deviceName(product: name, manufacturer: manufacturer, vendorID: vid, productID: pid)
         }()
 
         entryIDByDevice[ObjectIdentifier(device)] = entryID
@@ -467,6 +600,14 @@ final class HIDDeviceRegistry: ObservableObject {
         } else {
             entries.append(entry)
             entries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }
+        // Written to the Activity Log once, as the USB pads that are not
+        // HID are, so a replug does not repeat it.
+        if let reason = entry.unreadableReason {
+            let logKey = Self.pairKey(vendorID: vid, productID: pid)
+            if loggedUnreadable.insert(logKey).inserted {
+                ActivityLog.shared.warning("Devices", "\(displayName) (\(logKey)) cannot be read. \(reason)")
+            }
         }
 
         // A device the user connected by hand before comes back on its own,
@@ -565,6 +706,9 @@ final class HIDDeviceRegistry: ObservableObject {
         let gipReadable = ProcessInfo.processInfo.isOperatingSystemAtLeast(
             OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0))
         var found: [UInt64: UnreadablePad] = [:]
+        // GCRacingWheel gives no USB IDs to match a wheel it reads with its
+        // entry here, so as many Xbox wheels as it reads are left out.
+        var wheelsLeftOut = 0
 
         while case let interface = IOIteratorNext(iterator), interface != 0 {
             defer { IOObjectRelease(interface) }
@@ -576,7 +720,7 @@ final class HIDDeviceRegistry: ObservableObject {
             let proto = intProp(interface, "bInterfaceProtocol") ?? -1
             let isXUSB = subclass == 0x5D
             let isGIP = subclass == 0x47 && proto == 0xD0
-            guard isXUSB || (isGIP && !gipReadable) else { continue }
+            guard isXUSB || isGIP else { continue }
 
             var parent: io_registry_entry_t = 0
             guard IORegistryEntryGetParentEntry(interface, kIOServicePlane, &parent) == KERN_SUCCESS else { continue }
@@ -587,15 +731,27 @@ final class HIDDeviceRegistry: ObservableObject {
 
             let vid = Int32(intProp(parent, "idVendor") ?? intProp(interface, "idVendor") ?? 0)
             let pid = Int32(intProp(parent, "idProduct") ?? intProp(interface, "idProduct") ?? 0)
+            // Logitech's Xbox wheels speak the Xbox protocol, which Game
+            // Controller reads for pads on macOS 15 and later but never as a
+            // pad: listed on every version, with a reason that fits, unless
+            // its racing wheel support is reading the wheel.
+            let xboxWheel = isGIP && vid == 0x046D && [0xC261, 0xC262, 0xC26D, 0xC26E].contains(Int(pid))
+            if isGIP && gipReadable && !xboxWheel { continue }
+            if xboxWheel && wheelsLeftOut < racingWheelsRead {
+                wheelsLeftOut += 1
+                continue
+            }
             let productName = ["USB Product Name", "kUSBProductString"].lazy.compactMap {
                 IORegistryEntryCreateCFProperty(parent, $0 as CFString, kCFAllocatorDefault, 0)?
                     .takeRetainedValue() as? String
             }.first
             let name = productName.flatMap { $0.isEmpty ? nil : $0 }
-                ?? String(format: "USB controller %04X:%04X", vid, pid)
-            let reason = isGIP
-                ? "Xbox One or Series pad: update to macOS 15 to use it over USB, or use Bluetooth"
-                : "Xbox 360 style pad: macOS cannot read it; if the pad has another mode (DInput, Switch) or Bluetooth, use that"
+                ?? String(format: String(localized: "USB controller %04X:%04X"), locale: .current, vid, pid)
+            let reason = xboxWheel
+                ? String(localized: "Logitech wheel for Xbox: macOS cannot read it in this mode; the PlayStation and PC version of the wheel works")
+                : isGIP
+                ? String(localized: "Xbox One or Series pad: update to macOS 15 to use it over USB, or use Bluetooth")
+                : String(localized: "Xbox 360 style pad: macOS cannot read it; if the pad has another mode (DInput, Switch) or Bluetooth, use that")
             found[parentID] = UnreadablePad(id: parentID, name: name, vendorID: vid, productID: pid, reason: reason)
 
             let logKey = HIDDeviceRegistry.pairKey(vendorID: vid, productID: pid)

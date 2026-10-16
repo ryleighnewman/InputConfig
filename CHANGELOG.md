@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.7
+
+- InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese
+- The Live Visualizer's keyboard takes the shape of your keyboard, ANSI, ISO or JIS, and labels every key with what it types in your input source, so AZERTY, QWERTZ, Dvorak, Cyrillic, Arabic and every other layout macOS has show as printed; key names in the editor and the Live Visualizer follow your keyboard layout too; rows still store each key by its place, so presets work the same on every layout
+- The keyboard map shows the navigation keys and number pad of Apple's Magic Keyboard with Numeric Keypad when one is connected or a row uses them, with every key lined up with the rows beside it; pick the keyboard map's shape, the layout its keys are labeled in, and when the number pad shows from the menu above the map
+- In Arabic and Hebrew the app reads right to left, while the drawings of keyboards, controllers, touchpads, and screens keep their real left and right
+- Starting a preset by hand that keeps the pointer off the screen edges, recenters or hides it, or takes over mouse buttons first says so and lists every way to stop it, from your own Emergency Stop settings; check Don't show this again to skip it for that preset
+- Game presets no longer pull the pointer to the middle of the screen or hide it, so inventories and menus work with the stick again; the games lock and hide the mouse themselves while you play. The built-in Minecraft preset and game presets from the Smart Preset Maker are updated
+- The built-in Minecraft preset also sprints with the left stick pushed all the way forward; a Minecraft preset already in your library offers just that in the editor, to add or turn down
+- Flight sticks, wheels, pedals and button boxes are read in full from what they report: every flight and driving axis, hat switches that report an angle, and buttons sent as a list, numbered after the controls they already had so existing presets keep working; every axis, hat and button such a device reports can be scanned, added as a row, and clicked in the Live Visualizer, including a wheel's steering and pedals and a flight stick's twist and throttle
+- Rests at one end, a new row option for pedals, throttles and levers, reads the whole travel from rest to full; Scan turns it on when the control starts from an end
+- Set Up Full Gyro, on any motion row, adds the rows for gyro aiming, tilting to move with the arrow keys, or shakes and jabs, and skips rows the group already has
+- New app actions turn motion on and off with one press, or let the motion rows work only while a button is held, from any input, a key or a foot pedal included
+- Level is how you hold it, a new option for tilt and pointer rows, measures the lean from your grip instead of from lying flat
+- Motion from the 2015 Steam Controller and from a single Joy-Con now reaches presets, Yaw angle rows work, the 2026 Steam Controller can be re-zeroed, and a stalled Steam Controller link no longer holds a motion row's key
+- Gyro aiming is steadier: the pointer no longer creeps while the controller is still, a stalled sensor stops it, and each controller remembers which way its tilt runs
+- Controllers that need Input Monitoring offer to turn it on from both device menus, and are read as soon as it is allowed
+- Groups set to different controllers never share one pad, a pad picked from the USB or Bluetooth list is followed by name, and Use the connected controller switches to the pad that is here
+- Switching a controller off in the Live Visualizer lets go of every key, click and note it was holding
+- The Globe key can be bound as an input, tapped on its own or held as fn
+- MIDI: a CC output can send a set value on press, Scan picks up aftertouch from a key already held, Any channel pitch bend follows the bend being played, All Notes Off and All Sound Off release held note rows, Aftertouch rows no longer offer a direction that silenced them, and Reconnect MIDI Sources lets go of notes and pedals held by a source that went quiet
+- A two-finger click on a PlayStation touchpad no longer also counts as a two-finger tap
+- Rows keep options written by a newer version of InputConfig when the preset is saved here
+- Opening a second copy of InputConfig now says a copy is already running, instead of closing at once
+- Stick regions are rings: an area between two distances from the center and two directions, so pushing a stick past half way up is one button and all the way up another
+- Triggers and single axes take bands, a range of their travel such as the last third of a trigger pull, each one a button
+- A stick row fires by a direction or by a region, picked side by side in its direction menu; while the stick is inside a region, that region's row fires and the stick's direction rows wait, unless the region shares the stick (regions in presets made before 1.7 keep sharing)
+- A region row's Options name the direction rows and the other regions it overlaps, and say which rows fire where they meet
+- Stick gestures: flicks of a stick in order, such as pulling it straight back twice, fire a row; pick the flicks or record them by doing them; with Quick flicks only on, a push held out never counts
+- A stick or trigger row's Options show it live, with the deadzone, the part of the stick that fires the row and its regions, following the sliders as they move; click it for the full view
+- The deadzone sliders are now Deadzone and Full push at, each with a line on what it does; they take effect on the row as you move them, and the rows behind the sheet light by them before you save
+- The editor has Name, Tag, Activate and the Emergency Stop at the top, and scrolled down, Activate and the Emergency Stop stay in one row beside the preset's name; a preset that is on keeps working while you edit, with a warning that recommends turning it off
+- A new showcase and built-in preset, Stick Zones & Gestures, shows rings, bands, regions that share the stick, and gestures
+- The Logitech G920 and G923 for Xbox are read through macOS racing wheel support, numbered like the G29 so wheel presets work on them, and show with their own button names and the shifter's gears wherever controllers are listed; InputConfig holds the wheel only while a preset, the editor or the Live Visualizer reads it
+- Stream Deck +: each of its four dials can be pressed and turned either way, and its touch strip tapped, long pressed and swiped, each one a button after the eight keys
+- Two-port adapters that send each port on its own read the second port's stick too
+- A Steam Controller connected over Bluetooth is listed with how to connect it, instead of being taken for a keyboard
+- Knobs, dials and wheels that report turns rather than positions are read as turns, and a centered slider or dial is no longer taken for a trigger
+- Some USB controllers that read nothing, because of how their descriptor numbers its reports, now work
+- A controller with no drawing of its own is named the same way everywhere and lists the buttons it really has; the Stream Deck + files its keys, dials and touch strip under their own headings
+- A controller that drops and reconnects takes its old slot back, a pinned group keeps its toggles and held keys when its controller only moves slots, and each controller's connected time survives another one connecting
+- The editor clears options an input type cannot use when you change it, no longer offers held actions on taps and gestures that are never held, a direction row says which regions it waits in, and search finds mouse buttons, macro steps, Type Text and Activate Preset targets by what the row shows
+- Long dropdowns in the editor, and the Live Visualizer's controller menu, start with Search: type to find any choice in them, nested ones too, then pick it with the arrow keys and Return
+- Turning on Vibrate, Speak a phrase, a macro, or a held or double tap action from a row's output menu opens Options with that area glowing for a moment, so it is easy to find
+- A section's plus now sits under its last row, Hat in the input type menu says it is a D-pad or thumb switch, and a region row's menu lists only its own stick or trigger and names its region beside a color dot that shows it in the Regions card
+- Each device group in the editor ends with a Regions card listing that device's touchpad, trackpads, sticks, triggers and screen, where regions are drawn, moved and resized, right-clicked to rename, duplicate or delete, and each part's rows are a click away; every Edit regions button opens it there
+- Undo and Redo in the editor take back regions drawn, moved, resized or renamed too
+- The touchpad needs no calibration, so Calibrate Touchpad is gone: macOS reports the whole pad
+- A Steam Controller's left and right trackpads each have regions of their own
+- A stick or trigger direction row can wait for a region, set in its Options, and fire only while the stick is inside it
+- The sidebar can be searched and sorted by name, or by when presets were edited or made; a new library starts A to Z and an existing one keeps its own order
+- The Presets menu holds every folder and Trash action, so the library can be organized from the keyboard, VoiceOver or Voice Control; Next Preset, Previous Preset and the menu bar's list follow the sidebar's order, a zoomed map in the Live Visualizer pans from its right-click menu, and a click anywhere on a card's header opens or closes it
+- The Quick Start tour is shorter and friendlier, shows regions, opens Help and the motion menu for you, and its pointer reaches the toolbar and the editor
+- Tap the Mac says on its row, in its Options, and on its home card that it works only on some MacBooks
+- The Live Visualizer draws stick regions inside the sticks and trigger bands inside the triggers, and clicking a stick or trigger shows its regions larger
+- The Live Visualizer's 3D controller now turns, tips and leans the way the controller does
+- The Smart Preset Maker offers gyro aim on Switch Pro, Joy-Con and Steam Controllers, sprinting with the left stick pushed all the way and walking quietly on a light push, keeps a game's Steam launch link, offers trigger rumble only where a trigger clicks, and names your controller's buttons in fighting and racing notes
+- Open URL no longer opens files, Shortcuts, scripts, network shares or calls, the import review says what each link really does, and failed actions are counted in the activity log rather than written out
+- Sheets and the main window fit a 13-inch display at the largest text size and a short window too, the View, Window and Presets menus lost their duplicates and gained separators, and the app uses less CPU with a controller connected and scrolls smoothly with One-Stick Driving open
+- The Live Visualizer lights the D-pad key line and the 8BitDo Micro's D-pad, shows the latest MIDI pitch bend and program change, and puts a PlayStation pad's light bar color between L2 and R2
+- VoiceOver and Voice Control reach every region in the Regions card and the Live Visualizer, and hear search results and each jump between a row and its regions
+- Restoring a backup from before 1.5 keeps its stick regions, and Quit and Restart Now keep a field you were still typing in
+
 ## 1.6
 
 - Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles
@@ -20,7 +83,7 @@
 - The Live Visualizer lists what each control does in a key down both sides of the drawing, each caption joined to its control by a line that never crosses another, so no label sits on a control or another label
 - Drag the Live Visualizer map to move it around inside its panel; where you leave it and its zoom are kept for each preset, and Reset View puts it back
 - The Live Visualizer marks every deadzone a group's rows set, on sticks, triggers, pedals, wheels and the gyro, the way the deadzone calibration does, and triggers are taller so the percent reads clearly
-- Click a control, or any part of the Mouse, Keyboard, Touchpad, Screen or stick zone map, in the Live Visualizer to see what it does and jump to its rows, and draw a screen region or open Touchpad Setup from there
+- Click a control, or any part of the Mouse, Keyboard, Touchpad, Screen or stick region map, in the Live Visualizer to see what it does and jump to its rows, and draw a screen region or open Touchpad Setup from there
 - Light bar color as an output: any input can turn a DualSense or DualShock 4 light a color while held, set a color that stays, or switch the rainbow on and off, and a preset's rainbow runs at its own speed
 - Share, Create, and Capture keep their macOS screenshot and recording shortcut unless the running preset uses them
 - The controller emergency stop is a hold of Back and Start together, with a buzz a second in, and the same hold starts the preset again; on an Access Controller it is socket 7, and an Emergency Stop button under Activate and Edit shows the shortcut
@@ -30,7 +93,7 @@
 - A row's hold and double tap each get a full second action at the bottom of Options: keys and shortcuts, clicks, typed text, MIDI, system functions, several outputs at once, and on a hold, pointer movement and scrolling
 - Macro steps can send keyboard shortcuts, a row can repeat a held key like a real keyboard, and a repeating macro waits between passes
 - Choose how long Scan waits, up to until canceled, and hear when it times out
-- Type a screen region's, stick zone's or touchpad zone's place and size, and a fixed click point's X and Y, instead of only dragging
+- Type a screen region's, stick region's or touchpad region's place and size, and a fixed click point's X and Y, instead of only dragging
 - Undo in the editor still steps back after Save and opening the editor again, and Previous versions lists a change the moment it is saved
 - Every stick row shows its deadzone, and Adjust live sets it while you watch the stick
 - Pointer speed and Scroll speed sliders on the preset page, Ramp-up on pointer rows, a D-pad that can take one direction at a time, and the pointer stops the moment you let go of the stick

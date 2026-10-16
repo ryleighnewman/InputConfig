@@ -93,8 +93,10 @@ struct TipJarView: View {
             Image(systemName: "heart.fill")
                 .font(.system(size: 36))
                 .iconTint(.pink)
+                .accessibilityHidden(true)
             Text("Donate to InputConfig")
                 .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             Text("InputConfig is free forever and proudly open source. If it makes your setup better, a tip helps fund continued development.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -106,6 +108,7 @@ struct TipJarView: View {
                 Image(systemName: "info.circle.fill")
                     .foregroundStyle(.pink.opacity(0.7))
                     .font(.caption2)
+                    .accessibilityHidden(true)
                 Text("Tips are completely optional. InputConfig is free with no locked features. Tips simply support continued development and future updates.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -131,8 +134,8 @@ struct TipJarView: View {
                 Text("Make this recurring monthly")
                     .font(.body)
                 Text(recurring
-                     ? "Tips charge automatically each month until canceled."
-                     : "Switch on to support monthly instead of one time.")
+                     ? LocalizedStringKey("Tips charge automatically each month until canceled.")
+                     : LocalizedStringKey("Switch on to support monthly instead of one time."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -173,6 +176,7 @@ struct TipJarView: View {
                 tierIcon(for: product.id)
                     .font(.title3)
                     .frame(width: 26)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(product.displayName)
@@ -203,12 +207,14 @@ struct TipJarView: View {
             .innerWell()
         }
         .buttonStyle(.plain)
+        // Voice Control answers to the product's name alone.
+        .accessibilityInputLabels([Text(product.displayName)])
         .disabled(service.purchaseInProgress != nil)
     }
 
     private func priceLabel(for product: Product) -> String {
         if product.type == .autoRenewable {
-            return "\(product.displayPrice)/mo"
+            return String(localized: "\(product.displayPrice)/mo")
         }
         return product.displayPrice
     }
@@ -268,7 +274,10 @@ struct TipJarView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "hands.sparkles.fill")
                         .iconTint(.yellow)
-                    Text("You've tipped \(service.totalTipsCount) time\(service.totalTipsCount == 1 ? "" : "s"). Thank you.")
+                        .accessibilityHidden(true)
+                    Text(service.totalTipsCount == 1
+                         ? String(localized: "You've tipped 1 time. Thank you.")
+                         : String(localized: "You've tipped \(service.totalTipsCount) times. Thank you."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -299,6 +308,8 @@ struct TipJarView: View {
                 }
                 .buttonStyle(.solidSecondary)
                 .disabled(isRestoring)
+                .accessibilityLabel("Restore Purchases")
+                .accessibilityValue(isRestoring ? String(localized: "In progress") : "")
 
                 if service.activeSubscription != nil {
                     Button("Manage Subscription") {
@@ -310,7 +321,9 @@ struct TipJarView: View {
                 Spacer()
 
                 Button("Close") {
+                    // In its own window there is no presentation to dismiss.
                     dismiss()
+                    TipJarWindowController.shared.close()
                 }
                 .buttonStyle(.solidSecondary)
                 .keyboardShortcut(.cancelAction)
@@ -325,6 +338,7 @@ struct TipJarView: View {
             Image(systemName: "heart.circle")
                 .font(.title)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             // Only a copy that is certainly not from the App Store (Developer
             // ID) is told so; a store copy not recognized yet (a fresh
             // install, TestFlight, App Review) gets Retry.
@@ -365,7 +379,7 @@ struct TipJarView: View {
             // charge that vanished, and a Restore that does nothing visible
             // is a routine App Review rejection.
             if service.lastError == nil {
-                service.lastError = "The tip did not go through: \(error.localizedDescription)"
+                service.lastError = String(localized: "The tip did not go through: \(error.localizedDescription)")
             }
             await service.loadProducts()
         }
@@ -386,6 +400,8 @@ final class TipJarWindowController {
 
     private init() {}
 
+    func close() { window?.close() }
+
     func show() {
         if let window = window {
             window.makeKeyAndOrderFront(nil)
@@ -397,7 +413,7 @@ final class TipJarWindowController {
             .reduceMotionFriendly()
             .appAccessibility())
         let newWindow = NSWindow(contentViewController: hosting)
-        newWindow.title = "Donate to InputConfig"
+        newWindow.title = String(localized: "Donate to InputConfig")
         newWindow.setContentSize(NSSize(width: 520, height: 640))
         // A standard, opaque title bar, like every other window in the app.
         // The transparent-title-bar arrangement relied on the content's

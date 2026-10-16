@@ -721,7 +721,7 @@ final class InProcessLightWriter: @unchecked Sendable {
                 bufDualSenseUSB[45] = touchLight ? red : 0
                 bufDualSenseUSB[46] = touchLight ? green : 0
                 bufDualSenseUSB[47] = touchLight ? blue : 0
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x02, bufDualSenseUSB, bufDualSenseUSB.count)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x02, bufDualSenseUSB, bufDualSenseUSB.count)
             } else if isDS && d.isBT {
                 // 78-byte BT report: [0]=0x31, [1]=sequence<<4, [2]=0x10 tag,
                 // then the SAME payload as USB starting at [3]. The old code
@@ -750,7 +750,7 @@ final class InProcessLightWriter: @unchecked Sendable {
                 let crc = Self.crc32(prefix: [0xA2], buffer: bufDualSenseBT, range: 0..<74)
                 bufDualSenseBT[74] = UInt8(crc & 0xFF); bufDualSenseBT[75] = UInt8((crc >> 8) & 0xFF)
                 bufDualSenseBT[76] = UInt8((crc >> 16) & 0xFF); bufDualSenseBT[77] = UInt8((crc >> 24) & 0xFF)
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x31, bufDualSenseBT, bufDualSenseBT.count)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x31, bufDualSenseBT, bufDualSenseBT.count)
             } else if Self.ds4PIDs.contains(d.pid) && !d.isBT {
                 bufDS4USB[0] = 0x05
                 // Bit 0 rumble, bit 1 LED color, bit 2 LED blink: claim
@@ -762,7 +762,7 @@ final class InProcessLightWriter: @unchecked Sendable {
                 bufDS4USB[8] = touchLight ? blue : 0
                 bufDS4USB[4] = touchMotors ? weak : 0
                 bufDS4USB[5] = touchMotors ? strong : 0
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x05, bufDS4USB, bufDS4USB.count)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x05, bufDS4USB, bufDS4USB.count)
             } else if Self.ds4PIDs.contains(d.pid) && d.isBT {
                 // 78-byte DS4 BT report as SDL_hidapi_ps4.c sends it:
                 // [0]=0x11, [1]=0xC0 (HID + CRC), [3] the effects this write
@@ -780,7 +780,7 @@ final class InProcessLightWriter: @unchecked Sendable {
                 let crc = Self.crc32(prefix: [0xA2], buffer: bufDS4BT, range: 0..<74)
                 bufDS4BT[74] = UInt8(crc & 0xFF); bufDS4BT[75] = UInt8((crc >> 8) & 0xFF)
                 bufDS4BT[76] = UInt8((crc >> 16) & 0xFF); bufDS4BT[77] = UInt8((crc >> 24) & 0xFF)
-                IOHIDDeviceSetReport(d.dev, kIOHIDReportTypeOutput, 0x11, bufDS4BT, bufDS4BT.count)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x11, bufDS4BT, bufDS4BT.count)
             }
         }
     }

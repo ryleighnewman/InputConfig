@@ -34,21 +34,21 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .key: return "Keyboard Key"
-        case .typeText: return "Type Text"
-        case .appAction: return "App Action"
-        case .absoluteVolume: return "System Volume (follows input)"
-        case .systemAction: return "System Function"
-        case .lightBar: return "Light Bar Color"
-        case .mouseButton: return "Mouse Button"
-        case .mouseMotion: return "Mouse Motion"
-        case .mouseWheel: return "Mouse Wheel"
-        case .mouseWheelStep: return "Mouse Wheel Step"
-        case .midiNote: return "MIDI Note"
-        case .midiCC: return "MIDI CC (Control Change)"
-        case .midiPitchBend: return "MIDI Pitch Bend"
-        case .midiProgramChange: return "MIDI Program Change"
-        case .midiTransport: return "MIDI Transport"
+        case .key: return String(localized: "Keyboard Key")
+        case .typeText: return String(localized: "Type Text")
+        case .appAction: return String(localized: "App Action")
+        case .absoluteVolume: return String(localized: "System Volume (follows input)")
+        case .systemAction: return String(localized: "System Function")
+        case .lightBar: return String(localized: "Light Bar Color")
+        case .mouseButton: return String(localized: "Mouse Button")
+        case .mouseMotion: return String(localized: "Mouse Motion")
+        case .mouseWheel: return String(localized: "Mouse Wheel")
+        case .mouseWheelStep: return String(localized: "Mouse Wheel Step")
+        case .midiNote: return String(localized: "MIDI Note")
+        case .midiCC: return String(localized: "MIDI CC (Control Change)")
+        case .midiPitchBend: return String(localized: "MIDI Pitch Bend")
+        case .midiProgramChange: return String(localized: "MIDI Program Change")
+        case .midiTransport: return String(localized: "MIDI Transport")
         }
     }
 
@@ -71,9 +71,9 @@ enum MIDITransport: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .start: return "Start"
-        case .stop: return "Stop"
-        case .continue: return "Continue"
+        case .start: return String(localized: "Start")
+        case .stop: return String(localized: "Stop")
+        case .continue: return String(localized: "Continue")
         }
     }
 
@@ -126,31 +126,31 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .volumeUp: return "Volume Up"
-        case .volumeDown: return "Volume Down"
-        case .muteToggle: return "Mute / Unmute"
-        case .playPause: return "Play / Pause"
-        case .nextTrack: return "Next Track"
-        case .previousTrack: return "Previous Track"
-        case .brightnessUp: return "Brightness Up"
-        case .brightnessDown: return "Brightness Down"
-        case .keyboardBrightnessUp: return "Keyboard Brightness Up"
-        case .keyboardBrightnessDown: return "Keyboard Brightness Down"
-        case .startDictation: return "Start Dictation"
-        case .speakSelection: return "Speak Selection"
-        case .zoomToggle: return "Zoom On / Off"
-        case .zoomIn: return "Zoom In"
-        case .zoomOut: return "Zoom Out"
-        case .missionControl: return "Mission Control"
+        case .volumeUp: return String(localized: "Volume Up")
+        case .volumeDown: return String(localized: "Volume Down")
+        case .muteToggle: return String(localized: "Mute / Unmute")
+        case .playPause: return String(localized: "Play / Pause")
+        case .nextTrack: return String(localized: "Next Track")
+        case .previousTrack: return String(localized: "Previous Track")
+        case .brightnessUp: return String(localized: "Brightness Up")
+        case .brightnessDown: return String(localized: "Brightness Down")
+        case .keyboardBrightnessUp: return String(localized: "Keyboard Brightness Up")
+        case .keyboardBrightnessDown: return String(localized: "Keyboard Brightness Down")
+        case .startDictation: return String(localized: "Start Dictation")
+        case .speakSelection: return String(localized: "Speak Selection")
+        case .zoomToggle: return String(localized: "Zoom On / Off")
+        case .zoomIn: return String(localized: "Zoom In")
+        case .zoomOut: return String(localized: "Zoom Out")
+        case .missionControl: return String(localized: "Mission Control")
         case .launchpad:
-            if #available(macOS 26, *) { return "Apps (Launchpad)" }
-            return "Launchpad"
-        case .spotlight: return "Spotlight Search"
-        case .lockScreen: return "Lock Screen"
-        case .screenshotMenu: return "Screenshot Menu"
-        case .runShortcut: return "Run Siri Shortcut"
-        case .openApp: return "Open App"
-        case .openURL: return "Open URL"
+            if #available(macOS 26, *) { return String(localized: "Apps (Launchpad)") }
+            return String(localized: "Launchpad")
+        case .spotlight: return String(localized: "Spotlight Search")
+        case .lockScreen: return String(localized: "Lock Screen")
+        case .screenshotMenu: return String(localized: "Screenshot Menu")
+        case .runShortcut: return String(localized: "Run Siri Shortcut")
+        case .openApp: return String(localized: "Open App")
+        case .openURL: return String(localized: "Open URL")
         }
     }
 
@@ -193,14 +193,14 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     /// Section header the kind appears under in the output picker.
     var category: String {
         switch self {
-        case .volumeUp, .volumeDown, .muteToggle: return "Sound"
-        case .playPause, .nextTrack, .previousTrack: return "Media"
+        case .volumeUp, .volumeDown, .muteToggle: return String(localized: "Sound")
+        case .playPause, .nextTrack, .previousTrack: return String(localized: "Media")
         case .brightnessUp, .brightnessDown,
-             .keyboardBrightnessUp, .keyboardBrightnessDown: return "Display"
+             .keyboardBrightnessUp, .keyboardBrightnessDown: return String(localized: "Display")
         case .startDictation, .speakSelection,
-             .zoomToggle, .zoomIn, .zoomOut: return "Accessibility"
-        case .missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu: return "Mac"
-        case .runShortcut, .openApp, .openURL: return "Automation"
+             .zoomToggle, .zoomIn, .zoomOut: return String(localized: "Accessibility")
+        case .missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu: return String(localized: "Mac")
+        case .runShortcut, .openApp, .openURL: return String(localized: "Automation")
         }
     }
 
@@ -209,11 +209,11 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     var requirementNote: String? {
         switch self {
         case .startDictation:
-            return "Needs Dictation switched on in System Settings, Keyboard"
+            return String(localized: "Needs Dictation switched on in System Settings, Keyboard")
         case .speakSelection:
-            return "Needs Accessibility, Spoken Content, Speak selection switched on"
+            return String(localized: "Needs Accessibility, Spoken Content, Speak selection switched on")
         case .zoomToggle, .zoomIn, .zoomOut:
-            return "Needs Accessibility, Zoom, Use keyboard shortcuts to zoom switched on"
+            return String(localized: "Needs Accessibility, Zoom, Use keyboard shortcuts to zoom switched on")
         default:
             return nil
         }
@@ -221,14 +221,14 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
 
     /// Picker order, grouped by category.
     static let grouped: [(category: String, kinds: [SystemActionKind])] = [
-        ("Sound", [.volumeUp, .volumeDown, .muteToggle]),
-        ("Media", [.playPause, .nextTrack, .previousTrack]),
-        ("Display", [.brightnessUp, .brightnessDown,
+        (String(localized: "Sound"), [.volumeUp, .volumeDown, .muteToggle]),
+        (String(localized: "Media"), [.playPause, .nextTrack, .previousTrack]),
+        (String(localized: "Display"), [.brightnessUp, .brightnessDown,
                      .keyboardBrightnessUp, .keyboardBrightnessDown]),
-        ("Accessibility", [.startDictation, .speakSelection,
+        (String(localized: "Accessibility"), [.startDictation, .speakSelection,
                            .zoomToggle, .zoomIn, .zoomOut]),
-        ("Mac", [.missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu]),
-        ("Automation", [.runShortcut, .openApp, .openURL]),
+        (String(localized: "Mac"), [.missionControl, .launchpad, .spotlight, .lockScreen, .screenshotMenu]),
+        (String(localized: "Automation"), [.runShortcut, .openApp, .openURL]),
     ]
 }
 
@@ -255,9 +255,9 @@ enum LightOutputMode: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .whileHeld: return "While held"
-        case .set: return "Set and keep"
-        case .rainbowToggle: return "Rainbow on / off"
+        case .whileHeld: return String(localized: "While held")
+        case .set: return String(localized: "Set and keep")
+        case .rainbowToggle: return String(localized: "Rainbow on / off")
         }
     }
 }
@@ -265,16 +265,16 @@ enum LightOutputMode: String, Codable, CaseIterable, Identifiable {
 extension RGBLightColor {
     /// The named colors the preset's light bar picker offers, in its order.
     static let namedSwatches: [(name: String, color: RGBLightColor)] = [
-        ("Red", RGBLightColor(r: 255, g: 0, b: 0)),
-        ("Orange", RGBLightColor(r: 255, g: 89, b: 0)),
-        ("Yellow", RGBLightColor(r: 255, g: 179, b: 0)),
-        ("Green", RGBLightColor(r: 0, g: 255, b: 0)),
-        ("Cyan", RGBLightColor(r: 0, g: 255, b: 255)),
-        ("Blue", RGBLightColor(r: 0, g: 0, b: 255)),
-        ("Purple", RGBLightColor(r: 128, g: 0, b: 255)),
-        ("Pink", RGBLightColor(r: 255, g: 0, b: 153)),
-        ("White", RGBLightColor(r: 255, g: 255, b: 255)),
-        ("Off", RGBLightColor(r: 0, g: 0, b: 0)),
+        (String(localized: "Red"), RGBLightColor(r: 255, g: 0, b: 0)),
+        (String(localized: "Orange"), RGBLightColor(r: 255, g: 89, b: 0)),
+        (String(localized: "Yellow"), RGBLightColor(r: 255, g: 179, b: 0)),
+        (String(localized: "Green"), RGBLightColor(r: 0, g: 255, b: 0)),
+        (String(localized: "Cyan"), RGBLightColor(r: 0, g: 255, b: 255)),
+        (String(localized: "Blue"), RGBLightColor(r: 0, g: 0, b: 255)),
+        (String(localized: "Purple"), RGBLightColor(r: 128, g: 0, b: 255)),
+        (String(localized: "Pink"), RGBLightColor(r: 255, g: 0, b: 153)),
+        (String(localized: "White"), RGBLightColor(r: 255, g: 255, b: 255)),
+        (String(localized: "Off"), RGBLightColor(r: 0, g: 0, b: 0)),
     ]
 
     /// The swatch name this color matches, or the nearest one for a
@@ -284,7 +284,7 @@ extension RGBLightColor {
             let dr = Int(r) - Int(c.r), dg = Int(g) - Int(c.g), db = Int(b) - Int(c.b)
             return dr * dr + dg * dg + db * db
         }
-        return Self.namedSwatches.min { distance($0.color) < distance($1.color) }?.name ?? "Custom"
+        return Self.namedSwatches.min { distance($0.color) < distance($1.color) }?.name ?? String(localized: "Custom")
     }
 
     /// True when the color is exactly one of the named swatches.
@@ -298,8 +298,8 @@ enum MouseAxis: Int, Codable, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .horizontal: return "Horizontal"
-        case .vertical: return "Vertical"
+        case .horizontal: return String(localized: "Horizontal")
+        case .vertical: return String(localized: "Vertical")
         }
     }
 }
@@ -335,10 +335,10 @@ enum MouseDirection: String, Codable, CaseIterable {
     /// For mouse motion display
     func axisDirectionName(axis: MouseAxis) -> String {
         switch (axis, self) {
-        case (.vertical, .negative): return "Up"
-        case (.horizontal, .positive): return "Right"
-        case (.vertical, .positive): return "Down"
-        case (.horizontal, .negative): return "Left"
+        case (.vertical, .negative): return String(localized: "Up")
+        case (.horizontal, .positive): return String(localized: "Right")
+        case (.vertical, .positive): return String(localized: "Down")
+        case (.horizontal, .negative): return String(localized: "Left")
         }
     }
 }
@@ -357,6 +357,13 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
     /// cursor while the input is held, so the controller can be re-aimed
     /// without dragging the view. Nothing happens on release.
     case holdMuteMotion = "mutemotion"
+    /// Motion on and off by a press: one press stops the motion rows (the
+    /// pointer stays where it is), the next starts them again from where
+    /// the controller is then. Starts on with every preset.
+    case toggleMotion = "togglemotion"
+    /// Motion only while held: the motion rows move nothing unless this is
+    /// held, the way Steam Input's "gyro on while touching" works.
+    case holdEnableMotion = "holdmotion"
     /// Stop everything now: halt the engine, release every held key, button
     /// and note, and deactivate the preset. Never starts anything.
     case emergencyStop = "estop"
@@ -373,15 +380,35 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .activatePreset: return "Activate Preset"
-        case .nextPreset: return "Next Preset (in this folder)"
-        case .previousPreset: return "Previous Preset (in this folder)"
-        case .deactivate: return "Deactivate"
-        case .togglePauseOutputs: return "Pause / Resume Outputs"
-        case .holdMuteMotion: return "Pause Motion While Held"
-        case .emergencyStop: return "Emergency Stop (release everything)"
-        case .rezeroMotion: return "Re-zero Motion (this controller)"
-        case .centerPointer: return "Center Pointer on Screen"
+        case .activatePreset: return String(localized: "Activate Preset")
+        case .nextPreset: return String(localized: "Next Preset (in this folder)")
+        case .previousPreset: return String(localized: "Previous Preset (in this folder)")
+        case .deactivate: return String(localized: "Deactivate")
+        case .togglePauseOutputs: return String(localized: "Pause / Resume Outputs")
+        case .holdMuteMotion: return String(localized: "Pause Motion While Held")
+        case .toggleMotion: return String(localized: "Motion On / Off")
+        case .holdEnableMotion: return String(localized: "Motion Only While Held")
+        case .emergencyStop: return String(localized: "Emergency Stop (release everything)")
+        case .rezeroMotion: return String(localized: "Re-zero Motion (this controller)")
+        case .centerPointer: return String(localized: "Center Pointer on Screen")
+        }
+    }
+}
+
+extension OutputAction {
+    /// Whether a row's outputs form a Command or Control shortcut, which
+    /// sends its letter and punctuation keys by character.
+    static func isShortcut(_ outputs: [OutputAction]) -> Bool {
+        outputs.contains { $0.type == .key && KeyCodeMap.shortcutModifierCodes.contains($0.keyCode ?? -1) }
+    }
+
+    /// The names of a row's outputs as sent: "Command (Left) + Z" for Undo
+    /// on every keyboard layout.
+    static func names(_ outputs: [OutputAction]) -> [String] {
+        let shortcut = isShortcut(outputs)
+        return outputs.map { o in
+            if o.type == .key, let code = o.keyCode { return KeyCodeMap.outputName(for: code, inShortcut: shortcut) }
+            return o.displayName
         }
     }
 }
@@ -468,67 +495,69 @@ struct OutputAction: Codable, Hashable, Identifiable {
         switch type {
         case .key:
             if let code = keyCode {
-                return KeyCodeMap.name(for: code)
+                return KeyCodeMap.outputName(for: code, inShortcut: false)
             }
-            return "Key"
+            return String(localized: "Key")
         case .mouseButton:
             if let btn = mouseButtonIndex {
                 switch btn {
-                case 0: return "Mouse Click"
-                case 1: return "Right Click"
-                case 2: return "Middle Click"
-                default: return "Mouse \(btn)"
+                case 0: return String(localized: "Mouse Click")
+                case 1: return String(localized: "Right Click")
+                case 2: return String(localized: "Middle Click")
+                default: return String(localized: "Mouse \(btn)")
                 }
             }
-            return "Mouse Button"
+            return String(localized: "Mouse Button")
         case .mouseMotion:
             if let axis = mouseAxis, let dir = mouseDirection {
                 let dirName = dir.axisDirectionName(axis: axis)
                 let spd = speed ?? 6
-                return "Mouse \(dirName) (\(spd)x)"
+                return String(localized: "Mouse \(dirName) (\(spd)x)")
             }
-            return "Mouse Motion"
+            return String(localized: "Mouse Motion")
         case .mouseWheel:
             if let axis = mouseAxis, let dir = mouseDirection {
                 let dirName = dir.axisDirectionName(axis: axis)
                 let spd = speed ?? 6
-                return "Scroll \(dirName) (\(spd)x)"
+                return String(localized: "Scroll \(dirName) (\(spd)x)")
             }
-            return "Mouse Wheel"
+            return String(localized: "Mouse Wheel")
         case .mouseWheelStep:
             if let axis = mouseAxis, let dir = mouseDirection {
                 let dirName = dir.axisDirectionName(axis: axis)
-                return "Scroll Step \(dirName)"
+                return String(localized: "Scroll Step \(dirName)")
             }
-            return "Mouse Wheel Step"
+            return String(localized: "Mouse Wheel Step")
         case .midiNote:
             let note = midiNote ?? 60
             let ch = midiChannel ?? 1
-            return "MIDI \(MIDIService.noteName(note)) · ch \(ch)"
+            let noteName = MIDIService.noteName(note)
+            return String(localized: "MIDI \(noteName), ch \(ch)")
         case .midiCC:
             let cc = midiCCNumber ?? 1
             let ch = midiChannel ?? 1
-            return "MIDI CC \(cc) · ch \(ch)"
+            return String(localized: "MIDI CC \(cc), ch \(ch)")
         case .midiPitchBend:
             let ch = midiChannel ?? 1
-            return "MIDI Pitch Bend · ch \(ch)"
+            return String(localized: "MIDI Pitch Bend, ch \(ch)")
         case .midiProgramChange:
             let prog = midiProgramNumber ?? 0
             let ch = midiChannel ?? 1
-            return "MIDI Program \(prog) · ch \(ch)"
+            return String(localized: "MIDI Program \(prog), ch \(ch)")
         case .midiTransport:
-            return "MIDI \(midiTransport?.displayName ?? "Start")"
+            let transportName = (midiTransport ?? .start).displayName
+            return String(localized: "MIDI \(transportName)")
         case .typeText:
             let t = text ?? ""
-            if t.isEmpty { return "Type Text" }
+            if t.isEmpty { return String(localized: "Type Text") }
             let preview = t.count > 18 ? String(t.prefix(18)) + "..." : t
-            return "Type \"\(preview)\""
+            return String(localized: "Type \"\(preview)\"")
         case .appAction:
-            return appActionKind?.displayName ?? "App Action"
+            return appActionKind?.displayName ?? String(localized: "App Action")
         case .absoluteVolume:
-            return "System Volume"
+            return String(localized: "System Volume")
         case .systemAction:
-            guard let kind = systemActionKind else { return "System Function" }
+            guard let kind = systemActionKind else { return String(localized: "System Function") }
             if kind.needsParameter, let t = text, !t.isEmpty {
                 let preview = t.count > 18 ? String(t.prefix(18)) + "..." : t
                 return "\(kind.displayName): \(preview)"
@@ -536,9 +565,13 @@ struct OutputAction: Codable, Hashable, Identifiable {
             return kind.displayName
         case .lightBar:
             switch resolvedLightMode {
-            case .rainbowToggle: return "Light bar: rainbow on / off"
-            case .whileHeld: return "Light bar: \(resolvedLightColor.nearestName.lowercased()), while held"
-            case .set: return "Light bar: \(resolvedLightColor.nearestName.lowercased()), stays on"
+            case .rainbowToggle: return String(localized: "Light bar: rainbow on / off")
+            case .whileHeld:
+                let color = resolvedLightColor.nearestName.lowercased()
+                return String(localized: "Light bar: \(color), while held")
+            case .set:
+                let color = resolvedLightColor.nearestName.lowercased()
+                return String(localized: "Light bar: \(color), stays on")
             }
         }
     }
@@ -584,6 +617,10 @@ struct OutputAction: Codable, Hashable, Identifiable {
     /// Called whenever a row's output type changes.
     mutating func fillDefaultsForType() {
         switch type {
+        case .key:
+            // The key picker shows A with no key stored, and the row sent
+            // nothing; it stores the A it shows.
+            if keyCode == nil { keyCode = 4 }
         case .mouseButton:
             if mouseButtonIndex == nil { mouseButtonIndex = Self.defaultMouseButton }
         case .mouseMotion, .mouseWheel:

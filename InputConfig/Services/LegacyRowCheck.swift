@@ -427,10 +427,10 @@ final class LegacyRowCheck {
         if kind == .switchedWheel {
             // Its own mode reports every control differently, so the rows
             // cannot be moved; the presets are named so they can be rescanned.
-            let wheel = wheelName ?? "This wheel"
-            alert.messageText = "Rescan wheel rows in older presets"
-            alert.informativeText = "InputConfig 1.6 switches \(wheel) to its own mode, as Logitech's software does: the pedals read 0 to 1 on their own axes and the buttons have new numbers. Rows recorded on it before 1.6 need to be scanned again in:\n\n" + list.map(\.preset.name).joined(separator: "\n")
-            alert.addButton(withTitle: "OK")
+            let wheel = wheelName ?? String(localized: "This wheel")
+            alert.messageText = String(localized: "Rescan wheel rows in older presets")
+            alert.informativeText = String(localized: "InputConfig 1.6 switches \(wheel) to its own mode, as Logitech's software does: the pedals read 0 to 1 on their own axes and the buttons have new numbers. Rows recorded on it before 1.6 need to be scanned again in:\n\n") + list.map(\.preset.shownName).joined(separator: "\n")
+            alert.addButton(withTitle: String(localized: "OK"))
             alert.runModal()
             if preview { return }
             markOffered()
@@ -439,24 +439,26 @@ final class LegacyRowCheck {
         }
         switch kind {
         case .switchFaces:
-            alert.messageText = "Update Switch rows in older presets?"
-            alert.informativeText = "InputConfig 1.6 reads the face buttons of a Switch Pro Controller and Joy-Cons by position, so A is the button on the right. Rows recorded on one of these controllers before 1.6 would now fire from the button beside it. Tick the presets you made on this controller; swapping A with B and X with Y keeps their rows on the buttons you pressed."
-            alert.addButton(withTitle: "Swap in Ticked Presets")
+            alert.messageText = String(localized: "Update Switch rows in older presets?")
+            alert.informativeText = String(localized: "InputConfig 1.6 reads the face buttons of a Switch Pro Controller and Joy-Cons by position, so A is the button on the right. Rows recorded on one of these controllers before 1.6 would now fire from the button beside it. Check the presets you made on this controller; swapping A with B and X with Y keeps their rows on the buttons you pressed.")
+            alert.addButton(withTitle: String(localized: "Swap in Checked Presets"))
         case .eightBitDoBack:
-            alert.messageText = "Update 8BitDo back button rows in older presets?"
-            alert.informativeText = "InputConfig 1.6 reads an 8BitDo controller's two back buttons as back buttons. Rows recorded on them before 1.6 used other numbers and no longer fire. Tick the presets you made on this controller to move those rows to the back buttons."
-            alert.addButton(withTitle: "Move in Ticked Presets")
+            alert.messageText = String(localized: "Update 8BitDo back button rows in older presets?")
+            alert.informativeText = String(localized: "InputConfig 1.6 reads an 8BitDo controller's two back buttons as back buttons. Rows recorded on them before 1.6 used other numbers and no longer fire. Check the presets you made on this controller to move those rows to the back buttons.")
+            alert.addButton(withTitle: String(localized: "Move in Checked Presets"))
         case .rawPads, .switchedWheel:
-            let pad = padName ?? "this controller"
-            alert.messageText = "Update rows for \(pad) in older presets?"
-            alert.informativeText = "InputConfig 1.6 numbers the buttons and sticks of \(pad) the way it numbers other controllers, and pushing a stick up reads as up. Rows recorded on it before 1.6 would fire from other controls. Tick the presets you made on this controller to move their rows to the controls you pressed."
-            alert.addButton(withTitle: "Update Ticked Presets")
+            let pad = padName ?? String(localized: "this controller")
+            alert.messageText = String(localized: "Update rows for \(pad) in older presets?")
+            alert.informativeText = String(localized: "InputConfig 1.6 numbers the buttons and sticks of \(pad) the way it numbers other controllers, and pushing a stick up reads as up. Rows recorded on it before 1.6 would fire from other controls. Check the presets you made on this controller to move their rows to the controls you pressed.")
+            alert.addButton(withTitle: String(localized: "Update Checked Presets"))
         }
-        alert.addButton(withTitle: "Leave Them As They Are")
+        alert.addButton(withTitle: String(localized: "Leave Them As They Are"))
+        // Escape leaves them; the first button is disabled until a box is ticked.
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
 
         // One checkbox per preset, in a scroll view past a handful.
         let boxes: [NSButton] = list.map { item in
-            let box = NSButton(checkboxWithTitle: item.preset.name, target: nil, action: nil)
+            let box = NSButton(checkboxWithTitle: item.preset.shownName, target: nil, action: nil)
             box.state = looksMade(for: kind, item.preset) ? .on : .off
             return box
         }

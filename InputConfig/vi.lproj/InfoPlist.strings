@@ -1,0 +1,15 @@
+/* Bundle display name */
+"CFBundleDisplayName" = "InputConfig";
+
+/* Bundle name */
+"CFBundleName" = "InputConfig";
+
+/* Privacy - Bluetooth Always Usage Description */
+"NSBluetoothAlwaysUsageDescription" = "InputConfig chỉ dùng Bluetooth để ngắt kết nối bộ điều khiển không dây khi bạn yêu cầu.";
+
+/* Privacy - Bluetooth Peripheral Usage Description */
+"NSBluetoothPeripheralUsageDescription" = "InputConfig chỉ dùng Bluetooth để ngắt kết nối bộ điều khiển không dây khi bạn yêu cầu.";
+
+/* Copyright (human-readable) */
+"NSHumanReadableCopyright" = "Bản quyền © 2026 Ryleigh Newman. Bảo lưu mọi quyền.";
+

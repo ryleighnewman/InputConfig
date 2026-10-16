@@ -1,52 +1,17 @@
 import SwiftUI
 
-/// Touchpad Setup sheet. A top-level device picker chooses which surface
-/// the user is configuring; both tabs (Calibration and Regions) adapt to
-/// that pick.
-///
-/// **Calibration tab** is finger-driven on DualSense / DS4 (drag-to-fill
-/// the grid; save min/max bounds), or shows an info banner on Mac Trackpad
-/// (cursor coords are already absolute, no sweep required).
-///
-/// **Regions tab** stores zones in either `TouchpadService` (DualSense /
-/// DS4) or `CursorRegionService` (Mac Trackpad). The per-region "Bind to"
-/// popover writes a binding straight into the active preset, so the user
-/// doesn't have to leave the sheet to wire a region to a key.
+/// The touchpad's regions: areas of a DualSense or DualShock 4 touchpad,
+/// each its own input that fires while a finger is inside it. Drawn in the
+/// editor's Regions section, or in this sheet from the app menu with no
+/// preset open. The per-region "Bind to" popover writes a binding straight
+/// into the preset, so a region can be wired to a key without leaving.
+/// The touchpad needs no calibration: macOS reports the whole pad.
 struct TouchpadCalibrationView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var presetStore: PresetStore
-    @StateObject private var cursorRegions = CursorRegionService.shared
-
-    enum Tab: String, CaseIterable, Identifiable {
-        case calibration
-        case regions
-        var id: String { rawValue }
-        var displayName: String {
-            switch self {
-            case .calibration: return "Calibration"
-            case .regions:     return "Regions"
-            }
-        }
-    }
-
-    @State private var selectedTab: Tab = .calibration
-
-    #if DEBUG
-    /// Marketing capture hook: `tools/post inputconfig.debug.touchpadTab regions`
-    /// switches this sheet's tab. The screenshot script used to click the
-    /// segmented picker through the accessibility API, which SwiftUI does not
-    /// expose as a radio group, so the click silently did nothing and the
-    /// Regions shot was a duplicate of the Calibration one.
-    private var debugTabHook: some View {
-        Color.clear.frame(width: 0, height: 0)
-            .onReceive(DistributedNotificationCenter.default().publisher(
-                for: Notification.Name("inputconfig.debug.touchpadTab"))) { note in
-                if let raw = note.object as? String, let tab = Tab(rawValue: raw) {
-                    selectedTab = tab
-                }
-            }
-    }
-    #endif
+    @Environment(\.appTextScale) private var textScale
+    /// Not observed: its 60 Hz pointer publish re-rendered this whole sheet.
+    private var cursorRegions: CursorRegionService { .shared }
 
     /// Which physical surface the sheet is operating on. Persisted in
     /// TouchpadService.currentActiveDevice so the picker reopens to the
@@ -61,7 +26,6 @@ struct TouchpadCalibrationView: View {
     /// Regions a finger is in, refreshed by the poll only when the set
     /// changes, so the highlights redraw on a press and not by chance.
     @State private var pressedRegionIDs: Set<UUID> = []
-    @State private var showScreenRegions = false
 
     // MARK: - Shared state
 
@@ -74,30 +38,6 @@ struct TouchpadCalibrationView: View {
     private let surfaceWidth: Int
     private let surfaceHeight: Int
 
-    // MARK: - Calibration tab state
-
-    private let gridColumns = 12
-    private let gridRows = 7
-
-    /// Sweep storage uses plain `@State` on the parent view, same
-    /// shape v1.1 shipped with. The buffer / publishVersion /
-    /// throttled-Canvas attempts kept either over-throttling (visible
-    /// delay) or under-throttling (full-body re-eval storm during
-    /// sweeps). v1.1's straightforward @State approach was smooth
-    /// because v1.1's parent body was tiny; we match that by
-    /// compacting the device picker into a single menu instead of
-    /// four chips so this view's body re-eval cost is the same as
-    /// v1.1's was.
-    @State private var touched: [Bool]
-    @State private var minX: Int = .max
-    @State private var maxX: Int = .min
-    @State private var minY: Int = .max
-    @State private var maxY: Int = .min
-    @State private var showSavedConfirmation: Bool = false
-    @State private var showUnsavedCloseDialog: Bool = false
-    @State private var savedCalibrationOnOpen: TouchpadCalibration = .uncalibrated
-
-
     // MARK: - Regions tab state
 
     /// Local copy of whichever region list the active device uses.
@@ -107,8 +47,19 @@ struct TouchpadCalibrationView: View {
     @State private var selectedRegionID: UUID?
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
+    #if DEBUG
+    @State private var debugDraw: [Double]?
+    @State private var debugCursor: [Double]?
+    #endif
     @State private var drawingNewRegion = false
+    /// What the drag under way does: draw, move or resize.
+    @State private var dragMode: RectRegionDrag?
     @State private var renamingRegionID: UUID?
+    /// The region whose Delete waits for its confirmation.
+    @State private var pendingDeleteRegionID: UUID?
+    @State private var confirmingApplyDefault = false
+    @State private var confirmingReset = false
+    @FocusState private var renameFocused: Bool
     @State private var renamingText: String = ""
     /// The region currently showing a "Bind to" popover. nil when no
     /// popover is open. Drives a popover anchored on the bind button in
@@ -117,75 +68,76 @@ struct TouchpadCalibrationView: View {
     /// Confirmation toast after the "Apply default 1 to 16" action.
     @State private var showAppliedDefaultsToast: Bool = false
 
-    init() {
+    /// Drawn inside the editor's Regions section: no title or Close.
+    let embedded: Bool
+    /// The pad: nil the main touchpad (a PlayStation pad's, or a Steam
+    /// Controller's right trackpad), 1 a Steam Controller's left trackpad.
+    let surface: Int?
+    /// A Steam Controller's square trackpad rather than a PlayStation pad.
+    let steam: Bool
+
+    /// Where this pad's fingers and pressed regions are read.
+    private var padService: TouchpadService { TouchpadService.forSurface(surface, steam: steam) }
+
+    init(embedded: Bool = false, surface: Int? = nil, steam: Bool = false) {
+        self.embedded = embedded
+        self.surface = surface
+        self.steam = steam
         let (w, h) = TouchpadService.shared.nominalSurfaceSize
         self.surfaceWidth = w
         self.surfaceHeight = h
-        _touched = State(initialValue: Array(repeating: false, count: 12 * 7))
     }
 
     var body: some View {
+        Group {
+        if embedded {
+            embeddedBody
+                .onReceive(NotificationCenter.default.publisher(for: .inputConfigTourSelectRegion)) { note in
+                    let i = note.object as? Int ?? 0
+                    selectedRegionID = regions.indices.contains(i) ? regions[i].id : nil
+                }
+                #if DEBUG
+                .modifier(MarketingRegionHooks(draw: $debugDraw, cursor: $debugCursor) { i in
+                    selectedRegionID = regions.indices.contains(i) ? regions[i].id : nil
+                })
+                #endif
+        } else {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Touchpad Setup")
+            Text("Touchpad Regions")
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
 
-            devicePicker
-            #if DEBUG
-            debugTabHook
-            #endif
-
-            Picker("", selection: $selectedTab) {
-                ForEach(Tab.allCases) { tab in
-                    Text(tab.displayName).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("Setup section")
-
-            switch selectedTab {
-            case .calibration:
-                calibrationTab
-            case .regions:
-                regionsTab
-            }
-
-            Divider()
+            regionsTab
 
             HStack {
                 Spacer()
-                Button("Close") { attemptClose() }
+                // Escape backs out of a rename before it closes the sheet.
+                // A click closes; Escape backs out of a rename or a drawing first.
+                Button("Close") { dismiss() }
                     .buttonStyle(.solidSecondary)
-                    .keyboardShortcut(.cancelAction)
+                    .closesOnEscape {
+                        if renamingRegionID != nil { renamingRegionID = nil }
+                        else if drawingNewRegion { drawingNewRegion = false; dragStart = nil; dragCurrent = nil }
+                        else { dismiss() }
+                    }
                     .accessibilityLabel("Close touchpad setup")
+                    .accessibilityInputLabels([Text("Close"), Text("Close touchpad setup")])
             }
         }
         .padding(22)
-        .frame(width: 760, height: 640)
+        .fixedSize()
+        }
+        }
         .onAppear {
             MappingEngine.touchpadSetupOpen = true
             TouchpadService.shared.retain()
             startPolling()
             reloadRegionsForActiveDevice()
-            loadSavedCalibration()
-            #if DEBUG
-            // Marketing capture: the calibration grid only fills in as a real
-            // finger drags across the pad, so with no hardware the panel
-            // photographs completely blank. Seed it with a plausible sweep -
-            // dense in the middle, thinning at the corners the way a real
-            // drag leaves it - so the shot shows the feature doing something.
-            if DebugMarketing.shared.fakeController {
-                let cols = 12, rows = 7
-                for r in 0..<rows {
-                    for c in 0..<cols {
-                        let edge = (r == 0 || r == rows - 1) && (c < 2 || c > cols - 3)
-                        let gap = (r == 2 && c == 10) || (r == 4 && c == 1)
-                        touched[r * cols + c] = !edge && !gap
-                    }
-                }
-            }
-            #endif
+        }
+        // Undo and Redo in the editor put regions back into the service:
+        // show them, unless a drag here is under way.
+        .onReceive(NotificationCenter.default.publisher(for: TouchpadService.regionsDidChange)) { _ in
+            if dragMode == nil, !drawingNewRegion { reloadRegionsForActiveDevice() }
         }
         .onDisappear {
             MappingEngine.touchpadSetupOpen = false
@@ -193,358 +145,46 @@ struct TouchpadCalibrationView: View {
             TouchpadService.shared.release()
             saveRegionsOutsideEditor()
         }
-        .onChange(of: activeDevice) { _, newDevice in
-            TouchpadService.shared.setActiveDevice(newDevice)
-            // Region storage differs per device, so swap lists when the
-            // user flips the picker.
-            reloadRegionsForActiveDevice()
-            selectedRegionID = nil
-            drawingNewRegion = false
-            dragStart = nil
-            dragCurrent = nil
-        }
-        .confirmationDialog(
-            "You recorded a new calibration. Would you like to save it?",
-            isPresented: $showUnsavedCloseDialog,
-            titleVisibility: .visible
-        ) {
-            Button("Save Calibration") {
-                saveCalibration()
-                dismiss()
-            }
-            Button("Discard", role: .destructive) {
-                dismiss()
-            }
-            Button("Keep Editing", role: .cancel) { }
-        } message: {
-            Text("Your recorded X range \(minX) to \(maxX), Y range \(minY) to \(maxY) hasn't been saved yet. Closing will discard it unless you save first.")
-        }
     }
 
-    // MARK: - Device picker
-
-    /// Compact one-line device picker. The previous 4-chip row plus
-    /// help text doubled the parent view body weight compared to v1.1,
-    /// which is what made the calibration sheet feel laggy during
-    /// finger sweeps (every cell-crossing re-evaluated all of the
-    /// device picker chrome along with the grid). This single Menu is
-    /// roughly equivalent body weight to the v1.1 tab picker alone.
-    private var devicePicker: some View {
-        HStack(spacing: 8) {
-            // Menu wrapped in a rounded-rectangle chip so it looks like
-            // an intentional control rather than a bare menu button.
-            // `.menuStyle(.button)` + `.buttonStyle(.plain)` strips the
-            // built-in chrome so the chip below is what the user sees,
-            // and `.focusEffectDisabled()` kills the macOS default
-            // focus ring (the thick blue rectangle that appeared on
-            // keyboard focus / right after a click). Same pattern the
-            // toolbar uses to suppress its focus rings.
-            Menu {
-                // Controller pads only. The Mac's own trackpad moves the
-                // pointer and exposes no finger positions, so its areas are
-                // screen regions, a different thing with its own editor;
-                // offering it here as a "touchpad" is what made the two
-                // read as one muddled feature.
-                ForEach(TouchpadDevice.allCases.filter { !$0.usesCursorRegions }) { device in
-                    Button {
-                        activeDevice = device
-                    } label: {
-                        Label { Text(device.displayName) } icon: { MenuIcon(name: device.iconName) }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    IconView(name: activeDevice.iconName, glyphHeight: 13)
-                        .font(.callout)
-                    Text(activeDevice.displayName)
-                        .font(.callout.weight(.medium))
-                    Image(systemName: "chevron.down")
+    /// In the editor's Regions section: one line saying what to do, then
+    /// the touchpad and its regions.
+    /// Laid out as the Adjust live sheet and the stick's Regions are: the
+    /// hint, the touchpad, the buttons under it, then the list and what a
+    /// finger is touching now.
+    private var embeddedBody: some View {
+        HStack(alignment: .top, spacing: 28) {
+            VStack(spacing: 10) {
+                regionsPanel
+                    .frame(width: padWidth, height: padWidth / regionsAspect)
+                regionsToolbar
+            }
+            .frame(width: padWidth)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(RegionEditorHint.text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                regionsList
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("In region")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Text(touchedNames.isEmpty ? String(localized: "None") : touchedNames.formatted(.list(type: .and)))
+                        .font(.caption.monospacedDigit())
+                        .lineLimit(1)
                 }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .accessibilityElement(children: .combine)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .focusEffectDisabled()
-            .fixedSize()
-            .accessibilityLabel("Which touchpad")
-            .accessibilityHint("Choose between DualSense and DualShock 4")
-            .onAppear {
-                // A stored choice from before the Mac trackpad left this
-                // sheet lands on a real touchpad.
-                if activeDevice.usesCursorRegions { activeDevice = .dualSense }
-            }
-
-            Text(activeDeviceShortHint)
-                .font(.caption)
-                .foregroundStyle(.hint)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Button("Screen regions\u{2026}") { showScreenRegions = true }
-                .buttonStyle(.solidSecondaryCompact)
-                .help("Areas of a display that fire while the pointer is inside them: for the Mac's trackpad, a mouse, or a stick moving the pointer")
-                .sheet(isPresented: $showScreenRegions) {
-                    CursorRegionsView()
-                        .glassBackground()
-                }
+            .frame(width: 320 * min(1.6, max(1, textScale)), alignment: .leading)
         }
     }
 
-    /// Short single-line caption for the compact picker. The full
-    /// multi-line explanation that used to sit under the chip row
-    /// added body weight every render; we trim to a single hint.
-    private var activeDeviceShortHint: String {
-        switch activeDevice {
-        case .dualSense:   return "Per-finger touchpad over USB or Bluetooth."
-        case .dualShock4:  return "Per-finger touchpad over USB or Bluetooth."
-        case .macTrackpad: return "Uses cursor zones (no per-finger HID on Mac)."
-        }
-    }
+    private var touchedNames: [String] { regions.filter { isRegionPressed($0.id) }.map(\.shownName) }
 
-    // MARK: - Close handling
-
-    private func attemptClose() {
-        if hasUnsavedRecording {
-            showUnsavedCloseDialog = true
-        } else {
-            dismiss()
-        }
-    }
-
-    private var hasUnsavedRecording: Bool {
-        guard activeDevice.canFingerCalibrate else { return false }
-        guard canSaveCalibration else { return false }
-        let saved = TouchpadService.shared.currentCalibration()
-        return minX != saved.minX || maxX != saved.maxX
-            || minY != saved.minY || maxY != saved.maxY
-    }
-
-    // MARK: - Calibration tab
-
-    @ViewBuilder
-    private var calibrationTab: some View {
-        if activeDevice.canFingerCalibrate {
-            fingerCalibrationTab
-        } else {
-            macTrackpadCalibrationTab
-        }
-    }
-
-    @ViewBuilder
-    private var fingerCalibrationTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if savedCalibrationOnOpen.isUserCalibrated {
-                savedCalibrationBanner
-            }
-
-            Text("Drag your finger across the entire touchpad until every cell is filled. InputConfig records the bounds and uses them so swipes feel uniform.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            calibrationPanel
-                .aspectRatio(CGFloat(surfaceWidth) / CGFloat(surfaceHeight), contentMode: .fit)
-
-            calibrationFooter
-        }
-    }
-
-    /// Mac Trackpad branch of the Calibration tab. There is no calibration
-    /// to do here, so the panel just explains what's going on and offers
-    /// a shortcut to the Regions tab where the actual work happens.
-    @ViewBuilder
-    private var macTrackpadCalibrationTab: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "info.circle.fill")
-                    .font(.title2)
-                    .iconTint(.blue)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("No calibration needed")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Cursor coordinates on the Mac Trackpad are already in absolute screen space. Switch to the Regions tab to draw screen rectangles. Each region triggers a binding while the mouse cursor is inside.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.blue.opacity(0.10)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.blue.opacity(0.4), lineWidth: 1))
-
-            screenPreviewPanel
-
-            HStack {
-                Spacer()
-                Button {
-                    selectedTab = .regions
-                } label: {
-                    Label("Go to Regions", systemImage: "arrow.right")
-                }
-                .buttonStyle(.solidSecondary)
-            }
-        }
-    }
-
-    /// Live screen preview shown in Mac Trackpad calibration mode. Draws
-    /// the primary screen rectangle scaled to fit, with a dot at the
-    /// current normalized cursor position.
-    private var screenPreviewPanel: some View {
-        let aspect: CGFloat = {
-            guard let frame = NSScreen.main?.frame, frame.height > 0 else { return 16.0 / 10.0 }
-            return frame.width / frame.height
-        }()
-        return GeometryReader { geo in
-            ZStack {
-                RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.25))
-                RoundedRectangle(cornerRadius: 10).stroke(Color.mint.opacity(0.6), lineWidth: 1.5)
-                cursorPreviewDot(in: geo.size)
-                Text("Primary display")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-        }
-        .aspectRatio(aspect, contentMode: .fit)
-    }
-
-    @ViewBuilder
-    private func cursorPreviewDot(in size: CGSize) -> some View {
-        let p = cursorRegions.cursorNormalized
-        Circle()
-            .fill(Color.mint)
-            .frame(width: 18, height: 18)
-            .position(x: p.x * size.width, y: p.y * size.height)
-            .shadow(color: .mint.opacity(0.6), radius: 6)
-    }
-
-    /// Bottom row of the finger-calibration tab: coverage stats, Reset,
-    /// and Save. (Quick Zero was removed: regions are matched against the
-    /// absolute finger position, so it could only show "Centered".)
-    @ViewBuilder
-    private var calibrationFooter: some View {
-        HStack(spacing: 20) {
-            statBlock(label: "Coverage", value: "\(coveragePercent)%",
-                      tint: coveragePercent >= minCoveragePercent ? .green : .secondary)
-            statBlock(label: "X range",
-                      value: minX <= maxX ? "\(minX) to \(maxX)" : "n/a",
-                      tint: .secondary)
-            statBlock(label: "Y range",
-                      value: minY <= maxY ? "\(minY) to \(maxY)" : "n/a",
-                      tint: .secondary)
-            Spacer()
-
-            if showSavedConfirmation {
-                Label("Calibration saved", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .transition(.opacity)
-            }
-
-            Button("Reset", role: .destructive) { resetCalibration() }
-                .accessibilityLabel("Reset calibration")
-
-            Button {
-                saveCalibration()
-            } label: {
-                Label("Save Calibration", systemImage: "checkmark.seal.fill")
-            }
-            .buttonStyle(.solid)
-            .disabled(!canSaveCalibration)
-            .help(canSaveCalibration
-                  ? "Save the calibrated bounds"
-                  : "Drag your finger across the touchpad first to record an X / Y range")
-            .accessibilityLabel("Save calibration")
-        }
-    }
-
-    private let minCoveragePercent = 30
-
-    private var savedCalibrationBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.title2)
-                .iconTint(.green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Calibration saved and active")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text("X range \(savedCalibrationOnOpen.minX) to \(savedCalibrationOnOpen.maxX) , Y range \(savedCalibrationOnOpen.minY) to \(savedCalibrationOnOpen.maxY)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                if let when = savedCalibrationOnOpen.savedAt {
-                    Text("Last saved \(when, format: .relative(presentation: .named))")
-                        .font(.caption2)
-                        .foregroundStyle(.hint)
-                }
-            }
-            Spacer()
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.green.opacity(0.15)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.green.opacity(0.5), lineWidth: 1))
-    }
-
-    /// v1.1's calibration panel verbatim: a ForEach over touched cells
-    /// emitting Rectangle views, with the grid lines drawn as a Path
-    /// stroke and the live finger dots overlaid on top. The Canvas /
-    /// TimelineView / buffer experiments added either latency or
-    /// rendering complexity that hurt smoothness; this shape was the
-    /// one that shipped working in the v1.1 release, so we restore it.
-    private var calibrationPanel: some View {
-        GeometryReader { geo in
-            ZStack {
-                RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.25))
-                let cellW = geo.size.width / CGFloat(gridColumns)
-                let cellH = geo.size.height / CGFloat(gridRows)
-                ForEach(0..<(gridColumns * gridRows), id: \.self) { idx in
-                    if touched[idx] {
-                        let col = idx % gridColumns
-                        let row = idx / gridColumns
-                        Rectangle()
-                            .fill(Color.mint.opacity(0.45))
-                            .frame(width: cellW, height: cellH)
-                            .position(x: cellW * (CGFloat(col) + 0.5),
-                                      y: cellH * (CGFloat(row) + 0.5))
-                    }
-                }
-                Path { path in
-                    for i in 1..<gridColumns {
-                        let x = cellW * CGFloat(i)
-                        path.move(to: CGPoint(x: x, y: 0))
-                        path.addLine(to: CGPoint(x: x, y: geo.size.height))
-                    }
-                    for i in 1..<gridRows {
-                        let y = cellH * CGFloat(i)
-                        path.move(to: CGPoint(x: 0, y: y))
-                        path.addLine(to: CGPoint(x: geo.size.width, y: y))
-                    }
-                }
-                .stroke(Color.mint.opacity(0.18), lineWidth: 1)
-                // Border stroked LAST so it sits cleanly on top of
-                // the cell fills, hiding any cell edges that would
-                // otherwise poke past the rounded corners.
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.mint.opacity(0.6), lineWidth: 1.5)
-                fingerDots(in: geo.size)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-    }
+    /// The pad's width in the editor: a square Steam trackpad narrower than
+    /// the wide PlayStation pad, so both stand about as tall as the stick.
+    private var padWidth: CGFloat { (steam ? 260 : 380) * min(1.6, max(1, textScale)) }
 
     // MARK: - Regions tab
 
@@ -552,17 +192,24 @@ struct TouchpadCalibrationView: View {
     private var regionsTab: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(regionsHeadline)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if !embedded {
+                    Text(regionsHeadline)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-                regionsPanel
-                    .aspectRatio(regionsAspect, contentMode: .fit)
+                if embedded {
+                    regionsPanel
+                        .frame(width: 440, height: 440 / regionsAspect)
+                } else {
+                    regionsPanel
+                        .aspectRatio(regionsAspect, contentMode: .fit)
+                }
 
                 regionsToolbar
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: embedded ? 440 : .infinity, alignment: .leading)
 
             regionsList
                 .frame(width: 260)
@@ -572,14 +219,14 @@ struct TouchpadCalibrationView: View {
     private var regionsHeadline: String {
         if drawingNewRegion {
             return activeDevice == .macTrackpad
-                ? "Click and drag on the screen preview to draw the new cursor region."
-                : "Click and drag on the touchpad surface to draw the new region."
+                ? String(localized: "Click and drag on the screen preview to draw the new cursor region.")
+                : String(localized: "Click and drag on the touchpad surface to draw the new region.")
         }
         switch activeDevice {
         case .macTrackpad:
-            return "Cursor zones on the Mac Trackpad. Draw rectangles on the screen preview, then bind each one to a key or button."
+            return String(localized: "Cursor regions on the Mac Trackpad. Draw rectangles on the screen preview, then bind each one to a key or button.")
         case .dualSense, .dualShock4:
-            return "Zones on the controller's touchpad. A Touchpad zone input fires while a finger is inside one. Areas of the display are Screen regions, drawn in their own editor."
+            return String(localized: "Regions on the controller's touchpad. A Touchpad region input fires while a finger is inside one.")
         }
     }
 
@@ -590,72 +237,92 @@ struct TouchpadCalibrationView: View {
             }
             return 16.0 / 10.0
         }
+        // A Steam Controller's trackpads are round-ish squares.
+        if steam { return 1 }
         return CGFloat(surfaceWidth) / CGFloat(surfaceHeight)
     }
 
     @ViewBuilder
     private var regionsToolbar: some View {
-        HStack {
+        HStack(spacing: 8) {
+            if embedded {
+                regionCount
+                Spacer(minLength: 0)
+            }
             Button {
-                drawingNewRegion = true
-                dragStart = nil
-                dragCurrent = nil
+                addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
             } label: {
-                Label("Add Region", systemImage: "plus.rectangle")
+                Label("Add Region", systemImage: "plus")
             }
             .buttonStyle(.solidSecondaryCompact)
             // Regions belong to a preset; with none open or running there
             // is nowhere to keep them, and they were dropped on close.
-            .disabled(drawingNewRegion || regions.count >= 16 || !hasTargetPreset)
-            .help(hasTargetPreset ? "Draw a region on the pad" : "Open or run a preset to add regions")
-            if drawingNewRegion {
-                Button("Cancel") {
-                    drawingNewRegion = false
-                    dragStart = nil
-                    dragCurrent = nil
-                }
-                .buttonStyle(.solidSecondaryCompact)
-                Button("Place in Center") {
-                    drawingNewRegion = false
-                    dragStart = nil
-                    dragCurrent = nil
-                    addRegion(minX: 0.35, maxX: 0.65, minY: 0.35, maxY: 0.65)
-                }
-                .buttonStyle(.solidSecondaryCompact)
-                .help("Add the region in the middle without drawing it")
-            }
+            .disabled(regions.count >= 16 || !hasTargetPreset)
+            .help(hasTargetPreset ? String(localized: "Adds a region in the middle; or drag on the drawing to draw one") : String(localized: "Open or run a preset to add regions"))
             Button {
-                applyDefault1to16()
+                // Asked first when it would replace regions someone placed.
+                if regions.isEmpty { applyDefault1to16() } else { confirmingApplyDefault = true }
             } label: {
                 Label("Apply default 1 to 16", systemImage: "square.grid.4x3.fill")
+            }
+            .confirmationDialog("Replace your regions with the 4 by 4 grid?",
+                                isPresented: $confirmingApplyDefault, titleVisibility: .visible) {
+                Button("Replace", role: .destructive) { applyDefault1to16() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The rows bound to your regions are replaced too.")
             }
             .buttonStyle(.solidSecondaryCompact)
             .help("Replace regions with a 4 by 4 grid and bind each to keys 1 to 9, 0, F1 to F6 in the preset being edited")
             .disabled(!hasTargetPreset)
+            if !embedded {
+                Spacer()
+                regionCount
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var regionCount: some View {
+            // The toast takes the count's place for its moment, so the row
+            // never holds both.
             if showAppliedDefaultsToast {
                 Label("Default grid applied", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
                     .transition(.opacity)
+            } else {
+                Text("\(regions.count) / 16 regions")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Spacer()
-            Text("\(regions.count) / 16 regions")
-                .font(.caption)
-                .foregroundStyle(.hint)
-        }
     }
 
-    private var regionsPanel: some View {
+    private func previewPoints(_ size: CGSize) -> (CGPoint, CGPoint)? {
+        #if DEBUG
+        if let v = debugDraw {
+            return (CGPoint(x: v[0] * size.width, y: v[1] * size.height), CGPoint(x: v[2] * size.width, y: v[3] * size.height))
+        }
+        #endif
+        if drawingNewRegion, let start = dragStart, let current = dragCurrent { return (start, current) }
+        return nil
+    }
+
+    /// A picture of the surface: left is left in every language.
+    private var regionsPanel: some View { regionsPanelDrawing.environment(\.layoutDirection, .leftToRight) }
+
+    private var regionsPanelDrawing: some View {
         GeometryReader { geo in
             ZStack {
-                RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.25))
-                RoundedRectangle(cornerRadius: 10).stroke(Color.mint.opacity(0.6), lineWidth: 1.5)
+                // The surface as the Adjust live sheet draws a trigger's bar.
+                RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.12))
+                RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
 
                 ForEach(regions) { region in
                     regionShape(region: region, in: geo.size)
                 }
 
-                if drawingNewRegion, let start = dragStart, let current = dragCurrent {
+                if let (start, current) = previewPoints(geo.size) {
                     let r = CGRect(
                         x: min(start.x, current.x),
                         y: min(start.y, current.y),
@@ -669,14 +336,29 @@ struct TouchpadCalibrationView: View {
                         .allowsHitTesting(false)
                 }
 
-                if activeDevice == .macTrackpad {
-                    cursorPreviewDot(in: geo.size)
-                } else {
-                    fingerDots(in: geo.size)
+                if let id = selectedRegionID, let r = regions.first(where: { $0.id == id }) {
+                    RegionCornerHandles(rect: CGRect(x: r.minX * geo.size.width, y: r.minY * geo.size.height,
+                                                     width: (r.maxX - r.minX) * geo.size.width,
+                                                     height: (r.maxY - r.minY) * geo.size.height),
+                                        color: paletteColor(at: r.colorIndex))
                 }
+
+                fingerDots(in: geo.size)
+                // Where the tour's pointer lands before it selects the first region.
+                if let r = regions.first {
+                    Color.clear
+                        .frame(width: 24, height: 24)
+                        .spotlightAnchor(SpotlightID.tourRegion)
+                        .position(x: (r.minX + r.maxX) / 2 * geo.size.width, y: (r.minY + r.maxY) / 2 * geo.size.height)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                #if DEBUG
+                if let p = debugCursor { MarketingPointer(at: CGPoint(x: p[0] * geo.size.width, y: p[1] * geo.size.height)) }
+                #endif
             }
             .contentShape(Rectangle())
-            .gesture(drawGesture(size: geo.size), including: drawingNewRegion ? .gesture : .none)
+            .gesture(drawGesture(size: geo.size), including: .gesture)
         }
     }
 
@@ -690,29 +372,34 @@ struct TouchpadCalibrationView: View {
             width: (region.maxX - region.minX) * size.width,
             height: (region.maxY - region.minY) * size.height)
         let color = paletteColor(at: region.colorIndex)
-        let fillOpacity: Double = isPressed ? 0.65 : (isSelected ? 0.45 : 0.25)
-        let strokeWidth: CGFloat = isSelected ? 2 : 1
+        // Lit and picked as the stick's and the trigger's regions are.
+        let fillOpacity: Double = isPressed ? 0.32 : (isSelected ? 0.2 : 0.06)
+        let strokeWidth: CGFloat = isPressed || isSelected ? 2.5 : 1
 
-        RoundedRectangle(cornerRadius: 4)
+        RoundedRectangle(cornerRadius: 3)
             .fill(color.opacity(fillOpacity))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(color, lineWidth: strokeWidth))
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(color.opacity(isPressed || isSelected ? 1 : 0.8), lineWidth: strokeWidth))
             .overlay(
-                Text(region.name)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(color.opacity(0.85))
-                    .clipShape(Capsule()),
+                Text(region.shownName)
+                    .font(.caption2)
+                    .foregroundStyle(color.opacity(0.9))
+                    .lineLimit(1)
+                    .padding(4),
                 alignment: .topLeading
             )
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(region.shownName)
+            .accessibilityValue(isPressed ? String(localized: "Active") : "")
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { if !drawingNewRegion { selectedRegionID = region.id } }
             .onTapGesture {
                 if !drawingNewRegion {
                     selectedRegionID = region.id
                 }
             }
+            .contextMenu { regionMenuItems(region) }
     }
 
     /// The list, then typed bounds for the selected region: placing and
@@ -739,16 +426,25 @@ struct TouchpadCalibrationView: View {
 
     private var regionsListBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(regionsOwnerName.map { "Regions of \u{201C}\($0)\u{201D}" } ?? "This preset's regions")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            Text(embedded ? String(localized: "Regions")
+                 : regionsOwnerName.map { String(localized: "Regions of \u{201C}\($0)\u{201D}") } ?? String(localized: "This preset's regions"))
+                .font(embedded ? .subheadline : .caption.weight(.semibold))
+                .foregroundStyle(embedded ? .primary : .secondary)
+                .accessibilityAddTraits(.isHeader)
             if regions.isEmpty {
                 Text(hasTargetPreset
-                     ? "None yet. Regions belong to the preset you are editing; drag on the pad to draw one."
-                     : "Regions belong to a preset. Open a preset in the editor, or run one, to add regions.")
+                     ? String(localized: "None yet.")
+                     : String(localized: "Regions belong to a preset. Open a preset in the editor, or run one, to add regions."))
                     .font(.caption)
-                    .foregroundStyle(.hint)
-                Spacer()
+                    .foregroundStyle(.secondary)
+                if !embedded { Spacer() }
+            } else if embedded {
+                // The editor scrolls; a list of its own would scroll inside it.
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(regions) { region in
+                        regionRow(region)
+                    }
+                }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
@@ -773,9 +469,12 @@ struct TouchpadCalibrationView: View {
                 })
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
+                .accessibilityLabel("Rename region")
+                .focused($renameFocused)
+                .onExitCommand { renamingRegionID = nil }
             } else {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(region.name)
+                    Text(region.shownName)
                         .font(.body)
                         .lineLimit(1)
                     if let label = boundOutputLabel(for: region.id) {
@@ -795,6 +494,7 @@ struct TouchpadCalibrationView: View {
                 Image(systemName: "circle.fill")
                     .font(.caption2)
                     .foregroundStyle(.green)
+                    .accessibilityHidden(true)
             }
             Button {
                 bindingPopoverRegionID = region.id
@@ -803,34 +503,30 @@ struct TouchpadCalibrationView: View {
                     .foregroundStyle(Color.accentColor)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Bind this region")
             .disabled(!hasTargetPreset)
             .help(!hasTargetPreset
-                  ? "Open or create a preset to bind this region"
-                  : "Bind this region to a key")
+                  ? String(localized: "Open or create a preset to bind this region")
+                  : String(localized: "Bind this region to a key"))
             .popover(isPresented: Binding(
                 get: { bindingPopoverRegionID == region.id },
                 set: { isShown in if !isShown { bindingPopoverRegionID = nil } }
             ), arrowEdge: .leading) {
                 bindPopover(for: region)
             }
-            .accessibilityLabel("Bind region \(region.name)")
+            .accessibilityLabel("Bind region \(region.shownName)")
             Menu {
-                Button("Rename") {
-                    renamingRegionID = region.id
-                    renamingText = region.name
-                }
-                Button("Delete", role: .destructive) {
-                    deleteRegion(region.id)
-                }
+                // Selecting shows the typed bounds, the way to place a
+                // region without dragging; this menu is reachable by keyboard.
+                Button("Select") { selectedRegionID = region.id }
+                regionMenuItems(region)
             } label: {
                 Image(systemName: "ellipsis")
                     .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .accessibilityLabel("Region options for \(region.name)")
-            .help("Rename or delete \(region.name)")
+            .accessibilityLabel("Region options for \(region.shownName)")
+            .help("Select, rename, duplicate or delete \(region.shownName)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -842,6 +538,23 @@ struct TouchpadCalibrationView: View {
         .onTapGesture {
             selectedRegionID = region.id
         }
+        // One named row, as in Screen Regions and Stick zones, saying
+        // whether it is selected and whether a finger is in it.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(region.shownName)
+        .accessibilityValue([isSelected ? String(localized: "Selected") : nil, isRegionPressed(region.id) ? String(localized: "Active") : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        // Asked first: outside the editor a delete is saved at once, with
+        // no undo, and the rows bound to the region stop firing.
+        .confirmationDialog("Delete the region \u{201C}\(region.shownName)\u{201D}?",
+                            isPresented: Binding(get: { pendingDeleteRegionID == region.id },
+                                                 set: { if !$0 { pendingDeleteRegionID = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { deleteRegion(region.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Rows bound to it stop working.")
+        }
     }
 
     // MARK: - Bind popover
@@ -852,7 +565,7 @@ struct TouchpadCalibrationView: View {
     @ViewBuilder
     private func bindPopover(for region: TouchpadRegion) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Bind \(region.name) to…")
+            Text("Bind \(region.shownName) to…")
                 .font(.subheadline.weight(.semibold))
             Text("Picks a key to fire while this region is active. The binding is added to the current preset.")
                 .font(.caption)
@@ -898,31 +611,52 @@ struct TouchpadCalibrationView: View {
     /// Number row + function row are the most useful for region work; the
     /// editor still has the full picker for anything more exotic.
     private var quickBindOptions: [QuickBindOption] {
+        // Labels from the key itself: translated, and what the key types
+        // under the keyboard layout, like every other key name in the app.
+        func key(_ code: Int, _ description: String) -> QuickBindOption {
+            QuickBindOption(label: KeyCodeMap.name(for: code), description: description, keyCode: code)
+        }
         var opts: [QuickBindOption] = []
         for digit in 1...9 {
-            opts.append(QuickBindOption(label: "\(digit)", description: "Number row", keyCode: 29 + digit))
+            opts.append(key(29 + digit, String(localized: "Number row")))
         }
-        opts.append(QuickBindOption(label: "0", description: "Number row", keyCode: 39))
+        opts.append(key(39, String(localized: "Number row")))
         for fn in 1...12 {
-            opts.append(QuickBindOption(label: "F\(fn)", description: "Function row", keyCode: 57 + fn))
+            opts.append(key(57 + fn, String(localized: "Function row")))
         }
-        opts.append(QuickBindOption(label: "Space", description: "Spacebar", keyCode: 44))
-        opts.append(QuickBindOption(label: "Return", description: "Enter / Return", keyCode: 40))
-        opts.append(QuickBindOption(label: "Tab", description: "Tab", keyCode: 43))
-        opts.append(QuickBindOption(label: "Esc", description: "Escape", keyCode: 41))
+        opts.append(key(44, String(localized: "Spacebar")))
+        opts.append(key(40, String(localized: "Enter / Return")))
+        opts.append(key(43, String(localized: "Tab")))
+        opts.append(key(41, String(localized: "Escape")))
         return opts
     }
 
     // MARK: - Region drawing
 
+    /// A drag on a selected region's corner resizes it, inside a region
+    /// moves it, and on empty pad draws a new one: no mode to enter first.
     private func drawGesture(size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 2, coordinateSpace: .local)
+        DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
-                guard drawingNewRegion else { return }
+                let mode = dragMode ?? RectRegionDrag.mode(at: value.startLocation, size: size,
+                                                          regions: regions, selected: selectedRegionID)
+                dragMode = mode
+                if mode != .draw {
+                    if let changed = mode.apply(from: value.startLocation, to: value.location, size: size),
+                       let i = regions.firstIndex(where: { $0.id == changed.id }) {
+                        regions[i] = changed
+                        selectedRegionID = changed.id
+                    }
+                    return
+                }
+                guard regions.count < 16, hasTargetPreset else { return }
+                drawingNewRegion = true
                 if dragStart == nil { dragStart = value.startLocation }
                 dragCurrent = value.location
             }
             .onEnded { value in
+                defer { dragMode = nil }
+                if let mode = dragMode, mode != .draw { persistRegions(); return }
                 guard drawingNewRegion, let start = dragStart else { return }
                 let end = value.location
                 let normMinX = max(0, min(1, Double(min(start.x, end.x) / size.width)))
@@ -938,11 +672,37 @@ struct TouchpadCalibrationView: View {
             }
     }
 
+    /// Rename, Duplicate and Delete: the region's right-click menu and the
+    /// list row's menu.
+    @ViewBuilder
+    private func regionMenuItems(_ region: TouchpadRegion) -> some View {
+        Button("Rename") {
+            selectedRegionID = region.id
+            renamingRegionID = region.id
+            renamingText = region.shownName
+            DispatchQueue.main.async { renameFocused = true }
+        }
+        Button("Duplicate") {
+            guard regions.count < 16, hasTargetPreset else { return }
+            let copy = RectRegionDrag.duplicate(region, name: String(localized: "Region \(regions.count + 1)").withoutRTLMark,
+                                                colorIndex: regions.count % TouchpadRegion.colorPalette.count)
+            regions.append(copy)
+            selectedRegionID = copy.id
+            persistRegions()
+        }
+        .disabled(regions.count >= 16 || !hasTargetPreset)
+        Divider()
+        Button("Delete\u{2026}", role: .destructive) {
+            pendingDeleteRegionID = region.id
+        }
+    }
+
     private func addRegion(minX: Double, maxX: Double, minY: Double, maxY: Double) {
-        let name = "Region \(regions.count + 1)"
+        let name = String(localized: "Region \(regions.count + 1)").withoutRTLMark
         let colorIndex = regions.count % TouchpadRegion.colorPalette.count
-        let region = TouchpadRegion(name: name, minX: minX, maxX: maxX,
+        var region = TouchpadRegion(name: name, minX: minX, maxX: maxX,
                                      minY: minY, maxY: maxY, colorIndex: colorIndex)
+        region.surface = surface
         regions.append(region)
         selectedRegionID = region.id
         persistRegions()
@@ -954,14 +714,15 @@ struct TouchpadCalibrationView: View {
         if activeDevice.usesCursorRegions {
             cursorRegions.deleteRegion(id)
         } else {
-            TouchpadService.shared.saveRegions(regions)
+            saveTouchpadRegions()
         }
     }
 
     private func commitRename(for id: UUID) {
         guard let index = regions.firstIndex(where: { $0.id == id }) else { return }
         let trimmed = renamingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
+        // Unchanged, a built-in region keeps its English name on disk.
+        if !trimmed.isEmpty, trimmed != regions[index].shownName {
             regions[index].name = trimmed
             persistRegions()
         }
@@ -987,15 +748,10 @@ struct TouchpadCalibrationView: View {
     /// so the rest of the sheet stays static between ticks.
     @ViewBuilder
     private func fingerDots(in size: CGSize) -> some View {
-        FingerDotsOverlay(size: size)
+        FingerDotsOverlay(size: size, service: padService)
     }
 
-    private func statBlock(label: String, value: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.hint)
-            Text(value).font(.body.monospacedDigit()).foregroundStyle(tint)
-        }
-    }
+
 
     private func paletteColor(at index: Int) -> Color {
         let safeIndex = max(0, min(TouchpadRegion.colorPalette.count - 1, index))
@@ -1019,7 +775,8 @@ struct TouchpadCalibrationView: View {
         case .macTrackpad:
             regions = cursorRegions.allRegions()
         case .dualSense, .dualShock4:
-            regions = TouchpadService.shared.allRegions()
+            // This pad's own: the working set holds both Steam trackpads'.
+            regions = TouchpadService.shared.allRegions().filter { ($0.surface == 1) == (surface == 1) }
         }
     }
 
@@ -1040,8 +797,14 @@ struct TouchpadCalibrationView: View {
                 cursorRegions.upsert(region)
             }
         case .dualSense, .dualShock4:
-            TouchpadService.shared.saveRegions(regions)
+            saveTouchpadRegions()
         }
+    }
+
+    /// This pad's regions back into the working set, beside the other pad's.
+    private func saveTouchpadRegions() {
+        let others = TouchpadService.shared.allRegions().filter { ($0.surface == 1) != (surface == 1) }
+        TouchpadService.shared.saveRegions(others + regions)
     }
 
     /// Pressed-state lookup that routes to the right service.
@@ -1049,7 +812,7 @@ struct TouchpadCalibrationView: View {
         if activeDevice.usesCursorRegions {
             return cursorRegions.isRegionPressed(id)
         }
-        return TouchpadService.shared.isRegionPressed(id)
+        return padService.isRegionPressed(id)
     }
 
     /// Look up the binding that currently fires this region in the active
@@ -1077,9 +840,10 @@ struct TouchpadCalibrationView: View {
     /// name, so every built-in zone read "Bound: Command (Left)".
     private func outputLabel(for binding: BindingModel) -> String? {
         if let note = binding.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-            return "Bound: \(note)"
+            return String(localized: "Bound: \(ShippedText.t(note))")
         }
-        return "Bound: " + binding.outputs.map(\.displayName).joined(separator: " + ")
+        let outputNames = OutputAction.names(binding.outputs).joined(separator: " + ")
+        return String(localized: "Bound: \(outputNames)")
     }
 
     // MARK: - Binding writes
@@ -1094,9 +858,10 @@ struct TouchpadCalibrationView: View {
 
             let usesCursor = activeDevice.usesCursorRegions
             let inputType: InputType = usesCursor ? .cursorRegion : .touchpadRegion
-            let newInput: InputEvent = usesCursor
+            var newInput: InputEvent = usesCursor
                 ? .cursorRegion(regionID)
                 : .touchpadRegion(regionID)
+            if !usesCursor { newInput.touchpadSurface = surface }
             let newOutput = OutputAction(type: .key, keyCode: keyCode)
             let newBinding = BindingModel(input: newInput, outputs: [newOutput])
 
@@ -1134,7 +899,7 @@ struct TouchpadCalibrationView: View {
     /// The preset whose regions the sheet shows and saves into, by name,
     /// so it is never a guess which preset an edit lands in.
     private var regionsOwnerName: String? {
-        targetPreset()?.name
+        targetPreset()?.shownName
     }
 
     /// The preset this sheet binds regions into: the open editor's draft
@@ -1191,7 +956,7 @@ struct TouchpadCalibrationView: View {
         for cell in 0..<16 {
             let col = cell % 4
             let row = cell / 4
-            let region = TouchpadRegion(
+            var region = TouchpadRegion(
                 name: keyLabels[cell],
                 minX: Double(col) * cellW,
                 maxX: Double(col + 1) * cellW,
@@ -1199,9 +964,12 @@ struct TouchpadCalibrationView: View {
                 maxY: Double(row + 1) * cellH,
                 colorIndex: cell % TouchpadRegion.colorPalette.count
             )
+            region.surface = surface
             newRegions.append(region)
+            var input: InputEvent = usesCursor ? .cursorRegion(region.id) : .touchpadRegion(region.id)
+            if !usesCursor { input.touchpadSurface = surface }
             let binding = BindingModel(
-                input: usesCursor ? .cursorRegion(region.id) : .touchpadRegion(region.id),
+                input: input,
                 outputs: [OutputAction(type: .key, keyCode: keyCodes[cell])]
             )
             newBindings.append(binding)
@@ -1216,69 +984,18 @@ struct TouchpadCalibrationView: View {
             // Wipe prior region bindings of the right type so we replace
             // cleanly rather than stacking.
             for j in 0..<preset.joysticks.count {
-                preset.joysticks[j].bindings.removeAll { $0.input.type == inputType }
+                // This pad's rows only: the other Steam trackpad keeps its own.
+                preset.joysticks[j].bindings.removeAll {
+                    $0.input.type == inputType && (usesCursor || ($0.input.touchpadSurface == 1) == (surface == 1))
+                }
             }
             preset.joysticks[0].bindings.append(contentsOf: newBindings)
         }
 
         withAnimation(.easeIn(duration: 0.2)) { showAppliedDefaultsToast = true }
-        AccessibilityNotification.Announcement("Default grid applied").post()
+        AccessibilityNotification.Announcement(String(localized: "Default grid applied")).post()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             withAnimation(.easeOut(duration: 0.3)) { showAppliedDefaultsToast = false }
-        }
-    }
-
-    // MARK: - Calibration logic
-
-    private var coveragePercent: Int {
-        let total = touched.count
-        guard total > 0 else { return 0 }
-        return Int(Double(touched.filter { $0 }.count) / Double(total) * 100)
-    }
-
-    private var canSaveCalibration: Bool {
-        guard activeDevice.canFingerCalibrate else { return false }
-        return minX < maxX && minY < maxY
-            && minX != .max && maxX != .min && minY != .max && maxY != .min
-            && maxX - minX >= TouchpadService.minimumSpanX
-            && maxY - minY >= TouchpadService.minimumSpanY
-    }
-
-    private func resetCalibration() {
-        touched = Array(repeating: false, count: gridColumns * gridRows)
-        minX = .max; maxX = .min; minY = .max; maxY = .min
-        TouchpadService.shared.saveCalibration(.uncalibrated)
-        savedCalibrationOnOpen = .uncalibrated
-        showSavedConfirmation = false
-    }
-
-    private func loadSavedCalibration() {
-        let saved = TouchpadService.shared.currentCalibration()
-        savedCalibrationOnOpen = saved
-        guard saved.isUserCalibrated else { return }
-        minX = saved.minX
-        maxX = saved.maxX
-        minY = saved.minY
-        maxY = saved.maxY
-        if let cells = saved.gridCells, cells.count == gridColumns * gridRows {
-            touched = cells
-        }
-    }
-
-    private func saveCalibration() {
-        guard canSaveCalibration else { return }
-        let toSave = TouchpadCalibration(minX: minX, maxX: maxX, minY: minY, maxY: maxY,
-                                          savedAt: Date(), gridCells: touched)
-        TouchpadService.shared.saveCalibration(toSave)
-        savedCalibrationOnOpen = TouchpadService.shared.currentCalibration()
-        withAnimation(.easeIn(duration: 0.15)) {
-            showSavedConfirmation = true
-        }
-        AccessibilityNotification.Announcement("Calibration saved").post()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
-            withAnimation(.easeOut(duration: 0.3)) {
-                showSavedConfirmation = false
-            }
         }
     }
 
@@ -1302,39 +1019,10 @@ struct TouchpadCalibrationView: View {
         pollTimer = nil
     }
 
+    /// Lights the regions a finger is in, redrawing only when that changes.
     private func pollOnce() {
-        // After moving finger-dot rendering into `FingerDotsOverlay`
-        // (which reads TouchpadService directly via TimelineView), the
-        // only remaining job of this timer is to feed grid-cell
-        // ingest. `liveFinger0` / `liveFinger1` @State writes are no
-        // longer used by any view, so we don't bother updating them -
-        // that removes the SwiftUI body re-evaluation that was firing
-        // 60×/sec on every finger move and dominating the
-        // calibration sheet's perceived lag.
-        let svc = TouchpadService.shared
-        if let p = svc.currentPosition(finger: 0) {
-            ingest(x: p.x, y: p.y)
-        }
-        if let p = svc.currentPosition(finger: 1) {
-            ingest(x: p.x, y: p.y)
-        }
-        if selectedTab == .regions {
-            let pressed = Set(regions.map(\.id).filter { isRegionPressed($0) })
-            if pressed != pressedRegionIDs { pressedRegionIDs = pressed }
-        }
-    }
-
-    private func ingest(x: Int, y: Int) {
-        guard selectedTab == .calibration, activeDevice.canFingerCalibrate else { return }
-        if x < minX { minX = x }
-        if x > maxX { maxX = x }
-        if y < minY { minY = y }
-        if y > maxY { maxY = y }
-        let col = max(0, min(gridColumns - 1,
-                             Int(Double(x) / Double(surfaceWidth) * Double(gridColumns))))
-        let row = max(0, min(gridRows - 1,
-                             Int(Double(y) / Double(surfaceHeight) * Double(gridRows))))
-        touched[row * gridColumns + col] = true
+        let pressed = Set(regions.map(\.id).filter { isRegionPressed($0) })
+        if pressed != pressedRegionIDs { pressedRegionIDs = pressed }
     }
 }
 
@@ -1349,6 +1037,8 @@ struct TouchpadCalibrationView: View {
 /// banner, stat blocks, save / quick-zero / reset buttons) to redraw.
 private struct FingerDotsOverlay: View {
     let size: CGSize
+    /// The pad whose fingers are drawn.
+    var service: TouchpadService = .shared
 
     /// Cached touchpad surface dimensions. Same value the parent reads
     /// via TouchpadService.nominalSurfaceSize; pulling it once at init
@@ -1357,8 +1047,9 @@ private struct FingerDotsOverlay: View {
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
 
-    init(size: CGSize) {
+    init(size: CGSize, service: TouchpadService = .shared) {
         self.size = size
+        self.service = service
         let (w, h) = TouchpadService.shared.nominalSurfaceSize
         self.surfaceWidth = CGFloat(w)
         self.surfaceHeight = CGFloat(h)
@@ -1367,7 +1058,7 @@ private struct FingerDotsOverlay: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { _ in
             ZStack {
-                if let p = TouchpadService.shared.currentPosition(finger: 0) {
+                if let p = service.currentPosition(finger: 0) {
                     Circle()
                         .fill(Color.mint)
                         .frame(width: 18, height: 18)
@@ -1375,7 +1066,7 @@ private struct FingerDotsOverlay: View {
                                   y: CGFloat(p.y) / surfaceHeight * size.height)
                         .shadow(color: .mint.opacity(0.6), radius: 6)
                 }
-                if let p = TouchpadService.shared.currentPosition(finger: 1) {
+                if let p = service.currentPosition(finger: 1) {
                     Circle()
                         .fill(Color.cyan)
                         .frame(width: 14, height: 14)
@@ -1390,5 +1081,92 @@ private struct FingerDotsOverlay: View {
         // bounding box and clip dots near the edges.
         .frame(width: size.width, height: size.height)
         .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Moving and resizing rectangle regions
+
+/// What a drag on a rectangle region drawing does, decided where it starts:
+/// on a corner of the selected region it resizes it, inside a region it
+/// moves it, and on empty space it draws a new one.
+enum RectRegionDrag: Equatable {
+    case draw
+    case move(TouchpadRegion)
+    case resize(TouchpadRegion, corner: Int)   // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+
+    /// How close to a corner, in points, a press counts as on it.
+    static let handleReach: CGFloat = 9
+
+    static func mode(at p: CGPoint, size: CGSize, regions: [TouchpadRegion], selected: UUID?) -> RectRegionDrag {
+        guard size.width > 0, size.height > 0 else { return .draw }
+        if let id = selected, let r = regions.first(where: { $0.id == id }) {
+            for (i, c) in corners(r, size: size).enumerated() where hypot(c.x - p.x, c.y - p.y) <= handleReach {
+                return .resize(r, corner: i)
+            }
+        }
+        let x = Double(p.x / size.width), y = Double(p.y / size.height)
+        // The top one where two overlap: the last drawn.
+        if let hit = regions.last(where: { x >= $0.minX && x <= $0.maxX && y >= $0.minY && y <= $0.maxY }) {
+            return .move(hit)
+        }
+        return .draw
+    }
+
+    static func corners(_ r: TouchpadRegion, size: CGSize) -> [CGPoint] {
+        [CGPoint(x: r.minX * size.width, y: r.minY * size.height), CGPoint(x: r.maxX * size.width, y: r.minY * size.height),
+         CGPoint(x: r.minX * size.width, y: r.maxY * size.height), CGPoint(x: r.maxX * size.width, y: r.maxY * size.height)]
+    }
+
+    /// The region as the drag leaves it, kept on the surface and at least
+    /// a few percent across.
+    func apply(from start: CGPoint, to current: CGPoint, size: CGSize) -> TouchpadRegion? {
+        let dx = Double((current.x - start.x) / max(1, size.width))
+        let dy = Double((current.y - start.y) / max(1, size.height))
+        let minSide = 0.04
+        switch self {
+        case .draw:
+            return nil
+        case .move(var r):
+            let w = r.maxX - r.minX, h = r.maxY - r.minY
+            let nx = min(max(0, r.minX + dx), 1 - w), ny = min(max(0, r.minY + dy), 1 - h)
+            r.minX = nx; r.maxX = nx + w; r.minY = ny; r.maxY = ny + h
+            return r
+        case .resize(var r, let corner):
+            if corner == 0 || corner == 2 { r.minX = min(max(0, r.minX + dx), r.maxX - minSide) }
+            else { r.maxX = max(min(1, r.maxX + dx), r.minX + minSide) }
+            if corner == 0 || corner == 1 { r.minY = min(max(0, r.minY + dy), r.maxY - minSide) }
+            else { r.maxY = max(min(1, r.maxY + dy), r.minY + minSide) }
+            return r
+        }
+    }
+
+    /// A copy a little down and right of the original, still on the surface.
+    static func duplicate(_ r: TouchpadRegion, name: String, colorIndex: Int) -> TouchpadRegion {
+        var copy = r
+        copy.id = UUID()
+        copy.name = name
+        copy.colorIndex = colorIndex
+        let w = r.maxX - r.minX, h = r.maxY - r.minY
+        let nx = min(r.minX + 0.04, 1 - w), ny = min(r.minY + 0.04, 1 - h)
+        copy.minX = nx; copy.maxX = nx + w; copy.minY = ny; copy.maxY = ny + h
+        return copy
+    }
+}
+
+/// The selected region's corners: the dots a drag resizes it by.
+struct RegionCornerHandles: View {
+    let rect: CGRect
+    let color: Color
+
+    var body: some View {
+        ForEach(0..<4, id: \.self) { i in
+            Circle()
+                .fill(Color.white)
+                .overlay(Circle().stroke(color, lineWidth: 1.5))
+                .frame(width: 9, height: 9)
+                .position(x: i % 2 == 0 ? rect.minX : rect.maxX, y: i < 2 ? rect.minY : rect.maxY)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }

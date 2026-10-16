@@ -150,7 +150,7 @@ final class TestBenchService: ObservableObject {
         let cat = "Face Button Names"
         let ps = (0...3).compactMap { FaceLetters.genericName($0, choice: .playstation) }
         record(cat, "PlayStation names the face buttons on any controller",
-               pass: ps == ["Cross", "Circle", "Square", "Triangle"]
+               pass: ps == [String(localized: "Cross"), String(localized: "Circle"), String(localized: "Square"), String(localized: "Triangle")]
                    && FaceLetters.playStation(for: .xbox, choice: .playstation)
                    && !FaceLetters.nintendo(for: .switchPro, choice: .playstation),
                detail: ps.joined(separator: ", "))
@@ -219,7 +219,7 @@ final class TestBenchService: ObservableObject {
         let saved = InputEvent(type: .extKey, index: unnamed).serialized
         record(cat, "A key with no name is still bindable",
                pass: unnamed == KeyCodeMap.unknownKeyBase + 66
-                   && KeyCodeMap.name(for: unnamed) == "Key code 66"
+                   && KeyCodeMap.name(for: unnamed) == String(localized: "Key code \(66)")
                    && InputEvent.parse(saved)?.index == unnamed,
                detail: "\(KeyCodeMap.name(for: unnamed)), saved as \"\(saved)\"")
 

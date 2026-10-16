@@ -140,6 +140,52 @@ struct TouchpadRegion: Codable, Hashable, Identifiable {
     /// Touchpad and stick zones leave it nil. Absent in files written
     /// before 1.5, which decode as nil: every display, as before.
     var display: DisplayKey? = nil
+    /// Stick zones only: a ring sector instead of a rectangle. The bounds
+    /// above then hold the sector's bounding box, so a build before 1.7
+    /// reads the zone as the nearest rectangle. Absent everywhere else.
+    var ring: RingSector? = nil
+    /// Touchpad regions only: 1 for a Steam Controller's left trackpad. Nil
+    /// is the main touchpad: a PlayStation pad's, or a Steam Controller's
+    /// right trackpad. Absent in files written before 1.7, which read as
+    /// the main touchpad, as before.
+    var surface: Int? = nil
+    /// Zone fields this build has no key for (written by a newer version),
+    /// kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, name, minX, maxX, minY, maxY, colorIndex, display, ring, surface
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        minX = try c.decode(Double.self, forKey: .minX)
+        maxX = try c.decode(Double.self, forKey: .maxX)
+        minY = try c.decode(Double.self, forKey: .minY)
+        maxY = try c.decode(Double.self, forKey: .maxY)
+        colorIndex = try c.decode(Int.self, forKey: .colorIndex)
+        display = try c.decodeIfPresent(DisplayKey.self, forKey: .display)
+        ring = try c.decodeIfPresent(RingSector.self, forKey: .ring)
+        surface = try c.decodeIfPresent(Int.self, forKey: .surface)
+        extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(minX, forKey: .minX)
+        try c.encode(maxX, forKey: .maxX)
+        try c.encode(minY, forKey: .minY)
+        try c.encode(maxY, forKey: .maxY)
+        try c.encode(colorIndex, forKey: .colorIndex)
+        try c.encodeIfPresent(display, forKey: .display)
+        try c.encodeIfPresent(ring, forKey: .ring)
+        try c.encodeIfPresent(surface, forKey: .surface)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
+    }
 
     /// Color palette regions cycle through. Kept in the model so it
     /// survives serialization and the UI doesn't need a separate lookup.
@@ -159,9 +205,101 @@ struct TouchpadRegion: Codable, Hashable, Identifiable {
     }
 
     /// Test whether the normalized point is inside this region.
+    /// The far edges are open except at the surface's own edge, so two
+    /// zones that share a border (the 4 by 4 grid) are not both pressed on it.
     func contains(normalizedX: Double, y: Double) -> Bool {
-        normalizedX >= minX && normalizedX <= maxX &&
-        y >= minY && y <= maxY
+        if let ring { return ring.contains(x: normalizedX * 2 - 1, y: y * 2 - 1) }
+        return normalizedX >= minX && (normalizedX < maxX || maxX >= 1) &&
+            y >= minY && (y < maxY || maxY >= 1)
+    }
+
+    /// Travel bands (a trigger's or one axis's zones) keep their range in
+    /// minY...maxY as a fraction of the travel, 0 at the low end; their
+    /// width is zero, so a build before 1.7 never fires one.
+    func containsTravel(_ fraction: Double) -> Bool {
+        fraction >= minY && (fraction < maxY || maxY >= 1)
+    }
+
+    /// A ring zone with its bounding box filled in.
+    static func ring(name: String, _ ring: RingSector, colorIndex: Int) -> TouchpadRegion {
+        let box = ring.boundingBox
+        var r = TouchpadRegion(name: name, minX: box.minX, maxX: box.maxX,
+                               minY: box.minY, maxY: box.maxY, colorIndex: colorIndex)
+        r.ring = ring
+        return r
+    }
+
+    /// A travel band from `from` to `to` of the travel.
+    static func band(name: String, from: Double, to: Double, colorIndex: Int) -> TouchpadRegion {
+        TouchpadRegion(name: name, minX: 0, maxX: 0, minY: from, maxY: to, colorIndex: colorIndex)
+    }
+}
+
+/// A stick zone shaped as part of a ring: between two distances from the
+/// center and two directions. Distances run 0 (center) to 1 (full
+/// travel); directions are degrees counterclockwise from right, so up is
+/// 90. The sector runs counterclockwise from `start` to `end`, and the two
+/// equal (360 apart) make a whole ring.
+struct RingSector: Codable, Hashable {
+    var inner: Double
+    var outer: Double
+    var start: Double
+    var end: Double
+
+    /// Degrees from start to end, counterclockwise, in (0, 360].
+    var span: Double {
+        let d = Self.wrap(end - start)
+        return d == 0 ? 360 : d
+    }
+
+    static func wrap(_ degrees: Double) -> Double {
+        guard degrees.isFinite else { return 0 }
+        let d = degrees.truncatingRemainder(dividingBy: 360)
+        return d < 0 ? d + 360 : d
+    }
+
+    /// Whether a stick point is inside; `x` runs left to right and `y` top
+    /// to bottom, both -1...1, as the app reads a stick. The inner edge and
+    /// the end direction are open, so two zones sharing an edge are not
+    /// both pressed on it; a point past full travel counts as full travel.
+    func contains(x: Double, y: Double) -> Bool {
+        let r = min(1, hypot(x, y))
+        guard r >= inner, r < outer || outer >= 1 else { return false }
+        if span >= 360 { return true }
+        let angle = atan2(-y, x) * 180 / .pi
+        return Self.wrap(angle - start) < span
+    }
+
+    /// The point at a distance and direction, in the 0...1 surface space
+    /// rectangles use (y = 0 at the top).
+    static func point(r: Double, degrees: Double) -> CGPoint {
+        let a = degrees * .pi / 180
+        return CGPoint(x: (r * cos(a) + 1) / 2, y: (1 - r * sin(a)) / 2)
+    }
+
+    /// The smallest rectangle around the sector, in the 0...1 surface space.
+    var boundingBox: CGRect {
+        var pts = [Self.point(r: inner, degrees: start), Self.point(r: outer, degrees: start),
+                   Self.point(r: inner, degrees: start + span), Self.point(r: outer, degrees: start + span)]
+        for cardinal in stride(from: 0.0, to: 360, by: 90)
+        where span >= 360 || Self.wrap(cardinal - start) < span {
+            pts.append(Self.point(r: outer, degrees: cardinal))
+        }
+        let xs = pts.map(\.x), ys = pts.map(\.y)
+        let minX = max(0, xs.min() ?? 0), maxX = min(1, xs.max() ?? 1)
+        let minY = max(0, ys.min() ?? 0), maxY = min(1, ys.max() ?? 1)
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// In range, inner below outer, directions in 0..<360 (end may equal
+    /// start + 360 for a whole ring, which wraps to start).
+    func clamped() -> RingSector {
+        func f(_ v: Double, _ lo: Double, _ hi: Double, _ d: Double) -> Double { v.isFinite ? min(hi, max(lo, v)) : d }
+        var s = RingSector(inner: f(inner, 0, 1, 0), outer: f(outer, 0, 1, 1),
+                           start: Self.wrap(start), end: Self.wrap(end))
+        if s.inner > s.outer { swap(&s.inner, &s.outer) }
+        if s.outer - s.inner < 0.02 { s.outer = min(1, s.inner + 0.02); s.inner = s.outer - 0.02 }
+        return s
     }
 }
 
@@ -254,6 +392,13 @@ final class TouchpadService: @unchecked Sendable {
         self.surface = surface
         guard surface == 0 else { return }
         loadCalibration()
+        // 1.7 has no Calibrate Touchpad (macOS reports the whole pad), so a
+        // calibration saved in 1.6 would scale motion with no way to undo
+        // it: it is put back to the whole pad once.
+        if !UserDefaults.standard.bool(forKey: Self.calibrationResetKey) {
+            UserDefaults.standard.set(true, forKey: Self.calibrationResetKey)
+            if calibration != .uncalibrated { saveCalibration(.uncalibrated) }
+        }
         loadRegions()
     }
 
@@ -302,6 +447,7 @@ final class TouchpadService: @unchecked Sendable {
         oneFingerMotionMagnitude = 0
         oneFingerSawPress = false
         oneFingerSawSecond = false
+        twoFingerSawPress = false
         twoFingerLiftDeadline = nil
         lastOneFingerTapAt = 0
         touchpadButtonDown = false
@@ -549,6 +695,8 @@ final class TouchpadService: @unchecked Sendable {
         return c.maxX - c.minX >= minimumSpanX && c.maxY - c.minY >= minimumSpanY
     }
 
+    private static let calibrationResetKey = "InputConfig.touchpadCalibrationReset17"
+
     private func loadCalibration() {
         // Prefer the on-disk file (more reliable across container migrations),
         // fall back to UserDefaults for older installs.
@@ -672,8 +820,19 @@ final class TouchpadService: @unchecked Sendable {
         if let cb = scanGestureCallback { DispatchQueue.main.async { cb(kind) } }
     }
     func setTouchpadButtonPressed(_ pressed: Bool) {
-        lock.lock(); touchpadButtonDown = pressed; if pressed { oneFingerSawPress = true }; lock.unlock()
+        lock.lock()
+        touchpadButtonDown = pressed
+        if pressed {
+            oneFingerSawPress = true
+            // A two-finger click is a press, not a two-finger tap.
+            if twoFingerStartedAt != nil { twoFingerSawPress = true }
+            twoFingerLiftDeadline = nil
+        }
+        lock.unlock()
     }
+    /// The pad was pressed while two fingers were down: a click, which has
+    /// its own button 13 row, so no two-finger tap fires at the lift.
+    private var twoFingerSawPress = false
     /// Scan hook: a detected gesture is reported here as well as being
     /// held for the engine, so Scan can capture a tap.
     var scanGestureCallback: ((TouchpadGestureKind) -> Void)?
@@ -798,7 +957,9 @@ final class TouchpadService: @unchecked Sendable {
             if twoFingerStartedAt == nil {
                 twoFingerStartedAt = nowMono
                 twoFingerMotionMagnitude = 0
+                twoFingerSawPress = touchpadButtonDown
             } else {
+                if touchpadButtonDown { twoFingerSawPress = true }
                 // Accumulate per-frame motion on both fingers.
                 let dm = Double(abs(f0DX) + abs(f0DY) + abs(f1DX) + abs(f1DY))
                 twoFingerMotionMagnitude += dm
@@ -806,7 +967,7 @@ final class TouchpadService: @unchecked Sendable {
         } else if let started = twoFingerStartedAt {
             // Both-down window ended. Decide tap vs ignore.
             let elapsed = nowMono - started
-            if elapsed <= tapMaxDuration && twoFingerMotionMagnitude <= tapMotionLimit {
+            if elapsed <= tapMaxDuration && twoFingerMotionMagnitude <= tapMotionLimit && !twoFingerSawPress && !touchpadButtonDown {
                 if !f0Active && !f1Active {
                     fireGesture(.twoFingerTap)
                 } else {
@@ -816,6 +977,7 @@ final class TouchpadService: @unchecked Sendable {
             }
             twoFingerStartedAt = nil
             twoFingerMotionMagnitude = 0
+            twoFingerSawPress = false
         }
     }
 
@@ -829,14 +991,33 @@ final class TouchpadService: @unchecked Sendable {
 
     /// Make these the regions in play: the running preset's, or the one
     /// being edited.
+    /// Posted after the regions change, for the editor's undo history.
+    static let regionsDidChange = Notification.Name("InputConfig.touchpadRegionsDidChange")
+
     func load(_ newRegions: [TouchpadRegion]) {
+        defer {
+            if self === TouchpadService.shared {
+                DispatchQueue.main.async { NotificationCenter.default.post(name: Self.regionsDidChange, object: nil) }
+            }
+        }
         lock.lock()
         regions = newRegions
-        // Drop pressed-state entries for regions that no longer exist.
-        pressedRegions = pressedRegions.filter { id in newRegions.contains(where: { $0.id == id }) }
+        // Drop pressed-state entries for regions that no longer exist, and
+        // their latch, which brought a deleted zone back for a moment.
+        let ids = Set(newRegions.map(\.id))
+        pressedRegions = pressedRegions.filter { ids.contains($0) }
+        regionPressExpiry = regionPressExpiry.filter { ids.contains($0.key) }
+        // A finger resting still sends nothing, so test it against the new
+        // bounds now: a zone moved off it lets go at once.
+        recomputePressedRegions(f0Active: currentF0 != nil, f0X: currentF0?.x ?? 0, f0Y: currentF0?.y ?? 0,
+                                f1Active: currentF1 != nil, f1X: currentF1?.x ?? 0, f1Y: currentF1?.y ?? 0)
         lock.unlock()
-        // The Steam right pad reads the same zones.
-        if self === TouchpadService.shared { TouchpadService.steamRight.load(newRegions) }
+        // The Steam right pad reads the main touchpad's regions, the left
+        // pad its own.
+        if self === TouchpadService.shared {
+            TouchpadService.steamRight.load(newRegions.filter { $0.surface != 1 })
+            TouchpadService.second.load(newRegions.filter { $0.surface == 1 })
+        }
     }
 
     /// Regions the app kept app-wide before 1.5, read once so the
@@ -872,7 +1053,9 @@ final class TouchpadService: @unchecked Sendable {
         var held = Set<UUID>()
         let w = Double(surfaceWidth), h = Double(surfaceHeight)
         let now = ProcessInfo.processInfo.systemUptime
-        for region in regions {
+        // The working set (`shared`) holds the left trackpad's regions too,
+        // so a preset keeps them; only this surface's own ones are pressed.
+        for region in regions where (region.surface == 1) == (surface == 1) {
             if (f0Active && region.contains(normalizedX: Double(f0X) / w, y: Double(f0Y) / h))
                 || (f1Active && region.contains(normalizedX: Double(f1X) / w, y: Double(f1Y) / h)) {
                 held.insert(region.id)

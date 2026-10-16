@@ -87,6 +87,10 @@ final class CursorGuardService: ObservableObject {
     /// `GuardScope`).
     private var presetTargets = GuardScope()
     private var targetAppInFront = true
+    /// The Finder, InputConfig, System Settings or a system prompt is in
+    /// front: the Settings toggles stand down there too, so Deactivate,
+    /// the menu bar and the Accessibility switch stay in reach.
+    private var exemptAppInFront = false
     private var frontAppObserver: NSObjectProtocol?
 
     private init() {
@@ -121,6 +125,8 @@ final class CursorGuardService: ObservableObject {
         "com.apple.finder", "com.apple.systempreferences", "com.apple.SecurityAgent",
         "com.apple.UserNotificationCenter", "com.apple.coreservices.uiagent", "com.apple.loginwindow",
         "com.apple.LocalAuthentication.UIAgent", "com.apple.dock",
+        // The "would like to control this computer" Accessibility prompt.
+        "com.apple.accessibility.universalAccessAuthWarn",
     ]
 
     private static func targets(of automation: PresetAutomation?) -> GuardScope {
@@ -188,14 +194,17 @@ final class CursorGuardService: ObservableObject {
         } else {
             inFront = true
         }
-        guard inFront != targetAppInFront else { return }
+        let exempt = id.map { Self.neverGuarded.contains($0) || $0 == Bundle.main.bundleIdentifier } ?? false
+        guard inFront != targetAppInFront || exempt != exemptAppInFront else { return }
         targetAppInFront = inFront
+        exemptAppInFront = exempt
         restartLoop()
         applyHideState()
     }
 
     /// The preset's own utilities, when its target app (if it names one)
-    /// is in front. The global Settings toggles are not gated.
+    /// is in front. The global Settings toggles stand down only in the
+    /// apps that are never guarded (exemptAppInFront).
     private var presetGuards: PresetAutomation? {
         targetAppInFront ? presetOverride : nil
     }
@@ -232,19 +241,19 @@ final class CursorGuardService: ObservableObject {
     // ran. The preset's own numbers apply only when the preset turned the
     // utility on; otherwise the global numbers do.
     private var effectiveConfineEnabled: Bool {
-        (presetGuards?.confineCursor ?? false) || edgeConfineEnabled
+        (presetGuards?.confineCursor ?? false) || (edgeConfineEnabled && !exemptAppInFront)
     }
     private var effectiveBufferPx: Double {
         presetGuards?.confineCursor == true ? (presetGuards?.confineBufferPx ?? edgeBufferPx) : edgeBufferPx
     }
     private var effectiveRecenterEnabled: Bool {
-        (presetGuards?.autoRecenterCursor ?? false) || autoRecenterEnabled
+        (presetGuards?.autoRecenterCursor ?? false) || (autoRecenterEnabled && !exemptAppInFront)
     }
     private var effectiveRecenterIntervalMs: Double {
         presetGuards?.autoRecenterCursor == true ? (presetGuards?.autoRecenterIntervalMs ?? recenterIntervalMs) : recenterIntervalMs
     }
     private var effectiveHideCursor: Bool {
-        (presetGuards?.hideCursorWhileActive ?? false) || hideCursorWhileEngineRunning
+        (presetGuards?.hideCursorWhileActive ?? false) || (hideCursorWhileEngineRunning && !exemptAppInFront)
     }
 
     // MARK: - Engine integration
@@ -408,6 +417,9 @@ final class CursorGuardService: ObservableObject {
     /// Teleport the cursor back to the center of the screen it's on.
     /// Future work: per-screen / per-app anchor points.
     func warpToAnchor() {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("recenter"); return }
+        #endif
         guard let screen = screenForCursor() else { return }
         let frame = screenRectTopLeft(screen)
         let center = CGPoint(x: frame.midX, y: frame.midY)
@@ -416,6 +428,9 @@ final class CursorGuardService: ObservableObject {
 
     /// CG cursor hide/show toggle, matched to the engine-running state.
     private func applyHideState() {
+        #if DEBUG
+        if TestCapture.active { TestCapture.note("hide \(engineActive && !suspended && effectiveHideCursor)"); return }
+        #endif
         let shouldHide = engineActive && !suspended && effectiveHideCursor
         if shouldHide, !cursorHidden {
             CGDisplayHideCursor(CGMainDisplayID())

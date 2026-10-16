@@ -48,7 +48,7 @@ struct SettingsView: View {
     /// Why the last recorded emergency stop chord was refused.
     @State private var panicChordRefusal: String?
     @State private var globalChordRefusal: String? {
-        didSet { if let globalChordRefusal { AccessibilityNotification.Announcement(globalChordRefusal).post() } }
+        didSet { if let globalChordRefusal { AccessibilityNotification.Announcement(HotKeySpec.speakingChords(in: globalChordRefusal)).post() } }
     }
     @State private var showingResetConfirm = false
     /// The preset Pause stopped, so Resume can start that one again.
@@ -83,6 +83,20 @@ struct SettingsView: View {
 
     // App-level accessibility preferences (Settings > General > Accessibility).
     @AppStorage("InputConfig.a11y.textSize") private var a11yTextSize = 0
+
+    private var textSizePicker: some View {
+        Picker("Text size", selection: $a11yTextSize) {
+            Text("Small").tag(-1)
+            Text("Default").tag(0)
+            Text("Large").tag(1)
+            Text("Extra Large").tag(2)
+            Text("Huge").tag(3)
+            // Twice the default: what Larger Text asks for.
+            Text("Largest").tag(4)
+        }
+        .labelsHidden()
+        .accessibilityLabel("Text size")
+    }
     @AppStorage("InputConfig.a11y.boldText") private var a11yBoldText = false
     @AppStorage("InputConfig.a11y.highContrast") private var a11yHighContrast = false
     @AppStorage(ScanTiming.key) private var scanSeconds = 20
@@ -97,6 +111,14 @@ struct SettingsView: View {
         case about = "About"
 
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .general: return String(localized: "General")
+            case .advanced: return String(localized: "Advanced")
+            case .controllers: return String(localized: "Devices")
+            case .about: return String(localized: "About")
+            }
+        }
         var systemImage: String {
             switch self {
             case .general: return "gear"
@@ -113,7 +135,7 @@ struct SettingsView: View {
             // below the rounded corner via padding.
             Picker("Settings section", selection: $selectedTab) {
                 ForEach(SettingsTab.allCases) { tab in
-                    Label { Text(tab.rawValue) } icon: {
+                    Label { Text(tab.title) } icon: {
                         IconView(name: tab.systemImage, glyphHeight: 11)
                     }
                     .tag(tab)
@@ -141,8 +163,11 @@ struct SettingsView: View {
         // macOS Form needs more room. With sections containing descriptions
         // and toggles, 500 px clips the labels and right column. Widening
         // keeps multi-line descriptions readable.
+        // As tall as it likes, but able to shrink to a short window: a sheet
+        // taller than its window is cut off at both ends, which hid the
+        // section tabs above and Done below. The sections scroll instead.
         .frame(minWidth: Self.preferredSize.width, idealWidth: Self.preferredSize.width,
-               minHeight: Self.preferredSize.height, idealHeight: Self.preferredSize.height)
+               minHeight: 260, idealHeight: Self.preferredSize.height)
     }
 
     // MARK: - General
@@ -159,7 +184,7 @@ struct SettingsView: View {
                             .font(accessibility.isTrusted ? .system(size: 9) : .body)
                             .foregroundStyle(accessibility.isTrusted ? .green : .orange)
                             .accessibilityHidden(true)
-                        Text(accessibility.isTrusted ? "Accessibility access granted" : "Accessibility access not granted")
+                        Text(accessibility.isTrusted ? LocalizedStringKey("Accessibility access granted") : LocalizedStringKey("Accessibility access not granted"))
                             .font(.callout.weight(.medium))
                         Spacer()
                     }
@@ -184,6 +209,12 @@ struct SettingsView: View {
                     }
                 }
 
+                section(title: "Language") {
+                    // Rebuilt after Reset Settings, which clears the choice.
+                    LanguagePicker()
+                        .id(panicSpecRevision)
+                }
+
                 section(title: "Accent color") {
                     AccentColorPicker()
                     Text("Automatic follows System Settings. The last one picks any color.")
@@ -198,17 +229,13 @@ struct SettingsView: View {
                     // squeezed the label.
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Text size")
-                        Picker("Text size", selection: $a11yTextSize) {
-                            Text("Small").tag(-1)
-                            Text("Default").tag(0)
-                            Text("Large").tag(1)
-                            Text("Extra Large").tag(2)
-                            Text("Huge").tag(3)
+                        // Segments while they fit; a menu at the largest
+                        // sizes, where the segments cut their own names.
+                        ViewThatFits(in: .horizontal) {
+                            textSizePicker.pickerStyle(.segmented).fixedSize()
+                            textSizePicker.pickerStyle(.menu).fixedSize()
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(maxWidth: 460)
-                        .accessibilityLabel("Text size")
+                        .frame(maxWidth: 460, alignment: .leading)
                     }
                     Text("Scales all text in the app.")
                         .font(.caption)
@@ -256,6 +283,12 @@ struct SettingsView: View {
 
                 section(title: "Keyboard output") {
                     Toggle("Keys follow the keyboard layout", isOn: $keysFollowLayout)
+                        // Key outputs are named by what they send, which this
+                        // changes: open rows and key menus redraw.
+                        .onChange(of: keysFollowLayout) { _, _ in
+                            KeyLabelCache.forgetTypable()
+                            KeyboardLayoutService.shared.objectWillChange.send()
+                        }
                     Text("On a keyboard layout other than US, a row set to a letter, digit or punctuation key types that character: on French AZERTY, A types a instead of q. Leave it off for games, which read keys by where they are, so W A S D stay on the same physical keys. Shortcuts with Command or Control always follow the layout.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -321,13 +354,13 @@ struct SettingsView: View {
                                 // of InputConfig's own shortcuts is named.
                                 let chord = GlobalHotKeyService.spec
                                 if EmergencyStopService.shared.claims(chord) {
-                                    globalChordRefusal = "The emergency stop uses \(chord.displayString). Choose another emergency stop chord first."
+                                    globalChordRefusal = String(localized: "The emergency stop uses \(chord.displayString). Choose another emergency stop chord first.")
                                     globalHotkeyEnabled = false
                                 } else if let owner = presetStore.presets.first(where: { $0.activateHotKey == chord }) {
-                                    globalChordRefusal = "\(chord.displayString) already activates \u{201C}\(owner.name)\u{201D}. Give that preset another shortcut first."
+                                    globalChordRefusal = String(localized: "\(chord.displayString) already activates \u{201C}\(owner.shownName)\u{201D}. Give that preset another shortcut first.")
                                     globalHotkeyEnabled = false
                                 } else if !GlobalHotKeyService.shared.enable() {
-                                    globalChordRefusal = "Another app already uses \(chord.displayString)."
+                                    globalChordRefusal = String(localized: "Another app already uses \(chord.displayString).")
                                     globalHotkeyEnabled = false
                                 } else {
                                     globalChordRefusal = nil
@@ -342,6 +375,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     if let refusal = globalChordRefusal {
                         Text(refusal)
+                            .accessibilityLabel(HotKeySpec.speakingChords(in: refusal))
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
@@ -378,7 +412,7 @@ struct SettingsView: View {
                 section(title: "Reliability") {
                     Toggle("Restore active preset after a crash",
                            isOn: $crashRecovery.sessionRestoreEnabled)
-                    Text("InputConfig asks before starting it again, and starts it by itself after 20 seconds with no answer. A second crash soon after skips this, so a bad preset can't trap you.")
+                    Text("InputConfig asks before starting it again, and starts it by itself after 20 seconds with no answer (1 minute with VoiceOver or Switch Control on). A second crash soon after skips this, so a bad preset can't trap you.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -527,11 +561,13 @@ struct SettingsView: View {
                             Spacer(minLength: 0)
                             Button("Resume") {
                                 pausedPresetID = nil
-                                presetStore.activatePreset(last)
-                                mappingEngine.start(with: last)
+                                // The shared start path: it refuses a preset
+                                // left with nothing to run and warns when
+                                // Accessibility is off.
+                                MenuBarController.activate(last, store: presetStore, engine: mappingEngine)
                             }
                             .buttonStyle(.solidCompact)
-                            .help("Start \(last.name) again with the chosen rate.")
+                            .help("Start \(last.shownName) again with the chosen rate.")
                         }
                     }
 
@@ -593,17 +629,18 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Button("Restore Built-in Presets") {
                             let count = presetStore.restoreBuiltInPresets()
-                            backupMessage = (title: "Built-in presets",
-                                             text: count == 0 ? "Every built-in preset is already in your library."
-                                                : "\(count) built-in preset\(count == 1 ? " was" : "s were") put back. Ones you kept, edited or not, were left as they are.")
+                            backupMessage = (title: String(localized: "Built-in presets"),
+                                             text: count == 0 ? String(localized: "Every built-in preset is already in your library.")
+                                                : count == 1 ? String(localized: "1 built-in preset was put back. Ones you kept, edited or not, were left as they are.")
+                                                : String(localized: "\(count) built-in presets were put back. Ones you kept, edited or not, were left as they are."))
                         }
                         .buttonStyle(.solidSecondaryCompact)
                         Button("Check Older Presets Again") {
                             let count = LegacyRowCheck.shared.checkAgain()
-                            backupMessage = (title: "Older presets",
+                            backupMessage = (title: String(localized: "Older presets"),
                                              text: count == 0
-                                                ? "There are no presets from before 1.6 to check."
-                                                : "Presets made before 1.6 are offered again the next time a controller that 1.6 numbers differently connects.")
+                                                ? String(localized: "There are no presets from before 1.6 to check.")
+                                                : String(localized: "Presets made before 1.6 are offered again the next time a controller that 1.6 numbers differently connects."))
                         }
                         .buttonStyle(.solidSecondaryCompact)
                         Text("Moves rows recorded on a controller before 1.6 to the controls 1.6 reads.")
@@ -637,9 +674,18 @@ struct SettingsView: View {
                             AppSettingsApply.applyAll(engine: mappingEngine, store: presetStore)
                             // The default stop chord may be a preset's now:
                             // the preset lets go and the stop registers.
-                            presetStore.clearHotKeysClaimedByEmergencyStop()
+                            let cleared = presetStore.clearHotKeysClaimedByEmergencyStop()
                             EmergencyStopService.shared.refreshRegistration()
                             panicSpecRevision += 1
+                            // Presets are otherwise untouched, so a shortcut
+                            // taken back by the stop is said out loud.
+                            if !cleared.isEmpty {
+                                let names = ListFormatter.localizedString(byJoining: cleared)
+                                DispatchQueue.main.async {
+                                    backupMessage = (title: String(localized: "Settings Reset"),
+                                                     text: String(localized: "No longer has a shortcut, because the emergency stop uses it again: \(names)"))
+                                }
+                            }
                         }
                         Button("Cancel", role: .cancel) {}
                     } message: {
@@ -660,7 +706,7 @@ struct SettingsView: View {
     /// rounded-rectangle background that delineates one section from
     /// the next. Improves readability of long tab contents (the user
     /// said the Controllers / About tabs were "not easy to see").
-    private func section<Content: View>(title: String,
+    private func section<Content: View>(title: LocalizedStringKey,
                                          @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
@@ -694,7 +740,11 @@ struct SettingsView: View {
     /// already survives App Store updates.
     private func exportBackup() {
         let panel = NSSavePanel()
+        panel.message = String(localized: "Choose where to save the InputConfig backup")
         let formatter = DateFormatter()
+        // Gregorian, Western digits: a file name, not a date for reading.
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
         formatter.dateFormat = "yyyy-MM-dd"
         panel.nameFieldStringValue = "InputConfig-Backup-\(formatter.string(from: Date())).json"
         panel.allowedContentTypes = [.json]
@@ -708,7 +758,7 @@ struct SettingsView: View {
                 ActivityLog.shared.info("Settings", "Backup saved to \(url.lastPathComponent)")
             } catch {
                 ActivityLog.shared.error("Settings", "Backup could not be saved: \(error.localizedDescription)")
-                backupMessage = ("Backup Not Saved", error.localizedDescription)
+                backupMessage = (String(localized: "Backup Not Saved"), error.localizedDescription)
             }
         }
     }
@@ -717,6 +767,7 @@ struct SettingsView: View {
     /// already on this Mac are kept; the backup's are added beside them.
     private func importBackup() {
         let panel = NSOpenPanel()
+        panel.message = String(localized: "Choose an InputConfig backup file to restore")
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -725,8 +776,8 @@ struct SettingsView: View {
             guard let data = try? Data(contentsOf: url),
                   let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   envelope["presets"] != nil || envelope["userDefaults"] != nil else {
-                backupMessage = ("Not a Backup",
-                                 "\(url.lastPathComponent) is not an InputConfig backup. To add a single preset, use Import Preset File.")
+                backupMessage = (String(localized: "Not a Backup"),
+                                 String(localized: "\(url.lastPathComponent) is not an InputConfig backup. To add a single preset, use Import Preset File."))
                 return
             }
             restoreBackup(envelope)
@@ -734,197 +785,13 @@ struct SettingsView: View {
     }
 
     private func makeBackupEnvelope() -> [String: Any] {
-        var presetsArray: [[String: Any]] = []
-        for p in presetStore.presets {
-            if let data = try? JSONEncoder().encode(p),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                presetsArray.append(dict)
-            }
-        }
-        var groupsArray: [[String: Any]] = []
-        for g in presetStore.groups {
-            if let data = try? JSONEncoder().encode(g),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                groupsArray.append(dict)
-            }
-        }
-        // Trash (soft-deleted presets). Captures both the preset and the
-        // original deletedAt timestamp so a "restore on new Mac" landing
-        // doesn't reset the trash's chronological ordering. Older
-        // restores that lack this field just skip the trash block.
-        var trashArray: [[String: Any]] = []
-        for snap in presetStore.snapshotTrashForBackup() {
-            if let data = try? JSONEncoder().encode(snap),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                trashArray.append(dict)
-            }
-        }
-        // Mirror selected UserDefaults that we own.
-        let defaults = UserDefaults.standard
-        var prefs: [String: Any] = [:]
-        // Every UserDefaults key the app owns. Adding new keys here is
-        // how they get carried by Export Backup; missing entries silently
-        // reset when the user restores on a new Mac. Grouped roughly
-        // by subsystem for readability.
-        // Every setting the app owns, found by prefix in its own defaults
-        // domain rather than listed by hand. The hand-kept list had drifted:
-        // the emergency-stop and panic hotkeys, the global activate hotkey,
-        // auto-switch, the manual HID devices, the accessibility text
-        // settings and more were all missing, so restoring on a new Mac
-        // silently dropped the kill switch. A few keys are machine-local
-        // and skipped on purpose.
-        let exportedKeys: [String] = defaults.dictionaryRepresentation().keys
-            .filter { AppSettingsReset.isRestorable($0) && !AppSettingsReset.isUpgradeRecord($0) }
-            .sorted()
-        for key in exportedKeys {
-            if let v = defaults.object(forKey: key) {
-                // Encode Data values as base64 strings for JSON portability.
-                if let d = v as? Data {
-                    prefs[key] = ["__data": d.base64EncodedString()]
-                } else if key == HIDDeviceRegistry.rememberedKey, let list = v as? [String] {
-                    // A device's key carries its serial hashed with a salt
-                    // that stays on this Mac, so it cannot match on another.
-                    // The backup also carries the plain vendor and product
-                    // ("vvvv:pppp"), which still reconnects it after a
-                    // restore there. Only in the backup: on this Mac that
-                    // key would connect every identical pad.
-                    let pairs = list.compactMap { $0.count >= 9 ? String($0.prefix(9)) : nil }
-                    // A tag of this Mac's salt, so a restore here can tell
-                    // and leave the plain keys out.
-                    prefs[key] = Array(Set(list + pairs)).sorted() + [AppSettingsReset.saltTagPrefix + AppSettingsReset.saltTag]
-                } else if JSONSerialization.isValidJSONObject([v]) {
-                    prefs[key] = v
-                }
-            }
-        }
-        var envelope: [String: Any] = [
-            "schemaVersion": 1,
-            // Which version made it, and when 1.6 first ran on that Mac, so a
-            // restore knows which presets and trash entries 1.6 already upgraded.
-            "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
-            "exportedAt": ISO8601DateFormatter().string(from: Date()),
-            "presets": presetsArray,
-            "groups": groupsArray,
-            "trash": trashArray,
-            "userDefaults": prefs
-        ]
-        if let first = defaults.object(forKey: PresetStore.first16LaunchKey) as? Date {
-            envelope["first16LaunchAt"] = first.timeIntervalSince1970
-        }
-        // Gyro calibration lives in its own file; carried so a new Mac
-        // starts with the pads already calibrated.
-        if let motion = MotionCalibrationService.shared.exportData() {
-            envelope["motionCalibration"] = motion.base64EncodedString()
-        }
-        return envelope
+        BackupService.makeEnvelope(presetStore: presetStore)
     }
 
     private func restoreBackup(_ envelope: [String: Any]) {
-        // v1 is the only published format. A newer backup is refused
-        // rather than partly restored.
-        let version = (envelope["schemaVersion"] as? Int) ?? 1
-        guard version <= 1 else {
-            backupMessage = ("Backup From a Newer Version",
-                             "This backup was made by a newer InputConfig. Update the app, then restore it.")
-            return
-        }
-        func decodeAll<T: Decodable>(_ key: String, as type: T.Type, unreadable: inout Int) -> [T] {
-            guard let list = envelope[key] as? [[String: Any]] else { return [] }
-            return list.compactMap { dict in
-                guard let data = try? JSONSerialization.data(withJSONObject: dict),
-                      let value = try? JSONDecoder().decode(T.self, from: data) else {
-                    unreadable += 1
-                    return nil
-                }
-                return value
-            }
-        }
-        var unreadable = 0
-        let presets = decodeAll("presets", as: Preset.self, unreadable: &unreadable)
-        let groups = decodeAll("groups", as: PresetGroup.self, unreadable: &unreadable)
-        let trash = decodeAll("trash", as: PresetStore.TrashSnapshot.self, unreadable: &unreadable)
-        // A backup made by 1.6 names its version (1.5 wrote none); one from
-        // an early 1.6 build carried its one-shot flags instead.
-        let prefs = envelope["userDefaults"] as? [String: Any]
-        let madeBy16 = envelope["appVersion"] != nil
-            || prefs?["InputConfig.builtInRowFixes16.v1"] != nil
-            || prefs?["InputConfig.desktopNavigationAClicks.v1"] != nil
-        let source16 = (envelope["first16LaunchAt"] as? Double).map(Date.init(timeIntervalSince1970:))
-        var summary = presetStore.restoreFromBackup(presets: presets, groups: groups, trash: trash,
-                                                    madeBy16: madeBy16, source16Since: source16)
-        summary.unreadable = unreadable
-
-        // UserDefaults. Data values travel as base64 under a "__data"
-        // marker; backups written before 1.5 stored a few as bare strings.
-        let dataKeys: Set<String> = [
-            "InputConfig.touchpadCalibration.v1",
-            "InputConfig.touchpadRegions.v1",
-            "InputConfig.touchpadActiveDevice.v2",
-            "InputConfig.cursorRegions.v1",
-            "InputConfig.stickRegions.v1",
-        ]
-        var settingsRestored = 0
-        var skippedSettings = 0
-        if let prefs = envelope["userDefaults"] as? [String: Any] {
-            let defaults = UserDefaults.standard
-            // Only the app's own keys, and only values UserDefaults can hold:
-            // a null crashed the app, a negative panic key code crashed every
-            // launch after, and keys such as AppleLanguages could be planted.
-            for (key, rawValue) in prefs where AppSettingsReset.isRestorable(key)
-                && !AppSettingsReset.isRestoreSkipped(key) {
-                guard let value = AppSettingsReset.restorableValue(rawValue, forKey: key) else {
-                    skippedSettings += 1
-                    continue
-                }
-                let restored: Any
-                if let dict = value as? [String: Any], let str = dict["__data"] as? String,
-                   let data = Data(base64Encoded: str) {
-                    restored = data
-                } else if dataKeys.contains(key), let str = value as? String, let data = Data(base64Encoded: str) {
-                    restored = data
-                } else {
-                    restored = value
-                }
-                if key == "InputConfig.touchpadCalibration.v1", let data = restored as? Data,
-                   let calibration = try? JSONDecoder().decode(TouchpadCalibration.self, from: data) {
-                    // Through the service: it also keeps a file copy, which
-                    // wins over UserDefaults at launch.
-                    TouchpadService.shared.saveCalibration(calibration)
-                } else {
-                    defaults.set(AppSettingsReset.merged(restored, into: key, idMap: summary.idMap), forKey: key)
-                }
-                settingsRestored += 1
-            }
-        }
-        if let motion = envelope["motionCalibration"] as? String, let data = Data(base64Encoded: motion) {
-            MotionCalibrationService.shared.mergeImported(data)
-        }
-        // The stored values changed underneath the running services.
-        AppSettingsApply.applyAll(engine: mappingEngine, store: presetStore)
-        // Only now is the backup's Emergency Stop chord in place, so preset
-        // shortcuts are checked against it here, not against this Mac's
-        // before the restore (which cleared one for nothing, or let a preset
-        // and the stop share a chord).
-        presetStore.clearHotKeysClaimedByEmergencyStop()
-        // The stop tried to register before that preset let go of its chord.
-        EmergencyStopService.shared.refreshRegistration()
+        let result = BackupService.restore(envelope, presetStore: presetStore, mappingEngine: mappingEngine)
+        backupMessage = (result.title, result.message)
         panicSpecRevision += 1
-
-        var lines: [String] = []
-        lines.append("\(summary.presetsAdded) preset\(summary.presetsAdded == 1 ? "" : "s") added")
-        if summary.builtInsReplaced > 0 { lines.append("\(summary.builtInsReplaced) built-in preset\(summary.builtInsReplaced == 1 ? "" : "s") from the backup added beside this Mac\u{2019}s copy, named \u{201C}(from backup)\u{201D}") }
-        if summary.presetsSkipped > 0 { lines.append("\(summary.presetsSkipped) already here, kept as they are") }
-        if summary.groupsAdded > 0 { lines.append("\(summary.groupsAdded) folder\(summary.groupsAdded == 1 ? "" : "s") added") }
-        if summary.trashAdded > 0 { lines.append("\(summary.trashAdded) in the Trash") }
-        lines.append("\(settingsRestored) setting\(settingsRestored == 1 ? "" : "s") restored")
-        if skippedSettings > 0 { lines.append("\(skippedSettings) setting\(skippedSettings == 1 ? "" : "s") skipped as invalid") }
-        if summary.unreadable > 0 { lines.append("\(summary.unreadable) item\(summary.unreadable == 1 ? "" : "s") could not be read") }
-        if !summary.withOpeners.isEmpty {
-            let names = summary.withOpeners.prefix(5).map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")
-            lines.append("Opens apps or websites, or starts by itself: \(names)\(summary.withOpeners.count > 5 ? " and \(summary.withOpeners.count - 5) more" : ""). Check these in the editor before running them.")
-        }
-        ActivityLog.shared.info("Settings", "Backup restored: " + lines.joined(separator: ", "))
-        backupMessage = ("Backup Restored", lines.joined(separator: "\n"))
     }
 
     // MARK: - Controllers
@@ -964,6 +831,23 @@ struct SettingsView: View {
                         if !controllerService.rawHIDGamepadSlots.isEmpty {
                             rawHIDControllersList
                         }
+                        // Racing wheels read through macOS racing wheel support.
+                        ForEach(controllerService.racingWheelSlots.keys.sorted(), id: \.self) { slot in
+                            HStack {
+                                ControllerGlyph(height: 14)
+                                    .foregroundStyle(.green)
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading) {
+                                    Text(controllerService.controllerNames[slot] ?? GameControllerService.racingWheelFallbackName).font(.body)
+                                    Text("Slot #\(slot), read through macOS racing wheel support")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(10)
+                            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                        }
                         // The Steam Controller, read by its own helper.
                         if let steamSlot = controllerService.steamControllerSlot {
                             HStack {
@@ -972,7 +856,7 @@ struct SettingsView: View {
                                     .accessibilityHidden(true)
                                 VStack(alignment: .leading) {
                                     Text("Steam Controller").font(.body)
-                                    Text("Slot #\(steamSlot) · read by InputConfig's Steam Controller helper")
+                                    Text("Slot #\(steamSlot), read by InputConfig's Steam Controller helper")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -1010,7 +894,7 @@ struct SettingsView: View {
                 // to open from here worked on the shared working set and
                 // saved to nothing: every zone drawn was gone at the next
                 // launch, and a binding made against it dangled for good.
-                section(title: "Screen regions and stick zones") {
+                section(title: "Screen and stick regions") {
                     Text("Each preset has its own. Open it, choose Edit, and draw them from a row's Options.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1031,6 +915,7 @@ struct SettingsView: View {
         !controllerService.connectedControllers.isEmpty
             || !controllerService.rawHIDGamepadSlots.isEmpty
             || controllerService.steamControllerSlot != nil
+            || !controllerService.racingWheelSlots.isEmpty
             || controllerService.debugMarketingFakeActive
     }
 
@@ -1050,7 +935,7 @@ struct SettingsView: View {
                             VStack(alignment: .leading) {
                                 Text(gamepad.displayName)
                                     .font(.body)
-                                Text("Slot #\(slot) · detected over raw HID")
+                                Text("Slot #\(slot), detected over raw HID")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -1112,12 +997,13 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func tipRow(icon: String, title: String, body: String) -> some View {
+    private func tipRow(icon: String, title: LocalizedStringKey, body: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .foregroundStyle(.blue)
                 .frame(width: 22, alignment: .center)
                 .padding(.top, 2)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.caption.weight(.semibold))
@@ -1173,7 +1059,7 @@ struct SettingsView: View {
                                     .foregroundStyle(.blue)
                                     .accessibilityHidden(true)
                                 VStack(alignment: .leading) {
-                                    Text(controller.vendorName ?? "Unknown Controller")
+                                    Text(controller.vendorName ?? String(localized: "Unknown Controller"))
                                         .font(.body)
                                     Text("Slot #\(index)")
                                         .font(.caption)
@@ -1222,9 +1108,9 @@ struct SettingsView: View {
     /// FN buttons to the indices they should type into a binding row.
     private func indexLabel(forButtonName name: String, slot: Int) -> String {
         if let known = GameControllerService.firedIndex(forElement: name, brand: controllerService.controllerDetails[slot]?.brand) {
-            return "btn \(known)"
+            return String(localized: "btn \(known)")
         }
-        return "btn ?"
+        return String(localized: "btn ?")
     }
 
     // MARK: - About
@@ -1297,11 +1183,12 @@ struct SettingsView: View {
                     Button("View Changelog") { showChangelog = true }
                         .buttonStyle(.solidSecondaryCompact)
                         .accessibilityLabel("View changelog, current version \(Changelog.currentVersion)")
+                        .voiceNames("View Changelog")
                         .popover(isPresented: $showChangelog, arrowEdge: .bottom) {
                             changelogPopover
                         }
                 }
-                Text(storeSafe("A free accessibility tool that maps any input device to anything on your Mac.",
+                Text(storeSafe(String(localized: "A free accessibility tool that maps any input device to anything on your Mac."),
                                "An accessibility tool that maps any input device to anything on your Mac."))
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1314,10 +1201,10 @@ struct SettingsView: View {
     private var changelogPopover: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("What's new").font(.headline)
+                Text("What's new").font(.headline).accessibilityAddTraits(.isHeader)
                 ForEach(Changelog.entries) { entry in
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(entry.version).font(.subheadline.weight(.semibold))
+                        Text(entry.version).font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
                         ForEach(entry.points, id: \.self) { point in
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -1331,6 +1218,8 @@ struct SettingsView: View {
             .padding(16)
             .frame(width: 380, alignment: .leading)
         }
+        // Keys scroll it, with nothing focusable inside.
+        .focusable()
         .frame(maxHeight: 460)
     }
 
@@ -1346,7 +1235,7 @@ struct SettingsView: View {
                 Text("The mapping tools out there were either expensive, missing important features, or not really built for the people using them.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(storeSafe("So I made the input mapper of my dreams: free, endlessly customizable, and happy to treat any device (a game controller, a MIDI keyboard, a spare mouse) as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know.",
+                Text(storeSafe(String(localized: "So I made the input mapper of my dreams: free, endlessly customizable, and happy to treat any device (a game controller, a MIDI keyboard, a spare mouse) as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know."),
                                "So I made the input mapper of my dreams: open, endlessly customizable, and happy to treat any device (a game controller, a MIDI keyboard, a spare mouse) as a first-class way to drive a Mac. I hope it's helpful for you too. If you run into any problems, or have suggestions, please let me know."))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1371,11 +1260,12 @@ struct SettingsView: View {
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 22)
+                        .accessibilityHidden(true)
                     Text("View the source code on GitHub")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Image(systemName: "arrow.up.forward").imageScale(.small).foregroundStyle(.hint)
+                    Image(systemName: "arrow.up.forward").imageScale(.small).foregroundStyle(.hint).accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
             }
@@ -1396,7 +1286,8 @@ struct SettingsView: View {
                 Image(systemName: "heart.fill")
                     .foregroundStyle(.pink)
                     .frame(width: 22)
-                Text(storeSafe("Free forever. A tip is never expected, but would truly mean the world.",
+                    .accessibilityHidden(true)
+                Text(storeSafe(String(localized: "Free forever. A tip is never expected, but would truly mean the world."),
                                "A tip is never expected, but would truly mean the world."))
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1427,6 +1318,7 @@ struct SettingsView: View {
                 Image(systemName: "person.2.fill")
                     .foregroundStyle(.orange)
                     .frame(width: 22)
+                    .accessibilityHidden(true)
                 Text("To everyone who suggested features, tested rough builds, and told me exactly where it hurt: this app is shaped by you. Without this community, InputConfig wouldn't exist. Thank you.\n\nA special thank you to Tanya Riseman for extensive testing and feedback, to the GitHub community for feature requests and help tracking down bugs, to everyone who has donated, and to those who have reached out to me privately. You all are awesome!")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -1450,7 +1342,7 @@ struct SettingsView: View {
                 Spacer(minLength: 8)
                 Link(destination: URL(string: "https://apps.apple.com/us/app/yaptotext/id6786382289?mt=12")!) {
                     HStack(spacing: 4) {
-                        Image(systemName: "arrow.up.forward.app")
+                        Image(systemName: "arrow.up.forward.app").accessibilityHidden(true)
                         Text("App Store")
                     }
                     .font(.callout)
@@ -1490,10 +1382,22 @@ enum AppSettingsReset {
         // Records 1.6 keeps: the pads this Mac has seen (a group named for
         // one is pinned to it) and when 1.6 first ran.
         "InputConfig.seenControllerNames", "InputConfig.first16LaunchAt",
+        "InputConfig.first17LaunchAt",
+        // Records about the library: imports not yet confirmed (losing it
+        // started them with no review) and a library emptied on purpose
+        // (losing it brought every built-in back).
+        "InputConfig.unreviewedImports", "InputConfig.libraryEmptiedOnPurpose",
+        // The devices connected by hand before 1.7 (read bit by bit, as
+        // their presets expect) and each pad's learned tilt sign: records
+        // of this Mac's devices, not settings.
+        "InputConfig.handDevicesBefore17", "InputConfig.learnedTiltSigns",
+        "InputConfig.handDevicesBy17",
     ]
     private static let keptPrefixes = ["InputConfig.seededExample", "InputConfig.review.",
                                        // The presets still to offer the pre-1.6 row fix.
-                                       "InputConfig.legacyRowCheck."]
+                                       "InputConfig.legacyRowCheck.",
+                                       // Trash entries a restore sorted for the 1.7 cursor change.
+                                       "InputConfig.gameCursorGuards17.trash"]
 
     static func isSetting(_ key: String) -> Bool {
         guard prefixes.contains(where: { key.hasPrefix($0) }) else { return false }
@@ -1514,6 +1418,11 @@ enum AppSettingsReset {
         // The salt behind every stored device hash; with it, a backup's
         // hashes could be tested against guessed serials.
         DeviceSerial.saltKey,
+        // This Mac's record of a stop chord it already warned about; on
+        // another Mac it would silence that Mac's own warning.
+        "InputConfig.emergencyStopWarnedChord",
+        // This Mac's library was emptied on purpose; not another Mac's.
+        "InputConfig.libraryEmptiedOnPurpose",
     ]
 
     static func isRestorable(_ key: String) -> Bool {
@@ -1527,15 +1436,18 @@ enum AppSettingsReset {
     /// like) are real data.
     static let upgradeRecords: Set<String> = [
         "InputConfig.ankiShippedNotes.v1", "InputConfig.builtInRowFixes16.v1", "InputConfig.builtInRowFixes16.v2",
-        "InputConfig.builtInRowNotes16.v1", "InputConfig.builtInTags16.v1", "InputConfig.desktopNavigationAClicks.v1",
+        "InputConfig.builtInRowNotes16.v1", "InputConfig.builtInRowNotes17.v1", "InputConfig.touchpadCalibrationReset17",
+        "InputConfig.builtInTags16.v1", "InputConfig.desktopNavigationAClicks.v1",
         "InputConfig.driveThrottleSign16.v1", "InputConfig.eightBitDoBackButtons.v1", "InputConfig.nintendoFacePositions.v1",
         "InputConfig.presetButtonFamilies.v1", "InputConfig.presetButtonFamilies.v2", "InputConfig.presetButtonFamilies.v3",
         "InputConfig.retiredKeyboardDeck.v1", "InputConfig.sideButtonBlock.v1", "InputConfig.sideButtonBrackets.v1",
         "InputConfig.lastSeenVersion", "InputConfig.lastExampleSeedBuild", "InputConfig.first16LaunchAt",
+        "InputConfig.gameCursorGuards17.v1", "InputConfig.first17LaunchAt", "InputConfig.shippedNotes17.v1",
     ]
     static func isUpgradeRecord(_ key: String) -> Bool {
         upgradeRecords.contains(key) || key.hasPrefix("InputConfig.seededExample")
             || key.hasPrefix("InputConfig.legacyRowCheck.")
+            || key.hasPrefix("InputConfig.gameCursorGuards17.trash")
     }
 
     /// Keys a backup carries but a restore leaves as they are on this Mac:
@@ -1568,6 +1480,18 @@ enum AppSettingsReset {
             guard let incoming = restored as? [String] else { return restored }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
+        case "InputConfig.unreviewedImports":
+            // Added to, never replaced: an import on this Mac not yet
+            // confirmed keeps its review before the first start.
+            guard let incoming = restored as? [String] else { return restored }
+            let current = defaults.stringArray(forKey: key) ?? []
+            return current + incoming.filter { !current.contains($0) }
+        case "InputConfig.ignoredInputDevices":
+            // This Mac's switched-off pads stay off. The backup's per-unit
+            // entries carry another Mac's salted serial and match only there.
+            guard let incoming = restored as? [String] else { return restored }
+            let current = defaults.stringArray(forKey: key) ?? []
+            return current + incoming.filter { !current.contains($0) }
         case "InputConfig.favoritePresets", "InputConfig.manualHIDDevices":
             guard var incoming = restored as? [String] else { return restored }
             if key == "InputConfig.manualHIDDevices" {
@@ -1586,6 +1510,26 @@ enum AppSettingsReset {
             incoming = incoming.map { id in UUID(uuidString: id).flatMap { idMap[$0] }?.uuidString ?? id }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
+        case "InputConfig.handDevicesBefore17", "InputConfig.handDevicesBy17":
+            // Every device either Mac had connected by hand before 1.7. Its
+            // keys are salted per Mac, so from another Mac the plain vendor
+            // and product the backup adds are what still match; on the Mac
+            // that made it they are left out, as for manualHIDDevices.
+            guard var incoming = restored as? [String] else { return restored }
+            let sameMac = incoming.contains(saltTagPrefix + saltTag)
+            incoming.removeAll { $0.hasPrefix(saltTagPrefix) }
+            if sameMac {
+                let hashedPrefixes = Set(incoming.filter { $0.count > 9 }.map { String($0.prefix(9)) })
+                incoming.removeAll { $0.count == 9 && hashedPrefixes.contains($0) }
+            }
+            let current = defaults.stringArray(forKey: key) ?? []
+            return current + incoming.filter { !current.contains($0) }
+        case "InputConfig.learnedTiltSigns":
+            // This Mac's signs stay; the backup adds pads not seen here.
+            guard let incoming = restored as? [String: Any] else { return restored }
+            var current = defaults.dictionary(forKey: key) ?? [:]
+            for (k, v) in incoming where current[k] == nil { current[k] = v }
+            return current
         case "InputConfig.motion.clearedKeys":
             // This Mac's own list: its keys are salted per Mac, and an old
             // list switched drift learning off for pads calibrated since.
@@ -1606,10 +1550,18 @@ enum AppSettingsReset {
     /// sizes kept in range. nil means skip the key.
     static func restorableValue(_ value: Any, forKey key: String) -> Any? {
         guard let clean = plistSafe(value) else { return nil }
-        if let n = clean as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-           let range = numericRanges[key] {
-            let v = n.doubleValue
-            guard v.isFinite, range.contains(v) else { return nil }
+        if let range = numericRanges[key] {
+            // A number written as text too: UserDefaults reads "0.01" as
+            // 0.01, and the stop's hold came back far below its range.
+            if let n = clean as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() {
+                let v = n.doubleValue
+                guard v.isFinite, range.contains(v) else { return nil }
+            } else if let text = clean as? String {
+                guard let v = Double(text.trimmingCharacters(in: .whitespaces)), v.isFinite, range.contains(v) else { return nil }
+                return NSNumber(value: v)
+            } else {
+                return nil
+            }
         }
         return clean
     }
@@ -1623,7 +1575,7 @@ enum AppSettingsReset {
         "InputConfig.pollHzOnAC": 10...1000,
         "InputConfig.pollHzOnBattery": 10...1000,
         "InputConfig.rgbCycleSpeed": 0...100,
-        "InputConfig.a11y.textSize": -1...3,
+        "InputConfig.a11y.textSize": -1...4,
         "InputConfig.tap.minPeak": 0.01...1.0,
         "CursorGuard.recenterIntervalMs": 16...60_000,
         "CursorGuard.edgeBufferPx": 0...2000,
@@ -1665,6 +1617,8 @@ enum AppSettingsReset {
               let domain = defaults.persistentDomain(forName: bundle) else { return }
         let keys = domain.keys.filter(isSetting)
         for key in keys { defaults.removeObject(forKey: key) }
+        // The language picked in General goes back to Same as the system.
+        AppLanguage.choose(nil)
         ActivityLog.shared.post(.event, "Settings", "Settings reset to defaults (\(keys.count) keys)")
     }
 }
@@ -1688,6 +1642,7 @@ enum AppSettingsApply {
         AppState.applyDockIconVisible(dock)
         MenuBarController.shared.setVisible(menu)
         ChassisTapService.shared.reloadThresholdFromDefaults()
+        KeyboardLayoutService.shared.reloadFromDefaults()
 
         EmergencyStopService.shared.refreshRegistration()
         if d.bool(forKey: GlobalHotKeyService.enabledDefaultsKey) {
@@ -1711,6 +1666,7 @@ enum AppSettingsApply {
         }
         let rgb = (d.object(forKey: "InputConfig.rgbCycleSpeed") as? Double) ?? 1.0
         if let gc = engine?.controllerServiceForSettings, gc.rgbCycleSpeed != rgb { gc.rgbCycleSpeed = rgb }
+        engine?.controllerServiceForSettings.reloadIgnoredDevicesFromDefaults()
     }
 }
 
@@ -1737,8 +1693,9 @@ struct SpeechVoicePicker: View {
             .labelsHidden()
             .frame(maxWidth: 420)
             .accessibilityLabel("Spoken feedback voice")
+            .voiceNames("Voice", "Spoken feedback voice")
             Button("Preview") {
-                FeedbackService.shared.speak("Copy. Paste. Undo.")
+                FeedbackService.shared.speak(String(localized: "Copy. Paste. Undo."), appText: true)
             }
             .buttonStyle(.solidSecondaryCompact)
             Spacer()
@@ -1747,14 +1704,18 @@ struct SpeechVoicePicker: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-        .onAppear { voices = FeedbackService.installedVoices() }
+        .onAppear {
+            voices = FeedbackService.installedVoices()
+            // A voice removed from the Mac since: show what really speaks.
+            if !voiceID.isEmpty, !voices.contains(where: { $0.identifier == voiceID }) { voiceID = "" }
+        }
     }
 
     private func label(_ v: AVSpeechSynthesisVoice) -> String {
         let quality: String
         switch v.quality {
-        case .premium: quality = " (Premium)"
-        case .enhanced: quality = " (Enhanced)"
+        case .premium: quality = String(localized: " (Premium)")
+        case .enhanced: quality = String(localized: " (Enhanced)")
         default: quality = ""
         }
         let lang = Locale.current.localizedString(forIdentifier: v.language) ?? v.language
@@ -1820,256 +1781,318 @@ enum Changelog {
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.7", points: [
+            String(localized: "InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese"),
+            String(localized: "The Live Visualizer's keyboard takes the shape of your keyboard, ANSI, ISO or JIS, and labels every key with what it types in your input source, so AZERTY, QWERTZ, Dvorak, Cyrillic, Arabic and every other layout macOS has show as printed; key names in the editor and the Live Visualizer follow your keyboard layout too; rows still store each key by its place, so presets work the same on every layout"),
+            String(localized: "The keyboard map shows the navigation keys and number pad of Apple's Magic Keyboard with Numeric Keypad when one is connected or a row uses them, with every key lined up with the rows beside it; pick the keyboard map's shape, the layout its keys are labeled in, and when the number pad shows from the menu above the map"),
+            String(localized: "In Arabic and Hebrew the app reads right to left, while the drawings of keyboards, controllers, touchpads, and screens keep their real left and right"),
+            String(localized: "Starting a preset by hand that keeps the pointer off the screen edges, recenters or hides it, or takes over mouse buttons first says so and lists every way to stop it, from your own Emergency Stop settings; check Don't show this again to skip it for that preset"),
+            String(localized: "Game presets no longer pull the pointer to the middle of the screen or hide it, so inventories and menus work with the stick again; the games lock and hide the mouse themselves while you play. The built-in Minecraft preset and game presets from the Smart Preset Maker are updated"),
+            String(localized: "The built-in Minecraft preset also sprints with the left stick pushed all the way forward; a Minecraft preset already in your library offers just that in the editor, to add or turn down"),
+            String(localized: "Flight sticks, wheels, pedals and button boxes are read in full from what they report: every flight and driving axis, hat switches that report an angle, and buttons sent as a list, numbered after the controls they already had so existing presets keep working; every axis, hat and button such a device reports can be scanned, added as a row, and clicked in the Live Visualizer, including a wheel's steering and pedals and a flight stick's twist and throttle"),
+            String(localized: "Rests at one end, a new row option for pedals, throttles and levers, reads the whole travel from rest to full; Scan turns it on when the control starts from an end"),
+            String(localized: "Set Up Full Gyro, on any motion row, adds the rows for gyro aiming, tilting to move with the arrow keys, or shakes and jabs, and skips rows the group already has"),
+            String(localized: "New app actions turn motion on and off with one press, or let the motion rows work only while a button is held, from any input, a key or a foot pedal included"),
+            String(localized: "Level is how you hold it, a new option for tilt and pointer rows, measures the lean from your grip instead of from lying flat"),
+            String(localized: "Motion from the 2015 Steam Controller and from a single Joy-Con now reaches presets, Yaw angle rows work, the 2026 Steam Controller can be re-zeroed, and a stalled Steam Controller link no longer holds a motion row's key"),
+            String(localized: "Gyro aiming is steadier: the pointer no longer creeps while the controller is still, a stalled sensor stops it, and each controller remembers which way its tilt runs"),
+            String(localized: "Controllers that need Input Monitoring offer to turn it on from both device menus, and are read as soon as it is allowed"),
+            String(localized: "Groups set to different controllers never share one pad, a pad picked from the USB or Bluetooth list is followed by name, and Use the connected controller switches to the pad that is here"),
+            String(localized: "Switching a controller off in the Live Visualizer lets go of every key, click and note it was holding"),
+            String(localized: "The Globe key can be bound as an input, tapped on its own or held as fn"),
+            String(localized: "MIDI: a CC output can send a set value on press, Scan picks up aftertouch from a key already held, Any channel pitch bend follows the bend being played, All Notes Off and All Sound Off release held note rows, Aftertouch rows no longer offer a direction that silenced them, and Reconnect MIDI Sources lets go of notes and pedals held by a source that went quiet"),
+            String(localized: "A two-finger click on a PlayStation touchpad no longer also counts as a two-finger tap"),
+            String(localized: "Rows keep options written by a newer version of InputConfig when the preset is saved here"),
+            String(localized: "Opening a second copy of InputConfig now says a copy is already running, instead of closing at once"),
+            String(localized: "Stick regions are rings: an area between two distances from the center and two directions, so pushing a stick past half way up is one button and all the way up another"),
+            String(localized: "Triggers and single axes take bands, a range of their travel such as the last third of a trigger pull, each one a button"),
+            String(localized: "A stick row fires by a direction or by a region, picked side by side in its direction menu; while the stick is inside a region, that region's row fires and the stick's direction rows wait, unless the region shares the stick (regions in presets made before 1.7 keep sharing)"),
+            String(localized: "A region row's Options name the direction rows and the other regions it overlaps, and say which rows fire where they meet"),
+            String(localized: "Stick gestures: flicks of a stick in order, such as pulling it straight back twice, fire a row; pick the flicks or record them by doing them; with Quick flicks only on, a push held out never counts"),
+            String(localized: "A stick or trigger row's Options show it live, with the deadzone, the part of the stick that fires the row and its regions, following the sliders as they move; click it for the full view"),
+            String(localized: "The deadzone sliders are now Deadzone and Full push at, each with a line on what it does; they take effect on the row as you move them, and the rows behind the sheet light by them before you save"),
+            String(localized: "The editor has Name, Tag, Activate and the Emergency Stop at the top, and scrolled down, Activate and the Emergency Stop stay in one row beside the preset's name; a preset that is on keeps working while you edit, with a warning that recommends turning it off"),
+            String(localized: "A new showcase and built-in preset, Stick Zones & Gestures, shows rings, bands, regions that share the stick, and gestures"),
+            String(localized: "The Logitech G920 and G923 for Xbox are read through macOS racing wheel support, numbered like the G29 so wheel presets work on them, and show with their own button names and the shifter's gears wherever controllers are listed; InputConfig holds the wheel only while a preset, the editor or the Live Visualizer reads it"),
+            String(localized: "Stream Deck +: each of its four dials can be pressed and turned either way, and its touch strip tapped, long pressed and swiped, each one a button after the eight keys"),
+            String(localized: "Two-port adapters that send each port on its own read the second port's stick too"),
+            String(localized: "A Steam Controller connected over Bluetooth is listed with how to connect it, instead of being taken for a keyboard"),
+            String(localized: "Knobs, dials and wheels that report turns rather than positions are read as turns, and a centered slider or dial is no longer taken for a trigger"),
+            String(localized: "Some USB controllers that read nothing, because of how their descriptor numbers its reports, now work"),
+            String(localized: "A controller with no drawing of its own is named the same way everywhere and lists the buttons it really has; the Stream Deck + files its keys, dials and touch strip under their own headings"),
+            String(localized: "A controller that drops and reconnects takes its old slot back, a pinned group keeps its toggles and held keys when its controller only moves slots, and each controller's connected time survives another one connecting"),
+            String(localized: "The editor clears options an input type cannot use when you change it, no longer offers held actions on taps and gestures that are never held, a direction row says which regions it waits in, and search finds mouse buttons, macro steps, Type Text and Activate Preset targets by what the row shows"),
+            String(localized: "Long dropdowns in the editor, and the Live Visualizer's controller menu, start with Search: type to find any choice in them, nested ones too, then pick it with the arrow keys and Return"),
+            String(localized: "Turning on Vibrate, Speak a phrase, a macro, or a held or double tap action from a row's output menu opens Options with that area glowing for a moment, so it is easy to find"),
+            String(localized: "A section's plus now sits under its last row, Hat in the input type menu says it is a D-pad or thumb switch, and a region row's menu lists only its own stick or trigger and names its region beside a color dot that shows it in the Regions card"),
+            String(localized: "Each device group in the editor ends with a Regions card listing that device's touchpad, trackpads, sticks, triggers and screen, where regions are drawn, moved and resized, right-clicked to rename, duplicate or delete, and each part's rows are a click away; every Edit regions button opens it there"),
+            String(localized: "Undo and Redo in the editor take back regions drawn, moved, resized or renamed too"),
+            String(localized: "The touchpad needs no calibration, so Calibrate Touchpad is gone: macOS reports the whole pad"),
+            String(localized: "A Steam Controller's left and right trackpads each have regions of their own"),
+            String(localized: "A stick or trigger direction row can wait for a region, set in its Options, and fire only while the stick is inside it"),
+            String(localized: "The sidebar can be searched and sorted by name, or by when presets were edited or made; a new library starts A to Z and an existing one keeps its own order"),
+            String(localized: "The Presets menu holds every folder and Trash action, so the library can be organized from the keyboard, VoiceOver or Voice Control; Next Preset, Previous Preset and the menu bar's list follow the sidebar's order, a zoomed map in the Live Visualizer pans from its right-click menu, and a click anywhere on a card's header opens or closes it"),
+            String(localized: "The Quick Start tour is shorter and friendlier, shows regions, opens Help and the motion menu for you, and its pointer reaches the toolbar and the editor"),
+            String(localized: "Tap the Mac says on its row, in its Options, and on its home card that it works only on some MacBooks"),
+            String(localized: "The Live Visualizer draws stick regions inside the sticks and trigger bands inside the triggers, and clicking a stick or trigger shows its regions larger"),
+            String(localized: "The Live Visualizer's 3D controller now turns, tips and leans the way the controller does"),
+            String(localized: "The Smart Preset Maker offers gyro aim on Switch Pro, Joy-Con and Steam Controllers, sprinting with the left stick pushed all the way and walking quietly on a light push, keeps a game's Steam launch link, offers trigger rumble only where a trigger clicks, and names your controller's buttons in fighting and racing notes"),
+            String(localized: "Open URL no longer opens files, Shortcuts, scripts, network shares or calls, the import review says what each link really does, and failed actions are counted in the activity log rather than written out"),
+            String(localized: "Sheets and the main window fit a 13-inch display at the largest text size and a short window too, the View, Window and Presets menus lost their duplicates and gained separators, and the app uses less CPU with a controller connected and scrolls smoothly with One-Stick Driving open"),
+            String(localized: "The Live Visualizer lights the D-pad key line and the 8BitDo Micro's D-pad, shows the latest MIDI pitch bend and program change, and puts a PlayStation pad's light bar color between L2 and R2"),
+            String(localized: "VoiceOver and Voice Control reach every region in the Regions card and the Live Visualizer, and hear search results and each jump between a row and its regions"),
+            String(localized: "Restoring a backup from before 1.5 keeps its stick regions, and Quit and Restart Now keep a field you were still typing in"),
+        ]),
         Entry(version: "1.6", points: [
-            "Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles",
-            "Added infrastructure for far more controllers: generic USB pads and arcade sticks take their button names from the community SDL GameControllerDB, and wheels, flight sticks, and pedals are read on every axis at full resolution and every hat switch",
-            "Generic USB pads and a single Joy-Con number their controls like other controllers; InputConfig offers to update older rows on USB pads",
-            "Added infrastructure for two-player adapters and dual arcade encoders, so each player gets a controller of their own",
-            "Added infrastructure for Valve's 2026 Steam Controller on a USB cable, over Bluetooth, or through its Puck: every button, the four back buttons, both trackpads, the gyro, rumble, and battery, and a built-in preset",
-            "Added trackpad handling for both Steam Controllers: slide, tap, double tap, and press on either pad",
-            "Added infrastructure for the Logitech G29 and G923 wheels: a wheel in compatibility mode is switched to its own mode, the pedals read 0 to 1, and the Live Visualizer shows how far the wheel is turned in degrees",
-            "Added infrastructure for the Stream Deck, the Neo's touch points and the Stream Deck modules included, connected from the Devices menu or the menu bar",
-            "A controller that also acts as a keyboard, such as some arcade sticks, works once Input Monitoring is allowed for InputConfig in System Settings",
-            "With two PlayStation controllers connected, each gets its own light color, rumble, and Edge paddles, and two identical controllers can go to two players",
-            "A group set to one controller reads another of the same family when its own is away, such as an Edge for a DualSense, and otherwise says it is waiting, with one click to use the controller that is connected",
-            "InputConfig explains controllers macOS cannot read: Xbox 360 pads in the Devices menu, and 8BitDo pads in the wrong mode in the main window",
-            "Disconnect a controller from its entry at the top of the sidebar, or switch it off from its Live Visualizer panel so it reads as idle everywhere, remembered for that controller",
-            "The Live Visualizer draws 19 controllers as themselves, with every control where it really is and what each one is bound to",
-            "One menu on each Live Visualizer panel: Automatic, Screen, Keyboard, Touchpad, Mouse and MIDI, then Connected, where you pick which connected controller a group reads, and a menu for each maker for the model it is drawn as, even with nothing connected",
-            "The Live Visualizer lists what each control does in a key down both sides of the drawing, each caption joined to its control by a line that never crosses another, so no label sits on a control or another label",
-            "Drag the Live Visualizer map to move it around inside its panel; where you leave it and its zoom are kept for each preset, and Reset View puts it back",
-            "The Live Visualizer marks every deadzone a group's rows set, on sticks, triggers, pedals, wheels and the gyro, the way the deadzone calibration does, and triggers are taller so the percent reads clearly",
-            "Click a control, or any part of the Mouse, Keyboard, Touchpad, Screen or stick zone map, in the Live Visualizer to see what it does and jump to its rows, and draw a screen region or open Touchpad Setup from there",
-            "Light bar color as an output: any input can turn a DualSense or DualShock 4 light a color while held, set a color that stays, or switch the rainbow on and off, and a preset's rainbow runs at its own speed",
-            "Share, Create, and Capture keep their macOS screenshot and recording shortcut unless the running preset uses them",
-            "The controller emergency stop is a hold of Back and Start together, with a buzz a second in, and the same hold starts the preset again; on an Access Controller it is socket 7, and an Emergency Stop button under Activate and Edit shows the shortcut",
-            "The binding editor opens faster and scrolls smoothly",
-            "While the editor is open, the controller still moves the pointer and clicks, and Escape, Return, Tab, the arrows and Space still work from it, so Save and Cancel are always in reach",
-            "Override on the editor's paused banner lets the running preset work fully while you edit; Scan still holds outputs back while it listens",
-            "A row's hold and double tap each get a full second action at the bottom of Options: keys and shortcuts, clicks, typed text, MIDI, system functions, several outputs at once, and on a hold, pointer movement and scrolling",
-            "Macro steps can send keyboard shortcuts, a row can repeat a held key like a real keyboard, and a repeating macro waits between passes",
-            "Choose how long Scan waits, up to until canceled, and hear when it times out",
-            "Type a screen region's, stick zone's or touchpad zone's place and size, and a fixed click point's X and Y, instead of only dragging",
-            "Undo in the editor still steps back after Save and opening the editor again, and Previous versions lists a change the moment it is saved",
-            "Every stick row shows its deadzone, and Adjust live sets it while you watch the stick",
-            "Pointer speed and Scroll speed sliders on the preset page, Ramp-up on pointer rows, a D-pad that can take one direction at a time, and the pointer stops the moment you let go of the stick",
-            "Re-zeroing the gyro centers the pointer on the display it is on, and tilt aiming is steadier: turning the controller no longer reads as tilt, and a resting hand no longer twitches the pointer",
-            "Shortcuts in presets follow your keyboard layout, so Command A selects all on AZERTY, QWERTZ and Dvorak keyboards; Settings, Keyboard output can make typed keys follow it too, off by default since games read keys by position",
-            "Bind keys from gaming, ISO, and Japanese keyboards, mouse buttons up to 32, controller buttons up to 128, and a tilt wheel",
-            "MIDI Start, Continue, and Stop can be bound as inputs, and stick-driven MIDI CC reaches the full 0 to 127 range past the deadzone",
-            "Name every button the Xbox, PlayStation, Nintendo, Stadia, GameCube, or Steam Controller way for each preset, or North, South, East, and West in Settings",
-            "Pick the app's accent color in Settings, or any custom color",
-            "Higher contrast text in Settings brightens hints and status lines, and turns on with the Mac's Increase Contrast",
-            "A mouse side button can be kept from also going Back in a browser",
-            "Star your favorite presets and show only favorites in the sidebar and the menu bar",
-            "New built-in presets: Easy Browse for using the whole Mac from a controller, Easy Edit for a controller in one hand and a mouse in the other, and Auto Clicker, which clicks 5 to 20 times a second, on and off, while held, or a set number of times",
-            "Restore Built-in Presets in Settings puts back any built-in you deleted",
-            "Check Older Presets Again in Settings offers the update for presets made before 1.6 once more",
-            "Import a preset by opening it or dropping it on the Dock icon: the review shows every action, macro and pointer setting in full, actions that open apps or websites can be removed first, and the preset asks before its first start",
-            "Convert To makes a new preset beside the original",
-            "The Smart Preset Maker fills back paddles, gives 13 apps their Mac shortcuts instead of Windows ones, and opens Steam games through Steam",
-            "The built-in presets list rows on one stick or the D-pad in the same order on every install",
-            "The Access Controller preset follows Sony's base profile: the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight",
-            "Desktop Navigation: A clicks, and Select All moved to the right stick press",
-            "Built-in presets you never changed are updated: Minecraft's right stick click swaps hands, the PS5 FPS touchpad opens the map, MIDI: Knob Deck scrolls from a centered knob, MIDI: Transport Control no longer drops the volume to 0, and Motion Cursor scrolls the same way as the other pointer presets",
-            "In Trackpad & Mouse and Keyboard & Mouse Input, the side buttons send Command [ and ] and no longer also go Back on their own",
-            "The Xbox and 8BitDo FPS presets, Minecraft, and Racing Game use Menu for Escape and View for Tab",
-            "Keyboard Deck is retired: a copy you never changed moves to the Trash, and a copy you changed stays",
-            "Confine, recenter, and hide cursor pause while InputConfig, the Finder, System Settings, the Dock or a permission prompt is in front; when a preset lists apps they work only there, and a preset that launches an app keeps them in the game it starts, such as Minecraft from its launcher",
-            "New touchpad rows move the pointer as far up and down as they do side to side; rows made before 1.6 keep the speed they had",
-            "One-Stick Driving with Throttle axis is a trigger uses the whole travel of a gas pedal that reads -1 to 1",
-            "While the Mac sleeps or is locked no key is sent: at the lock screen only the pointer, clicks, and scrolling work",
-            "After a crash, InputConfig asks before starting your preset again, and starts it by itself after 20 seconds with no answer",
-            "Cancel in the editor asks before throwing away changes, and Empty Trash and deleting a folder ask first",
-            "VoiceOver names every field in the binding editor and the visualizers, and the keyboard focus ring is back",
-            "Text Size and Reduce Transparency reach every part of the app",
-            "The menu bar icon turns orange when a running preset needs Accessibility, and rows start working the moment it is granted",
-            "Statistics has a new look, and counts each controller's own time",
-            "Uses less CPU and energy while nothing is moving",
-            "Fixed the Switch Pro Controller and Joy-Con face buttons, where pressing A fired the rows meant for B; when one first connects, InputConfig offers to update rows recorded on it before",
-            "Fixed 8BitDo back buttons, which were read as a DualSense Edge's Fn buttons, and the Pro 2's back buttons and wired model over USB; rows recorded on them before are offered the same update",
-            "Fixed a gamepad that macOS GameController reads under a different name also being read directly, which doubled every press on a second slot",
-            "Fixed a plain row and a chord row on the same button both lighting in the editor: a row lights only when it would fire, its held controls included",
-            "Fixed keys and mouse buttons left held after a crash, a forced quit, or when two buttons share a key",
-            "Fixed quick presses on two buttons mixing their shortcuts, and double clicks not opening files",
-            "Fixed One-Stick Driving accelerating when the stick was pulled back; Invert throttle, the old workaround, is turned off",
-            "Fixed recording a shortcut that InputConfig already uses, and Settings now says which shortcut or app holds a chord",
-            "Fixed lifting or tilting a MacBook counting as a tap",
-            "Fixed the Steam Controller's buttons, stick click, and wireless connection",
-            "Fixed two identical controllers switching on and off together and sharing a motion zero, and controllers lost after a Bluetooth reconnect or a sleep",
-            "Fixed the pointer vanishing past a screen edge, and recenter and confine fighting the stick",
-            "Fixed chords firing the plain row on release, and gyro aim losing part of every turn",
-            "Fixed Launchpad, brightness, keyboard light, Eject, Lock Screen, and Mouse Wheel Step outputs",
-            "Fixed a damaged preset file freezing the app, and presets dropping rows made by a newer version",
-            "Restoring a backup on a new Mac no longer duplicates the built-in presets, and says what it restored",
-            "Fixed touchpad regions saving to the wrong preset, and Clear in Motion Calibration not sticking",
-            "Fixed several built-in presets and Smart Presets whose rows did not match their notes",
-            "Help is corrected throughout, and now covers gaming keypads, macro pads, pen tablets, switch interfaces, and Xbox Elite paddles",
+            String(localized: "Optimized for macOS 27, with a new app icon made for the Dark, Clear, and Tinted styles"),
+            String(localized: "Added infrastructure for far more controllers: generic USB pads and arcade sticks take their button names from the community SDL GameControllerDB, and wheels, flight sticks, and pedals are read on every axis at full resolution and every hat switch"),
+            String(localized: "Generic USB pads and a single Joy-Con number their controls like other controllers; InputConfig offers to update older rows on USB pads"),
+            String(localized: "Added infrastructure for two-player adapters and dual arcade encoders, so each player gets a controller of their own"),
+            String(localized: "Added infrastructure for Valve's 2026 Steam Controller on a USB cable, over Bluetooth, or through its Puck: every button, the four back buttons, both trackpads, the gyro, rumble, and battery, and a built-in preset"),
+            String(localized: "Added trackpad handling for both Steam Controllers: slide, tap, double tap, and press on either pad"),
+            String(localized: "Added infrastructure for the Logitech G29 and G923 wheels: a wheel in compatibility mode is switched to its own mode, the pedals read 0 to 1, and the Live Visualizer shows how far the wheel is turned in degrees"),
+            String(localized: "Added infrastructure for the Stream Deck, the Neo's touch points and the Stream Deck modules included, connected from the Devices menu or the menu bar"),
+            String(localized: "A controller that also acts as a keyboard, such as some arcade sticks, works once Input Monitoring is allowed for InputConfig in System Settings"),
+            String(localized: "With two PlayStation controllers connected, each gets its own light color, rumble, and Edge paddles, and two identical controllers can go to two players"),
+            String(localized: "A group set to one controller reads another of the same family when its own is away, such as an Edge for a DualSense, and otherwise says it is waiting, with one click to use the controller that is connected"),
+            String(localized: "InputConfig explains controllers macOS cannot read: Xbox 360 pads in the Devices menu, and 8BitDo pads in the wrong mode in the main window"),
+            String(localized: "Disconnect a controller from its entry at the top of the sidebar, or switch it off from its Live Visualizer panel so it reads as idle everywhere, remembered for that controller"),
+            String(localized: "The Live Visualizer draws 19 controllers as themselves, with every control where it really is and what each one is bound to"),
+            String(localized: "One menu on each Live Visualizer panel: Automatic, Screen, Keyboard, Touchpad, Mouse and MIDI, then Connected, where you pick which connected controller a group reads, and a menu for each maker for the model it is drawn as, even with nothing connected"),
+            String(localized: "The Live Visualizer lists what each control does in a key down both sides of the drawing, each caption joined to its control by a line that never crosses another, so no label sits on a control or another label"),
+            String(localized: "Drag the Live Visualizer map to move it around inside its panel; where you leave it and its zoom are kept for each preset, and Reset View puts it back"),
+            String(localized: "The Live Visualizer marks every deadzone a group's rows set, on sticks, triggers, pedals, wheels and the gyro, the way the deadzone calibration does, and triggers are taller so the percent reads clearly"),
+            String(localized: "Click a control, or any part of the Mouse, Keyboard, Touchpad, Screen or stick region map, in the Live Visualizer to see what it does and jump to its rows, and draw a screen region or open Touchpad Setup from there"),
+            String(localized: "Light bar color as an output: any input can turn a DualSense or DualShock 4 light a color while held, set a color that stays, or switch the rainbow on and off, and a preset's rainbow runs at its own speed"),
+            String(localized: "Share, Create, and Capture keep their macOS screenshot and recording shortcut unless the running preset uses them"),
+            String(localized: "The controller emergency stop is a hold of Back and Start together, with a buzz a second in, and the same hold starts the preset again; on an Access Controller it is socket 7, and an Emergency Stop button under Activate and Edit shows the shortcut"),
+            String(localized: "The binding editor opens faster and scrolls smoothly"),
+            String(localized: "While the editor is open, the controller still moves the pointer and clicks, and Escape, Return, Tab, the arrows and Space still work from it, so Save and Cancel are always in reach"),
+            String(localized: "Override on the editor's paused banner lets the running preset work fully while you edit; Scan still holds outputs back while it listens"),
+            String(localized: "A row's hold and double tap each get a full second action at the bottom of Options: keys and shortcuts, clicks, typed text, MIDI, system functions, several outputs at once, and on a hold, pointer movement and scrolling"),
+            String(localized: "Macro steps can send keyboard shortcuts, a row can repeat a held key like a real keyboard, and a repeating macro waits between passes"),
+            String(localized: "Choose how long Scan waits, up to until canceled, and hear when it times out"),
+            String(localized: "Type a screen region's, stick region's or touchpad region's place and size, and a fixed click point's X and Y, instead of only dragging"),
+            String(localized: "Undo in the editor still steps back after Save and opening the editor again, and Previous versions lists a change the moment it is saved"),
+            String(localized: "Every stick row shows its deadzone, and Adjust live sets it while you watch the stick"),
+            String(localized: "Pointer speed and Scroll speed sliders on the preset page, Ramp-up on pointer rows, a D-pad that can take one direction at a time, and the pointer stops the moment you let go of the stick"),
+            String(localized: "Re-zeroing the gyro centers the pointer on the display it is on, and tilt aiming is steadier: turning the controller no longer reads as tilt, and a resting hand no longer twitches the pointer"),
+            String(localized: "Shortcuts in presets follow your keyboard layout, so Command A selects all on AZERTY, QWERTZ and Dvorak keyboards; Settings, Keyboard output can make typed keys follow it too, off by default since games read keys by position"),
+            String(localized: "Bind keys from gaming, ISO, and Japanese keyboards, mouse buttons up to 32, controller buttons up to 128, and a tilt wheel"),
+            String(localized: "MIDI Start, Continue, and Stop can be bound as inputs, and stick-driven MIDI CC reaches the full 0 to 127 range past the deadzone"),
+            String(localized: "Name every button the Xbox, PlayStation, Nintendo, Stadia, GameCube, or Steam Controller way for each preset, or North, South, East, and West in Settings"),
+            String(localized: "Pick the app's accent color in Settings, or any custom color"),
+            String(localized: "Higher contrast text in Settings brightens hints and status lines, and turns on with the Mac's Increase Contrast"),
+            String(localized: "A mouse side button can be kept from also going Back in a browser"),
+            String(localized: "Star your favorite presets and show only favorites in the sidebar and the menu bar"),
+            String(localized: "New built-in presets: Easy Browse for using the whole Mac from a controller, Easy Edit for a controller in one hand and a mouse in the other, and Auto Clicker, which clicks 5 to 20 times a second, on and off, while held, or a set number of times"),
+            String(localized: "Restore Built-in Presets in Settings puts back any built-in you deleted"),
+            String(localized: "Check Older Presets Again in Settings offers the update for presets made before 1.6 once more"),
+            String(localized: "Import a preset by opening it or dropping it on the Dock icon: the review shows every action, macro and pointer setting in full, actions that open apps or websites can be removed first, and the preset asks before its first start"),
+            String(localized: "Convert To makes a new preset beside the original"),
+            String(localized: "The Smart Preset Maker fills back paddles, gives 13 apps their Mac shortcuts instead of Windows ones, and opens Steam games through Steam"),
+            String(localized: "The built-in presets list rows on one stick or the D-pad in the same order on every install"),
+            String(localized: "The Access Controller preset follows Sony's base profile: the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight"),
+            String(localized: "Desktop Navigation: A clicks, and Select All moved to the right stick press"),
+            String(localized: "Built-in presets you never changed are updated: Minecraft's right stick click swaps hands, the PS5 FPS touchpad opens the map, MIDI: Knob Deck scrolls from a centered knob, MIDI: Transport Control no longer drops the volume to 0, and Motion Cursor scrolls the same way as the other pointer presets"),
+            String(localized: "In Trackpad & Mouse and Keyboard & Mouse Input, the side buttons send Command [ and ] and no longer also go Back on their own"),
+            String(localized: "The Xbox and 8BitDo FPS presets, Minecraft, and Racing Game use Menu for Escape and View for Tab"),
+            String(localized: "Keyboard Deck is retired: a copy you never changed moves to the Trash, and a copy you changed stays"),
+            String(localized: "Confine, recenter, and hide cursor pause while InputConfig, the Finder, System Settings, the Dock or a permission prompt is in front; when a preset lists apps they work only there, and a preset that launches an app keeps them in the game it starts, such as Minecraft from its launcher"),
+            String(localized: "New touchpad rows move the pointer as far up and down as they do side to side; rows made before 1.6 keep the speed they had"),
+            String(localized: "One-Stick Driving with Throttle axis is a trigger uses the whole travel of a gas pedal that reads -1 to 1"),
+            String(localized: "While the Mac sleeps or is locked no key is sent: at the lock screen only the pointer, clicks, and scrolling work"),
+            String(localized: "After a crash, InputConfig asks before starting your preset again, and starts it by itself after 20 seconds with no answer"),
+            String(localized: "Cancel in the editor asks before throwing away changes, and Empty Trash and deleting a folder ask first"),
+            String(localized: "VoiceOver names every field in the binding editor and the visualizers, and the keyboard focus ring is back"),
+            String(localized: "Text Size and Reduce Transparency reach every part of the app"),
+            String(localized: "The menu bar icon turns orange when a running preset needs Accessibility, and rows start working the moment it is granted"),
+            String(localized: "Statistics has a new look, and counts each controller's own time"),
+            String(localized: "Uses less CPU and energy while nothing is moving"),
+            String(localized: "Fixed the Switch Pro Controller and Joy-Con face buttons, where pressing A fired the rows meant for B; when one first connects, InputConfig offers to update rows recorded on it before"),
+            String(localized: "Fixed 8BitDo back buttons, which were read as a DualSense Edge's Fn buttons, and the Pro 2's back buttons and wired model over USB; rows recorded on them before are offered the same update"),
+            String(localized: "Fixed a gamepad that macOS GameController reads under a different name also being read directly, which doubled every press on a second slot"),
+            String(localized: "Fixed a plain row and a chord row on the same button both lighting in the editor: a row lights only when it would fire, its held controls included"),
+            String(localized: "Fixed keys and mouse buttons left held after a crash, a forced quit, or when two buttons share a key"),
+            String(localized: "Fixed quick presses on two buttons mixing their shortcuts, and double clicks not opening files"),
+            String(localized: "Fixed One-Stick Driving accelerating when the stick was pulled back; Invert throttle, the old workaround, is turned off"),
+            String(localized: "Fixed recording a shortcut that InputConfig already uses, and Settings now says which shortcut or app holds a chord"),
+            String(localized: "Fixed lifting or tilting a MacBook counting as a tap"),
+            String(localized: "Fixed the Steam Controller's buttons, stick click, and wireless connection"),
+            String(localized: "Fixed two identical controllers switching on and off together and sharing a motion zero, and controllers lost after a Bluetooth reconnect or a sleep"),
+            String(localized: "Fixed the pointer vanishing past a screen edge, and recenter and confine fighting the stick"),
+            String(localized: "Fixed chords firing the plain row on release, and gyro aim losing part of every turn"),
+            String(localized: "Fixed Launchpad, brightness, keyboard light, Eject, Lock Screen, and Mouse Wheel Step outputs"),
+            String(localized: "Fixed a damaged preset file freezing the app, and presets dropping rows made by a newer version"),
+            String(localized: "Restoring a backup on a new Mac no longer duplicates the built-in presets, and says what it restored"),
+            String(localized: "Fixed touchpad regions saving to the wrong preset, and Clear in Motion Calibration not sticking"),
+            String(localized: "Fixed several built-in presets and Smart Presets whose rows did not match their notes"),
+            String(localized: "Help is corrected throughout, and now covers gaming keypads, macro pads, pen tablets, switch interfaces, and Xbox Elite paddles"),
         ]),
         Entry(version: "1.5", points: [
-            "Tap the Mac is now enhanced with additional compatibility on more MacBooks",
-            "Quadruple and quintuple taps are now available in the binding editor",
-            "Tap the Mac: Calibrate Taps is now in the Options of any tap row. Knock on the chassis and watch each strike to set the firmness threshold with a slider",
-            "Your Mac is now an official input: every key on the keyboard and every click, scroll, and Force Touch on the mouse or trackpad can be mapped",
-            "The Live Visualizer's Keyboard and Mouse & Trackpad templates are live: press a key or click and it lights on the diagram",
-            "Four new presets for the Mac's own devices: Keyboard Deck, Trackpad & Mouse, Modifier Holds, and Double Click Deck, each with a home page showcase",
-            "Screen regions are now their own input: draw an area of any display and it fires while the pointer is inside it",
-            "The Live Visualizer has a Screen template showing the display, its regions, and the live pointer",
-            "Zones and regions now belong to the preset they were drawn in",
-            "The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, a condensed layout, zoom, and a choice of background",
-            "Every control in the Live Visualizer is clickable and opens its row in the editor",
-            "The editor has a search field that finds any row by input, output, section, or note",
-            "Rows sit under section headings, and Automatically insert available inputs adds a row for every control the device has",
-            "The device menu lists everything the app can hear from: controllers, Bluetooth and USB devices, this Mac's keyboard and mouse, and MIDI sources",
-            "A row's Options panel is laid out as boxes, with the input side on the left and the output side on the right",
-            "The output menu now lists your Shortcuts, applications, presets, and every key by group",
-            "Chords can hold up to three controls, chosen from the menu or scanned",
-            "Accessories plugged into a PlayStation Access Controller or Xbox Adaptive Controller are picked up as inputs",
-            "Bluetooth headset and hearing aid buttons can be mapped as media keys",
-            "Gyro pointing follows the controller's tilt like a laser pointer, and the gyro zero learns itself",
-            "Motion Calibration is one simple sheet with a 3D controller model and a Re-zero button you can assign",
-            "Pointer motion from a stick, touchpad, or gyro is smooth, and the touchpad no longer lags while the Live Visualizer is open",
-            "Touchpad Mouse works, with one-finger tap, two-finger tap, and double tap as inputs",
-            "Rumble on a DualSense Edge is much stronger, its strength setting works, and vibration has a Duration slider",
-            "New presets: One-Stick Driving, Access Controller, Cursor Regions, Hold & Double-Tap, Keyboard & Mouse Input, Shortcuts & Apps, and Touchpad Zones",
-            "Every built-in preset now carries notes on every row",
-            "The Smart Preset Maker can add touchpad-as-trackpad, gyro fine aim, and trigger rumble",
-            "Every Feature Showcase opens its preset, with arrows to step through them",
-            "The sidebar splits into My Presets and Built-in Presets, with colored folder outlines and Move to Group",
-            "Help is rewritten: shorter, plainer, and current, with every guide's steps in the app",
-            "First launch opens with a welcome and the ways to reach out",
-            "Settings: choose the menu bar icon, a spoken feedback voice, Next and Previous Preset, and Reset Settings",
-            "The activity log shows everything the app does, pops out into its own window, and can save a report",
-            "The emergency stop releases held keys, silences the motors, and stops any haptic",
-            "VoiceOver speaks the Live Visualizer in plain words, and Reduce Motion applies immediately",
-            "The app naps when idle and reads nothing from a controller nobody is looking at",
-            "Fixed a crash on the first launch of a fresh install or after an update",
-            "Fixed the pointer walking off target with two displays of different heights",
-            "Fixed lone modifier keys being invisible to apps, and modifiers left held after quick presses",
-            "Fixed mouse buttons 3 and up hanging the app",
-            "Fixed the Speed sliders, Confine cursor, Recenter, and Hide cursor doing nothing while a preset ran",
-            "Fixed touchpad zones being lost or copied between presets",
-            "Fixed a fixed-point click forgetting its point on relaunch",
-            "Presets saved by a newer version still open in an older one, and an unreadable preset is named in the log",
-            "Export Backup carries every setting, and the privacy policy says nothing is transmitted",
+            String(localized: "Tap the Mac is now enhanced with additional compatibility on more MacBooks"),
+            String(localized: "Quadruple and quintuple taps are now available in the binding editor"),
+            String(localized: "Tap the Mac: Calibrate Taps is now in the Options of any tap row. Knock on the chassis and watch each strike to set the firmness threshold with a slider"),
+            String(localized: "Your Mac is now an official input: every key on the keyboard and every click, scroll, and Force Touch on the mouse or trackpad can be mapped"),
+            String(localized: "The Live Visualizer's Keyboard and Mouse & Trackpad templates are live: press a key or click and it lights on the diagram"),
+            String(localized: "Four new presets for the Mac's own devices: Keyboard Deck, Trackpad & Mouse, Modifier Holds, and Double Click Deck, each with a home page showcase"),
+            String(localized: "Screen regions are now their own input: draw an area of any display and it fires while the pointer is inside it"),
+            String(localized: "The Live Visualizer has a Screen template showing the display, its regions, and the live pointer"),
+            String(localized: "Zones and regions now belong to the preset they were drawn in"),
+            String(localized: "The Live Visualizer builds its map from the connected controller, with proper PlayStation button shapes, a condensed layout, zoom, and a choice of background"),
+            String(localized: "Every control in the Live Visualizer is clickable and opens its row in the editor"),
+            String(localized: "The editor has a search field that finds any row by input, output, section, or note"),
+            String(localized: "Rows sit under section headings, and Automatically insert available inputs adds a row for every control the device has"),
+            String(localized: "The device menu lists everything the app can hear from: controllers, Bluetooth and USB devices, this Mac's keyboard and mouse, and MIDI sources"),
+            String(localized: "A row's Options panel is laid out as boxes, with the input side on the left and the output side on the right"),
+            String(localized: "The output menu now lists your Shortcuts, applications, presets, and every key by group"),
+            String(localized: "Chords can hold up to three controls, chosen from the menu or scanned"),
+            String(localized: "Accessories plugged into a PlayStation Access Controller or Xbox Adaptive Controller are picked up as inputs"),
+            String(localized: "Bluetooth headset and hearing aid buttons can be mapped as media keys"),
+            String(localized: "Gyro pointing follows the controller's tilt like a laser pointer, and the gyro zero learns itself"),
+            String(localized: "Motion Calibration is one simple sheet with a 3D controller model and a Re-zero button you can assign"),
+            String(localized: "Pointer motion from a stick, touchpad, or gyro is smooth, and the touchpad no longer lags while the Live Visualizer is open"),
+            String(localized: "Touchpad Mouse works, with one-finger tap, two-finger tap, and double tap as inputs"),
+            String(localized: "Rumble on a DualSense Edge is much stronger, its strength setting works, and vibration has a Duration slider"),
+            String(localized: "New presets: One-Stick Driving, Access Controller, Cursor Regions, Hold & Double-Tap, Keyboard & Mouse Input, Shortcuts & Apps, and Touchpad Zones"),
+            String(localized: "Every built-in preset now carries notes on every row"),
+            String(localized: "The Smart Preset Maker can add touchpad-as-trackpad, gyro fine aim, and trigger rumble"),
+            String(localized: "Every Feature Showcase opens its preset, with arrows to step through them"),
+            String(localized: "The sidebar splits into My Presets and Built-in Presets, with colored folder outlines and Move to Group"),
+            String(localized: "Help is rewritten: shorter, plainer, and current, with every guide's steps in the app"),
+            String(localized: "First launch opens with a welcome and the ways to reach out"),
+            String(localized: "Settings: choose the menu bar icon, a spoken feedback voice, Next and Previous Preset, and Reset Settings"),
+            String(localized: "The activity log shows everything the app does, pops out into its own window, and can save a report"),
+            String(localized: "The emergency stop releases held keys, silences the motors, and stops any haptic"),
+            String(localized: "VoiceOver speaks the Live Visualizer in plain words, and Reduce Motion applies immediately"),
+            String(localized: "The app naps when idle and reads nothing from a controller nobody is looking at"),
+            String(localized: "Fixed a crash on the first launch of a fresh install or after an update"),
+            String(localized: "Fixed the pointer walking off target with two displays of different heights"),
+            String(localized: "Fixed lone modifier keys being invisible to apps, and modifiers left held after quick presses"),
+            String(localized: "Fixed mouse buttons 3 and up hanging the app"),
+            String(localized: "Fixed the Speed sliders, Confine cursor, Recenter, and Hide cursor doing nothing while a preset ran"),
+            String(localized: "Fixed touchpad zones being lost or copied between presets"),
+            String(localized: "Fixed a fixed-point click forgetting its point on relaunch"),
+            String(localized: "Presets saved by a newer version still open in an older one, and an unreadable preset is named in the log"),
+            String(localized: "Export Backup carries every setting, and the privacy policy says nothing is transmitted"),
         ]),
         Entry(version: "1.4", points: [
-            "Tap the Mac. Your MacBook has a motion sensor, and InputConfig can now feel you knock on the case. Double tap or triple tap the palm rest or the lid to fire any output. It is the first input that needs no hardware at all: no controller, no MIDI device, nothing plugged in",
-            "Taps are told apart by counting: two taps close together are a double, three are a triple, and a pause starts a new count. Typing is ignored on purpose, so working at the keyboard never sets it off",
-            "New built-in preset Tap the Mac under Feature Showcases: double tap for Mission Control, triple tap to start dictation",
-            "Emergency stop: one action that only ever stops, never starts. It halts the engine, releases every held key, button, and note, and gives the pointer back",
-            "The emergency stop works three ways: a system-wide keyboard shortcut, holding Home / PS / Guide on the controller for two seconds, and a button in the menu bar. Any control can also be bound to it directly",
-            "The controller hold works no matter what the preset maps that button to, so a preset that has taken over the keyboard and mouse can always be escaped from the controller itself",
-            "Start Dictation as a System Function output: a control now presses the dictation key itself, exactly as pressing F5 does, so it works with no extra setup",
-            "New Accessibility group under System Function: Start Dictation, Speak Selection, Zoom On / Off, Zoom In, and Zoom Out, so the accessibility shortcuts no longer have to be built by hand out of key combinations",
-            "Per-preset shortcuts: give any preset its own system-wide key that switches to it, and press it again to stop it",
-            "Chords: a binding can now require a second button, so Triangle + D-pad up can run a macro while D-pad up alone keeps its normal job. Set it under Press Behavior with the new While holding menu",
-            "Gyro ratcheting: the new Pause Motion While Held app action stops motion aim while a button is held, so you can re-aim the controller without dragging the cursor, the way you lift a mouse",
-            "The fn / Globe key is now available in two places, because macOS treats them as two different things. fn / Globe (hold) is under Modifier Keys and adds the fn modifier to another key, which is how shortcuts like Globe + E and Globe + D work. Globe Key (Emoji) is under Special Keys and presses the Globe key on its own, firing whatever you have set it to do",
-            "Keyboard Brightness Up and Down added to the Display group",
-            "Fixed: presets that use only the trackpad, a cursor region, or a Mac tap did nothing unless a game controller happened to be connected. They now work on their own, which is the whole point of them",
-            "Presets can be reordered by dragging, and dragged from one folder into another. Drop a preset onto another to place it there. The order you set now sticks, instead of rearranging itself whenever a preset was edited",
-            "Fixed a crash when dragging presets or folders in the sidebar",
-            "The scan button now detects modifier keys pressed on their own, including Shift, Control, Option, Command and the fn / Globe key, plus the right Command key and F16 to F19. None of these could be scanned before",
-            "The trigger deadzone bar is see-through, so the red inner-deadzone band stays visible while you pull the trigger",
-            "InputConfig no longer opens a second copy of itself. Two copies fought over the keyboard and mouse, and only one could use the emergency stop",
-            "The app now says so when another app has taken the emergency stop shortcut, instead of failing silently",
-            "Editing a preset while it is running now takes effect straight away, instead of waiting for a restart",
-            "Duplicating a binding or a slot, and converting a preset between controllers, now keep every setting. Chords, macros, deadzone and the rest used to be dropped",
-            "Bindings switched to Axis or Hat by hand now pick a direction, so they fire the way the menu says",
-            "Dragging with a controller works: holding a mapped click while moving the stick now sends real drag events, so window moves, text selection, sliders, and drag and drop all work",
-            "Cursor motion from a stick no longer asks the system where the cursor is on every frame. This was the cause of high CPU with Variable Sensitivity on",
-            "Slow scrolling from a stick is smooth instead of dead or jittery; the fractional part is carried between frames the way cursor motion already was",
-            "A stick resting at the edge of its deadzone no longer chatters on and off every frame",
-            "The binding editor scrolls and expands smoothly. Moving the pointer across the list no longer makes every row redraw, and row measurements no longer feed back into the layout",
-            "Bindings can be reordered by dragging the handle on the left of each row. The row lifts and follows the pointer, the list opens a gap where it will land, and a row with its Options open folds them away while you drag it",
-            "A controller reconnecting over Bluetooth no longer shows up twice in the list",
-            "A Cancel button on the scan overlay, so a scan can be canceled without a keyboard",
-            "The help guides have a search field, plus new guides for chords, ratcheting, and tapping the Mac",
-            "New built-in preset Anki in Desktop & Productivity: the face buttons rate flashcards, the bumpers undo and replay audio, stick clicks mark and bury, and the D-pad scrolls the card. Every row is labeled with its Anki action, and Anki is in the Smart Preset Maker's app list too",
-            "Fixed: the release notes you are reading now did not appear for people who already had the app installed, so earlier updates arrived silently",
+            String(localized: "Tap the Mac. Your MacBook has a motion sensor, and InputConfig can now feel you knock on the case. Double tap or triple tap the palm rest or the lid to fire any output. It is the first input that needs no hardware at all: no controller, no MIDI device, nothing plugged in"),
+            String(localized: "Taps are told apart by counting: two taps close together are a double, three are a triple, and a pause starts a new count. Typing is ignored on purpose, so working at the keyboard never sets it off"),
+            String(localized: "New built-in preset Tap the Mac under Feature Showcases: double tap for Mission Control, triple tap to start dictation"),
+            String(localized: "Emergency stop: one action that only ever stops, never starts. It halts the engine, releases every held key, button, and note, and gives the pointer back"),
+            String(localized: "The emergency stop works three ways: a system-wide keyboard shortcut, holding Home / PS / Guide on the controller for two seconds, and a button in the menu bar. Any control can also be bound to it directly"),
+            String(localized: "The controller hold works no matter what the preset maps that button to, so a preset that has taken over the keyboard and mouse can always be escaped from the controller itself"),
+            String(localized: "Start Dictation as a System Function output: a control now presses the dictation key itself, exactly as pressing F5 does, so it works with no extra setup"),
+            String(localized: "New Accessibility group under System Function: Start Dictation, Speak Selection, Zoom On / Off, Zoom In, and Zoom Out, so the accessibility shortcuts no longer have to be built by hand out of key combinations"),
+            String(localized: "Per-preset shortcuts: give any preset its own system-wide key that switches to it, and press it again to stop it"),
+            String(localized: "Chords: a binding can now require a second button, so Triangle + D-pad up can run a macro while D-pad up alone keeps its normal job. Set it under Press Behavior with the new While holding menu"),
+            String(localized: "Gyro ratcheting: the new Pause Motion While Held app action stops motion aim while a button is held, so you can re-aim the controller without dragging the cursor, the way you lift a mouse"),
+            String(localized: "The fn / Globe key is now available in two places, because macOS treats them as two different things. fn / Globe (hold) is under Modifier Keys and adds the fn modifier to another key, which is how shortcuts like Globe + E and Globe + D work. Globe Key (Emoji) is under Special Keys and presses the Globe key on its own, firing whatever you have set it to do"),
+            String(localized: "Keyboard Brightness Up and Down added to the Display group"),
+            String(localized: "Fixed: presets that use only the trackpad, a cursor region, or a Mac tap did nothing unless a game controller happened to be connected. They now work on their own, which is the whole point of them"),
+            String(localized: "Presets can be reordered by dragging, and dragged from one folder into another. Drop a preset onto another to place it there. The order you set now sticks, instead of rearranging itself whenever a preset was edited"),
+            String(localized: "Fixed a crash when dragging presets or folders in the sidebar"),
+            String(localized: "The scan button now detects modifier keys pressed on their own, including Shift, Control, Option, Command and the fn / Globe key, plus the right Command key and F16 to F19. None of these could be scanned before"),
+            String(localized: "The trigger deadzone bar is see-through, so the red inner-deadzone band stays visible while you pull the trigger"),
+            String(localized: "InputConfig no longer opens a second copy of itself. Two copies fought over the keyboard and mouse, and only one could use the emergency stop"),
+            String(localized: "The app now says so when another app has taken the emergency stop shortcut, instead of failing silently"),
+            String(localized: "Editing a preset while it is running now takes effect straight away, instead of waiting for a restart"),
+            String(localized: "Duplicating a binding or a slot, and converting a preset between controllers, now keep every setting. Chords, macros, deadzone and the rest used to be dropped"),
+            String(localized: "Bindings switched to Axis or Hat by hand now pick a direction, so they fire the way the menu says"),
+            String(localized: "Dragging with a controller works: holding a mapped click while moving the stick now sends real drag events, so window moves, text selection, sliders, and drag and drop all work"),
+            String(localized: "Cursor motion from a stick no longer asks the system where the cursor is on every frame. This was the cause of high CPU with Variable Sensitivity on"),
+            String(localized: "Slow scrolling from a stick is smooth instead of dead or jittery; the fractional part is carried between frames the way cursor motion already was"),
+            String(localized: "A stick resting at the edge of its deadzone no longer chatters on and off every frame"),
+            String(localized: "The binding editor scrolls and expands smoothly. Moving the pointer across the list no longer makes every row redraw, and row measurements no longer feed back into the layout"),
+            String(localized: "Bindings can be reordered by dragging the handle on the left of each row. The row lifts and follows the pointer, the list opens a gap where it will land, and a row with its Options open folds them away while you drag it"),
+            String(localized: "A controller reconnecting over Bluetooth no longer shows up twice in the list"),
+            String(localized: "A Cancel button on the scan overlay, so a scan can be canceled without a keyboard"),
+            String(localized: "The help guides have a search field, plus new guides for chords, ratcheting, and tapping the Mac"),
+            String(localized: "New built-in preset Anki in Desktop & Productivity: the face buttons rate flashcards, the bumpers undo and replay audio, stick clicks mark and bury, and the D-pad scrolls the card. Every row is labeled with its Anki action, and Anki is in the Smart Preset Maker's app list too"),
+            String(localized: "Fixed: the release notes you are reading now did not appear for people who already had the app installed, so earlier updates arrived silently"),
         ]),
         Entry(version: "1.3", points: [
-            "Knob modes for MIDI dials: Dial mode treats the center of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at center",
-            "Turn mode fires a nudge for every few steps of rotation, clockwise or counterclockwise, built for volume, brightness, and stepped scrolling",
-            "Both modes work with the sensitivity curves, deadzone settings, and variable speed the analog sticks already use",
-            "System volume as a fader: a new output that makes the Mac's volume follow a knob, the pitch wheel, aftertouch, or a controller trigger 1-to-1",
-            "Turn Step setting per binding: Fine, Normal, Coarse, or Chunky nudge sensitivity for Turn mode",
-            "The volume fader only takes over once you actually move the control, so activating a preset never jumps the volume",
-            "New built-in preset MIDI: Knob Deck and a new welcome-screen demo showing MIDI devices driving the Mac",
-            "System Function outputs: volume, mute, media keys, brightness, Mission Control, Launchpad, Spotlight, lock screen, screenshot, Siri Shortcuts, and opening any app or URL",
-            "New built-in preset MIDI: Media Deck, with pads and knobs running media keys, volume steps, and brightness",
-            "A What's New popup after each update, so new features are never silently installed",
-            "The YapToText shoutout now lives at the bottom of the welcome screen with a one-click App Store link",
-            "An About button on the welcome screen opens the redesigned About page: the story behind the app, the changelog, source code, and support",
-            "An Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion",
-            "MIDI is now a full Live Visualizer template: a seven-octave velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log, switchable like any layout and automatic for MIDI presets",
-            "Five new welcome-screen cards: Siri Shortcuts, Keyboard & Mouse as Input, Hold & Double-Tap, Per-App Auto-Switch, and Cursor Regions, ordered by importance",
-            "The version number now shows in the menu bar popover",
+            String(localized: "Knob modes for MIDI dials: Dial mode treats the center of the knob as zero, so scrolling and mouse motion speed up the further you turn, with a deadzone to stop at center"),
+            String(localized: "Turn mode fires a nudge for every few steps of rotation, clockwise or counterclockwise, built for volume, brightness, and stepped scrolling"),
+            String(localized: "Both modes work with the sensitivity curves, deadzone settings, and variable speed the analog sticks already use"),
+            String(localized: "System volume as a fader: a new output that makes the Mac's volume follow a knob, the pitch wheel, aftertouch, or a controller trigger 1-to-1"),
+            String(localized: "Turn Step setting per binding: Fine, Normal, Coarse, or Chunky nudge sensitivity for Turn mode"),
+            String(localized: "The volume fader only takes over once you actually move the control, so activating a preset never jumps the volume"),
+            String(localized: "New built-in preset MIDI: Knob Deck and a new welcome-screen demo showing MIDI devices driving the Mac"),
+            String(localized: "System Function outputs: volume, mute, media keys, brightness, Mission Control, Launchpad, Spotlight, lock screen, screenshot, Siri Shortcuts, and opening any app or URL"),
+            String(localized: "New built-in preset MIDI: Media Deck, with pads and knobs running media keys, volume steps, and brightness"),
+            String(localized: "A What's New popup after each update, so new features are never silently installed"),
+            String(localized: "The YapToText shoutout now lives at the bottom of the welcome screen with a one-click App Store link"),
+            String(localized: "An About button on the welcome screen opens the redesigned About page: the story behind the app, the changelog, source code, and support"),
+            String(localized: "An Accessibility area in Settings: app-wide text size, bold text, reduced transparency, and reduced motion"),
+            String(localized: "MIDI is now a full Live Visualizer template: a seven-octave velocity-shaded keyboard, named knob dials, pitch bend and aftertouch meters, a channel strip, and a live event log, switchable like any layout and automatic for MIDI presets"),
+            String(localized: "Five new welcome-screen cards: Siri Shortcuts, Keyboard & Mouse as Input, Hold & Double-Tap, Per-App Auto-Switch, and Cursor Regions, ordered by importance"),
+            String(localized: "The version number now shows in the menu bar popover"),
         ]),
 
         Entry(version: "1.2.1", points: [
-            "Fixes MIDI devices not appearing as an option when creating a binding",
-            "MIDI now works with no game controller connected, so a MIDI keyboard or pad controller can drive your Mac on its own",
-            "Connected MIDI devices are listed by name when you pick an input, so you can confirm yours was found",
-            "Input groups are now called Input Device rather than Joystick, since a group can hold MIDI, keyboard, and mouse bindings too",
-            "A group no longer warns about a missing controller when nothing in it needs one",
-            "The scan panel now tells you that you can play a note or twist a knob to map it",
+            String(localized: "Fixes MIDI devices not appearing as an option when creating a binding"),
+            String(localized: "MIDI now works with no game controller connected, so a MIDI keyboard or pad controller can drive your Mac on its own"),
+            String(localized: "Connected MIDI devices are listed by name when you pick an input, so you can confirm yours was found"),
+            String(localized: "Input groups are now called Input Device rather than Joystick, since a group can hold MIDI, keyboard, and mouse bindings too"),
+            String(localized: "A group no longer warns about a missing controller when nothing in it needs one"),
+            String(localized: "The scan panel now tells you that you can play a note or twist a knob to map it"),
         ]),
 
         Entry(version: "1.2", points: [
-            "MIDI devices can now be used as an input: bind notes, pads, knobs, the pitch wheel, the sustain pedal, and aftertouch to keys, clicks, macros, or anything else",
-            "DualSense Edge extra buttons: the back paddles, both FN buttons, and mute are now bindable like any other input, over Bluetooth and USB",
-            "Light bar colors now work over Bluetooth: preset colors, the RGB cycle, and brightness all reach the controller wirelessly",
-            "A new DualSense Edge help guide covers binding the extra buttons",
-            "More reliable controller data reading behind the scenes, with an automatic fallback when a Bluetooth session goes quiet",
+            String(localized: "MIDI devices can now be used as an input: bind notes, pads, knobs, the pitch wheel, the sustain pedal, and aftertouch to keys, clicks, macros, or anything else"),
+            String(localized: "DualSense Edge extra buttons: the back paddles, both FN buttons, and mute are now bindable like any other input, over Bluetooth and USB"),
+            String(localized: "Light bar colors now work over Bluetooth: preset colors, the RGB cycle, and brightness all reach the controller wirelessly"),
+            String(localized: "A new DualSense Edge help guide covers binding the extra buttons"),
+            String(localized: "More reliable controller data reading behind the scenes, with an automatic fallback when a Bluetooth session goes quiet"),
         ]),
         Entry(version: "1.1.1", points: [
-            "Fixes a crash that prevented InputConfig from launching on macOS 14 Sonoma",
+            String(localized: "Fixes a crash that prevented InputConfig from launching on macOS 14 Sonoma"),
         ]),
         Entry(version: "1.1", points: [
-            "431 built-in presets, over 300 of them new: games, creative and productivity apps, and accessibility workflows including VoiceOver Navigation, Numeric Keypad, Menu Bar and Dock, Emulator, and Comic Reader",
-            "Much broader controller compatibility: DualShock 3, Logitech F-series in D mode, fight sticks, multi-mode pads, and wheels, with correct d-pad handling on far more controllers",
-            "Keyboard shortcut outputs with modifiers (Cmd+C and friends) now fire as real combos",
-            "Fixed stuck mouse buttons after sleep, stuck MIDI controllers and pitch bend after stopping a preset, and edits to a running preset not applying until reactivation",
-            "Crash recovery now fully restores your active preset, including restarting the mapping engine",
-            "Macros: Toggle plus Macro works as documented, the editor shows macro state accurately, and duplicating a binding keeps every setting",
-            "VoiceOver: the input scan overlay announces itself and speaks what it detected, and the binding editor controls are labeled",
-            "Live Visualizer: the zoomed controller map stays cleanly inside its panel",
-            "Faster and lighter: large reductions in per-frame work across the input path and the interface",
+            String(localized: "431 built-in presets, over 300 of them new: games, creative and productivity apps, and accessibility workflows including VoiceOver Navigation, Numeric Keypad, Menu Bar and Dock, Emulator, and Comic Reader"),
+            String(localized: "Much broader controller compatibility: DualShock 3, Logitech F-series in D mode, fight sticks, multi-mode pads, and wheels, with correct d-pad handling on far more controllers"),
+            String(localized: "Keyboard shortcut outputs with modifiers (Cmd+C and friends) now fire as real combos"),
+            String(localized: "Fixed stuck mouse buttons after sleep, stuck MIDI controllers and pitch bend after stopping a preset, and edits to a running preset not applying until reactivation"),
+            String(localized: "Crash recovery now fully restores your active preset, including restarting the mapping engine"),
+            String(localized: "Macros: Toggle plus Macro works as documented, the editor shows macro state accurately, and duplicating a binding keeps every setting"),
+            String(localized: "VoiceOver: the input scan overlay announces itself and speaks what it detected, and the binding editor controls are labeled"),
+            String(localized: "Live Visualizer: the zoomed controller map stays cleanly inside its panel"),
+            String(localized: "Faster and lighter: large reductions in per-frame work across the input path and the interface"),
         ]),
         Entry(version: "1.0", points: [
-            "Initial release: map any controller, keyboard, or mouse to keyboard, mouse, MIDI, and more, anywhere on macOS",
-            "Preset system with groups, notes, per-preset light bar colors, and app auto-activation",
-            "Scan to bind: press any control and it maps instantly",
-            "Live Visualizer with customizable widget layout",
-            "Turbo, macros, hold and double-tap actions, haptics, and spoken feedback per binding",
-            "Touchpad calibration and regions, gyroscope aim, deadzone tuning, one-stick driving",
-            "MIDI notes, CC, and pitch bend outputs through a built-in virtual MIDI port",
+            String(localized: "Initial release: map any controller, keyboard, or mouse to keyboard, mouse, MIDI, and more, anywhere on macOS"),
+            String(localized: "Preset system with groups, notes, per-preset light bar colors, and app auto-activation"),
+            String(localized: "Scan to bind: press any control and it maps instantly"),
+            String(localized: "Live Visualizer with customizable widget layout"),
+            String(localized: "Turbo, macros, hold and double-tap actions, haptics, and spoken feedback per binding"),
+            String(localized: "Touchpad calibration and regions, gyroscope aim, deadzone tuning, one-stick driving"),
+            String(localized: "MIDI notes, CC, and pitch bend outputs through a built-in virtual MIDI port"),
         ]),
 
         // Everything below shipped under the app's original name,
         // JoystickConfig, before the rename to InputConfig.
-        Entry(version: "1.2 (as JoystickConfig)", points: [
-            "Support for controllers beyond Apple's framework: the app now reads raw HID gamepads directly, with a descriptor parser and a controller profile database",
-            "Your Mac's own keyboard and mouse can be used as input sources",
-            "Cursor regions and stick regions: fire bindings when the pointer or a stick enters a zone you draw",
-            "Crash recovery restores your active preset after an unexpected quit",
-            "Menu bar icon with quick preset switching",
-            "Freeze watchdog and cursor guard for a safer always-on experience",
+        Entry(version: String(localized: "1.2 (as JoystickConfig)"), points: [
+            String(localized: "Support for controllers beyond Apple's framework: the app now reads raw HID gamepads directly, with a descriptor parser and a controller profile database"),
+            String(localized: "Your Mac's own keyboard and mouse can be used as input sources"),
+            String(localized: "Cursor regions and stick regions: fire bindings when the pointer or a stick enters a zone you draw"),
+            String(localized: "Crash recovery restores your active preset after an unexpected quit"),
+            String(localized: "Menu bar icon with quick preset switching"),
+            String(localized: "Freeze watchdog and cursor guard for a safer always-on experience"),
         ]),
-        Entry(version: "1.1 (as JoystickConfig)", points: [
-            "MIDI output: send notes, CC, and pitch bend to any music app through a built-in virtual port",
-            "Steam Controller support",
-            "Controller touchpad as a mouse, with calibration",
-            "Deadzone calibration with a live plot",
-            "Motion calibration for gyroscope presets",
-            "Usage statistics, a test bench for trying bindings, and Launch at Login",
+        Entry(version: String(localized: "1.1 (as JoystickConfig)"), points: [
+            String(localized: "MIDI output: send notes, CC, and pitch bend to any music app through a built-in virtual port"),
+            String(localized: "Steam Controller support"),
+            String(localized: "Controller touchpad as a mouse, with calibration"),
+            String(localized: "Deadzone calibration with a live plot"),
+            String(localized: "Motion calibration for gyroscope presets"),
+            String(localized: "Usage statistics, a test bench for trying bindings, and Launch at Login"),
         ]),
-        Entry(version: "1.0 (as JoystickConfig)", points: [
-            "The original release: map a game controller to keyboard and mouse anywhere on macOS",
-            "Presets, the mapping engine, and scan to bind",
-            "DualSense light bar control and haptic feedback",
+        Entry(version: String(localized: "1.0 (as JoystickConfig)"), points: [
+            String(localized: "The original release: map a game controller to keyboard and mouse anywhere on macOS"),
+            String(localized: "Presets, the mapping engine, and scan to bind"),
+            String(localized: "DualSense light bar control and haptic feedback"),
         ]),
     ]
 }
@@ -2086,10 +2109,10 @@ struct FullChangelogList: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Changelog").font(.headline)
+                Text("Changelog").font(.headline).accessibilityAddTraits(.isHeader)
                 ForEach(Changelog.entries) { entry in
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(entry.version).font(.subheadline.weight(.semibold))
+                        Text(entry.version).font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
                         ForEach(entry.points, id: \.self) { point in
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -2103,6 +2126,8 @@ struct FullChangelogList: View {
             .padding(16)
             .frame(width: 400, alignment: .leading)
         }
+        // Keys scroll it, with nothing focusable inside.
+        .focusable()
         .frame(maxHeight: 480)
     }
 }
@@ -2124,6 +2149,7 @@ struct WhatsNewView: View {
                 Button("Done") { dismiss() }
                     .buttonStyle(.solid)
                     .keyboardShortcut(.defaultAction)
+                    .closesOnEscape { dismiss() }
             }
         }
         .padding(22)
@@ -2137,10 +2163,12 @@ struct WhatsNewView: View {
                     Image(nsImage: appIcon)
                         .resizable()
                         .frame(width: 44, height: 44)
+                        .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Welcome to version \(Changelog.currentVersion)")
                         .font(.title2.weight(.bold))
+                        .accessibilityAddTraits(.isHeader)
                     Text("Here's what's new since your last update.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -2148,13 +2176,23 @@ struct WhatsNewView: View {
                 Spacer()
             }
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(points.prefix(10), id: \.self) { point in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
-                        Text(point).font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
+                // Scrolls at large Text Size, where the notes ran past the
+                // bottom of the screen and took Done with them.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(points, id: \.self) { point in
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text("\u{2022}").foregroundStyle(.secondary).accessibilityHidden(true)
+                                Text(point).font(.caption)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .focusable()
+                .frame(maxHeight: 360)
+                .fixedSize(horizontal: false, vertical: true)
                 // A link to the whole list, opened right here: Settings
                 // cannot open over this sheet, so pointing at its path sent
                 // people looking for it.
@@ -2217,19 +2255,69 @@ struct EmergencyStopSettingsContent: View {
         get { chordRefusal }
         nonmutating set {
             chordRefusal = newValue
-            if let newValue { AccessibilityNotification.Announcement(newValue).post() }
+            if let newValue { AccessibilityNotification.Announcement(HotKeySpec.speakingChords(in: newValue)).post() }
         }
     }
 
     /// Why the keyboard stop is not live, naming a preset that holds its
     /// chord rather than blaming another app.
+    /// What the hold does, built from the settings: socket 7 only stops
+    /// while the button is still the default, and the two-button default
+    /// gets a pointer to a single button.
+    private var controllerHoldCaption: String {
+        // The one-second warning needs a hold longer than a second.
+        var parts = [panicHoldSeconds > 1
+            ? String(localized: "Works in every preset. A normal press still does what the preset says. A second in, you feel a buzz, hear a sound and see a note. Once it stops, the same hold starts the preset again.")
+            : String(localized: "Works in every preset. A normal press still does what the preset says. A one second hold stops at once, with no warning first. Once it stops, the same hold starts the preset again.")]
+        if panicControllerButton == EmergencyStopService.defaultControllerButton {
+            parts.append(String(localized: "On an Access Controller, hold socket 7 (Options). On a single Joy-Con, hold Minus or Plus. On a controller with no Back button, such as a GameCube controller, hold Start."))
+            if panicWithStart { parts.append(String(localized: "If pressing two buttons at once is hard, pick one button below.")) }
+        }
+        return parts.joined(separator: " ")
+    }
+
     private var unregisteredStopText: String? {
         let stop = EmergencyStopService.shared
         guard panicHotkeyEnabled, !stop.isRegistered else { return nil }
         if let owner = presetStore.presets.first(where: { $0.activateHotKey == stop.spec }) {
-            return "\u{201C}\(owner.name)\u{201D} uses \(stop.spec.displayString), so this shortcut does nothing. Choose another chord, or change that preset's."
+            return String(localized: "\u{201C}\(owner.shownName)\u{201D} uses \(stop.spec.displayString), so this shortcut does nothing. Choose another chord, or change that preset's.")
         }
-        return "Another app holds \(stop.spec.displayString), so this shortcut does nothing. Choose another chord."
+        return String(localized: "Another app holds \(stop.spec.displayString), so this shortcut does nothing. Choose another chord.")
+    }
+
+    private var panicButtonChoice: some View {
+        HStack(spacing: 10) {
+            Text("Button")
+                .foregroundStyle(.secondary)
+                .fixedSize()
+            Picker("Emergency stop button", selection: $panicControllerButton) {
+                ForEach(BindingRowView.standardButtonLabels, id: \.index) { entry in
+                    Text(entry.label).tag(entry.index)
+                }
+            }
+            .labelsHidden()
+            .voiceNames("Button", "Emergency stop button")
+            .frame(width: 230)
+        }
+    }
+
+    private var panicHoldChoice: some View {
+        HStack(spacing: 10) {
+            Text("held for")
+                .foregroundStyle(.secondary)
+                .fixedSize()
+            Picker("Emergency stop hold time", selection: $panicHoldSeconds) {
+                Text("1 second").tag(1.0)
+                Text("1.5 seconds").tag(1.5)
+                Text("2 seconds").tag(2.0)
+                Text("3 seconds").tag(3.0)
+                Text("4 seconds").tag(4.0)
+                Text("5 seconds").tag(5.0)
+            }
+            .labelsHidden()
+            .voiceNames("Held for", "Emergency stop hold time")
+            .fixedSize()
+        }
     }
 
     var body: some View {
@@ -2242,12 +2330,12 @@ struct EmergencyStopSettingsContent: View {
             .onChange(of: panicHotkeyEnabled) { _, on in
                 let chord = EmergencyStopService.shared.spec
                 if on, let owner = presetStore.presets.first(where: { $0.activateHotKey == chord }) {
-                    panicChordRefusal = "\(chord.displayString) already activates \u{201C}\(owner.name)\u{201D}. Choose another chord."
+                    panicChordRefusal = String(localized: "\(chord.displayString) already activates \u{201C}\(owner.shownName)\u{201D}. Choose another chord.")
                     panicHotkeyEnabled = false
                     return
                 }
                 if on, GlobalHotKeyService.shared.isEnabled, chord == GlobalHotKeyService.spec {
-                    panicChordRefusal = "\(chord.displayString) already turns the last preset on and off. Choose another chord."
+                    panicChordRefusal = String(localized: "\(chord.displayString) already turns the last preset on and off. Choose another chord.")
                     panicHotkeyEnabled = false
                     return
                 }
@@ -2255,7 +2343,7 @@ struct EmergencyStopSettingsContent: View {
                 if on && !EmergencyStopService.shared.isRegistered {
                     // The chord field stays usable while the switch is
                     // off, so a new chord can be tried.
-                    panicChordRefusal = "Another app already uses \(chord.displayString). Choose another chord."
+                    panicChordRefusal = String(localized: "Another app already uses \(chord.displayString). Choose another chord.")
                     panicHotkeyEnabled = false
                 } else if on {
                     panicChordRefusal = nil
@@ -2269,12 +2357,12 @@ struct EmergencyStopSettingsContent: View {
                 // one twice fails, which turned the keyboard stop off and
                 // blamed another app.
                 if GlobalHotKeyService.shared.isEnabled, newSpec == GlobalHotKeyService.spec {
-                    panicChordRefusal = "\(newSpec.displayString) already turns the last preset on and off. Choose another chord."
+                    panicChordRefusal = String(localized: "\(newSpec.displayString) already turns the last preset on and off. Choose another chord.")
                     specRevision &+= 1
                     return
                 }
                 if let owner = presetStore.presets.first(where: { $0.activateHotKey == newSpec }) {
-                    panicChordRefusal = "\(newSpec.displayString) already activates \u{201C}\(owner.name)\u{201D}. Choose another chord."
+                    panicChordRefusal = String(localized: "\(newSpec.displayString) already activates \u{201C}\(owner.shownName)\u{201D}. Choose another chord.")
                     specRevision &+= 1
                     return
                 }
@@ -2284,12 +2372,17 @@ struct EmergencyStopSettingsContent: View {
                 // there come back, and the field stays usable for another
                 // try.
                 if !EmergencyStopService.shared.trySpec(newSpec) {
-                    panicChordRefusal = "Another app already uses \(newSpec.displayString). Choose another chord."
+                    panicChordRefusal = String(localized: "Another app already uses \(newSpec.displayString). Choose another chord.")
+                } else {
+                    // The field is rebuilt below, so say what was saved.
+                    AccessibilityNotification.Announcement(String(localized: "Emergency stop shortcut set to \(newSpec.spokenString)")).post()
                 }
                 panicHotkeyEnabled = EmergencyStopService.shared.isEnabled
                 specRevision &+= 1
             }
-            .id(specRevision)
+            // Refreshed in place, not rebuilt, so keyboard and VoiceOver
+            // focus stay on the field.
+            .refreshedBy(specRevision)
             Spacer()
         }
         if EmergencyStopService.shared.spec.stealsATypingKey {
@@ -2301,6 +2394,7 @@ struct EmergencyStopSettingsContent: View {
         }
         if let refusal = panicChordRefusal ?? unregisteredStopText {
             Text(refusal)
+                .accessibilityLabel(HotKeySpec.speakingChords(in: refusal))
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2310,37 +2404,29 @@ struct EmergencyStopSettingsContent: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .id(specRevision)
+        if NSWorkspace.shared.isVoiceOverEnabled {
+            Text(HotKeyRecorderField.voiceOverPassThrough)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
 
         Divider()
 
         Toggle("Hold a button on the controller", isOn: $panicControllerEnabled)
-        Text("Works in every preset. A normal press still does what the preset says. You feel a buzz a second in, and once it stops, the same hold starts the preset again. On an Access Controller, hold socket 7 (Options).")
+        Text(controllerHoldCaption)
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: 10) {
-            Text("Button")
-                .foregroundStyle(.secondary)
-            Picker("Emergency stop button", selection: $panicControllerButton) {
-                ForEach(BindingRowView.standardButtonLabels, id: \.index) { entry in
-                    Text(entry.label).tag(entry.index)
-                }
+        // One line when it fits; in a long language (and in the narrow
+        // emergency stop popover) the hold time moves to a line of its own
+        // rather than squeezing the labels into broken words.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { panicButtonChoice; panicHoldChoice; Spacer(minLength: 0) }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) { panicButtonChoice; Spacer(minLength: 0) }
+                HStack(spacing: 10) { panicHoldChoice; Spacer(minLength: 0) }
             }
-            .labelsHidden()
-            .frame(width: 230)
-            Text("held for")
-                .foregroundStyle(.secondary)
-            Picker("Emergency stop hold time", selection: $panicHoldSeconds) {
-                Text("1 second").tag(1.0)
-                Text("1.5 seconds").tag(1.5)
-                Text("2 seconds").tag(2.0)
-                Text("3 seconds").tag(3.0)
-                Text("4 seconds").tag(4.0)
-                Text("5 seconds").tag(5.0)
-            }
-            .labelsHidden()
-            .frame(width: 130)
-            Spacer()
         }
         .disabled(!panicControllerEnabled)
         if panicControllerButton == EmergencyStopService.defaultControllerButton {
@@ -2364,7 +2450,18 @@ struct EmergencyStopSettingsContent: View {
 struct HotKeyRecorderField: View {
     let spec: HotKeySpec
     /// What the shortcut does, read by VoiceOver before the chord.
-    var label: String = "Shortcut"
+    var label: LocalizedStringKey = "Shortcut"
+    /// The word shown beside the field ("Shortcut", "Key").
+    var voiceName: LocalizedStringKey = "Shortcut"
+    /// Bumped by the owner after a record, so a refused chord shows the one
+    /// still in force.
+    var revision = 0
+
+    func refreshedBy(_ revision: Int) -> HotKeyRecorderField {
+        var copy = self
+        copy.revision = revision
+        return copy
+    }
     let onRecord: (HotKeySpec) -> Void
 
     @State private var recording = false
@@ -2374,9 +2471,11 @@ struct HotKeyRecorderField: View {
     @State private var monitor: Any?
     @State private var current: HotKeySpec
 
-    init(spec: HotKeySpec, label: String = "Shortcut", onRecord: @escaping (HotKeySpec) -> Void) {
+    init(spec: HotKeySpec, label: LocalizedStringKey = "Shortcut", voiceName: LocalizedStringKey = "Shortcut",
+         onRecord: @escaping (HotKeySpec) -> Void) {
         self.spec = spec
         self.label = label
+        self.voiceName = voiceName
         self.onRecord = onRecord
         _current = State(initialValue: spec)
     }
@@ -2385,7 +2484,7 @@ struct HotKeyRecorderField: View {
         Button {
             recording ? stop() : start()
         } label: {
-            Text(recording ? (hint ?? "Press a key…") : current.displayString)
+            Text(recording ? (hint ?? String(localized: "Press a key…")) : current.displayString)
                 .font(.body.monospaced())
                 .frame(minWidth: 130)
                 .padding(.horizontal, 12)
@@ -2398,37 +2497,57 @@ struct HotKeyRecorderField: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-        .accessibilityValue(recording ? (hint ?? "Recording, press a shortcut") : current.displayString)
+        .accessibilityValue(recording ? (hint.map(HotKeySpec.speakingChords) ?? String(localized: "Recording, press a shortcut")) : current.spokenString)
+        // Voice Control: the word shown beside the field, then its full name.
+        .accessibilityInputLabels([Text(voiceName), Text(label)])
         .help("Click, then press the shortcut you want. It needs Command or Control, or Option with a function, arrow, or navigation key: macOS will not hand an app a single key, Shift or Option with a letter would stop that character typing anywhere, and Command Q, W, C, V and the like are macOS's own.")
         .onDisappear { stop() }
         // Recording lets every InputConfig chord go, the emergency stop's
         // included, so it ends when the app or window is left.
+        .onChange(of: spec) { _, new in current = new }
+        .onChange(of: revision) { _, _ in current = spec }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stop() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in stop() }
         .onChange(of: hint) { _, new in
-            if let new { AccessibilityNotification.Announcement(new).post() }
+            if let new { AccessibilityNotification.Announcement(HotKeySpec.speakingChords(in: new)).post() }
         }
+    }
+
+    /// VoiceOver keeps Control Option chords, so the recorder never hears
+    /// them unless they are passed through.
+    static var voiceOverPassThrough: String {
+        String(localized: "With VoiceOver on, press Control Option Tab first to pass a Control Option chord through, or use a chord without Control and Option together.")
     }
 
     /// What the field asks for when a press could not be taken.
     private var hint: String? {
         guard needsModifier else { return nil }
-        return macOSChord ? "macOS uses that: add \u{2303} or \u{2325}" : "Add \u{2318} or \u{2303}"
+        return macOSChord ? String(localized: "macOS uses that: add \u{2303} or \u{2325}") : String(localized: "Add \u{2318} or \u{2303}")
     }
     @State private var macOSChord = false
 
     /// Command (or Command Shift) with a key macOS and every app use.
     private static func isMacOSShortcut(_ s: HotKeySpec) -> Bool {
         guard s.modifiers == UInt32(cmdKey) || s.modifiers == UInt32(cmdKey | shiftKey) else { return false }
-        let keys: Set<Int> = [kVK_ANSI_Q, kVK_ANSI_W, kVK_ANSI_H, kVK_ANSI_M, kVK_ANSI_C, kVK_ANSI_V,
-                              kVK_ANSI_X, kVK_ANSI_Z, kVK_ANSI_A, kVK_ANSI_S, kVK_Tab, kVK_Space, kVK_ANSI_Comma]
-        return keys.contains(Int(s.keyCode))
+        // Tab and Space by position; letters and the comma by the character
+        // the key types, as menus match them (Command M sits on another key
+        // on AZERTY, and the US Z position types Y on QWERTZ).
+        if [kVK_Tab, kVK_Space].contains(Int(s.keyCode)) { return true }
+        let typed = SystemActionService.character(forVirtualKey: Int(s.keyCode))?.lowercased()
+        guard let typed else {
+            return [kVK_ANSI_Q, kVK_ANSI_W, kVK_ANSI_H, kVK_ANSI_M, kVK_ANSI_C, kVK_ANSI_V,
+                    kVK_ANSI_X, kVK_ANSI_Z, kVK_ANSI_A, kVK_ANSI_S, kVK_ANSI_Comma].contains(Int(s.keyCode))
+        }
+        return ["q", "w", "h", "m", "c", "v", "x", "z", "a", "s", ","].contains(typed)
     }
 
     private func start() {
         recording = true
         needsModifier = false
         macOSChord = false
+        // Said, since a button's changed value is not reliably re-read.
+        AccessibilityNotification.Announcement(String(localized: "Recording. Press the shortcut, or Escape to cancel.")
+            + (NSWorkspace.shared.isVoiceOverEnabled ? " " + Self.voiceOverPassThrough : "")).post()
         HotKeyCenter.shared.suspendAll()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
             var mods: UInt32 = 0
@@ -2437,6 +2556,7 @@ struct HotKeyRecorderField: View {
             if event.modifierFlags.contains(.shift)   { mods |= UInt32(shiftKey) }
             if event.modifierFlags.contains(.command) { mods |= UInt32(cmdKey) }
             if event.keyCode == UInt16(kVK_Escape) && mods == 0 {
+                AccessibilityNotification.Announcement(String(localized: "Recording canceled")).post()
                 stop()
                 return nil
             }
@@ -2609,3 +2729,382 @@ struct MenuBarIconPicker: View {
 #else
 @MainActor private func storeSafe(_ normal: String, _ storeCopy: String) -> String { normal }
 #endif
+
+/// Settings, General, Language: the system's language or one picked for
+/// InputConfig, applied by restarting the app.
+private struct LanguagePicker: View {
+    @State private var choice: String = AppLanguage.chosen ?? ""
+    @State private var showRestart = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Language", selection: $choice) {
+                Text("Same as the system").tag("")
+                Divider()
+                ForEach(AppLanguage.codes, id: \.self) { code in
+                    Text(verbatim: AppLanguage.nativeName(code)).tag(code)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .onChange(of: choice) { _, new in
+                AppLanguage.choose(new.isEmpty ? nil : new)
+                showRestart = AppLanguage.nextLaunch != AppLanguage.current
+                if showRestart {
+                    AccessibilityNotification.Announcement(String(localized: "InputConfig changes language when it starts again.")).post()
+                }
+            }
+            // A choice made earlier and not yet applied keeps its Restart Now.
+            .onAppear { showRestart = AppLanguage.nextLaunch != AppLanguage.current }
+            if showRestart {
+                HStack(spacing: 8) {
+                    Text("InputConfig changes language when it starts again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Restart Now") { AppLanguage.relaunch() }
+                        .buttonStyle(.solidCompact)
+                }
+            }
+            Text("Same as the system follows System Settings, General, Language and Region, where you can also set a language for InputConfig alone.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Export Backup and Restore from Backup, apart from the Settings view so
+/// they can be run on their own (the tests run them for real).
+@MainActor
+enum BackupService {
+    struct Result {
+        var title = ""
+        var message = ""
+        var refusedNewer = false
+        var summary = PresetStore.RestoreSummary()
+        var settingsRestored = 0
+        var skippedSettings = 0
+        var languageNote = false
+        var clearedShortcuts: [String] = []
+        var lines: [String] = []
+    }
+
+    static func makeEnvelope(presetStore: PresetStore) -> [String: Any] {
+        var presetsArray: [[String: Any]] = []
+        for p in presetStore.presets {
+            if let data = try? JSONEncoder().encode(p),
+               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                presetsArray.append(dict)
+            }
+        }
+        var groupsArray: [[String: Any]] = []
+        for g in presetStore.groups {
+            if let data = try? JSONEncoder().encode(g),
+               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                groupsArray.append(dict)
+            }
+        }
+        // Trash (soft-deleted presets). Captures both the preset and the
+        // original deletedAt timestamp so a "restore on new Mac" landing
+        // doesn't reset the trash's chronological ordering. Older
+        // restores that lack this field just skip the trash block.
+        var trashArray: [[String: Any]] = []
+        for snap in presetStore.snapshotTrashForBackup() {
+            if let data = try? JSONEncoder().encode(snap),
+               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                trashArray.append(dict)
+            }
+        }
+        // Mirror selected UserDefaults that we own.
+        let defaults = UserDefaults.standard
+        var prefs: [String: Any] = [:]
+        // Every UserDefaults key the app owns. Adding new keys here is
+        // how they get carried by Export Backup; missing entries silently
+        // reset when the user restores on a new Mac. Grouped roughly
+        // by subsystem for readability.
+        // Every setting the app owns, found by prefix in its own defaults
+        // domain rather than listed by hand. The hand-kept list had drifted:
+        // the emergency-stop and panic hotkeys, the global activate hotkey,
+        // auto-switch, the manual HID devices, the accessibility text
+        // settings and more were all missing, so restoring on a new Mac
+        // silently dropped the kill switch. A few keys are machine-local
+        // and skipped on purpose.
+        let exportedKeys: [String] = defaults.dictionaryRepresentation().keys
+            .filter { AppSettingsReset.isRestorable($0) && !AppSettingsReset.isUpgradeRecord($0) }
+            .sorted()
+        // The stop chord only when recorded: its registered default read as
+        // a recorded chord after a restore, and pinned the stop to the US
+        // period key on AZERTY, Dvorak and Turkish layouts.
+        let ownDomain = Bundle.main.bundleIdentifier.flatMap { defaults.persistentDomain(forName: $0) } ?? [:]
+        for key in exportedKeys {
+            if key == EmergencyStopService.keyCodeKey || key == EmergencyStopService.modifiersKey, ownDomain[key] == nil { continue }
+            if let v = defaults.object(forKey: key) {
+                // Encode Data values as base64 strings for JSON portability.
+                if let d = v as? Data {
+                    prefs[key] = ["__data": d.base64EncodedString()]
+                } else if key == HIDDeviceRegistry.rememberedKey || key == HIDDeviceRegistry.bitwiseBefore17Key
+                            || key == HIDDeviceRegistry.rememberedBy17Key,
+                          let list = v as? [String] {
+                    // A device's key carries its serial hashed with a salt
+                    // that stays on this Mac, so it cannot match on another.
+                    // The backup also carries the plain vendor and product
+                    // ("vvvv:pppp"), which still reconnects it after a
+                    // restore there. Only in the backup: on this Mac that
+                    // key would connect every identical pad.
+                    let pairs = list.compactMap { $0.count >= 9 ? String($0.prefix(9)) : nil }
+                    // A tag of this Mac's salt, so a restore here can tell
+                    // and leave the plain keys out.
+                    prefs[key] = Array(Set(list + pairs)).sorted() + [AppSettingsReset.saltTagPrefix + AppSettingsReset.saltTag]
+                } else if JSONSerialization.isValidJSONObject([v]) {
+                    prefs[key] = v
+                }
+            }
+        }
+        var envelope: [String: Any] = [
+            "schemaVersion": 1,
+            // Which version made it, and when 1.6 first ran on that Mac, so a
+            // restore knows which presets and trash entries 1.6 already upgraded.
+            "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+            "exportedAt": ISO8601DateFormatter().string(from: Date()),
+            "presets": presetsArray,
+            "groups": groupsArray,
+            "trash": trashArray,
+            "userDefaults": prefs
+        ]
+        if let first = defaults.object(forKey: PresetStore.first16LaunchKey) as? Date {
+            envelope["first16LaunchAt"] = first.timeIntervalSince1970
+        }
+        let first17 = defaults.double(forKey: PresetStore.first17LaunchKey)
+        if first17 > 0 { envelope["first17LaunchAt"] = first17 }
+        if let lang = AppLanguage.chosen { envelope["appLanguage"] = lang }
+        // Gyro calibration lives in its own file; carried so a new Mac
+        // starts with the pads already calibrated.
+        if let motion = MotionCalibrationService.shared.exportData() {
+            envelope["motionCalibration"] = motion.base64EncodedString()
+        }
+        return envelope
+    }
+
+
+    /// The app-wide zone lists a backup from before 1.5 carries, by kind:
+    /// base64 under a "__data" marker, or a bare base64 string as those
+    /// backups wrote them.
+    static func legacyZones(in prefs: [String: Any]?) -> (touchpad: [TouchpadRegion], cursor: [TouchpadRegion], stick: [Int: [TouchpadRegion]]) {
+        func data(_ key: String) -> Data? {
+            guard let value = prefs?[key] else { return nil }
+            if let dict = value as? [String: Any], let str = dict["__data"] as? String { return Data(base64Encoded: str) }
+            if let str = value as? String { return Data(base64Encoded: str) }
+            return nil
+        }
+        func list(_ key: String) -> [TouchpadRegion] {
+            data(key).flatMap { try? JSONDecoder().decode([TouchpadRegion].self, from: $0) } ?? []
+        }
+        var stick: [Int: [TouchpadRegion]] = [:]
+        if let d = data("InputConfig.stickRegions.v1"),
+           let root = try? JSONDecoder().decode([String: [String: [TouchpadRegion]]].self, from: d) {
+            for (key, zones) in root["byStick"] ?? [:] { if let i = Int(key) { stick[i] = zones } }
+        }
+        return (list("InputConfig.touchpadRegions.v1"), list("InputConfig.cursorRegions.v1"), stick)
+    }
+
+    /// Restore from Backup. applyToApp false (tests) leaves the running
+    /// services, the Dock, the menu bar, attached devices and the system-wide
+    /// stop shortcut alone. Returns the title and text the alert shows.
+    @discardableResult
+    static func restore(_ envelope: [String: Any], presetStore: PresetStore, mappingEngine: MappingEngine?,
+                        controllerService: GameControllerService? = nil, applyToApp: Bool = true) -> Result {
+        // v1 is the only published format. A newer backup is refused
+        // rather than partly restored.
+        let version = (envelope["schemaVersion"] as? Int) ?? 1
+        guard version <= 1 else {
+            return Result(title: String(localized: "Backup From a Newer Version"),
+                          message: String(localized: "This backup was made by a newer InputConfig. Update the app, then restore it."),
+                          refusedNewer: true)
+        }
+        func decodeAll<T: Decodable>(_ key: String, as type: T.Type, unreadable: inout Int) -> [T] {
+            guard let list = envelope[key] as? [[String: Any]] else { return [] }
+            return list.compactMap { dict in
+                guard let data = try? JSONSerialization.data(withJSONObject: dict),
+                      let value = try? JSONDecoder().decode(T.self, from: data) else {
+                    unreadable += 1
+                    return nil
+                }
+                return value
+            }
+        }
+        var unreadable = 0
+        var presets = decodeAll("presets", as: Preset.self, unreadable: &unreadable)
+        let groups = decodeAll("groups", as: PresetGroup.self, unreadable: &unreadable)
+        var trash = decodeAll("trash", as: PresetStore.TrashSnapshot.self, unreadable: &unreadable)
+        // A backup made by 1.6 names its version (1.5 wrote none); one from
+        // an early 1.6 build carried its one-shot flags instead.
+        let prefs = envelope["userDefaults"] as? [String: Any]
+        // Zones were one app-wide list per kind before 1.5. The one-shot
+        // that hands them to the presets referring to them ran on this Mac
+        // long ago, so a backup made before 1.5 hands them over here, or
+        // every zone row it restores refers to a zone its preset does not carry.
+        let legacy = legacyZones(in: prefs)
+        if !legacy.touchpad.isEmpty || !legacy.cursor.isEmpty || !legacy.stick.isEmpty {
+            for i in presets.indices {
+                _ = presets[i].adoptLegacyRegions(touchpad: legacy.touchpad, cursor: legacy.cursor, stick: legacy.stick)
+            }
+            for i in trash.indices {
+                var p = trash[i].preset
+                if p.adoptLegacyRegions(touchpad: legacy.touchpad, cursor: legacy.cursor, stick: legacy.stick) {
+                    trash[i] = PresetStore.TrashSnapshot(preset: p, deletedAt: trash[i].deletedAt)
+                }
+            }
+        }
+        let madeBy16 = envelope["appVersion"] != nil
+            || prefs?["InputConfig.builtInRowFixes16.v1"] != nil
+            || prefs?["InputConfig.desktopNavigationAClicks.v1"] != nil
+        let source16 = (envelope["first16LaunchAt"] as? Double).map(Date.init(timeIntervalSince1970:))
+        let backupVersion = envelope["appVersion"] as? String ?? ""
+        let madeBefore17 = backupVersion.isEmpty || backupVersion.compare("1.7", options: .numeric) == .orderedAscending
+        var summary = presetStore.restoreFromBackup(presets: presets, groups: groups, trash: trash,
+                                                    madeBy16: madeBy16, madeBefore17: madeBefore17,
+                                                    source16Since: source16,
+                                                    source17Since: (envelope["first17LaunchAt"] as? Double).map(Date.init(timeIntervalSince1970:)))
+        summary.unreadable = unreadable
+
+        // UserDefaults. Data values travel as base64 under a "__data"
+        // marker; backups written before 1.5 stored a few as bare strings.
+        let dataKeys: Set<String> = [
+            "InputConfig.touchpadCalibration.v1",
+            "InputConfig.touchpadRegions.v1",
+            "InputConfig.touchpadActiveDevice.v2",
+            "InputConfig.cursorRegions.v1",
+            "InputConfig.stickRegions.v1",
+        ]
+        var settingsRestored = 0
+        var skippedSettings = 0
+        if let prefs = envelope["userDefaults"] as? [String: Any] {
+            let defaults = UserDefaults.standard
+            // Only the app's own keys, and only values UserDefaults can hold:
+            // a null crashed the app, a negative panic key code crashed every
+            // launch after, and keys such as AppleLanguages could be planted.
+            for (key, rawValue) in prefs where AppSettingsReset.isRestorable(key)
+                && !AppSettingsReset.isRestoreSkipped(key) {
+                guard let value = AppSettingsReset.restorableValue(rawValue, forKey: key) else {
+                    skippedSettings += 1
+                    continue
+                }
+                // A backup from before 1.7 carried the stop chord's registered
+                // default as if recorded; written here it fixed the stop to
+                // the US period key. Kept out unless this Mac recorded one
+                // too. A 1.7 backup carries the chord only when recorded.
+                if madeBefore17, key == EmergencyStopService.keyCodeKey || key == EmergencyStopService.modifiersKey,
+                   let n = value as? Int,
+                   n == (key == EmergencyStopService.keyCodeKey ? Int(EmergencyStopService.defaultSpec.keyCode) : Int(EmergencyStopService.defaultSpec.modifiers)),
+                   Bundle.main.bundleIdentifier.flatMap({ defaults.persistentDomain(forName: $0)?[key] }) == nil {
+                    continue
+                }
+                let restored: Any
+                if let dict = value as? [String: Any], let str = dict["__data"] as? String,
+                   let data = Data(base64Encoded: str) {
+                    restored = data
+                } else if dataKeys.contains(key), let str = value as? String, let data = Data(base64Encoded: str) {
+                    restored = data
+                } else {
+                    restored = value
+                }
+                if key == "InputConfig.touchpadCalibration.v1" {
+                    // A backup's touchpad calibration is not brought back:
+                    // 1.7 reads the whole pad and has no way to clear one.
+                } else {
+                    defaults.set(AppSettingsReset.merged(restored, into: key, idMap: summary.idMap), forKey: key)
+                }
+                settingsRestored += 1
+            }
+        }
+        if let motion = envelope["motionCalibration"] as? String, let data = Data(base64Encoded: motion) {
+            MotionCalibrationService.shared.mergeImported(data)
+        }
+        // A backup from before 1.7: its devices connected by hand were read
+        // bit by bit, and its presets use those bit numbers, so they count
+        // as connected before 1.7 here too.
+        if madeBefore17, let hand = prefs?[HIDDeviceRegistry.rememberedKey] as? [String] {
+            HIDDeviceRegistry.noteHandDevicesBefore17()
+            let key = HIDDeviceRegistry.bitwiseBefore17Key
+            let current = UserDefaults.standard.stringArray(forKey: key) ?? []
+            var incoming = hand.filter { !$0.hasPrefix(AppSettingsReset.saltTagPrefix) }
+            // On the Mac that made it, its own keys still match, and the
+            // plain vendor and product would count every identical device
+            // (one connected since in 1.7 too) as read bit by bit.
+            if hand.contains(AppSettingsReset.saltTagPrefix + AppSettingsReset.saltTag) {
+                let hashedPrefixes = Set(incoming.filter { $0.count > 9 }.map { String($0.prefix(9)) })
+                incoming.removeAll { $0.count == 9 && hashedPrefixes.contains($0) }
+            }
+            let added = incoming.filter { !current.contains($0) }
+            if !added.isEmpty { UserDefaults.standard.set(current + added, forKey: key) }
+        }
+        // The app language picked in the backup, when none is picked here;
+        // macOS applies it at the next launch.
+        var languageNote = false
+        if let lang = envelope["appLanguage"] as? String, AppLanguage.codes.contains(lang),
+           AppLanguage.chosen == nil, lang != AppLanguage.current {
+            AppLanguage.choose(lang)
+            languageNote = true
+        }
+        // The stored values changed underneath the running services.
+        if applyToApp, let mappingEngine {
+            AppSettingsApply.applyAll(engine: mappingEngine, store: presetStore)
+        } else {
+            // The reloads a restore depends on, without the Dock, the menu
+            // bar or the system-wide shortcut.
+            presetStore.reloadFavoritesFromDefaults()
+            controllerService?.reloadIgnoredDevicesFromDefaults()
+        }
+        // Devices connected by hand on the other Mac that are plugged in
+        // here already: opened now, as when they attach.
+        if applyToApp { HIDDeviceRegistry.shared.adoptRememberedNow() }
+        // Only now is the backup's Emergency Stop chord in place, so preset
+        // shortcuts are checked against it here, not against this Mac's
+        // before the restore (which cleared one for nothing, or let a preset
+        // and the stop share a chord).
+        let clearedShortcuts = presetStore.clearHotKeysClaimedByEmergencyStop()
+        // The stop tried to register before that preset let go of its chord.
+        if applyToApp { EmergencyStopService.shared.refreshRegistration() }
+
+        var lines: [String] = []
+        lines.append(summary.presetsAdded == 1 ? String(localized: "1 preset added") : String(localized: "\(summary.presetsAdded) presets added"))
+        if summary.builtInsReplaced > 0 {
+            lines.append(summary.builtInsReplaced == 1
+                ? String(localized: "1 built-in preset from the backup added beside this Mac\u{2019}s copy, named \u{201C}(from backup)\u{201D}")
+                : String(localized: "\(summary.builtInsReplaced) built-in presets from the backup added beside this Mac\u{2019}s copy, named \u{201C}(from backup)\u{201D}"))
+        }
+        if summary.presetsSkipped > 0 {
+            lines.append(summary.presetsSkipped == 1 ? String(localized: "1 already here, kept as it is")
+                         : String(localized: "\(summary.presetsSkipped) already here, kept as they are"))
+        }
+        if summary.groupsAdded > 0 {
+            lines.append(summary.groupsAdded == 1 ? String(localized: "1 folder added") : String(localized: "\(summary.groupsAdded) folders added"))
+        }
+        if summary.trashAdded > 0 { lines.append(String(localized: "\(summary.trashAdded) in the Trash")) }
+        lines.append(settingsRestored == 1 ? String(localized: "1 setting restored") : String(localized: "\(settingsRestored) settings restored"))
+        if skippedSettings > 0 {
+            lines.append(skippedSettings == 1 ? String(localized: "1 setting skipped as invalid") : String(localized: "\(skippedSettings) settings skipped as invalid"))
+        }
+        if summary.unreadable > 0 {
+            lines.append(summary.unreadable == 1 ? String(localized: "1 item could not be read") : String(localized: "\(summary.unreadable) items could not be read"))
+        }
+        if !summary.withOpeners.isEmpty {
+            let names = summary.withOpeners.prefix(5).map { "\u{201C}\($0)\u{201D}" }.joined(separator: ", ")
+            if summary.withOpeners.count > 5 {
+                lines.append(String(localized: "Opens apps or websites, or starts by itself: \(names) and \(summary.withOpeners.count - 5) more. Check these in the editor before running them."))
+            } else {
+                lines.append(String(localized: "Opens apps or websites, or starts by itself: \(names). Check these in the editor before running them."))
+            }
+        }
+        if !clearedShortcuts.isEmpty {
+            lines.append(String(localized: "No longer has a shortcut, because the emergency stop uses it again: \(ListFormatter.localizedString(byJoining: clearedShortcuts))"))
+        }
+        if languageNote {
+            lines.append(String(localized: "The app language from the backup is used the next time InputConfig opens"))
+        }
+        ActivityLog.shared.info("Settings", "Backup restored: " + lines.joined(separator: ", "))
+        return Result(title: String(localized: "Backup Restored"), message: lines.joined(separator: "\n"),
+                      summary: summary, settingsRestored: settingsRestored, skippedSettings: skippedSettings,
+                      languageNote: languageNote, clearedShortcuts: clearedShortcuts, lines: lines)
+    }
+}

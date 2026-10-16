@@ -21,13 +21,13 @@ where V.Stride: BinaryFloatingPoint {
     /// What the slider sets, for VoiceOver ("Deadzone", "Speed"). The
     /// visible label next to it is separate text the slider knows nothing
     /// about, so without this it announced only its value.
-    var label: String = ""
+    var label: LocalizedStringKey = ""
 
     @State private var localValue: V
     @State private var isDragging = false
 
     init(
-        _ label: String = "",
+        _ label: LocalizedStringKey = "",
         value: Binding<V>,
         in range: ClosedRange<V>,
         step: V.Stride = 1,

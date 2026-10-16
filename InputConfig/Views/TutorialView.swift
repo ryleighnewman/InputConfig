@@ -30,6 +30,17 @@ enum SpotlightID {
     static let importButton     = "import-button"
     static let editorSave       = "editor-save"
     static let editorCancel     = "editor-cancel"
+    static let motionWidget     = "motion-widget"
+    /// The first region on the Regions card's drawing.
+    static let tourRegion       = "tour-region"
+}
+
+extension Notification.Name {
+    /// The tour selects a region by its place in the shown list (an Int).
+    static let inputConfigTourSelectRegion = Notification.Name("InputConfig.TourSelectRegion")
+    /// The tour opens a Live Visualizer control's popover by its key (a
+    /// String), or closes it (nil).
+    static let inputConfigTourInspect = Notification.Name("InputConfig.TourInspect")
 }
 
 struct SpotlightAnchor: Equatable {
@@ -65,11 +76,49 @@ private struct SpotlightAnchorModifier: ViewModifier {
                             key: SpotlightAnchorsKey.self,
                             value: [SpotlightAnchor(id: id, frame: geo.frame(in: .global))]
                         )
+                        // Where it is on the screen, for the pointer: the
+                        // frame above is only good inside its own window.
+                        .background(ScreenAnchorReporter(id: id, frame: geo.frame(in: .global)))
                 }
             )
         } else {
             content
         }
+    }
+}
+
+/// Reports an anchor's frame on the screen whenever it moves, from inside
+/// whatever window holds it: a toolbar, a sheet or the main window.
+private struct ScreenAnchorReporter: NSViewRepresentable {
+    let id: String
+    /// Only to be told when it moves.
+    let frame: CGRect
+
+    final class Probe: NSView {
+        var id = ""
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            report()
+        }
+        func report() {
+            guard let window else { return }
+            TutorialState.shared.screenAnchorMoved(id, to: window.convertToScreen(convert(bounds, to: nil)))
+        }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let v = Probe()
+        v.id = id
+        return v
+    }
+
+    func updateNSView(_ v: Probe, context: Context) {
+        v.id = id
+        DispatchQueue.main.async { v.report() }
+    }
+
+    static func dismantleNSView(_ v: Probe, coordinator: ()) {
+        TutorialState.shared.screenAnchorGone(v.id)
     }
 }
 
@@ -132,7 +181,24 @@ final class TutorialState: ObservableObject {
     /// the animation completes.
     @Published private(set) var simulatedClickPressed: Bool = false
 
+    /// Every anchor's frame on the screen, for the pointer.
+    private var screenAnchors: [String: NSRect] = [:]
+
     private init() {}
+
+    func screenAnchorMoved(_ id: String, to rect: NSRect) {
+        screenAnchors[id] = rect
+        if id == simulatedClickTarget { aimCursor() }
+    }
+
+    func screenAnchorGone(_ id: String) {
+        screenAnchors[id] = nil
+    }
+
+    private func aimCursor() {
+        guard let target = simulatedClickTarget, let r = screenAnchors[target] else { return }
+        TutorialCursorPanel.shared.aim(atScreen: NSPoint(x: r.midX, y: r.midY))
+    }
 
     /// Start the tour. Spins up the floating panel so the card sits
     /// above any sheets that get opened along the way.
@@ -147,6 +213,7 @@ final class TutorialState: ObservableObject {
     func stop() {
         isActive = false
         TutorialWindowController.shared.hide()
+        TutorialCursorPanel.shared.hide()
     }
 
     func next() {
@@ -155,6 +222,7 @@ final class TutorialState: ObservableObject {
         } else {
             stepIndex += 1
             steps[stepIndex].action?()
+            refocusCard()
         }
     }
 
@@ -162,6 +230,17 @@ final class TutorialState: ObservableObject {
         guard stepIndex > 0 else { return }
         stepIndex -= 1
         steps[stepIndex].action?()
+        refocusCard()
+    }
+
+    /// The card takes the keys back once a step's sheet has opened, so
+    /// Return and Escape reach Next and Skip and not the sheet's buttons.
+    private func refocusCard() {
+        let at = stepIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak self] in
+            guard let self, self.isActive, self.stepIndex == at else { return }
+            TutorialWindowController.shared.focus()
+        }
     }
 
     var currentStep: TutorialStep? {
@@ -183,15 +262,23 @@ final class TutorialState: ObservableObject {
                             action: @escaping () -> Void) {
         simulatedClickPressed = false
         simulatedClickTarget = anchorID
+        TutorialCursorPanel.shared.hide()
+        aimCursor()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
             self?.simulatedClickPressed = true
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+        // Only if the tour is still on this step: Skip right after a step
+        // still opened the editor or Settings behind the ended tour.
+        let at = stepIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) { [weak self] in
+            guard let self, self.isActive, self.stepIndex == at else { return }
             action()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.simulatedClickTarget = nil
-            self?.simulatedClickPressed = false
+            guard let self, self.simulatedClickTarget == anchorID else { return }
+            self.simulatedClickTarget = nil
+            self.simulatedClickPressed = false
+            TutorialCursorPanel.shared.hide()
         }
     }
 }
@@ -206,7 +293,15 @@ struct TutorialOverlay: View {
     @ObservedObject var state: TutorialState
     let anchors: [String: CGRect]
 
-    var body: some View {
+    // Window coordinates are left to right, so the spotlight and the
+    // simulated cursor are placed in them in every language; the card's
+    // text is its own view below and reads in the app's direction.
+    // The pointer is drawn by TutorialCursorPanel, a window of its own above
+    // everything: drawn in this one it went under the toolbar's buttons (the
+    // Settings gear) and never reached them.
+    var body: some View { overlay.environment(\.layoutDirection, .leftToRight) }
+
+    private var overlay: some View {
         ZStack {
             // Spotlight dim/cutout.
             if let step = state.currentStep,
@@ -217,17 +312,71 @@ struct TutorialOverlay: View {
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.22), value: state.stepIndex)
             }
-            // Simulated cursor flying to a target anchor. Tour steps
-            // that auto-perform UI actions trigger this so the user
-            // sees WHERE the click landed before the sheet opens.
-            if let target = state.simulatedClickTarget,
-               let rect = anchors[target] {
-                SimulatedCursor(targetCenter: CGPoint(x: rect.midX, y: rect.midY),
-                                pressed: state.simulatedClickPressed)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+        }
+        // The anchors are window frames, measured from the window's top
+        // edge: the cursor landed a toolbar's height below its target.
+        .ignoresSafeArea()
+    }
+}
+
+/// A click-through window over the screen that draws the tour's pointer,
+/// above the toolbar, sheets and the Help window.
+@MainActor
+final class TutorialCursorPanel: ObservableObject {
+    static let shared = TutorialCursorPanel()
+    /// The target in the panel's view, measured from its top left.
+    @Published private(set) var point: CGPoint?
+    /// A new flight: the pointer glides in again.
+    @Published private(set) var flight = 0
+    private var panel: NSPanel?
+
+    private init() {}
+
+    func aim(atScreen p: NSPoint) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(p) }) ?? NSScreen.main else { return }
+        let panel = panel ?? makePanel()
+        if panel.frame != screen.frame { panel.setFrame(screen.frame, display: false) }
+        if point == nil { flight &+= 1 }
+        point = CGPoint(x: p.x - screen.frame.minX, y: screen.frame.maxY - p.y)
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        point = nil
+        panel?.orderOut(nil)
+    }
+
+    private func makePanel() -> NSPanel {
+        let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+        p.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        p.ignoresMouseEvents = true
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        let host = NSHostingView(rootView: TutorialCursorLayer().reduceMotionFriendly())
+        host.sizingOptions = []
+        p.contentView = host
+        panel = p
+        return p
+    }
+}
+
+private struct TutorialCursorLayer: View {
+    @ObservedObject private var cursor = TutorialCursorPanel.shared
+    @ObservedObject private var state = TutorialState.shared
+
+    var body: some View {
+        ZStack {
+            if let p = cursor.point {
+                SimulatedCursor(targetCenter: p, pressed: state.simulatedClickPressed)
+                    .id(cursor.flight)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
+        .environment(\.layoutDirection, .leftToRight)
     }
 }
 
@@ -308,6 +457,12 @@ struct TutorialCardView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isHeader)
+                    // A new step is read aloud: focus stays on Next.
+                    .onChange(of: state.stepIndex) { _, i in
+                        guard let s = state.currentStep else { return }
+                        AccessibilityNotification.Announcement(
+                            String(localized: "Step \(i + 1) of \(state.steps.count), \(s.title). \(s.body)")).post()
+                    }
                     Spacer()
                     Button {
                         state.stop()
@@ -366,7 +521,7 @@ struct TutorialCardView: View {
                         Button {
                             state.back()
                         } label: {
-                            Label("Back", systemImage: "chevron.left")
+                            Label("Back", systemImage: "chevron.backward")
                                 .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(.solidSecondary)
@@ -375,13 +530,17 @@ struct TutorialCardView: View {
                     Button {
                         state.next()
                     } label: {
-                        if state.stepIndex + 1 >= state.steps.count {
-                            Label("Finish", systemImage: "checkmark")
-                                .labelStyle(.titleAndIcon)
-                        } else {
-                            Label("Next", systemImage: "chevron.right")
-                                .labelStyle(.titleAndIcon)
+                        // One width for Next and Finish, so the button never moves.
+                        Group {
+                            if state.stepIndex + 1 >= state.steps.count {
+                                Label("Finish", systemImage: "checkmark")
+                                    .labelStyle(.titleAndIcon)
+                            } else {
+                                Label("Next", systemImage: "chevron.forward")
+                                    .labelStyle(.titleAndIcon)
+                            }
                         }
+                        .frame(minWidth: 84)
                     }
                     .buttonStyle(.solid)
                     .keyboardShortcut(.return, modifiers: [])
@@ -392,9 +551,14 @@ struct TutorialCardView: View {
             .liquidGlass(in: RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: Metrics.panelRadius, style: .continuous)
-                    .stroke(step.tint.opacity(0.45), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+            // Small enough to end inside the panel's padding: a larger one
+            // was cut off at the panel's edges.
+            .shadow(color: .black.opacity(0.3), radius: 7, y: 3)
+            // Pinned to the panel's bottom, so a longer step grows upward
+            // and Back, Next and Skip stay where they are.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
     }
 
@@ -421,6 +585,8 @@ final class TutorialWindowController {
 
     private init() {}
 
+    func focus() { panel?.makeKey() }
+
     func show() {
         if let p = panel {
             // Don't re-position on subsequent shows - the user may have
@@ -438,6 +604,8 @@ final class TutorialWindowController {
         )
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Named in VoiceOver's window chooser, though it has no title bar.
+        p.title = String(localized: "Quick Start")
         p.isMovableByWindowBackground = true
         p.isReleasedWhenClosed = false
         p.hidesOnDeactivate = false
@@ -454,6 +622,8 @@ final class TutorialWindowController {
                 .appAccessibility()
         )
         host.autoresizingMask = [.width, .height]
+        // The panel keeps its size and place; the card sits at its bottom.
+        host.sizingOptions = []
         p.contentView = host
         panel = p
         position(panel: p)
@@ -509,6 +679,25 @@ struct TutorialPlumbing: ViewModifier {
             }
             .onChange(of: state.isActive) { _, isActive in
                 if !isActive { onTutorialEnded() }
+            }
+    }
+}
+
+/// The tour's spotlight and pointer inside a sheet, such as the editor: a
+/// sheet is its own window, and its anchors never reach the main window's.
+struct TutorialSheetOverlay: ViewModifier {
+    @ObservedObject private var state = TutorialState.shared
+    @State private var anchors: [String: CGRect] = [:]
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if state.isActive { TutorialOverlay(state: state, anchors: anchors) }
+            }
+            .onPreferenceChange(SpotlightAnchorsKey.self) { values in
+                var dict: [String: CGRect] = [:]
+                for a in values { dict[a.id] = a.frame }
+                anchors = dict
             }
     }
 }
@@ -577,9 +766,13 @@ struct SpotlightDimView: View {
                            ? nil
                            : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
                            value: pulse)
+                // Rebuilt when Reduce Motion changes, so a pulse already
+                // running stops (and starts again when it is turned off).
+                .id(reduceMotion)
                 .onAppear {
                     if !reduceMotion { pulse = true }
                 }
+                .onChange(of: reduceMotion) { _, on in pulse = false; if !on { DispatchQueue.main.async { pulse = true } } }
             }
         }
         .allowsHitTesting(false)
@@ -596,12 +789,12 @@ struct TutorialDemoView: View {
     /// the animation produces.
     private var accessibilityDescription: String {
         switch kind {
-        case .analogStick:     return "Analog stick demonstration, showing smooth analog values"
-        case .pressureTrigger: return "Pressure-sensitive trigger demonstration"
-        case .gyro:            return "3D motion model demonstration, mirroring controller orientation"
-        case .lightBar:        return "Per-preset light bar demonstration, cycling through colors"
-        case .macroChain:      return "Macro chain demonstration, highlighting each key in sequence"
-        case .buttonMapping:   return "Button mapping demonstration, mapping the A button to Space"
+        case .analogStick:     return String(localized: "Analog stick demonstration, showing smooth analog values")
+        case .pressureTrigger: return String(localized: "Pressure-sensitive trigger demonstration")
+        case .gyro:            return String(localized: "3D motion model demonstration, mirroring controller orientation")
+        case .lightBar:        return String(localized: "Per-preset light bar demonstration, cycling through colors")
+        case .macroChain:      return String(localized: "Macro chain demonstration, highlighting each key in sequence")
+        case .buttonMapping:   return String(localized: "Button mapping demonstration, mapping the A button to Space")
         }
     }
 
@@ -648,10 +841,10 @@ private struct AnalogStickDemo: View {
                 .frame(width: 72, height: 72)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Smooth analog values").font(.caption.weight(.semibold))
-                    Text("X: \(String(format: "%+0.2f", x))")
+                    Text("X: \(String(format: "%+0.2f", locale: .current, x))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Text("Y: \(String(format: "%+0.2f", y))")
+                    Text("Y: \(String(format: "%+0.2f", locale: .current, y))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -763,17 +956,21 @@ private struct LightBarDemo: View {
 private struct MacroChainDemo: View {
     @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTextScale) private var textScale
     private let keys = ["⌘", "C", "⌥", "Tab"]
     var body: some View {
         TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let active = Int(t * 1.5) % keys.count
+            // The tiles grow with Text Size: at a fixed 28 pt, "Tab" became
+            // "T..." at the Largest size.
+            let tile = 28 * max(1, textScale)
             HStack(spacing: 14) {
                 HStack(spacing: 6) {
                     ForEach(keys.indices, id: \.self) { i in
                         Text(keys[i])
                             .font(.caption.weight(.semibold).monospaced())
-                            .frame(width: 28, height: 28)
+                            .frame(minWidth: tile, minHeight: tile)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
                                     .fill(i == active ? Color.yellow.opacity(0.4)
@@ -798,21 +995,23 @@ private struct MacroChainDemo: View {
 private struct ButtonMappingDemo: View {
     @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTextScale) private var textScale
     var body: some View {
         TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let pressed = sin(t * 2) > 0
+            let s = max(1, textScale)
             HStack(spacing: 12) {
                 Circle()
                     .fill(pressed ? Color.green : Color.secondary.opacity(0.2))
                     .frame(width: 36, height: 36)
                     .overlay(Text("A").font(.caption.weight(.semibold)))
                     .shadow(color: pressed ? .green.opacity(0.7) : .clear, radius: 8)
-                Image(systemName: "arrow.right")
+                Image(systemName: "arrow.forward")
                     .foregroundStyle(.hint)
                 Text(pressed ? "Space" : " ")
                     .font(.caption.weight(.semibold).monospaced())
-                    .frame(width: 60, height: 28)
+                    .frame(minWidth: 60 * s, minHeight: 28 * s)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
                             .fill(pressed ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.12))

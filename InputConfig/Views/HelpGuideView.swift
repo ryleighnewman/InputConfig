@@ -14,22 +14,33 @@ struct HelpGuideView: View {
     @State private var selectedGuideID: String? = HelpGuideLibrary.all.first?.id
     @State private var showingHome = true
     @State private var query = ""
+    /// The match count, said once typing pauses.
+    @State private var countAnnouncement: DispatchWorkItem?
 
     private var visibleGuides: [HelpGuide] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return HelpGuideLibrary.all }
-        return HelpGuideLibrary.all.filter { $0.matches(q) }
+        guard !q.isEmpty else { return HelpGuideLibrary.localizedAll }
+        // Search the guide in the app's language, and in English too, so an
+        // English term found on the website still finds its guide.
+        // Against text lowercased once per launch: lowercasing every guide
+        // in two languages on each keystroke stalled the search field.
+        return zip(HelpGuideLibrary.localizedAll, zip(Self.searchLocalized, Self.searchEnglish))
+            .filter { $0.1.0.contains(q) || (HelpLocalizer.isTranslated && $0.1.1.contains(q)) }.map(\.0)
     }
 
+    private static let searchLocalized: [String] = HelpGuideLibrary.localizedAll.map(\.searchText)
+    private static let searchEnglish: [String] = HelpGuideLibrary.all.map(\.searchText)
+
     private var guidesByCategory: [(category: String, guides: [HelpGuide])] {
-        HelpGuideLibrary.categories.compactMap { category in
-            let guides = visibleGuides.filter { $0.category == category }
+        let visible = visibleGuides
+        return HelpGuideLibrary.categories.compactMap { category in
+            let guides = visible.filter { $0.category == category }
             return guides.isEmpty ? nil : (category, guides)
         }
     }
 
     private var selectedGuide: HelpGuide? {
-        HelpGuideLibrary.all.first { $0.id == selectedGuideID }
+        HelpGuideLibrary.localizedAll.first { $0.id == selectedGuideID }
     }
 
     var body: some View {
@@ -45,12 +56,26 @@ struct HelpGuideView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(showingHome ? Color.accentColor : .primary)
+                    // The page showing, said: the list's own selection stays
+                    // on the last guide behind Overview.
+                    .accessibilityAddTraits(showingHome ? .isSelected : [])
                 }
                 ForEach(guidesByCategory, id: \.category) { group in
-                    Section(group.category) {
+                    Section(HelpLocalizer.t(group.category)) {
                         ForEach(group.guides) { guide in
                             Text(guide.title)
                                 .tag(guide.id as String?)
+                                .accessibilityAddTraits(!showingHome && selectedGuideID == guide.id ? .isSelected : [])
+                                // The guide that is already selected behind
+                                // Overview opens too: picking it again does
+                                // not change the selection.
+                                .simultaneousGesture(TapGesture().onEnded {
+                                    if selectedGuideID == guide.id { showingHome = false }
+                                })
+                                .accessibilityAction {
+                                    selectedGuideID = guide.id
+                                    showingHome = false
+                                }
                         }
                     }
                 }
@@ -61,10 +86,26 @@ struct HelpGuideView: View {
                 showingHome = false
             }
             .onChange(of: query) { _, _ in
+                // Never to nil: that collapses the sidebar, search field and all.
+                let visible = visibleGuides
                 if let id = selectedGuideID,
-                   !visibleGuides.contains(where: { $0.id == id }) {
-                    selectedGuideID = visibleGuides.first?.id
+                   !visible.contains(where: { $0.id == id }),
+                   let first = visible.first?.id {
+                    selectedGuideID = first
                 }
+                countAnnouncement?.cancel()
+                if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    let n = visible.count
+                    let work = DispatchWorkItem {
+                        AccessibilityNotification.Announcement(n == 0 ? String(localized: "No matching guides")
+                            : n == 1 ? String(localized: "1 matching guide") : String(localized: "\(n) matching guides")).post()
+                    }
+                    countAnnouncement = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+                }
+                // Searching shows the first match rather than leaving
+                // Overview up with a match silently selected.
+                if !query.trimmingCharacters(in: .whitespaces).isEmpty, !visible.isEmpty { showingHome = false }
             }
             .frame(minWidth: 220)
         } detail: {
@@ -85,6 +126,14 @@ struct HelpGuideView: View {
         .frame(minWidth: 860, minHeight: 560)
         // Links between help pages stay in the window; everything else
         // (guides, tools, presets, About) goes where it points.
+        #if DEBUG
+        // `post inputconfig.debug.help <guide id>` (ContentView) opens the window on that guide.
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("inputconfig.debug.helpSelect"))) { note in
+            guard let id = note.object as? String else { return }
+            query = ""
+            if id == "home" { showingHome = true } else { selectedGuideID = id; showingHome = false }
+        }
+        #endif
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "inputconfig", url.host == "about" {
                 MenuBarController.shared.openAboutPage()
@@ -123,6 +172,11 @@ struct HelpGuideView: View {
 }
 
 extension HelpGuide {
+    /// Every searchable word of the guide, lowercased, in one string.
+    var searchText: String {
+        ([title, intro] + sections.flatMap { [$0.heading] + $0.blocks.map(\.text) }).joined(separator: "\n").lowercased()
+    }
+
     func matches(_ q: String) -> Bool {
         if title.lowercased().contains(q) || intro.lowercased().contains(q) { return true }
         return sections.contains { section in
@@ -183,6 +237,8 @@ private struct HelpPageView: View {
                     Text(guide.title)
                         .font(.system(size: 28, weight: .bold))
                         .padding(.bottom, 8)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityHeading(.h1)
                     Text(helpMarkdown(guide.intro))
                         .font(.title3)
                         .foregroundStyle(.secondary)
@@ -197,7 +253,10 @@ private struct HelpPageView: View {
                         }
                         HelpSectionView(section: section)
                             .padding(.bottom, HelpLayout.sectionGap - 6)
-                            .id(helpAnchor(section.heading))
+                            // The anchor comes from the English heading: links in
+                            // every language point at the English slug.
+                            .id(helpAnchor(HelpGuideLibrary.all.first { $0.id == guide.id }?
+                                .sections[safe: index]?.heading ?? section.heading))
                     }
 
                     if !guide.related.isEmpty {
@@ -205,19 +264,23 @@ private struct HelpPageView: View {
                             .padding(.bottom, 14)
                         Text("Related")
                             .font(.caption.weight(.semibold))
+                            .accessibilityAddTraits(.isHeader)
                             .foregroundStyle(.secondary)
                             .padding(.bottom, 6)
                         HelpChipRow(links: guide.related)
                             .padding(.bottom, 20)
                     }
 
-                    Text(helpMarkdown("This page on the web: [\(guide.url.replacingOccurrences(of: "https://", with: ""))](\(guide.url))"))
+                    Text(helpMarkdown(String(localized: "This page on the web: [\(guide.url.replacingOccurrences(of: "https://", with: ""))](\(guide.url))")))
                         .font(.caption)
                         .foregroundStyle(.hint)
                         // Always the browser. The window's handler reads this
                         // page's own address as a link to the page already
                         // showing, so the click did nothing.
                         .environment(\.openURL, OpenURLAction { _ in .systemAction })
+                        .accessibilityAction(named: Text("Open This Page on the Web")) {
+                            if let url = URL(string: guide.url) { NSWorkspace.shared.open(url) }
+                        }
                         .padding(.bottom, 24)
                 }
                 .frame(maxWidth: HelpLayout.column, alignment: .leading)
@@ -225,6 +288,9 @@ private struct HelpPageView: View {
                 .padding(.horizontal, 36)
                 .padding(.top, 20)
             }
+            // Reachable with Tab, so arrow and Page keys scroll the page
+            // and not the sidebar.
+            .focusable()
             // A link to a section of this page ("#if-a-pad-does-nothing")
             // scrolls to it. Everything else goes to the window's handler.
             .environment(\.openURL, OpenURLAction { url in
@@ -247,6 +313,7 @@ private struct HelpSectionView: View {
             Text(section.heading)
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityHeading(.h2)
                 .padding(.bottom, 2)
             ForEach(Array(section.blocks.enumerated()), id: \.offset) { _, block in
                 HelpBlockView(block: block)
@@ -257,6 +324,7 @@ private struct HelpSectionView: View {
 }
 
 private struct HelpBlockView: View {
+    @Environment(\.appTextScale) private var textScale
     let block: HelpBlock
 
     var body: some View {
@@ -300,7 +368,7 @@ private struct HelpBlockView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 14) {
                         Text(helpMarkdown(term.term))
                             .font(.body.weight(.semibold))
-                            .frame(width: 150, alignment: .leading)
+                            .frame(width: 150 * max(1, textScale), alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(helpMarkdown(term.detail))
                             .font(.body)
@@ -326,6 +394,8 @@ private struct HelpBlockView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 6)
+                                // Each cell below says its column instead.
+                                .accessibilityHidden(!rows.isEmpty)
                         }
                     }
                     Divider()
@@ -337,6 +407,10 @@ private struct HelpBlockView: View {
                                 .font(.body)
                                 .padding(.vertical, 6)
                                 .fixedSize(horizontal: false, vertical: true)
+                                // "Output: Space", so VoiceOver keeps the column.
+                                .accessibilityLabel(c < header.count && !header[c].isEmpty
+                                    ? String(localized: "\(header[c]): \(String(helpMarkdown(c < row.count ? row[c] : "").characters))")
+                                    : String(helpMarkdown(c < row.count ? row[c] : "").characters))
                         }
                     }
                     if index < rows.count - 1 {
@@ -373,7 +447,8 @@ private struct HelpChipRow: View {
     var body: some View {
         FlowLayout(spacing: 6) {
             ForEach(links, id: \.url) { link in
-                Text(helpMarkdown("[\(link.title)](\(link.url))"))
+                // A Link, not Markdown text: reachable with Tab and Space.
+                HelpLinkText(title: link.title, url: link.url)
                     .font(.callout)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
@@ -420,10 +495,16 @@ private struct FlowLayout: Layout {
 /// The page the window opens on: where to start, then the material that
 /// stays on the site (situation guides and interactive tools) as links.
 private struct HelpHomePage: View {
+    @Environment(\.appTextScale) private var textScale
+    @Environment(\.openURL) private var openURL
+    /// A guide's title in the app's language.
+    private static func title(_ id: String, _ english: String) -> String {
+        HelpGuideLibrary.localizedAll.first { $0.id == id }?.title ?? english
+    }
     private let starts: [(title: String, detail: String, id: String)] = [
-        ("Your First Preset", "Connect, activate, grant the one permission. Five minutes.", "first-preset"),
-        ("The Binding Editor", "What a row is, and every option on it.", "binding-editor"),
-        ("Emergency Stop", "The one thing to know before a preset takes the keyboard.", "emergency-stop"),
+        (Self.title("first-preset", "Your First Preset"), String(localized: "Connect, activate, grant the one permission. Five minutes."), "first-preset"),
+        (Self.title("binding-editor", "The Binding Editor"), String(localized: "What a row is, and every option on it."), "binding-editor"),
+        (Self.title("emergency-stop", "Emergency Stop"), String(localized: "The one thing to know before a preset takes the keyboard."), "emergency-stop"),
     ]
 
     var body: some View {
@@ -432,6 +513,8 @@ private struct HelpHomePage: View {
                 Text("InputConfig Help")
                     .font(.system(size: 28, weight: .bold))
                     .padding(.bottom, 8)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHeading(.h1)
                 Text("How each part of the app works, the same pages as on [inputconfig.com](https://inputconfig.com/help/). Pick a topic on the left, or start here.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -442,9 +525,9 @@ private struct HelpHomePage: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(starts.enumerated()), id: \.offset) { index, item in
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            Text(helpMarkdown("[\(item.title)](https://inputconfig.com/help/\(item.id))"))
+                            HelpLinkText(title: item.title, url: "https://inputconfig.com/help/\(item.id)")
                                 .font(.body.weight(.semibold))
-                                .frame(width: 170, alignment: .leading)
+                                .frame(width: 170 * max(1, textScale), alignment: .leading)
                             Text(item.detail)
                                 .font(.body)
                                 .foregroundStyle(.secondary)
@@ -461,20 +544,30 @@ private struct HelpHomePage: View {
                 Text("On inputconfig.com")
                     .font(.title3.weight(.semibold))
                     .padding(.bottom, 4)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHeading(.h2)
                 Text("Longer material that reads better in a browser.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 14)
 
-                webGroup("Tools", HelpGuideLibrary.tools, detail: true)
-                webGroup("Accessibility guides", HelpGuideLibrary.accessibilityGuides, detail: false)
-                webGroup("Work and play guides", HelpGuideLibrary.workAndPlayGuides, detail: false)
+                webGroup("Tools", HelpGuideLibrary.tools.map(HelpLocalizer.localized), detail: true)
+                webGroup("Accessibility guides", HelpGuideLibrary.accessibilityGuides.map(HelpLocalizer.localized), detail: false)
+                webGroup("Work and play guides", HelpGuideLibrary.workAndPlayGuides.map(HelpLocalizer.localized), detail: false)
 
-                Text(helpMarkdown("Also there: a [preset library](https://inputconfig.com/presets/) with a page and a download for every built-in preset and hundreds of Smart Preset Maker layouts, and [short answers](https://inputconfig.com/questions/) to common questions. Feature requests and bugs: [GitHub](https://github.com/ryleighnewman/InputConfig). About this app: [here](inputconfig://about)."))
+                Text(helpMarkdown(String(localized: "Also there: a [preset library](https://inputconfig.com/presets/) with a page and a download for every built-in preset and hundreds of Smart Preset Maker layouts, and [short answers](https://inputconfig.com/questions/) to common questions. Feature requests and bugs: [GitHub](https://github.com/ryleighnewman/InputConfig). About this app: [here](inputconfig://about).")))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    // Links inside text are not reached with Tab; each one
+                    // is an action on the paragraph too.
+                    .accessibilityActions {
+                        Button("Preset Library") { openURL(URL(string: "https://inputconfig.com/presets/")!) }
+                        Button("Short Answers") { openURL(URL(string: "https://inputconfig.com/questions/")!) }
+                        Button("GitHub") { openURL(URL(string: "https://github.com/ryleighnewman/InputConfig")!) }
+                        Button("About This App") { openURL(URL(string: "inputconfig://about")!) }
+                    }
                     .padding(.top, 6)
                     .padding(.bottom, 24)
             }
@@ -483,21 +576,26 @@ private struct HelpHomePage: View {
             .padding(.horizontal, 36)
             .padding(.top, 20)
         }
+        // Reachable with Tab, so arrow and Page keys scroll the page and
+        // not the sidebar, as on the guide pages.
+        .focusable()
     }
 
     @ViewBuilder
-    private func webGroup(_ title: String, _ links: [HelpWebLink], detail: Bool) -> some View {
+    private func webGroup(_ title: LocalizedStringKey, _ links: [HelpWebLink], detail: Bool) -> some View {
         Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.bottom, 6)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityHeading(.h3)
         if detail {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(links, id: \.url) { link in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(helpMarkdown("[\(link.title)](\(link.url))"))
+                        HelpLinkText(title: link.title, url: link.url)
                             .font(.body.weight(.medium))
-                            .frame(width: 170, alignment: .leading)
+                            .frame(width: 170 * max(1, textScale), alignment: .leading)
                         Text(link.detail)
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -524,6 +622,21 @@ final class HelpGuideWindowController {
 
     private init() {}
 
+    /// Opened by the Quick Start tour, which closes it again; a Help window
+    /// that was already open stays.
+    private var openedForTour = false
+
+    func showForTour() {
+        if window?.isVisible != true { openedForTour = true }
+        show()
+    }
+
+    func closeForTour() {
+        guard openedForTour else { return }
+        openedForTour = false
+        window?.close()
+    }
+
     func show() {
         if let window = window {
             window.makeKeyAndOrderFront(nil)
@@ -535,7 +648,7 @@ final class HelpGuideWindowController {
             .reduceMotionFriendly()
             .appAccessibility())
         let newWindow = HelpWindow(contentViewController: hosting)
-        newWindow.title = "Help"
+        newWindow.title = String(localized: "Help")
         newWindow.setContentSize(NSSize(width: 960, height: 640))
         // .fullSizeContentView lets the behind-window blur reach under the
         // transparent titlebar; without it the titlebar shows straight through
@@ -558,5 +671,25 @@ private final class HelpWindow: NSWindow {
     override var titleVisibility: NSWindow.TitleVisibility {
         get { .hidden }
         set { super.titleVisibility = .hidden }
+    }
+}
+
+/// A Help link the keyboard can reach: a SwiftUI Link styled like the
+/// Markdown links around it (the window's openURL handler still decides
+/// whether it opens in Help or in the browser).
+private struct HelpLinkText: View {
+    let title: String
+    let url: String
+
+    var body: some View {
+        if let target = URL(string: url) {
+            Link(title, destination: target)
+                .buttonStyle(.link)
+                // A title that wraps lines up at the left, not centered.
+                .multilineTextAlignment(.leading)
+                .focusable()
+        } else {
+            Text(title)
+        }
     }
 }

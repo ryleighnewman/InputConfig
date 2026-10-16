@@ -17,7 +17,7 @@ extension ControllerLayout {
     /// reads buttonA (the physical A on the right) into btn 0.
     ///
     /// Not reported to the Mac: SL and SR on both rails, the sync buttons, and
-    /// motion (Apple reports no Joy-Con gyro or accelerometer).
+    /// motion unless macOS reports it (read through GameController when it does).
     static let joyConPair = ControllerLayout(
         id: .joyConPair,
         displayName: "Joy-Con pair",
@@ -32,7 +32,7 @@ extension ControllerLayout {
         controls: joyConPairControls,
         match: [[.gcProductCategoryContains("Switch Joy-Con (L/R)")]],
         matchPriority: 10,
-        readability: .partial("macOS does not report SL, SR or Joy-Con motion"),
+        readability: .partial("macOS does not report SL or SR; Joy-Con motion is read when macOS reports it"),
         approximate: true,
         sources: [
             "nintendo.com Joy-Con specifications (102 x 35.9 x 28.4 mm)",

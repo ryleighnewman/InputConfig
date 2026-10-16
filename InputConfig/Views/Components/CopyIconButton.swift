@@ -10,20 +10,23 @@ import SwiftUI
 struct CopyIconButton: View {
     let action: () -> Void
     /// Hover tooltip ("Duplicate this binding", "Copy log to clipboard", etc.)
-    var helpText: String = "Copy"
+    var helpText: LocalizedStringKey = "Copy"
     /// Default icon. Override when the source icon isn't the standard
     /// "doc.on.doc" (currently nothing else uses this, but kept flexible).
     var icon: String = "doc.on.doc"
     /// Icon size. Match the surrounding font weight where the button lives.
     var size: Font = .caption2
     var tint: Color = .secondary
+    /// What VoiceOver hears after the press; nil when the action announces
+    /// its own result (a duplicated row says where it went).
+    var announcement: String? = String(localized: "Copied")
 
     @State private var justCopied: Bool = false
 
     var body: some View {
         Button {
             action()
-            AccessibilityNotification.Announcement("Copied").post()
+            if let announcement { AccessibilityNotification.Announcement(announcement).post() }
             withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
                 justCopied = true
             }

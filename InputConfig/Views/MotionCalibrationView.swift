@@ -52,6 +52,9 @@ struct MotionCalibrationView: View {
     @State private var pressedWhenListeningBegan: Set<Int> = []
     @State private var observedSavedAt: Date?
     @State private var rezeroFlashUntil: Date?
+    /// The last Re-zero now found the pad moving: said on the row until
+    /// the next try, not only to VoiceOver.
+    @State private var rezeroMoved = false
     @State private var tick = 0
 
     private struct SampleVector {
@@ -134,8 +137,13 @@ struct MotionCalibrationView: View {
                 y: Float(motion.rotationRate.y),
                 z: Float(motion.rotationRate.z),
                 forKey: key)
+            // Yaw is the turn about gravity, as the engine and the Live
+            // Visualizer read it; the pad's own Z rate turned the model the
+            // other way here.
+            let slot = controllerService.connectedControllers.firstIndex { $0 === entry.controller }
+            let turn = slot.flatMap { controllerService.currentStates[$0]?.motion[.gyroZ] } ?? -gz
             integratedPitch = (integratedPitch + gx * dt) * 0.98
-            integratedYaw   = (integratedYaw + gz * dt) * 0.98
+            integratedYaw   = (integratedYaw + turn * dt) * 0.98
             integratedRoll  = (integratedRoll + gy * dt) * 0.98
             integratedPitch = max(-(.pi / 2), min(.pi / 2, integratedPitch))
             integratedYaw   = max(-(.pi / 2), min(.pi / 2, integratedYaw))
@@ -150,6 +158,7 @@ struct MotionCalibrationView: View {
             integratedRoll = 0
             listeningForRezeroButton = false
             rezeroFlashUntil = nil
+            rezeroMoved = false
             rezeroButton = key.flatMap { MotionCalibrationService.shared.rezeroButton(forKey: $0) }
             observedSavedAt = key.flatMap { MotionCalibrationService.shared.calibration(forKey: $0)?.savedAt }
         }
@@ -172,14 +181,27 @@ struct MotionCalibrationView: View {
     /// Lets the user verify motion is actually flowing BEFORE running
     /// calibration. If a gyro never moves the values here, the controller
     /// either doesn't expose motion or macOS isn't piping it through.
-    /// Marketing capture stand-in. The real panel needs a GCMotion, which a
-    /// synthetic controller cannot provide, so the sheet showed an empty band
-    /// where the readings belong. Compiles to nothing in Release.
+    /// Stand-in for the Quick Start tour's controller and the marketing
+    /// captures. The real panel needs a GCMotion, which a synthetic
+    /// controller cannot provide, so the sheet showed an empty band where
+    /// the readings belong.
     #if DEBUG
+    @State private var debugMotionTime: Double?
+    #endif
+
+    private func syntheticTime(_ date: Date) -> Double {
+        #if DEBUG
+        // inputconfig.debug.motiontime "<t>" holds the pose at that
+        // moment, so the poster's model is the same in every run.
+        if let debugMotionTime { return debugMotionTime }
+        #endif
+        return date.timeIntervalSinceReferenceDate
+    }
+
     @ViewBuilder
     private var syntheticLiveReadings: some View {
         TimelineView(.periodic(from: Date(), by: 1.0 / 30.0)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+            let t = syntheticTime(ctx.date)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "waveform.path.ecg")
@@ -202,7 +224,6 @@ struct MotionCalibrationView: View {
             }
         }
     }
-    #endif
 
     /// The 3D model, driven by the controller's attitude when it has one
     /// and by the integrated gyro otherwise, so it holds its pose at rest.
@@ -222,10 +243,16 @@ struct MotionCalibrationView: View {
                     mode: .model
                 )
             }
+        } else if controllerService.tutorialFakeControllerActive {
+            // The tour's controller moves the model too.
+            syntheticLiveReadings
         } else {
             #if DEBUG
             if controllerService.debugMarketingFakeActive {
                 syntheticLiveReadings
+                    .onReceive(DistributedNotificationCenter.default().publisher(for: .init("inputconfig.debug.motiontime"))) { note in
+                        debugMotionTime = Double((note.object as? String) ?? "")
+                    }
             } else {
                 noControllerNote
             }
@@ -236,7 +263,7 @@ struct MotionCalibrationView: View {
     }
 
     private var noControllerNote: some View {
-        Text("Connect a controller with motion sensors: a DualSense, DualSense Edge or DualShock 4.")
+        Text("Connect a controller with motion sensors: a DualSense, DualSense Edge, DualShock 4, Switch Pro Controller or Joy-Con. A Steam Controller keeps its own zero: use Re-zero Motion or Reset gyroscope in the Live Visualizer.")
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
@@ -245,6 +272,12 @@ struct MotionCalibrationView: View {
     /// One line of live numbers. The bars and the gravity and user
     /// acceleration rows are gone: three signed rates say whether the
     /// gyro is alive, which is all this line is for.
+    /// A rate with its sign as a word, which a voice otherwise drops.
+    static func spokenRate(_ v: Double) -> String {
+        let n = abs(v).formatted(.number.precision(.fractionLength(2)))
+        return v < 0 ? String(localized: "minus \(n)") : n
+    }
+
     @ViewBuilder
     private var readout: some View {
         if let entry = selectedControllerEntry, let motion = entry.controller.motion {
@@ -255,6 +288,8 @@ struct MotionCalibrationView: View {
                         Text(String(format: "x %+.2f   y %+.2f   z %+.2f rad/s",
                                     motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z))
                             .monospacedDigit()
+                            // Signs and the unit as words for VoiceOver.
+                            .accessibilityLabel(String(localized: "x \(Self.spokenRate(motion.rotationRate.x)), y \(Self.spokenRate(motion.rotationRate.y)), z \(Self.spokenRate(motion.rotationRate.z)) radians per second"))
                     } else {
                         Text("The gyroscope is not reporting. Try a wired connection, or re-pair the controller.")
                             .foregroundStyle(.orange)
@@ -324,7 +359,7 @@ struct MotionCalibrationView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.hint)
                     .frame(width: 10, alignment: .leading)
-                Text(String(format: "%+0.2f", value))
+                Text(String(format: "%+0.2f", locale: .current, value))
                     .font(.caption.monospacedDigit())
                     .frame(width: 50, alignment: .trailing)
                 Text(unit)
@@ -352,7 +387,11 @@ struct MotionCalibrationView: View {
             Button("Re-zero now") { rezeroNow() }
                 .buttonStyle(.solidSecondaryCompact)
                 .disabled(selectedControllerEntry == nil || captureInProgress)
-            if let until = rezeroFlashUntil, until > Date() {
+            if rezeroMoved {
+                Text("It moved, nothing saved. Hold it still and try again.")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let until = rezeroFlashUntil, until > Date() {
                 Label("Zeroed", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .transition(.opacity)
@@ -385,9 +424,12 @@ struct MotionCalibrationView: View {
                     }
                 }
             } label: {
-                Text(rezeroButton.map(rezeroButtonLabel) ?? "None")
+                Text(rezeroButton.map(rezeroButtonLabel) ?? String(localized: "None"))
             }
             .fixedSize()
+            .accessibilityLabel("Re-zero button")
+            .accessibilityValue(rezeroButton.map(rezeroButtonLabel) ?? String(localized: "None"))
+            .accessibilityInputLabels([Text(rezeroButton.map(rezeroButtonLabel) ?? String(localized: "None")), Text("Re-zero button")])
             .disabled(selectedControllerEntry == nil)
 
             Button {
@@ -438,7 +480,7 @@ struct MotionCalibrationView: View {
                 Label("It moved, nothing saved. Rest it flat and start again", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
             } else {
-                Text(String(format: "rest it flat and untouched for %.1f seconds", captureDuration))
+                Text("rest it flat and untouched for \(captureDuration, specifier: "%.1f") seconds")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -463,7 +505,7 @@ struct MotionCalibrationView: View {
     }
 
     private func rezeroButtonLabel(_ index: Int) -> String {
-        rezeroButtonChoices.first(where: { $0.index == index })?.label ?? "Button \(index)"
+        rezeroButtonChoices.first(where: { $0.index == index })?.label ?? String(localized: "Button \(index)")
     }
 
     private func setRezeroButton(_ index: Int?) {
@@ -476,9 +518,12 @@ struct MotionCalibrationView: View {
     private func rezeroNow() {
         guard let entry = selectedControllerEntry else { return }
         if controllerService.rezeroMotion(slot: entry.slot) {
-            AccessibilityNotification.Announcement(controllerService.lastRezeroStoredZero
-                ? "Motion re-zeroed"
-                : "The controller was moving. Hold it still and try again").post()
+            rezeroMoved = !controllerService.lastRezeroStoredZero
+            // A stored zero is said by trackRezero when it sees the new
+            // save; saying it here too cut the first one off.
+            if !controllerService.lastRezeroStoredZero {
+                AccessibilityNotification.Announcement(String(localized: "The controller was moving. Hold it still and try again")).post()
+            }
         }
     }
 
@@ -492,6 +537,7 @@ struct MotionCalibrationView: View {
                 .filter { $0.value > 0.5 }.keys
             if let fresh = pressed.first(where: { !pressedWhenListeningBegan.contains($0) }) {
                 setRezeroButton(fresh)
+                AccessibilityNotification.Announcement(String(localized: "Re-zero button set to \(rezeroButtonLabel(fresh))")).post()
             } else {
                 pressedWhenListeningBegan = Set(pressed)
             }
@@ -499,8 +545,11 @@ struct MotionCalibrationView: View {
         let savedAt = MotionCalibrationService.shared.calibration(forKey: key)?.savedAt
         if savedAt != observedSavedAt {
             observedSavedAt = savedAt
+            // A zero that took, from any path, ends an earlier "It moved".
+            if savedAt != nil { rezeroMoved = false }
             if savedAt != nil, !captureInProgress {
                 rezeroFlashUntil = Date().addingTimeInterval(2)
+                AccessibilityNotification.Announcement(String(localized: "Motion re-zeroed")).post()
             }
         } else if let until = rezeroFlashUntil, until <= Date() {
             rezeroFlashUntil = nil
@@ -515,6 +564,7 @@ struct MotionCalibrationView: View {
                 .foregroundStyle(.tint)
             Text("Motion Calibration")
                 .font(.headline)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             if let key = selectedKey, MotionCalibrationService.shared.isCalibrated(forKey: key) {
                 Button("Clear") {
@@ -531,11 +581,13 @@ struct MotionCalibrationView: View {
                 Image(systemName: "questionmark.circle")
             }
             .buttonStyle(.solidSecondaryCompact)
+            .accessibilityLabel("Help")
             .help("How calibration works")
             .popover(isPresented: $showingHelp, arrowEdge: .bottom) { help }
             Button("Done") { dismiss() }
                 .buttonStyle(.solidCompact)
                 .keyboardShortcut(.defaultAction)
+                .closesOnEscape { dismiss() }
         }
     }
 
@@ -555,9 +607,9 @@ struct MotionCalibrationView: View {
     /// another connected pad has the same name.
     private func pickerName(_ entry: (slot: Int, controller: GCController, info: ControllerInfo),
                             in list: [(slot: Int, controller: GCController, info: ControllerInfo)]) -> String {
-        let name = entry.controller.vendorName ?? "Controller"
-        let twins = list.filter { ($0.controller.vendorName ?? "Controller") == name }.count
-        return twins > 1 ? "\(name) (controller \(entry.slot + 1))" : name
+        let name = entry.controller.vendorName ?? String(localized: "Controller")
+        let twins = list.filter { ($0.controller.vendorName ?? String(localized: "Controller")) == name }.count
+        return twins > 1 ? String(localized: "\(name) (controller \(entry.slot + 1))") : name
     }
 
     /// The controller being calibrated, on the heading line: a name when
@@ -582,18 +634,18 @@ struct MotionCalibrationView: View {
                     }
                     .fixedSize()
                 } else {
-                    Text(entry.controller.vendorName ?? "Controller")
+                    Text(entry.controller.vendorName ?? String(localized: "Controller"))
                         .foregroundStyle(.secondary)
                 }
                 Circle().fill(calibrated ? Color.green : Color.orange).frame(width: 7, height: 7)
-                Text(calibrated ? "calibrated" : "not calibrated")
+                Text(calibrated ? String(localized: "calibrated") : String(localized: "not calibrated"))
                     .foregroundStyle(.secondary)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
         } else if controllerService.debugMarketingFakeActive {
             HStack(spacing: 6) {
-                Text(controllerService.controllerNames[0] ?? "Controller").foregroundStyle(.secondary)
+                Text(controllerService.controllerNames[0] ?? String(localized: "Controller")).foregroundStyle(.secondary)
                 Circle().fill(Color.green).frame(width: 7, height: 7)
                 Text("calibrated").foregroundStyle(.secondary)
             }
@@ -608,7 +660,7 @@ struct MotionCalibrationView: View {
             Text("Calibrating motion")
                 .font(.headline)
             Text("Re-zero takes the controller's reading right now as its resting zero: quick, and enough whenever motion starts to drift. A button on the controller can do the same; rest the controller, press it, and a short pulse confirms it. A paddle or a button you never use is the usual home for it.")
-            Text(String(format: "Full calibration records the resting gyro and accelerometer for %.1f seconds.", captureDuration) + " Put the controller on a flat, level surface, turn off rumble, and do not touch it until it finishes. The zero is saved for this controller and used by every motion preset.")
+            Text("Full calibration records the resting gyro and accelerometer for \(captureDuration, specifier: "%.1f") seconds. Put the controller on a flat, level surface, turn off rumble, and do not touch it until it finishes. The zero is saved for this controller and used by every motion preset.")
             Text("The readout should move when you turn the controller and settle near zero when it rests. If it reads exactly zero whatever you do, motion is not reaching the app: try a wired connection or re-pair over Bluetooth.")
         }
         .font(.callout)
@@ -687,7 +739,7 @@ struct MotionCalibrationView: View {
         }
         if moved {
             captureMovedKey = key
-            AccessibilityNotification.Announcement("The controller moved, so nothing was saved. Rest it flat and start again").post()
+            AccessibilityNotification.Announcement(String(localized: "The controller moved, so nothing was saved. Rest it flat and start again")).post()
             return
         }
         let cal = MotionCalibration(
@@ -699,7 +751,7 @@ struct MotionCalibrationView: View {
         MotionCalibrationService.shared.save(cal)
         lastSavedKey = key
         observedSavedAt = cal.savedAt
-        AccessibilityNotification.Announcement("Motion calibration saved").post()
+        AccessibilityNotification.Announcement(String(localized: "Motion calibration saved")).post()
     }
 }
 

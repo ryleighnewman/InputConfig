@@ -79,7 +79,9 @@ struct GyroVisualizationView: View {
                 fieldOfView: 38,
                 isMoving: abs(gyroX) + abs(gyroY) + abs(gyroZ) > 0.03
             )
-            .frame(width: 300, height: 140)
+            // Tall enough for the controller rolled on its side (about 190
+            // points at this width); 140 cut off both ends of it.
+            .frame(width: 300, height: 220)
         } else {
             VStack(spacing: mode == .compact ? 4 : 10) {
                 attitudeRing
@@ -97,7 +99,11 @@ struct GyroVisualizationView: View {
     /// lower half, and the horizon line tilts with roll while sliding
     /// vertically with pitch. Controller silhouette sits centered and
     /// tilts in 3D so it feels like the physical controller in your hand.
-    private var attitudeRing: some View {
+    /// Pinned left to right like the 3D model above it, or the horizon
+    /// rolled the other way in right-to-left languages.
+    private var attitudeRing: some View { attitudeRingDrawing.environment(\.layoutDirection, .leftToRight) }
+
+    private var attitudeRingDrawing: some View {
         ZStack {
             // Sky / ground gradient slices that shift with pitch.
             attitudeHorizon
@@ -124,7 +130,7 @@ struct GyroVisualizationView: View {
             Group {
                 if modelAsImage {
                     Controller3DImage(pitchAngle: pitchAngle, yawAngle: yawAngle, rollAngle: rollAngle,
-                                      size: CGSize(width: silhouetteSize * 1.6, height: silhouetteSize * 1.2))
+                                      size: CGSize(width: silhouetteSize * 1.6, height: silhouetteSize * 1.6))
                 } else {
                     Controller3DSceneView(
                         pitchAngle: pitchAngle,
@@ -135,7 +141,10 @@ struct GyroVisualizationView: View {
                     )
                 }
             }
-            .frame(width: silhouetteSize * 1.6, height: silhouetteSize * 1.2)
+            // Square: the camera's field of view is set across the width, so
+            // a frame shorter than it is wide cut off the top and bottom of a
+            // controller rolled on its side.
+            .frame(width: silhouetteSize * 1.6, height: silhouetteSize * 1.6)
             .shadow(color: .teal.opacity(0.4), radius: 4)
 
             // Center crosshair so the eye has an "origin" even when the
@@ -182,7 +191,9 @@ struct GyroVisualizationView: View {
                 .frame(width: ringSize * 1.4, height: 1.5)
         }
         .offset(y: pitchOffset)
-        .rotationEffect(.radians(Double(rollAngle)))
+        // The world's horizon, as pitch moves it: the right side going
+        // down turns it the other way, so it reads level with the table.
+        .rotationEffect(.radians(Double(-rollAngle)))
         .animation(.easeOut(duration: 0.05), value: rollAngle)
         .animation(.easeOut(duration: 0.05), value: pitchAngle)
     }
@@ -230,7 +241,7 @@ struct GyroVisualizationView: View {
             }
             .frame(height: barHeight)
 
-            Text(String(format: "%+0.2f", value))
+            Text(String(format: "%+0.2f", locale: .current, value))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 38, alignment: .trailing)
@@ -253,6 +264,23 @@ struct GyroVisualizationView: View {
 }
 
 // MARK: - SceneKit 3D controller
+
+/// The model's pose: leaned by roll and tipped by pitch in the pad's own
+/// frame, then turned about the vertical by yaw. Yaw is the turn about
+/// gravity, so it goes on last. Euler angles put pitch last instead, about
+/// the screen's own axis, so with the pad tipped toward you a turn to the
+/// right swung the model up.
+/// The app's angles: pitch is nose up positive, yaw is a turn to the right
+/// positive, roll is the right side down positive. Seen from the camera in
+/// front, a positive turn about Z lifts the right side, so roll goes in
+/// negated (it lifted the left side when the right one was raised), and a
+/// positive turn about Y points left, so yaw does too.
+func controllerPose(pitch: Float, yaw: Float, roll: Float) -> simd_quatf {
+    let turn = simd_quatf(angle: -yaw, axis: SIMD3<Float>(0, 1, 0))
+    let tip = simd_quatf(angle: pitch, axis: SIMD3<Float>(1, 0, 0))
+    let lean = simd_quatf(angle: -roll, axis: SIMD3<Float>(0, 0, 1))
+    return turn * tip * lean
+}
 
 /// Real 3D controller mesh, rendered via SceneKit so rotation looks like
 /// genuine depth (parallax, lighting changes) instead of a flat icon being
@@ -301,19 +329,11 @@ struct Controller3DSceneView: NSViewRepresentable {
         nsView.rendersContinuously = isMoving
         guard let node = nsView.scene?.rootNode.childNode(withName: "controller",
                                                           recursively: true) else { return }
-        // GCMotion convention: X = pitch, Y = yaw, Z = roll. SceneKit uses
-        // Euler angles in the same order so the mapping is direct. Slight
-        // sign flip on yaw so tilting the controller right makes the model
-        // visually point right. Wrap in SCNTransaction so the angle update
-        // commits this frame and SceneKit interpolates smoothly between
-        // ticks.
+        // Wrap in SCNTransaction so the pose commits this frame and
+        // SceneKit interpolates smoothly between ticks.
         SCNTransaction.begin()
         SCNTransaction.animationDuration = 0.05
-        node.eulerAngles = SCNVector3(
-            CGFloat(pitchAngle),
-            CGFloat(-yawAngle),
-            CGFloat(rollAngle)
-        )
+        node.simdOrientation = controllerPose(pitch: pitchAngle, yaw: yawAngle, roll: rollAngle)
         SCNTransaction.commit()
     }
 
@@ -783,7 +803,7 @@ final class Controller3DSnapshot {
         // A hundredth of a radian is below what the eye sees at this size.
         let key = [Int(pitch * 100), Int(yaw * 100), Int(roll * 100), Int(size.width), Int(size.height)]
         if let last, last.key == key { return last.image }
-        node?.eulerAngles = SCNVector3(CGFloat(pitch), CGFloat(-yaw), CGFloat(roll))
+        node?.simdOrientation = controllerPose(pitch: pitch, yaw: yaw, roll: roll)
         let pixels = CGSize(width: size.width * 3, height: size.height * 3)
         let image = renderer.snapshot(atTime: 0, with: pixels, antialiasingMode: .multisampling4X)
         image.size = size

@@ -51,6 +51,12 @@ enum SteamControllerButton: Int, CaseIterable {
         case 9: return SteamControllerButton.forward.rawValue
         case 10: return SteamControllerButton.steam.rawValue
         case 11: return SteamControllerButton.stickClick.rawValue
+        // The triggers' full-pull clicks and the grips, so a one-button
+        // emergency hold picked as LT, RT or a paddle works on this pad.
+        case 6: return SteamControllerButton.leftTrigger.rawValue
+        case 7: return SteamControllerButton.rightTrigger.rawValue
+        case 16: return SteamControllerButton.leftGrip.rawValue
+        case 17: return SteamControllerButton.rightGrip.rawValue
         default: return nil
         }
     }
@@ -78,29 +84,29 @@ enum SteamControllerButton: Int, CaseIterable {
     /// edge clicks. Only names: presets store the indices.
     var displayName: String {
         switch self {
-        case .rightTrigger: return "Right trigger click (full pull)"
-        case .leftTrigger: return "Left trigger click (full pull)"
-        case .rightBumper: return "Right bumper"
-        case .leftBumper: return "Left bumper"
+        case .rightTrigger: return String(localized: "Right trigger click (full pull)")
+        case .leftTrigger: return String(localized: "Left trigger click (full pull)")
+        case .rightBumper: return String(localized: "Right bumper")
+        case .leftBumper: return String(localized: "Left bumper")
         case .y: return "Y"
         case .b: return "B"
         case .x: return "X"
         case .a: return "A"
-        case .dpadUp: return "Left pad up (click)"
-        case .dpadRight: return "Left pad right (click)"
-        case .dpadLeft: return "Left pad left (click)"
-        case .dpadDown: return "Left pad down (click)"
-        case .back: return "Back (left arrow)"
+        case .dpadUp: return String(localized: "Left pad up (click)")
+        case .dpadRight: return String(localized: "Left pad right (click)")
+        case .dpadLeft: return String(localized: "Left pad left (click)")
+        case .dpadDown: return String(localized: "Left pad down (click)")
+        case .back: return String(localized: "Back (left arrow)")
         case .steam: return "Steam"
-        case .forward: return "Start (right arrow)"
-        case .leftGrip: return "Left grip paddle"
-        case .rightGrip: return "Right grip paddle"
-        case .leftPadClick: return "Left pad click"
-        case .rightPadClick: return "Right pad click"
-        case .leftPadTouch: return "Left pad touch"
-        case .rightPadTouch: return "Right pad touch"
-        case .stickClick: return "Stick click"
-        case .stickActive: return "Stick active"
+        case .forward: return String(localized: "Start (right arrow)")
+        case .leftGrip: return String(localized: "Left grip paddle")
+        case .rightGrip: return String(localized: "Right grip paddle")
+        case .leftPadClick: return String(localized: "Left pad click")
+        case .rightPadClick: return String(localized: "Right pad click")
+        case .leftPadTouch: return String(localized: "Left pad touch")
+        case .rightPadTouch: return String(localized: "Right pad touch")
+        case .stickClick: return String(localized: "Stick click")
+        case .stickActive: return String(localized: "Stick active")
         }
     }
 }
@@ -262,12 +268,16 @@ final class SteamControllerService: @unchecked Sendable {
     fileprivate func markHelperDisconnected() {
         lock.lock()
         if state.connected {
-            state = SteamControllerState()
+            state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
         }
         lock.unlock()
     }
 
     private func start() {
+        #if DEBUG
+        // A test run reads only its scripted pads, never the Mac's own.
+        if TestCapture.inTestRun { return }
+        #endif
         lock.lock(); let alreadyRunning = helperRunning; lock.unlock()
         guard !alreadyRunning else { return }
         let resolvedPath = helperPath()
@@ -279,7 +289,7 @@ final class SteamControllerService: @unchecked Sendable {
         lock.unlock()
 
         guard let helperURL = resolvedPath else {
-            let msg = "SteamControllerHelper not found in the app bundle. The Copy Helpers build phase may have been removed, or this is an App Store build where the helper was stripped."
+            let msg = String(localized: "SteamControllerHelper not found in the app bundle. The Copy Helpers build phase may have been removed, or this is an App Store build where the helper was stripped.")
             lock.lock()
             _diagnostics.helperLaunchError = msg
             lock.unlock()
@@ -347,8 +357,8 @@ final class SteamControllerService: @unchecked Sendable {
                     self.managerOpenFailures = self.sawStateThisLaunch ? 0 : self.managerOpenFailures + 1
                     if self.managerOpenFailures >= 3 {
                         let how = proc.terminationReason == .uncaughtSignal
-                            ? "signal \(proc.terminationStatus)" : "status \(proc.terminationStatus)"
-                        self._diagnostics.helperLaunchError = "Helper stopped after exiting three times in a row (\(how)); not relaunched"
+                            ? String(localized: "signal \(proc.terminationStatus)") : String(localized: "status \(proc.terminationStatus)")
+                        self._diagnostics.helperLaunchError = String(localized: "Helper stopped after exiting three times in a row (\(how)); not relaunched")
                     }
                 }
                 let wanted = self.retainCount > 0 && self.managerOpenFailures < 3
@@ -375,7 +385,7 @@ final class SteamControllerService: @unchecked Sendable {
             _diagnostics.lastDiagnosticUpdate = Date()
             lock.unlock()
         } catch {
-            let msg = "Helper launch failed: \(error.localizedDescription)"
+            let msg = String(localized: "Helper launch failed: \(error.localizedDescription)")
             lock.lock()
             _diagnostics.helperLaunchError = msg
             _diagnostics.lastDiagnosticUpdate = Date()
@@ -395,7 +405,7 @@ final class SteamControllerService: @unchecked Sendable {
         process = nil
         pipeOut = nil
         pipeIn = nil
-        state = SteamControllerState()
+        state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
         lock.unlock()
 
         po?.fileHandleForReading.readabilityHandler = nil
@@ -473,7 +483,7 @@ final class SteamControllerService: @unchecked Sendable {
         // Bench calls it first to be safe), it wiped a real controller's
         // state and showed it disconnected until the next report.
         if isSimulating {
-            state = SteamControllerState()
+            state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
             isSimulating = false
         }
         lock.unlock()
@@ -518,7 +528,7 @@ final class SteamControllerService: @unchecked Sendable {
         // nothing stays held when the controller powers off mid-press.
         if line == "W 0" || line == "W 1" {
             lock.lock()
-            state = SteamControllerState()
+            state = SteamControllerState(); imuMotion = [:]; imu.forgetGravity(); lastStick = (0, 0); lastLeftPad = (0, 0)
             state.connected = (line == "W 1")
             lastStick = (0, 0)
             lastLeftPad = (0, 0)
@@ -528,7 +538,7 @@ final class SteamControllerService: @unchecked Sendable {
         // The device went away (unplugged, dongle removed).
         if line == "D" {
             lock.lock()
-            state = SteamControllerState()
+            state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
             lastStick = (0, 0)
             lastLeftPad = (0, 0)
             lock.unlock()
@@ -605,7 +615,38 @@ final class SteamControllerService: @unchecked Sendable {
         sawStateThisLaunch = true
         _diagnostics.firstStateLineReceived = true
         lock.unlock()
+
+        // The IMU, once the helper has turned it on (its bytes are zero
+        // until then): gyro at 2000 degrees per second full scale, the
+        // accelerometer at 2 g, as SDL reads this controller, in the frame
+        // the shared IMU code expects (X right, Y away, Z up). This model's
+        // gyro Y runs the other way from its accelerometer Y (SDL turns the
+        // accelerometer's around and not the gyro's, where it turns both on
+        // the 2026 model), so it is turned around here to match.
+        if ax != 0 || ay != 0 || az != 0 {
+            let gyroScale: Float = (2000 / 32768) * .pi / 180
+            let processed = imu.processMotion([
+                .gyroX: Float(gx) * gyroScale, .gyroY: -Float(gy) * gyroScale, .gyroZ: Float(gz) * gyroScale,
+                .accelX: Float(ax) / 16384, .accelY: Float(ay) / 16384, .accelZ: Float(az) / 16384,
+            ])
+            lock.lock()
+            imuMotion = processed
+            lock.unlock()
+        }
     }
+
+    /// The controller's motion, gyro and accelerometer, in the app's
+    /// channels (see DirectIMU). Empty until the IMU has reported.
+    let imu = DirectIMU()
+    private var imuMotion: [MotionChannel: Float] = [:]
+
+    var motion: [MotionChannel: Float] {
+        lock.lock(); defer { lock.unlock() }
+        return imuMotion
+    }
+
+    /// True once the controller's IMU has reported.
+    var hasMotion: Bool { !motion.isEmpty }
 
     // MARK: - Helper discovery
 

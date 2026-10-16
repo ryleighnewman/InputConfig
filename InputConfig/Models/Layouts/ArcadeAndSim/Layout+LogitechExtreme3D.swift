@@ -92,13 +92,15 @@ extension ControllerLayout {
         PlacedControl(id: "trigger", kind: .trigger(.digital), center: CGPoint(x: 0.60, y: 0.27), size: 0.09, height: 0.065,
                       shape: .roundedRect(corner: 0.35), printed: "1", inputs: .button(0),
                       note: "On the front of the grip, facing away from you", callout: .below),
-        // The whole grip: X and Y tilt, and the twist rudder (Rz, axis 2).
-        // The twist is listed with the x role so both of its directions
-        // count as this control's inputs; the canvas moves the stick dot
-        // from the first x axis (axis 0) only.
+        // The whole grip: X and Y tilt. The twist rudder (Rz, axis 2) has a
+        // dial of its own, as on the T.16000M: drawn on the stick it never
+        // moved, since the stick dot follows one x axis.
         PlacedControl(id: "stick", kind: .stick, center: CGPoint(x: 0.55, y: 0.45), size: 0.18,
-                      inputs: ControlInputs(axes: [.x(0), .y(1), AxisRef(index: 2, role: .x)]),
+                      inputs: ControlInputs(axes: [.x(0), .y(1)]),
                       note: "Twisting the grip is axis 2 (rudder)", callout: .below),
+        PlacedControl(id: "twist", kind: .dial, center: CGPoint(x: 0.66, y: 0.68), size: 0.22, height: 0.05,
+                      shape: .capsule(angleDegrees: 0), printed: "Twist", inputs: ControlInputs(axes: [.x(2)]),
+                      callout: .below),
         // Base: buttons 7 to 12 in two columns of three, 7 and 8 farthest
         // from the pilot.
         PlacedControl(id: "b7", kind: .key, center: CGPoint(x: 0.11, y: 0.67), size: 0.06,

@@ -35,7 +35,9 @@ enum ButtonNames {
     /// model's own names (a DualShock 4's Share) on top.
     static func label(_ index: Int, family: FaceLetters?, model: ModelNames = .none,
                       choice: FaceLetters = FaceLetters.current) -> String {
-        if let renamed = model.renamed[index] { return renamed }
+        // A model's own name, written in English in its layout ("Left
+        // arrow", "Capture"), in the app's language.
+        if let renamed = model.renamed[index] { return LayoutText.t(renamed) }
         let fam = family.flatMap { $0 == .automatic || $0 == .positions ? nil : $0 }
         if choice == .positions || family == .positions, let compass = positionName(index, family: fam) {
             return compass
@@ -46,7 +48,27 @@ enum ButtonNames {
         }
         if let fam, let named = name(index, family: fam) { return named }
         if fam == nil, let face = FaceLetters.genericName(index, choice: choice) { return face }
-        return combined[index] ?? "Button \(index)"
+        return combined[index] ?? fallbackLabel(index)
+    }
+
+    /// The name of a button nothing else names, in the app's language.
+    /// Code that needs to know whether a label is this fallback compares
+    /// with it, never with English text.
+    static func fallbackLabel(_ index: Int) -> String { String(localized: "Button \(index)") }
+
+    /// A name for VoiceOver with the PlayStation glyphs as words: a
+    /// language whose name for Cross is the printed "\u{00D7}" heard it as
+    /// the multiplication sign. Names that are already words are untouched.
+    static func spokenGlyphs(_ name: String) -> String {
+        let words: [Character: String] = [
+            "\u{00D7}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
+            "\u{25CB}": String(localized: "spoken.circle", defaultValue: "Circle", comment: "The PlayStation Circle button, as a screen reader says it"),
+            "\u{25A1}": String(localized: "spoken.square", defaultValue: "Square", comment: "The PlayStation Square button, as a screen reader says it"),
+            "\u{25B3}": String(localized: "spoken.triangle", defaultValue: "Triangle", comment: "The PlayStation Triangle button, as a screen reader says it"),
+            "\u{2715}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
+        ]
+        guard name.contains(where: { words[$0] != nil }) else { return name }
+        return name.map { words[$0] ?? String($0) }.joined()
     }
 
     /// An input's name for lists and search: a button or axis by the
@@ -59,19 +81,21 @@ enum ButtonNames {
             guard let name = axisName(event.index, family: family) else { return event.displayName }
             return "\(name) \(event.axisDirection?.displayName ?? "+")"
         case .touchpad where family?.isSteam == true:
-            let pad = event.touchpadSurface == 1 ? "Left trackpad" : "Right trackpad"
+            let left = event.touchpadSurface == 1
             let positive = event.axisDirection != .negative
-            let dir = event.touchpadAxis == .y ? (positive ? "down" : "up") : (positive ? "right" : "left")
-            return "\(pad) slide \(dir)"
-        case .touchpadGesture where family?.isSteam == true:
-            let pad = event.touchpadSurface == 1 ? "Left trackpad" : "Right trackpad"
-            let kind: String
-            switch event.touchpadGestureKind {
-            case .doubleTap?: kind = "double tap"
-            case .twoFingerTap?: kind = "two-finger tap"
-            case .oneFingerTap?, nil: kind = "tap"
+            if event.touchpadAxis == .y {
+                if positive { return left ? String(localized: "Left trackpad slide down") : String(localized: "Right trackpad slide down") }
+                return left ? String(localized: "Left trackpad slide up") : String(localized: "Right trackpad slide up")
             }
-            return "\(pad) \(kind)"
+            if positive { return left ? String(localized: "Left trackpad slide right") : String(localized: "Right trackpad slide right") }
+            return left ? String(localized: "Left trackpad slide left") : String(localized: "Right trackpad slide left")
+        case .touchpadGesture where family?.isSteam == true:
+            let left = event.touchpadSurface == 1
+            switch event.touchpadGestureKind {
+            case .doubleTap?: return left ? String(localized: "Left trackpad double tap") : String(localized: "Right trackpad double tap")
+            case .twoFingerTap?: return left ? String(localized: "Left trackpad two-finger tap") : String(localized: "Right trackpad two-finger tap")
+            case .oneFingerTap?, nil: return left ? String(localized: "Left trackpad tap") : String(localized: "Right trackpad tap")
+            }
         default:
             return event.displayName
         }
@@ -92,7 +116,7 @@ enum ButtonNames {
     /// pad has B (1) on the left of A and X (2) on the right.
     static func positionName(_ index: Int, family: FaceLetters?) -> String? {
         if family == .gameCube {
-            return [0: "South", 1: "West", 2: "East", 3: "North"][index]
+            return [0: String(localized: "South"), 1: String(localized: "West"), 2: String(localized: "East"), 3: String(localized: "North")][index]
         }
         if family == .steamController {
             let steam: [Int: Int] = [SteamControllerButton.a.rawValue: 0, SteamControllerButton.b.rawValue: 1,
@@ -102,29 +126,42 @@ enum ButtonNames {
         return FaceLetters.positionName(index)
     }
 
+    /// The one-letter compass mark for a face button, on the same numbering.
+    static func positionLetter(_ index: Int, family: FaceLetters?) -> String? {
+        if family == .gameCube {
+            return [0: 0, 1: 2, 2: 1, 3: 3][index].flatMap { FaceLetters.positionInitial($0) }
+        }
+        if family == .steamController {
+            let steam: [Int: Int] = [SteamControllerButton.a.rawValue: 0, SteamControllerButton.b.rawValue: 1,
+                                     SteamControllerButton.x.rawValue: 2, SteamControllerButton.y.rawValue: 3]
+            return steam[index].flatMap { FaceLetters.positionInitial($0) }
+        }
+        return FaceLetters.positionInitial(index)
+    }
+
     /// Short labels for the visualizer's shoulder, trigger and center
     /// buttons (4, 5, 6, 7, 8, 9, 10), by standard position; nil where the
     /// family has no such button. A nil family gets names that fit any pad.
     static func short(_ index: Int, family: FaceLetters?, model: ModelNames = .none) -> String? {
-        if let renamed = model.short[index] { return renamed }
+        if let renamed = model.short[index] { return LayoutText.t(renamed) }
         switch family {
         case .playstation?:
             return [4: "L1", 5: "R1", 6: "L2", 7: "R2", 8: "Create", 9: "Options", 10: "PS"][index]
         case .stadia?:
-            return [4: "L1", 5: "R1", 6: "L2", 7: "R2", 8: "Options", 9: "Menu", 10: "Stadia"][index]
+            return [4: "L1", 5: "R1", 6: "L2", 7: "R2", 8: String(localized: "Options"), 9: String(localized: "Menu"), 10: "Stadia"][index]
         case .nintendo?:
-            return [4: "L", 5: "R", 6: "ZL", 7: "ZR", 8: "\u{2212}", 9: "+", 10: "Home"][index]
+            return [4: "L", 5: "R", 6: "ZL", 7: "ZR", 8: "\u{2212}", 9: "+", 10: String(localized: "Home")][index]
         case .gameCube?:
-            return [4: "L", 5: "Z", 6: "L", 7: "R", 9: "Start", 10: "Home"][index]
+            return [4: "L", 5: "Z", 6: "L", 7: "R", 9: String(localized: "Start"), 10: String(localized: "Home")][index]
         case .steamController2026?:
-            return [4: "L1", 5: "R1", 6: "L2", 7: "R2", 8: "View", 9: "Menu", 10: "Steam"][index]
+            return [4: "L1", 5: "R1", 6: "L2", 7: "R2", 8: String(localized: "View"), 9: String(localized: "Menu"), 10: "Steam"][index]
         case .steamController?:
             // Standard positions, drawn through the 2015 numbering.
-            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: "Back", 9: "Start", 10: "Steam"][index]
+            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: String(localized: "Back"), 9: String(localized: "Start"), 10: "Steam"][index]
         case .xbox?:
-            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: "View", 9: "Menu", 10: "Xbox"][index]
+            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: String(localized: "View"), 9: String(localized: "Menu"), 10: "Xbox"][index]
         case .automatic?, .positions?, nil:
-            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: "Select", 9: "Start", 10: "Home"][index]
+            return [4: "LB", 5: "RB", 6: "LT", 7: "RT", 8: String(localized: "Select"), 9: String(localized: "Start"), 10: String(localized: "Home")][index]
         }
     }
 
@@ -136,28 +173,28 @@ enum ButtonNames {
     static func axisName(_ index: Int, family: FaceLetters?) -> String? {
         guard let fam = family else { return nil }
         switch (fam, index) {
-        case (.steamController, 0): return "Stick X"
-        case (.steamController, 1): return "Stick Y"
-        case (.steamController, 2): return "Right trackpad X"
-        case (.steamController, 3): return "Right trackpad Y"
-        case (.steamController, 6), (.steamController2026, 6): return "Left trackpad X"
-        case (.steamController, 7), (.steamController2026, 7): return "Left trackpad Y"
-        case (.steamController2026, 8): return "Right trackpad X"
-        case (.steamController2026, 9): return "Right trackpad Y"
-        case (.steamController2026, 10): return "Left trackpad pressure"
-        case (.steamController2026, 11): return "Right trackpad pressure"
-        case (.gameCube, 0): return "Control stick X"
-        case (.gameCube, 1): return "Control stick Y"
-        case (.gameCube, 2): return "C-stick X"
-        case (.gameCube, 3): return "C-stick Y"
-        case (.gameCube, 4): return "L (analog)"
-        case (.gameCube, 5): return "R (analog)"
-        case (_, 0): return "Left stick X"
-        case (_, 1): return "Left stick Y"
-        case (_, 2): return "Right stick X"
-        case (_, 3): return "Right stick Y"
-        case (.automatic, 4), (.positions, 4): return "Left trigger"
-        case (.automatic, 5), (.positions, 5): return "Right trigger"
+        case (.steamController, 0): return String(localized: "Stick X")
+        case (.steamController, 1): return String(localized: "Stick Y")
+        case (.steamController, 2): return String(localized: "Right trackpad X")
+        case (.steamController, 3): return String(localized: "Right trackpad Y")
+        case (.steamController, 6), (.steamController2026, 6): return String(localized: "Left trackpad X")
+        case (.steamController, 7), (.steamController2026, 7): return String(localized: "Left trackpad Y")
+        case (.steamController2026, 8): return String(localized: "Right trackpad X")
+        case (.steamController2026, 9): return String(localized: "Right trackpad Y")
+        case (.steamController2026, 10): return String(localized: "Left trackpad pressure")
+        case (.steamController2026, 11): return String(localized: "Right trackpad pressure")
+        case (.gameCube, 0): return String(localized: "Control stick X")
+        case (.gameCube, 1): return String(localized: "Control stick Y")
+        case (.gameCube, 2): return String(localized: "C-stick X")
+        case (.gameCube, 3): return String(localized: "C-stick Y")
+        case (.gameCube, 4): return String(localized: "L (analog)")
+        case (.gameCube, 5): return String(localized: "R (analog)")
+        case (_, 0): return String(localized: "Left stick X")
+        case (_, 1): return String(localized: "Left stick Y")
+        case (_, 2): return String(localized: "Right stick X")
+        case (_, 3): return String(localized: "Right stick Y")
+        case (.automatic, 4), (.positions, 4): return String(localized: "Left trigger")
+        case (.automatic, 5), (.positions, 5): return String(localized: "Right trigger")
         case (_, 4): return short(6, family: fam)
         case (_, 5): return short(7, family: fam)
         default: return nil
@@ -210,11 +247,11 @@ enum ButtonNames {
         /// mute button or the Edge's back and Fn buttons.
         static func of(brand: ControllerBrand?, dualShock3: Bool) -> ModelNames {
             if dualShock3 {
-                return ModelNames(renamed: [8: "Select", 9: "Start"], short: [8: "Select", 9: "Start"],
+                return ModelNames(renamed: [8: String(localized: "Select"), 9: String(localized: "Start")], short: [8: String(localized: "Select"), 9: String(localized: "Start")],
                                   absent: [13, 15, 16, 17, 20, 21])
             }
             if brand == .dualShock4 {
-                return ModelNames(renamed: [8: "Share"], short: [8: "Share"], absent: [15, 16, 17, 20, 21])
+                return ModelNames(renamed: [8: String(localized: "Share")], short: [8: String(localized: "Share")], absent: [15, 16, 17, 20, 21])
             }
             return .none
         }
@@ -236,54 +273,54 @@ enum ButtonNames {
 
     /// No family chosen and none known: both common names.
     static let combined: [Int: String] = [
-        0: "A / Cross", 1: "B / Circle", 2: "X / Square", 3: "Y / Triangle",
-        4: "LB / L1", 5: "RB / R1", 6: "LT / L2 (digital)", 7: "RT / R2 (digital)",
-        8: "Back / Share / Select", 9: "Start / Options", 10: "Home / PS / Guide",
-        11: "L3 (left stick click)", 12: "R3 (right stick click)", 13: "Touchpad press",
-        14: "Share (where exposed)", 15: "Microphone / Mute",
-        16: "Left back button / Elite P1 (upper right)", 17: "Right back button / Elite P2 (lower right)",
-        18: "Elite P3 (upper left)", 19: "Elite P4 (lower left)",
-        20: "FN 1 / Left Function", 21: "FN 2 / Right Function",
+        0: String(localized: "A / Cross"), 1: String(localized: "B / Circle"), 2: String(localized: "X / Square"), 3: String(localized: "Y / Triangle"),
+        4: String(localized: "LB / L1"), 5: String(localized: "RB / R1"), 6: String(localized: "LT / L2 (digital)"), 7: String(localized: "RT / R2 (digital)"),
+        8: String(localized: "Back / Share / Select"), 9: String(localized: "Start / Options"), 10: String(localized: "Home / PS / Guide"),
+        11: String(localized: "L3 (left stick click)"), 12: String(localized: "R3 (right stick click)"), 13: String(localized: "Touchpad press"),
+        14: String(localized: "Share (where exposed)"), 15: String(localized: "Microphone / Mute"),
+        16: String(localized: "Left back button / Elite P1 (upper right)"), 17: String(localized: "Right back button / Elite P2 (lower right)"),
+        18: String(localized: "Elite P3 (upper left)"), 19: String(localized: "Elite P4 (lower left)"),
+        20: String(localized: "FN 1 / Left Function"), 21: String(localized: "FN 2 / Right Function"),
     ]
 
     static let xbox: [Int: String] = [
         0: "A", 1: "B", 2: "X", 3: "Y",
-        4: "LB", 5: "RB", 6: "LT (digital)", 7: "RT (digital)",
-        8: "View", 9: "Menu", 10: "Xbox button",
-        11: "Left stick press", 12: "Right stick press",
-        14: "Share",
+        4: "LB", 5: "RB", 6: String(localized: "LT (digital)"), 7: String(localized: "RT (digital)"),
+        8: String(localized: "View"), 9: String(localized: "Menu"), 10: String(localized: "Xbox button"),
+        11: String(localized: "Left stick press"), 12: String(localized: "Right stick press"),
+        14: String(localized: "Share"),
         // Elite paddles: P1 and P2 on the right, P3 and P4 on the left.
-        16: "Paddle P1 (upper right)", 17: "Paddle P2 (lower right)",
-        18: "Paddle P3 (upper left)", 19: "Paddle P4 (lower left)",
+        16: String(localized: "Paddle P1 (upper right)"), 17: String(localized: "Paddle P2 (lower right)"),
+        18: String(localized: "Paddle P3 (upper left)"), 19: String(localized: "Paddle P4 (lower left)"),
     ]
 
     static let playStation: [Int: String] = [
-        0: "Cross", 1: "Circle", 2: "Square", 3: "Triangle",
-        4: "L1", 5: "R1", 6: "L2 (digital)", 7: "R2 (digital)",
-        8: "Create / Share", 9: "Options", 10: "PS button",
-        11: "L3 (left stick press)", 12: "R3 (right stick press)",
-        13: "Touchpad press", 15: "Mute",
+        0: String(localized: "Cross"), 1: String(localized: "Circle"), 2: String(localized: "Square"), 3: String(localized: "Triangle"),
+        4: "L1", 5: "R1", 6: String(localized: "L2 (digital)"), 7: String(localized: "R2 (digital)"),
+        8: String(localized: "Create / Share"), 9: "Options", 10: String(localized: "PS button"),
+        11: String(localized: "L3 (left stick press)"), 12: String(localized: "R3 (right stick press)"),
+        13: String(localized: "Touchpad press"), 15: String(localized: "Mute"),
         // DualSense Edge: two back buttons and two Fn buttons.
-        16: "Left back button (Edge)", 17: "Right back button (Edge)",
-        20: "Left Fn (Edge)", 21: "Right Fn (Edge)",
+        16: String(localized: "Left back button (Edge)"), 17: String(localized: "Right back button (Edge)"),
+        20: String(localized: "Left Fn (Edge)"), 21: String(localized: "Right Fn (Edge)"),
     ]
 
     static let nintendo: [Int: String] = [
         0: "B", 1: "A", 2: "Y", 3: "X",
         4: "L", 5: "R", 6: "ZL", 7: "ZR",
-        8: "Minus", 9: "Plus", 10: "Home",
-        11: "Left stick press", 12: "Right stick press",
-        14: "Capture",
+        8: String(localized: "Minus"), 9: String(localized: "Plus"), 10: String(localized: "Home"),
+        11: String(localized: "Left stick press"), 12: String(localized: "Right stick press"),
+        14: String(localized: "Capture"),
         // Switch 2 Pro Controller: C and the two back buttons.
-        15: "C", 16: "GL (left back button)", 17: "GR (right back button)",
+        15: "C", 16: String(localized: "GL (left back button)"), 17: String(localized: "GR (right back button)"),
     ]
 
     static let stadia: [Int: String] = [
         0: "A", 1: "B", 2: "X", 3: "Y",
-        4: "L1", 5: "R1", 6: "L2 (digital)", 7: "R2 (digital)",
-        8: "Options", 9: "Menu", 10: "Stadia button",
-        11: "L3 (left stick press)", 12: "R3 (right stick press)",
-        14: "Capture",
+        4: "L1", 5: "R1", 6: String(localized: "L2 (digital)"), 7: String(localized: "R2 (digital)"),
+        8: String(localized: "Options"), 9: String(localized: "Menu"), 10: String(localized: "Stadia button"),
+        11: String(localized: "L3 (left stick press)"), 12: String(localized: "R3 (right stick press)"),
+        14: String(localized: "Capture"),
     ]
 
     /// The GameCube controller, on the numbering both GameCube decoders
@@ -292,16 +329,16 @@ enum ButtonNames {
     /// both fire from it, and the Switch 2 model adds Home, Capture, C, ZL.
     static let gameCube: [Int: String] = [
         0: "A", 1: "B", 2: "X", 3: "Y",
-        4: "L (as a bumper)", 5: "Z",
-        6: "L (full press)", 7: "R (full press)",
-        9: "Start", 10: "Home (Switch 2 model)",
-        14: "Capture (Switch 2 model)", 15: "C (Switch 2 model)", 16: "ZL (Switch 2 model)",
+        4: String(localized: "L (as a bumper)"), 5: "Z",
+        6: String(localized: "L (full press)"), 7: String(localized: "R (full press)"),
+        9: String(localized: "Start"), 10: String(localized: "Home (Switch 2 model)"),
+        14: String(localized: "Capture (Switch 2 model)"), 15: String(localized: "C (Switch 2 model)"), 16: String(localized: "ZL (Switch 2 model)"),
     ]
 
     /// Face buttons by compass point; everything else keeps both names.
     static let positions: [Int: String] = {
         var t = combined
-        t[0] = "South"; t[1] = "East"; t[2] = "West"; t[3] = "North"
+        t[0] = String(localized: "South"); t[1] = String(localized: "East"); t[2] = String(localized: "West"); t[3] = String(localized: "North")
         return t
     }()
 
@@ -310,6 +347,8 @@ enum ButtonNames {
         SteamControllerButton.allCases.filter { $0 != .stickActive }.map { ($0.bindingIndex, $0.displayName) })
 
     /// The 2026 Steam Controller, on the numbering its decoder uses.
+    /// In the app's language ("Quick Access", "Left pad click"); the English
+    /// list stays the one devices are matched by.
     static let steam2026: [Int: String] = Dictionary(uniqueKeysWithValues:
-        ControllerProfileDatabase.steamController2026ButtonNames.enumerated().map { ($0.offset, $0.element) })
+        ControllerProfileDatabase.steamController2026ButtonNames.enumerated().map { ($0.offset, LayoutText.t($0.element)) })
 }

@@ -20,6 +20,14 @@ struct ScanOverlayView: View {
     @State private var detectedInput: InputEvent?
     @State private var timer: Timer?
     @State private var didCompleteScan = false
+    /// Canceled after something was detected: the delayed completion then
+    /// writes nothing.
+    @State private var canceled = false
+    /// When fn went down: a Globe tap sends its own key after the release,
+    /// so fn alone is only taken once that key has had time to come.
+    @State private var pendingFnAt: Date?
+    /// A Steam pad's tap waiting to see whether a second makes it a double tap.
+    @State private var steamTapPending: InputEvent?
     /// A left click held back briefly: a Force Click begins as one, and
     /// scans as Deep Press if its second stage follows.
     @State private var pendingLeftClick: DispatchWorkItem?
@@ -34,6 +42,9 @@ struct ScanOverlayView: View {
     /// the scan can be canceled without a keyboard. Everything else about
     /// the monitor's capture behavior is unchanged.
     @State private var cancelButtonFrame: CGRect = .zero
+    /// The whole card: a click on it (a dwell click on the way to Cancel)
+    /// is never taken as the scanned input.
+    @State private var cardFrame: CGRect = .zero
 
     var body: some View {
         ZStack {
@@ -45,7 +56,7 @@ struct ScanOverlayView: View {
             // Content card
             VStack(spacing: 20) {
                 // Timer
-                Text(ScanTiming.seconds > 0 ? "\(timeRemaining)" : "Waiting")
+                Text(ScanTiming.seconds > 0 ? "\(timeRemaining)" : String(localized: "Waiting"))
                     .font(.system(size: 48, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
 
@@ -74,6 +85,7 @@ struct ScanOverlayView: View {
                 // canceling never needs a keyboard. Esc still works too.
                 HStack(spacing: 14) {
                     Button {
+                        canceled = true
                         cleanup()
                         onCancel()
                     } label: {
@@ -91,6 +103,7 @@ struct ScanOverlayView: View {
                             .onChange(of: geo.frame(in: .global)) { _, f in cancelButtonFrame = f }
                     })
                     .accessibilityLabel("Cancel scan")
+                    .accessibilityInputLabels([Text("Cancel"), Text("Cancel scan")])
 
                     HStack(spacing: 6) {
                         Text("esc")
@@ -112,6 +125,11 @@ struct ScanOverlayView: View {
             // Floating scan panel: real Liquid Glass at the card radius, with a
             // drop shadow (shadows are allowed on floating HUDs).
             .liquidGlass(in: RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+            .background(GeometryReader { geo in
+                Color.clear
+                    .onAppear { cardFrame = geo.frame(in: .global) }
+                    .onChange(of: geo.frame(in: .global)) { _, f in cardFrame = f }
+            })
             .shadow(radius: 20)
             // Contain, not ignore: ignore removed the Cancel button from
             // VoiceOver, Voice Control and Switch Control, leaving no way
@@ -119,7 +137,10 @@ struct ScanOverlayView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Scan for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it.")
             .accessibilityHint("Use the Cancel scan button or press Escape to cancel.")
-            .accessibilityAction(.escape) { cleanup(); onCancel() }
+            .accessibilityAction(.escape) { canceled = true; cleanup(); onCancel() }
+            // Modal: VoiceOver and Switch Control stay on the scan card, not
+            // the editor behind the dim.
+            .accessibilityAddTraits(.isModal)
         }
         .onAppear {
             startTimer()
@@ -132,7 +153,7 @@ struct ScanOverlayView: View {
             // meant. Tap the Mac is chosen from the input type menu instead
             // (with its tap-count picker), never by scanning.
             installInputMonitor()
-            announce("Scanning for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it. Press Escape to cancel.")
+            announce(String(localized: "Scanning for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it. Press Escape to cancel."))
         }
         .onDisappear {
             cleanup()
@@ -169,7 +190,15 @@ struct ScanOverlayView: View {
     /// Map a captured AppKit event to an `InputEvent` and finish the scan.
     /// Returns true if the event was consumed.
     private func handleScanNSEvent(_ event: NSEvent) -> Bool {
-        guard !didCompleteScan else { return false }
+        // Escape still cancels in the moment after a detection, rather than
+        // reaching the editor's own Cancel.
+        if didCompleteScan {
+            guard event.type == .keyDown, event.keyCode == 53, !canceled else { return false }
+            canceled = true
+            cleanup()
+            onCancel()
+            return true
+        }
         if event.type == .flagsChanged {
             let vk = Int(event.keyCode)
             let f = event.modifierFlags
@@ -191,6 +220,18 @@ struct ScanOverlayView: View {
             // to Cancel scan bound Control to the row.
             // Caps Lock too, which VoiceOver can use as its modifier.
         if NSWorkspace.shared.isVoiceOverEnabled, [57, 58, 61, 59, 62].contains(vk) { return false }
+            if vk == 63 {
+                guard pressed else { return true }
+                let at = Date()
+                pendingFnAt = at
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard pendingFnAt == at, !didCompleteScan, !canceled else { return }
+                    completeScan(with: InputEvent(
+                        type: .extKey, index: KeyCodeMap.globeFnCode,
+                        extDeviceID: ExternalInputDeviceService.builtInKeyboardID))
+                }
+                return true
+            }
             guard pressed,
                   let hid = ExternalInputDeviceService.hidUsage(forVirtualKeyCode: vk)
             else { return false }
@@ -210,6 +251,7 @@ struct ScanOverlayView: View {
         switch event.type {
         case .keyDown:
             if event.keyCode == 53 { // Escape cancels the scan
+                canceled = true
                 cleanup()
                 onCancel()
                 return true
@@ -233,6 +275,9 @@ struct ScanOverlayView: View {
                 if cancelButtonFrame.insetBy(dx: -6, dy: -6).contains(point) {
                     return false
                 }
+                // Elsewhere on the card: swallowed, not scanned. A mouse
+                // click is still bound by clicking the dimmed background.
+                if cardFrame.contains(point) { return true }
             }
             let button = event.type == .leftMouseDown ? 0
                 : (event.type == .rightMouseDown ? 1 : event.buttonNumber)
@@ -328,22 +373,48 @@ struct ScanOverlayView: View {
             didCompleteScan = true
             touchpadCandidates = [event]
             detectedInput = event
-            announce("Touchpad detected.")
+            announce(String(localized: "Touchpad detected."))
             // A one-finger tap may be the first half of a double tap, which
             // is only known when the second finger lifts, up to ~650 ms on;
             // give it time. A press or two-finger tap needs only the lift.
             let window: Double = (event.type == .touchpadGesture && event.touchpadGestureKind == .oneFingerTap) ? 0.9 : 0.5
             DispatchQueue.main.asyncAfter(deadline: .now() + window) {
+                guard !canceled else { return }
                 cleanup()
                 choose(touchpadCandidates)
             }
             return
         }
+        // A Steam pad's one-finger tap may be the first half of a double
+        // tap, which comes as its own gesture: wait for it, as the
+        // PlayStation touchpad's window does. A double tap was never caught.
+        if event.type == .touchpadGesture {
+            if steamTapPending != nil {
+                if event.touchpadGestureKind == .doubleTap { steamTapPending = event; detectedInput = event }
+                return
+            }
+            if !didCompleteScan, event.touchpadGestureKind == .oneFingerTap {
+                didCompleteScan = true
+                detectedInput = event
+                steamTapPending = event
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                    guard !canceled else { return }
+                    let taken = steamTapPending ?? event
+                    steamTapPending = nil
+                    cleanup()
+                    onInputDetected(taken)
+                }
+                return
+            }
+        }
         guard !didCompleteScan else { return }
         didCompleteScan = true
         detectedInput = event
-        announce("Detected \(event.displayName).")
+        // Not announced here: the editor says the row and the control's own
+        // name ("Row 1 input: Cross") a moment later, and two names for one
+        // press left people unsure what was bound.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            guard !canceled else { return }
             cleanup()
             onInputDetected(event)
         }
@@ -360,7 +431,10 @@ struct ScanOverlayView: View {
             if timeRemaining > 0 {
                 timeRemaining -= 1
             } else {
-                announce("Scan timed out. Nothing was set.")
+                // A control was caught in the last moment: it is being set.
+                if didCompleteScan { return }
+                canceled = true
+                announce(String(localized: "Scan timed out. Nothing was set."))
                 cleanup()
                 onCancel()
             }
@@ -407,6 +481,11 @@ enum ScanTiming {
     /// Never unlimited: Escape is a key this scan can bind, so it cannot
     /// cancel it; "until canceled" waits a minute here.
     static var macInputSeconds: Int {
-        UserDefaults.standard.object(forKey: key) == nil ? 5 : (seconds == 0 ? 60 : seconds)
+        // Switch Control scans to a key on its own keyboard panel, which
+        // takes well past 5 seconds; it gets the full scan time.
+        let unset = UserDefaults.standard.object(forKey: key) == nil
+        // VoiceOver too: its spoken instruction took most of the 5 seconds.
+        if unset, !NSWorkspace.shared.isSwitchControlEnabled, !NSWorkspace.shared.isVoiceOverEnabled { return 5 }
+        return seconds == 0 ? 60 : seconds
     }
 }

@@ -72,6 +72,12 @@ final class DualSenseSupplementService: @unchecked Sendable {
     private var identities: [UInt64: SonyPadIdentity] = [:]
     private var reportBuffers: [UInt64: UnsafeMutablePointer<UInt8>] = [:]
     private var supplementalState: [UInt64: [Int: Float]] = [:]
+    /// The buttons[2] byte each location's snapshot was decoded from, so a
+    /// report whose byte has not moved (every report but a few a minute) is
+    /// dropped on one byte compare instead of decoding a dictionary and
+    /// comparing it. Cleared with the snapshot, so a cleared snapshot is
+    /// rebuilt by the next report whatever its byte.
+    private var lastButtons2: [UInt64: UInt8] = [:]
     private var lastLoggedByte11: [UInt64: UInt8] = [:]
     private var reportCounter: [UInt64: Int] = [:]
     /// Timestamp of the last streamed (callback-delivered) input report per
@@ -111,6 +117,10 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// touchpad helper's feed) is gone with the helper: GameController's
     /// touchpadPrimary bridge is the touch source.
     func start() {
+        #if DEBUG
+        // A test run reads only its scripted pads, never the Mac's own.
+        if TestCapture.inTestRun { return }
+        #endif
         let enableLegacyOpen = true
         NSLog("[DualSenseSupplement] start() - opening DualSense raw HID (USB extras reader)")
 
@@ -167,6 +177,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         identities.removeAll()
         reportBuffers.removeAll()
         supplementalState.removeAll()
+        lastButtons2.removeAll()
         lastLoggedByte11.removeAll()
         lastStreamAt.removeAll()
         let poll = pollTimer
@@ -231,6 +242,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         identities[location] = identity
         reportBuffers[location] = buf
         supplementalState[location] = [:]
+        lastButtons2.removeValue(forKey: location)
         lock.unlock()
 
         // Use the location ID directly as the callback context. Safe
@@ -305,6 +317,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         productIDs.removeValue(forKey: location)
         identities.removeValue(forKey: location)
         supplementalState.removeValue(forKey: location)
+        lastButtons2.removeValue(forKey: location)
         lastLoggedByte11.removeValue(forKey: location)
         lastSignificantBytes.removeValue(forKey: location)
         reportCounter.removeValue(forKey: location)
@@ -342,9 +355,13 @@ final class DualSenseSupplementService: @unchecked Sendable {
 
         // Mark the stream alive so the GET_REPORT poll stands down for
         // this device (streamed reports are lower-latency than polling).
+        // The pad's model is read in the same lock section: this runs on
+        // the main thread at the pad's report rate (250 a second over USB),
+        // and a report used to take the lock three times.
         lock.lock()
         let firstStream = (lastStreamAt[locationID] == nil)
         lastStreamAt[locationID] = CFAbsoluteTimeGetCurrent()
+        let isDS4 = Self.dualShock4PIDs.contains(productIDs[locationID] ?? 0)
         lock.unlock()
         if firstStream {
             NSLog("[DualSenseSupplement] stream ALIVE (loc=0x%llX) first report id=0x%02X len=%d",
@@ -411,9 +428,6 @@ final class DualSenseSupplementService: @unchecked Sendable {
         //     nothing (power-cycling the controller clears it), which
         //     is where the old "Bluetooth gives zero reports" belief
         //     came from.
-        lock.lock()
-        let isDS4 = Self.dualShock4PIDs.contains(productIDs[locationID] ?? 0)
-        lock.unlock()
         guard let b2 = Self.buttons2(reportPointer, length: length, isDS4: isDS4) else { return }
         applyButtons2(b2, locationID: locationID)
     }
@@ -465,6 +479,15 @@ final class DualSenseSupplementService: @unchecked Sendable {
 
     /// Decode one buttons[2] byte into the supplemental button snapshot.
     private func applyButtons2(_ b2: UInt8, locationID: UInt64) {
+        // The common case first: the byte the snapshot already holds. Before
+        // this, every one of the 250 reports a second built a six-entry
+        // dictionary (two or three rehashes), took the lock and compared it
+        // entry by entry; now an unchanged report costs one lock and one
+        // byte compare, and the dictionary is built only on an edge.
+        lock.lock()
+        guard liveDevices[locationID] != nil else { lock.unlock(); return }
+        if lastButtons2[locationID] == b2 { lock.unlock(); return }
+        lock.unlock()
         let psDown   = (b2 & 0x01) != 0
         let muteDown = (b2 & 0x04) != 0
         // DualSense Edge extras, as SDL_hidapi_ps5.c reads them (same
@@ -494,6 +517,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         guard liveDevices[locationID] != nil else { lock.unlock(); return }
         let changed = (supplementalState[locationID] != snapshot)
         supplementalState[locationID] = snapshot
+        lastButtons2[locationID] = b2
         let notify = changed ? onStateChange : nil
         lock.unlock()
         // GameController never reports these buttons, so this is the only
@@ -549,6 +573,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
                 supplementalState[loc] = [:]
                 changed = true
             }
+            lastButtons2.removeAll()
         }
         var toSchedule: [IOHIDDevice] = []
         var toUnschedule: [IOHIDDevice] = []

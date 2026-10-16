@@ -95,14 +95,14 @@ extension ControllerLayout {
         /// A typical unknown DirectInput pad, for the catalog entry.
         static let typicalPad = UnrecognizedHIDInventory(
             source: .descriptor,
-            buttons: (0..<12).map { Button(index: $0, label: "Button \($0) (HID button \($0 + 1))") },
+            buttons: (0..<12).map { Button(index: $0, label: String(localized: "Button \($0) (HID button \($0 + 1))")) },
             axes: [
                 Axis(index: 0, usagePage: 0x01, usage: 0x30, unipolar: false, digitalButton: nil),
                 Axis(index: 1, usagePage: 0x01, usage: 0x31, unipolar: false, digitalButton: nil),
                 Axis(index: 2, usagePage: 0x01, usage: 0x32, unipolar: false, digitalButton: nil),
                 Axis(index: 3, usagePage: 0x01, usage: 0x35, unipolar: false, digitalButton: nil),
             ],
-            hats: [Hat(index: 0, note: "Hat switch 0, 8 directions")]
+            hats: [Hat(index: 0, note: String(localized: "Hat switch 0, 8 directions"))]
         )
 
         init(source: Source, buttons: [Button], axes: [Axis], hats: [Hat]) {
@@ -131,28 +131,34 @@ extension ControllerLayout {
                     let label: String
                     switch source {
                     case .bitField:
-                        label = "Bit \(b.bitOffset) of the report"
+                        label = String(localized: "Bit \(b.bitOffset) of the report")
                     case .descriptor, .sdl:
                         if let u = usageAt[key(report.reportID, b.bitOffset)] {
-                            label = "Button \(b.index) (\(UnrecognizedHIDInventory.buttonUsageName(page: u.page, usage: u.usage)))"
+                            label = String(localized: "Button \(b.index) (\(UnrecognizedHIDInventory.buttonUsageName(page: u.page, usage: u.usage)))")
                         } else if source == .descriptor {
-                            label = "Button \(b.index) (HID button \(b.index + 1))"
+                            label = String(localized: "Button \(b.index) (HID button \(b.index + 1))")
                         } else {
-                            label = "Button \(b.index)"
+                            label = String(localized: "Button \(b.index)")
                         }
                     }
                     buttons[b.index] = Button(index: b.index, label: label)
+                }
+                // An array input's buttons: each value names one of them.
+                for array in report.buttonArrays {
+                    for i in array.firstIndex..<(array.firstIndex + array.buttons) where buttons[i] == nil {
+                        buttons[i] = Button(index: i, label: String(localized: "Button \(i)"))
+                    }
                 }
                 for a in report.axes where axes[a.index] == nil {
                     axes[a.index] = Axis(index: a.index, usagePage: a.usagePage, usage: a.usage,
                                          unipolar: a.unipolar, digitalButton: a.digitalButton)
                 }
                 for h in report.hats where hats[h.index] == nil {
-                    hats[h.index] = Hat(index: h.index, note: "Hat switch \(h.index), \(h.directions) directions")
+                    hats[h.index] = Hat(index: h.index, note: String(localized: "Hat switch \(h.index), \(h.directions) directions"))
                 }
                 for d in report.dpadButtons where hats[d.hatIndex] == nil {
-                    let how = d.axisHalf == nil ? "four buttons" : "two axes"
-                    hats[d.hatIndex] = Hat(index: d.hatIndex, note: "D-pad sent as \(how), read as hat \(d.hatIndex)")
+                    let how = d.axisHalf == nil ? String(localized: "four buttons", comment: "A D-pad sent as four buttons") : String(localized: "two axes", comment: "A D-pad sent as two axes")
+                    hats[d.hatIndex] = Hat(index: d.hatIndex, note: String(localized: "D-pad sent as \(how), read as hat \(d.hatIndex)"))
                 }
             }
             self.buttons = buttons.values.sorted { $0.index < $1.index }
@@ -163,7 +169,7 @@ extension ControllerLayout {
         static func buttonUsageName(page: Int, usage: Int) -> String {
             switch page {
             case 0x09:
-                return "HID button \(usage)"
+                return String(localized: "HID button \(usage)")
             case 0x0C:
                 switch usage {
                 case 0x223: return "Consumer Home"
@@ -245,7 +251,7 @@ extension ControllerLayout {
             let ny = UnrecognizedHIDInventory.axisUsageName(page: s.y.usagePage, usage: s.y.usage).name
             roundControls.append(PlacedControl(id: "stick.\(s.x.index)", kind: .stick, center: CGPoint(x: 0, y: 0), size: 0.1,
                                        inputs: .stick(x: s.x.index, y: s.y.index, press: nil),
-                                       note: "Stick: axes \(s.x.index) and \(s.y.index) (HID \(nx) and \(ny)); a click, if any, is one of the keys",
+                                       note: String(localized: "Stick: axes \(s.x.index) and \(s.y.index) (HID \(nx) and \(ny)); a click, if any, is one of the keys"),
                                        callout: .below))
         }
         for h in inv.hats {
@@ -278,8 +284,8 @@ extension ControllerLayout {
                     let mirror = a.digitalButton.flatMap { buttonIndices.contains($0) ? nil : $0 }
                     var inputs = ControlInputs(axes: [a.unipolar ? AxisRef.analog(a.index) : AxisRef.x(a.index)])
                     inputs.digitalCopy = mirror
-                    var note = "Axis \(a.index): HID \(name.name), " + (a.unipolar ? "0 to 1" : "-1 to 1")
-                    if let mirror { note += "; also presses btn \(mirror) past 12 percent" }
+                    var note = String(localized: "Axis \(a.index): HID \(name.name), ") + (a.unipolar ? String(localized: "0 to 1") : String(localized: "-1 to 1"))
+                    if let mirror { note += String(localized: "; also presses btn \(mirror) past 12 percent") }
                     controls.append(PlacedControl(id: "axis.\(a.index)", kind: .slider,
                                                   center: CGPoint(x: x0 + CGFloat(n) * pitch, y: y + barHeight / 2),
                                                   size: width, height: barHeight, shape: .roundedRect(corner: 0.3),
@@ -322,13 +328,13 @@ extension ControllerLayout {
         }
 
         let offBody = inv.buttons.dropFirst(unrecognizedHIDMaxKeys).map {
-            OffBodyInput(serialized: "btn \($0.index)", reason: "\($0.label): past the \(unrecognizedHIDMaxKeys) keys the grid draws")
+            OffBodyInput(serialized: "btn \($0.index)", reason: String(localized: "\($0.label): past the \(unrecognizedHIDMaxKeys) keys the grid draws"))
         }
 
         let readability: ModelReadability
         switch inv.source {
         case .bitField:
-            readability = .partial("No usable descriptor: the report is read bit by bit, so each key is one bit, not a known button")
+            readability = .partial(String(localized: "No usable descriptor: the report is read bit by bit, so each key is one bit, not a known button"))
         case .descriptor, .sdl:
             readability = .full
         }

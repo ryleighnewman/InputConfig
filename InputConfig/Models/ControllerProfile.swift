@@ -48,9 +48,38 @@ struct ControllerProfile: Equatable {
         /// The first Original reports each row right to left; this is the
         /// row length to mirror, or 0.
         var mirrorColumns: Int = 0
+        /// Dials under the keys (4 on a Stream Deck +, none elsewhere).
+        var dials: Int = 0
+        /// The Stream Deck + touch strip between the keys and the dials.
+        var touchStrip: Bool = false
         /// Button slot of the first key. Keys sit past the gamepad block so
         /// they show as Key 1, Key 2 rather than as gamepad buttons.
         static let firstSlot = 22
+
+        /// What the touch strip reports, in slot order after the dials.
+        enum StripGesture: Int, CaseIterable {
+            case tap, longPress, swipeLeft, swipeRight
+        }
+
+        /// Every slot the model fills: keys, then each dial's press, then
+        /// each dial's two turns, then the touch strip. New controls go
+        /// after the keys so the keys keep the numbers presets saved.
+        var controls: Int { keys + 3 * dials + (touchStrip ? StripGesture.allCases.count : 0) }
+
+        func dialPressSlot(_ dial: Int) -> Int { Self.firstSlot + keys + dial }
+
+        func dialTurnSlot(_ dial: Int, clockwise: Bool) -> Int {
+            Self.firstSlot + keys + dials + 2 * dial + (clockwise ? 1 : 0)
+        }
+
+        func stripSlot(_ gesture: StripGesture) -> Int { Self.firstSlot + keys + 3 * dials + gesture.rawValue }
+
+        /// Turns and touch strip gestures arrive as single events with no
+        /// release, so each is a short press (see `RawHIDGamepad.pulse`).
+        var oneShotSlots: [Int] {
+            (0..<dials).flatMap { [dialTurnSlot($0, clockwise: false), dialTurnSlot($0, clockwise: true)] }
+                + (touchStrip ? StripGesture.allCases.map(stripSlot) : [])
+        }
     }
 
     /// Pre-baked decoder layouts. Each case knows the byte offsets and

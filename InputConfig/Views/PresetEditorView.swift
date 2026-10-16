@@ -27,6 +27,9 @@ enum EditorJumpAction: Hashable {
     /// Add a Screen region row to the group and open the region drawing
     /// sheet; the region drawn there is attached to the new row.
     case addScreenRegion
+    /// Open the group's Zones section on one part: its touchpad, a stick,
+    /// a trigger, the screen.
+    case showZones(ZonePart)
 }
 
 /// Full-featured preset editor with joystick groups and bindings.
@@ -52,6 +55,9 @@ struct PresetEditorView: View {
     /// Optional jump-to-row request set by ContentView when the user clicks
     /// an input on the Live Visualizer. nil for a normal open.
     var pendingJump: EditorJumpTarget? = nil
+    /// Activate or Deactivate this preset from the editor, by the same path
+    /// as the detail page's button (its first-start checks included).
+    var onToggleActive: ((Preset) -> Void)? = nil
     let onSave: (Preset) -> Void
 
     @EnvironmentObject var controllerService: GameControllerService
@@ -64,8 +70,23 @@ struct PresetEditorView: View {
     // it, and observing it re-ran the whole editor, every group and row
     // included, on each of its debug log flushes while a preset ran.
     @Environment(\.dismiss) private var dismiss
+    /// Above Huge the rows are wider than a laptop screen: the editor then
+    /// scrolls sideways too, so the handle, Add output and Remove stay reachable.
+    @Environment(\.appTextScale) private var editorScale
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The system setting or the app's own: jumps and reveals do not glide.
+    private var editorReduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     @State private var scanningBinding: (joystickIndex: Int, bindingIndex: Int)?
+    /// The header has scrolled away: its title, the preset's name and the
+    /// two run buttons sit in one row pinned at the top.
+    @State private var headerCollapsed = false
+    /// Built-in updates added or turned down while the editor is open.
+    @State private var addedUpdates: Set<String> = []
+    @State private var declinedUpdates: Set<String> = []
+    @Namespace private var headerMorph
+    static let scrollSpace = "editorScroll"
     /// True while the scan is for a row's chord control rather than its input.
     @State private var scanningModifier = false
     /// The chord slot a modifier scan replaces; nil adds a new one.
@@ -84,17 +105,22 @@ struct PresetEditorView: View {
         // Compared with the preset as opened, not by the undo history:
         // collapsing a device group, or the old placeholder tag being
         // cleared, is not an edit and must not ask to save.
-        if let opened = openedPreset {
-            if Self.ignoringLayout(preset) != Self.ignoringLayout(opened) { return true }
-        } else if !undoStack.isEmpty {
-            return true
+        // The regions compared are the ones the editors hold: Undo writes a
+        // step's regions into the draft too, and later edits go only to
+        // the services, so the draft's own could be stale.
+        let owner = Preset.regionWorkingSetOwner == preset.id
+        var now = preset
+        if owner { now.captureRegionsFromServices() }
+        now.stickRegions = now.stickRegions.filter { !$0.value.isEmpty }
+        if var opened = openedPreset {
+            opened.stickRegions = opened.stickRegions.filter { !$0.value.isEmpty }
+            return Self.ignoringLayout(now) != Self.ignoringLayout(opened)
         }
-        guard Preset.regionWorkingSetOwner == preset.id else { return false }
-        var probe = preset
-        probe.captureRegionsFromServices()
-        return probe.touchpadRegions != preset.touchpadRegions
-            || probe.cursorRegions != preset.cursorRegions
-            || probe.stickRegions != preset.stickRegions
+        if !undoStack.isEmpty { return true }
+        guard owner else { return false }
+        return now.touchpadRegions != preset.touchpadRegions
+            || now.cursorRegions != preset.cursorRegions
+            || now.stickRegions != preset.stickRegions.filter { !$0.value.isEmpty }
     }
     @State private var showingScanOverlay = false
 
@@ -111,13 +137,15 @@ struct PresetEditorView: View {
     /// UUID of the binding row currently pulsing yellow because we just
     /// jumped to it. nil when no pulse is active.
     @State private var pulsingBindingID: UUID?
+    /// The row that takes VoiceOver and keyboard focus after its neighbor
+    /// was removed, so focus does not fall back to the top of the sheet.
+    @State private var focusBindingID: UUID?
     /// The row a jump is heading for, built ahead of the staged reveal.
     @State private var revealBindingID: UUID?
     /// The latest jump, so a quicker second click cancels the first.
     @State private var jumpToken = 0
     /// "Draw a screen region" from the visualizer: the drawing sheet, the
     /// row waiting for its region, and the regions there were before.
-    @State private var drawingScreenRegions = false
     @State private var regionRowAwaitingRegion: UUID?
     @State private var regionsBeforeDrawing: Set<UUID> = []
     /// A jump requested by the finder (the parent's `pendingJump` is a plain
@@ -142,8 +170,7 @@ struct PresetEditorView: View {
         let bindingIndex: Int
         /// True for axis + touchpad. We don't prompt on plain button taps.
         let isDirectional: Bool
-        /// True only for touchpad inputs - drives the "Calibrate touchpad
-        /// first" hint and the optional Region path.
+        /// True only for touchpad inputs, which take the optional Region path.
         let isTouchpad: Bool
     }
 
@@ -162,6 +189,19 @@ struct PresetEditorView: View {
 
     /// The preset with what is only view state set aside: whether each
     /// device group is expanded, and the old placeholder tag.
+    /// Hands the rows' Set Up Full Gyro menu to this editor.
+    private func installMotionSetup() {
+        MotionSetupAction.perform = { id, setup in setUpMotion(setup, from: id) }
+    }
+
+    /// What the editor's rows hand back when it closes: row lights, an
+    /// inline edit's Escape, the motion setup menu.
+    private func clearEditorHooks() {
+        LiveRowLights.shared.reset()
+        EditorInlineEdit.reset()
+        MotionSetupAction.perform = nil
+    }
+
     private static func ignoringLayout(_ p: Preset) -> Preset {
         var copy = p
         for i in copy.joysticks.indices {
@@ -174,7 +214,6 @@ struct PresetEditorView: View {
     /// Drives the Calibrate Touchpad sheet. Only shown when at least one
     /// connected controller reports a touchpad (DualSense, DualSense Edge,
     /// DualShock 4, etc.).
-    @State private var showingTouchpadCalibration: Bool = false
     /// Drives the Calibrate Motion sheet from the toolbar button.
     @State private var showingMotionCalibration: Bool = false
     /// Drives the Calibrate Taps sheet. Only offered on Macs that publish
@@ -191,6 +230,7 @@ struct PresetEditorView: View {
     /// landed (the actual save is silent on disk).
     @State private var showQuickZeroToast: Bool = false
     @State private var quickZeroToastMessage: String = ""
+    @State private var quickZeroToastToken = 0
 
     /// True when any connected controller has a touchpad surface. The
     /// Calibrate Touchpad toolbar button is hidden otherwise.
@@ -208,12 +248,13 @@ struct PresetEditorView: View {
         editorBody
             // Every row names the face buttons for the family this preset is for.
             .environment(\.presetButtonFamily, preset.buttonFamily)
+            .modifier(TutorialSheetOverlay())
     }
 
     @ViewBuilder private var editorBody: some View {
         NavigationStack {
             ScrollViewReader { proxy in
-            ScrollView {
+            ScrollView(editorScale > 1.5 ? [.vertical, .horizontal] : .vertical) {
                 // Plain VStack, deliberately NOT lazy. The editor has only a
                 // handful of top-level sections, but one of them (a joystick
                 // group) can be thousands of points tall. LazyVStack's item
@@ -222,20 +263,30 @@ struct PresetEditorView: View {
                 // re-dirtying the graph mid-layout), hanging the app. Eager
                 // layout is deterministic and converges in one pass.
                 VStack(alignment: .leading, spacing: 16) {
-                    if enginePausedNotice {
-                        EnginePausedBanner()
+                    Text("Edit Bindings & Mappings")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    // Name, tag and key on the left; Activate with the
+                    // Emergency Stop under it on the right, as on the
+                    // preset's page.
+                    HStack(alignment: .top, spacing: 20) {
+                        headerSection
+                        // As wide as the Emergency Stop's own label, Activate
+                        // matching it: no wider than what they say. Scrolled
+                        // away, they move up into the top row, side by side.
+                        runButtons(inTopRow: false)
                     }
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: EditorHeaderBottomKey.self,
+                                               value: g.frame(in: .named(Self.scrollSpace)).maxY)
+                    })
+
+                    EditorRunBanner(presetID: preset.id, runnable: preset.isRunnable, part: .notes) {}
+
+                    builtInUpdateOffers
 
                     // Search the rows of this preset; a click scrolls to the row.
-                    PresetSearchBar(preset: preset, naming: { [controllerService, preset] g in
-                        let slots = controllerService.effectiveSlots(for: preset.joysticks)
-                        return controllerService.naming(forSlot: slots[g] ?? g, presetFamily: preset.buttonFamily)
-                    }) { hit in
-                        finderJump = EditorJumpTarget(joystickIndex: hit.joystickIndex, inputSerialized: hit.inputSerialized,
-                                                      bindingID: hit.id)
-                    }
-
-                    headerSection
+                    presetSearchBar
 
                     if preset.joysticks.contains(where: { $0.bindings.contains { $0.input.type == .chassisTap } }) {
                         ChassisTapWarning(sensorPresent: hasChassisTapSensor)
@@ -249,10 +300,11 @@ struct PresetEditorView: View {
                         // controller publish) with a now-out-of-range index.
                         if preset.joysticks.indices.contains(index) {
                             let joystick = preset.joysticks[index]
+                            let readSlot: Int? = controllerService.effectiveSlots(for: preset.joysticks)[index]
                             JoystickGroupView(
                                 joystick: binding(for: index),
                                 joystickIndex: index,
-                                controllerName: controllerService.controllerName(at: index),
+                                controllerName: groupControllerName(index, readSlot: readSlot),
                                 onAddBinding: { addBinding(to: index) },
                                 onRemoveBinding: { bindIdx in removeBinding(at: bindIdx, from: index) },
                                 onDuplicateBinding: { bindIdx in duplicateBinding(at: bindIdx, in: index) },
@@ -262,15 +314,17 @@ struct PresetEditorView: View {
                                 onDuplicate: { duplicateJoystick(at: index) },
                                 onRemoveJoystick: { removeJoystick(at: index) },
                                 pulsingBindingID: pulsingBindingID,
+                                focusBindingID: focusBindingID,
                                 revealThrough: revealBindingID,
                                 revealAll: revealBindingID.map { id in
                                     (preset.joysticks.firstIndex { $0.bindings.contains { $0.id == id } } ?? -1) > index
                                 } ?? false,
-                                resolvedSlot: controllerService.effectiveSlots(for: preset.joysticks)[index],
+                                resolvedSlot: readSlot,
+                                standInPadName: { controllerService.standInPadName(forGroup: index, in: preset.joysticks) },
                                 // Plain values so the row views stay free of
                                 // store subscriptions; used by the App Action
                                 // output's target-preset picker.
-                                availablePresets: presetStore.presets.map { (id: $0.id, name: $0.name) }
+                                availablePresets: presetStore.presets.map { (id: $0.id, name: $0.shownName) }
                             )
                             .id(joystick.id)
                         }
@@ -281,9 +335,7 @@ struct PresetEditorView: View {
                     .animation(nil, value: preset.joysticks.count)
 
                     Button {
-                        withAnimation {
-                            preset.joysticks.append(JoystickMapping(tag: ""))
-                        }
+                        addInputDevice()
                     } label: {
                         Label("Add a new Input Device", systemImage: "plus.circle")
                             .frame(maxWidth: .infinity)
@@ -304,7 +356,11 @@ struct PresetEditorView: View {
                     // is a single-line summary; expanding reveals the
                     // toggles + path picker.
                     PresetAutomationSection(automation: $preset.automation)
-                        .id("editor-automation")
+                        // The jump lands on a mark above the section, so its
+                        // heading stops below the collapsed top row, not under it.
+                        .background(alignment: .top) {
+                            Color.clear.frame(height: 1).offset(y: -64).id("editor-automation")
+                        }
 
                     // MARK: Accessibility Tools Suite
                     // Alternative-input schemes built for accessibility, with
@@ -327,11 +383,13 @@ struct PresetEditorView: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityAddTraits(.isHeader)
 
-                        DriveModeSection(driveConfig: $preset.driveConfig)
+                        DriveModeSection(driveConfig: $preset.driveConfig, groups: preset.joysticks)
                             .id("editor-drive")
                     }
                     .padding(.top, 6)
                 }
+                .frame(minWidth: editorScale > 1.5 ? 1200 + BindingRowView.extraEditorWidth(scale: editorScale) : nil,
+                       alignment: .leading)
                 .padding(20)
                 // Transparent tap-anywhere layer that releases keyboard
                 // focus from the Name / Tag fields. Child controls
@@ -345,12 +403,25 @@ struct PresetEditorView: View {
                 )
                 .background(ScrollContentPrewarmer().frame(width: 0, height: 0))
             }
-            // Content dissolves under the (now background-free) toolbar so the
-            // top of the box reads like the glass body, matching the main
-            // window instead of a distinct toolbar band.
-            .headerFade()
+            .coordinateSpace(name: Self.scrollSpace)
+            .onPreferenceChange(EditorHeaderBottomKey.self) { bottom in
+                // Collapsed once the header has gone up under the top row;
+                // back a little further down, so it does not flicker at the edge.
+                let collapse = headerCollapsed ? bottom < 64 : bottom < 48
+                guard collapse != headerCollapsed else { return }
+                withAnimation(editorReduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) {
+                    headerCollapsed = collapse
+                }
+            }
+            .overlay(alignment: .top) { collapsedTopRow }
+            // The title bar and the bottom bar let the rows show through,
+            // rather than sitting on two solid dark bands.
+            .modifier(SoftScrollEdges())
             .background(NoInitialTextFocus().frame(width: 0, height: 0))
-            .navigationTitle("Edit Bindings & Mappings")
+            // The title is drawn in the editor itself: the system title
+            // strip drew a darker band of its own over the glass. The window
+            // keeps the title (hidden) for VoiceOver; TransparentTitlebar sets it.
+            .navigationTitle("")
             .overlay(alignment: .top) {
                 // Brief confirmation toast for the Quick Zero toolbar
                 // button. Calibration save is silent on disk; the toast
@@ -371,6 +442,7 @@ struct PresetEditorView: View {
             }
             .animation(.easeOut(duration: 0.2), value: showQuickZeroToast)
             .onAppear {
+                installMotionSetup()
                 // Saved and opened again: the undo history from before the
                 // Save comes back, so Undo still steps back to how the
                 // preset was. It closed with the editor before, and a change
@@ -390,6 +462,7 @@ struct PresetEditorView: View {
                 // the cursor sampled while the editor is open.
                 updateCursorTracking()
                 controllerService.retainLiveInput("editor")
+                updateLiveGestures()
                 // The region editors and the row pickers work on the
                 // services' working set: make it this preset's.
                 preset.applyRegionsToServices()
@@ -400,9 +473,16 @@ struct PresetEditorView: View {
                 updateTapSensor()
                 updateKeyboardMouseMonitor()
                 OpenEditor.current = OpenEditor(
-                    name: { preset.name },
-                    isDirty: { hasUnsavedChanges },
+                    name: { preset.shownName },
+                    isDirty: {
+                        // A section name still being typed counts (Quit asks
+                        // this right away, before the field's own commit).
+                        EditorInlineEdit.commit?()
+                        return hasUnsavedChanges
+                    },
                     save: {
+                        EditorInlineEdit.commit?()
+                        recordHistory()
                         preset.captureRegionsFromServices()
                         EditorHistory.keep(undoStack, savedAs: preset)
                         onSave(preset)
@@ -415,6 +495,7 @@ struct PresetEditorView: View {
                     edit: { change in change(&preset) })
             }
             .onDisappear {
+                clearEditorHooks()
                 // Closed some other way than Save or Cancel (the Quick Start
                 // tour, a window closing): the running preset's regions go
                 // back, or its screen corners and zones did nothing until it
@@ -430,14 +511,18 @@ struct PresetEditorView: View {
                     trackingCursor = false
                 }
                 controllerService.releaseLiveInput("editor")
+                clearLiveEditorInputs()
             }
-            .onChange(of: preset) { _, _ in recordHistory(); scheduleLiveApply() }
+            .onChange(of: preset) { _, _ in recordHistory(); scheduleLiveApply(); updateLiveGestures() }
+            .modifier(RegionHistoryHooks { recordHistory() })
+            // Stopped on purpose while the editor was open (emergency stop,
+            // menu bar, a shortcut): closing it does not start it again.
+            .onChange(of: presetStore.activePresetId) { _, id in if id != preset.id { runningAtOpen = false } }
             .onChange(of: preset.cursorRegions.isEmpty) { _, _ in updateCursorTracking() }
             .modifier(EditorLiveHooks(hasTapRows: hasTapRows, keyboardMouseRows: keyboardMouseRows,
                                       onTapRowsChange: updateTapSensor,
                                       onKeyboardMouseChange: updateKeyboardMouseMonitor,
-                                      drawingScreenRegions: $drawingScreenRegions,
-                                      onDrawingDismiss: attachDrawnRegion))
+                                      onScreenRegionsChange: attachDrawnRegion))
             // While the editor is open, regions drawn in the sheet live in
             // the service and reach `preset` only on Save, so watch there too
             // or the first region's row did not light until a reopen.
@@ -447,6 +532,19 @@ struct PresetEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        // Escape in the search field clears the search first.
+                        // Only for the Escape key: a click or a spoken "Cancel"
+                        // closes as labeled.
+                        // Escape in a section heading or note being typed ends
+                        // that edit, not the editor.
+                        if NSApp.currentEvent?.type == .keyDown, let end = EditorInlineEdit.end, end() {
+                            EditorInlineEdit.reset()
+                            return
+                        }
+                        if NSApp.currentEvent?.type == .keyDown, PresetSearchBar.clearActiveSearch?() == true {
+                            AccessibilityNotification.Announcement(String(localized: "Search cleared")).post()
+                            return
+                        }
                         // Nothing to lose: close. Otherwise ask, since Cancel
                         // and Escape used to throw away every change silently.
                         if hasUnsavedChanges {
@@ -457,14 +555,17 @@ struct PresetEditorView: View {
                         }
                     }
                         .keyboardShortcut(.cancelAction)
-                        .confirmationDialog("Save the changes to \u{201C}\(preset.name)\u{201D}?",
+                        .confirmationDialog("Save the changes to \u{201C}\(preset.shownName)\u{201D}?",
                                             isPresented: $confirmingCancel, titleVisibility: .visible) {
                             Button("Save") {
-                                preset.captureRegionsFromServices()
-                                EditorHistory.keep(undoStack, savedAs: preset)
-                                onSave(preset)
-                                restoreRunningPresetRegions(savedDraft: preset)
-                                dismiss()
+                                commitFieldsThen {
+                                    recordHistory()
+                                    preset.captureRegionsFromServices()
+                                    EditorHistory.keep(undoStack, savedAs: preset)
+                                    onSave(preset)
+                                    restoreRunningPresetRegions(savedDraft: preset)
+                                    dismiss()
+                                }
                             }
                             Button("Don\u{2019}t Save", role: .destructive) {
                                 restoreRunningPresetRegions()
@@ -475,17 +576,21 @@ struct PresetEditorView: View {
                         .buttonStyle(.solidSecondary)
                         .spotlightAnchor(SpotlightID.editorCancel)
                         .accessibilityLabel("Cancel editing")
+                        .voiceNames("Cancel", "Cancel editing")
                         .accessibilityHint("Closes the editor, asking first if there are unsaved changes")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        // Zones drawn while editing live in the services;
-                        // take them into the preset so they save with it.
-                        preset.captureRegionsFromServices()
-                        EditorHistory.keep(undoStack, savedAs: preset)
-                        onSave(preset)
-                        restoreRunningPresetRegions(savedDraft: preset)
-                        dismiss()
+                        commitFieldsThen {
+                            // Zones drawn while editing live in the services;
+                            // take them into the preset so they save with it.
+                            recordHistory()
+                            preset.captureRegionsFromServices()
+                            EditorHistory.keep(undoStack, savedAs: preset)
+                            onSave(preset)
+                            restoreRunningPresetRegions(savedDraft: preset)
+                            dismiss()
+                        }
                     }
                     .buttonStyle(.solid)
                     // Command S, so Save is in reach even when the sheet is
@@ -493,6 +598,7 @@ struct PresetEditorView: View {
                     .keyboardShortcut("s", modifiers: .command)
                     .spotlightAnchor(SpotlightID.editorSave)
                     .accessibilityLabel("Save preset")
+                    .voiceNames("Save", "Save preset")
                     .accessibilityHint("Saves the current bindings and closes the editor")
                 }
                 // Undo / Redo. Available everywhere in the editor and bound
@@ -569,9 +675,9 @@ struct PresetEditorView: View {
                         Divider()
                         Menu("Convert Controller Type…") {
                             ForEach(ControllerType.allCases.filter { !$0.conversionTargets.isEmpty }) { source in
-                                Menu("From \(source.rawValue)") {
+                                Menu("From \(source.displayName)") {
                                     ForEach(source.conversionTargets) { dest in
-                                        Button("To \(dest.rawValue)") {
+                                        Button("To \(dest.displayName)") {
                                             preset = ControllerType.convert(preset: preset, from: source, to: dest)
                                         }
                                     }
@@ -593,12 +699,7 @@ struct PresetEditorView: View {
                     .accessibilityHint("Sort all bindings, undo sort, or convert controller type")
                 }
             }
-            .toolbarBackground(.hidden, for: .windowToolbar)
-            .sheet(isPresented: $showingTouchpadCalibration) {
-                TouchpadCalibrationView()
-                    .environmentObject(presetStore)
-                    .glassBackground()
-            }
+            .modifier(ClearToolbarBackdrop())
             .sheet(isPresented: $showingMotionCalibration) {
                 MotionCalibrationView()
                     .environmentObject(controllerService)
@@ -662,7 +763,7 @@ struct PresetEditorView: View {
                     ]
                     ForEach(options, id: \.serialized) { option in
                         let detected = seen.contains(where: { $0.serialized == option.serialized })
-                        Button(touchpadOptionLabel(option) + (detected ? " (detected)" : "")) {
+                        Button(detected ? String(localized: "\(touchpadOptionLabel(option)) (detected)") : touchpadOptionLabel(option)) {
                             pendingTouchpadChoice = nil
                             handleScannedInput(option)
                         }
@@ -678,7 +779,7 @@ struct PresetEditorView: View {
             // surface a one-tap "Calibrate first" shortcut so the resulting
             // mouse motion uses the user's actual touchpad bounds.
             .confirmationDialog(
-                pendingScanMapping?.event.displayName ?? "Scanned input",
+                pendingScanMapping?.event.displayName ?? String(localized: "Scanned input"),
                 isPresented: Binding(
                     get: { pendingScanMapping != nil },
                     set: { newValue in
@@ -692,15 +793,6 @@ struct PresetEditorView: View {
                         applyScanMapping(pending, kind: .mouse)
                         pendingScanMapping = nil
                     }
-                    if pending.isTouchpad {
-                        Button("Calibrate touchpad first…") {
-                            // Leave the raw input on the binding; user can
-                            // come back and auto-map after calibrating.
-                            applyScanMapping(pending, kind: .raw)
-                            pendingScanMapping = nil
-                            showingTouchpadCalibration = true
-                        }
-                    }
                     Button("Keep raw, I'll pick the output", role: .cancel) {
                         applyScanMapping(pending, kind: .raw)
                         pendingScanMapping = nil
@@ -708,11 +800,7 @@ struct PresetEditorView: View {
                 }
             } message: {
                 if let pending = pendingScanMapping {
-                    if pending.isTouchpad {
-                        Text("This is a touchpad input. Auto-map sends mouse motion in the matching direction. If your touchpad hasn't been calibrated yet, calibrating first will make the cursor speed feel right.")
-                    } else {
-                        Text("Auto-map sends mouse motion in the matching direction. Keep raw to wire your own output (key, MIDI, macro, etc.).")
-                    }
+                    Text("Auto-map sends mouse motion in the matching direction. Keep raw to wire your own output (key, MIDI, macro, etc.).")
                 }
             }
             .onReceive(NotificationCenter.default.publisher(
@@ -768,19 +856,21 @@ struct PresetEditorView: View {
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: .inputConfigScrollToAutomation)) { _ in
-                withAnimation(.easeInOut(duration: 0.6)) {
+                withAnimation(editorReduceMotion ? nil : .easeInOut(duration: 0.6)) {
                     proxy.scrollTo("editor-automation", anchor: .top)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(
-                for: .inputConfigScrollToFirstBinding)) { _ in
+                for: .inputConfigScrollToFirstBinding)) { note in
                 // Scroll to the first binding's ID so the Options
                 // disclosure is in view. preset.joysticks.first?.bindings.first
                 // gives the row's id; ForEach in JoystickGroupView
                 // applies .id(binding.id) so this resolves.
+                // "top": the row near the top, so its Options open below it in view.
+                let anchor: UnitPoint = (note.object as? String) == "top" ? UnitPoint(x: 0.5, y: 0.12) : .center
                 if let firstID = preset.joysticks.first?.bindings.first?.id {
-                    withAnimation(.easeInOut(duration: 0.6)) {
-                        proxy.scrollTo(firstID, anchor: .center)
+                    withAnimation(editorReduceMotion ? nil : .easeInOut(duration: 0.6)) {
+                        proxy.scrollTo(firstID, anchor: anchor)
                     }
                 }
             }
@@ -805,6 +895,55 @@ struct PresetEditorView: View {
     /// zones behind in the engine.
     /// Hold a cursor-tracking claim exactly while this preset has screen
     /// regions, so their rows light as the pointer moves.
+    /// The editor's gesture rows, so each lights when its gesture is made,
+    /// and its axis rows, so each lights at its own deadzone.
+    /// The editor's live lights end with it.
+    private var presetSearchBar: some View {
+        PresetSearchBar(preset: preset, naming: { [controllerService, preset] g in
+            let slots = controllerService.effectiveSlots(for: preset.joysticks)
+            return controllerService.naming(forSlot: slots[g] ?? g, presetFamily: preset.buttonFamily)
+        }, presetName: { [presetStore] id in presetStore.presets.first { $0.id == id }?.shownName }) { hit in
+            finderJump = EditorJumpTarget(joystickIndex: hit.joystickIndex, inputSerialized: hit.inputSerialized,
+                                          bindingID: hit.id)
+        }
+    }
+
+    private func clearLiveEditorInputs() {
+        controllerService.liveGestures = []
+        controllerService.liveAxisRows = []
+        controllerService.liveTakeoverZones = []
+        controllerService.liveZoneRows = []
+        // A deadzone slider's preview never outlives the editor (Cancel
+        // would otherwise leave a running preset on the dragged value).
+        MappingEngine.deadzonePreview = nil
+        MappingEngine.deadzonePreviewPresetID = nil
+    }
+
+    private func updateLiveGestures() {
+        // Deadzone previews from this editor apply to this preset only.
+        MappingEngine.deadzonePreviewPresetID = preset.id
+        controllerService.liveZoneRows = preset.joysticks.flatMap(\.bindings)
+            .filter { $0.input.type == .stickRegion }
+            .compactMap { row in row.input.stickRegionID.map {
+                GameControllerService.LiveZoneRow(id: row.id, key: row.input.index, zone: $0,
+                                                  deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true) } }
+        controllerService.liveTakeoverZones = preset.joysticks.flatMap(\.bindings)
+            .filter { $0.input.type == .stickRegion && $0.zoneSharesStick == false }
+            .compactMap { row in row.input.stickRegionID.map {
+                (key: row.input.index, id: $0, deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true,
+                 rowID: row.id, modifiers: row.modifiers.map(\.serialized)) } }
+        controllerService.liveAxisRows = preset.joysticks.flatMap(\.bindings)
+            .filter { $0.input.type == .axis }
+            .map { GameControllerService.LiveAxisRow(id: $0.id, index: $0.input.index, direction: $0.input.axisDirection,
+                                                     deadzone: $0.deadzone ?? 0.25, invert: $0.invertAxis == true,
+                                                     fullTravel: $0.fullTravel == true, onlyInRegion: $0.onlyInRegion) }
+        controllerService.liveGestures = preset.joysticks.flatMap(\.bindings)
+            .filter { $0.input.type == .stickGesture }
+            .map { GameControllerService.LiveGesture(input: $0.input, reach: max(0.3, min(1, $0.gestureReach ?? 0.8)),
+                                                     windowMs: $0.gestureWindowMs ?? 600, flickMs: $0.gestureFlickMs ?? 400,
+                                                     invert: $0.invertAxis == true) }
+    }
+
     private func updateCursorTracking() {
         let wants = !preset.cursorRegions.isEmpty || !CursorRegionService.shared.regions.isEmpty
         if wants && !trackingCursor {
@@ -913,6 +1052,15 @@ struct PresetEditorView: View {
     }
     #endif
 
+    /// The pad a group actually reads, for its header: a motion group can
+    /// fall back to another slot than its own number.
+    private func groupControllerName(_ index: Int, readSlot: Int?) -> String {
+        guard let slot = readSlot, slot != GameControllerService.noSlot else {
+            return controllerService.controllerName(at: index)
+        }
+        return controllerService.controllerName(at: slot)
+    }
+
     /// The running engine takes the draft after a short pause, so typing in
     /// a field or dragging a slider reloads once at the end, not every step.
     /// An edit that would leave no rows, or take away the pointer or the
@@ -920,12 +1068,23 @@ struct PresetEditorView: View {
     /// keeps the last version that still had them, so Undo, Cancel and Save
     /// stay in reach from the controller.
     private func scheduleLiveApply() {
-        let draft = preset
+        let opened = preset
         liveApplyTask?.cancel()
         liveApplyTask = Task { @MainActor in
+            var draft = opened
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, liveEngine.isRunning,
                   presetStore.activePresetId == draft.id else { return }
+            // A held click is a drag in progress (a slider moved with the
+            // stick); the reload would let go of it, so wait for the release.
+            if InputSimulator.shared.holdsMouseButton {
+                scheduleLiveApply()
+                return
+            }
+            // Zones drawn while the editor is open live in the services until
+            // Save; the reload loads the draft's lists into them, so take the
+            // working set first or the new zones are wiped.
+            if Preset.regionWorkingSetOwner == draft.id { draft.captureRegionsFromServices() }
             let saved = presetStore.presets.first(where: { $0.id == draft.id }) ?? draft
             if MappingEngine.draftKeepsWayOut(saved: saved, draft: draft) {
                 if liveEngine.editorDraftHeld { liveEngine.editorDraftHeld = false }
@@ -934,6 +1093,26 @@ struct PresetEditorView: View {
                 liveEngine.editorDraftHeld = true
             }
         }
+    }
+
+    private func refusesScanFromOtherController(_ event: InputEvent, joystickIndex: Int) -> Bool {
+        // Buttons, sticks and hats only: a group's motion and touchpad rows
+        // go to the pad that has them, so a first gyro row scanned from a
+        // DualSense next to an Xbox pad belongs there.
+        let controllerTypes: Set<InputType> = [.button, .axis, .hat]
+        guard controllerTypes.contains(event.type), let from = controllerService.lastScanSlot else { return false }
+        let rowSlot = controllerService.effectiveSlots(for: preset.joysticks)[joystickIndex] ?? joystickIndex
+        guard rowSlot != from, controllerService.controllerDetails[rowSlot] != nil else { return false }
+        return true
+    }
+
+    /// A new group, announced by the number its header shows (from 0).
+    private func addInputDevice() {
+        withAnimation {
+            preset.joysticks.append(JoystickMapping(tag: ""))
+        }
+        let index = preset.joysticks.count - 1
+        AccessibilityNotification.Announcement(String(localized: "Input device \(index) added")).post()
     }
 
     private func restoreRunningPresetRegions(savedDraft: Preset? = nil) {
@@ -977,17 +1156,33 @@ struct PresetEditorView: View {
             if controllerService.lastRezeroStoredZero { count += 1 } else { moving += 1 }
         }
         quickZeroToastMessage = count == 0 && moving == 0
-            ? "No motion-capable controller connected"
+            ? String(localized: "No motion-capable controller connected")
             : count == 0
-                ? "The controller was moving. Hold it still and try again"
-                : "Gyro zeroed on \(count) controller\(count == 1 ? "" : "s")"
+                ? String(localized: "The controller was moving. Hold it still and try again")
+                : count == 1 ? String(localized: "Gyro zeroed on 1 controller")
+                             : String(localized: "Gyro zeroed on \(count) controllers")
         showQuickZeroToast = true
+        quickZeroToastToken &+= 1
+        let token = quickZeroToastToken
         // The toast is a transient overlay VoiceOver would otherwise miss.
         // Announce the same message so the outcome reaches VoiceOver users.
         AccessibilityNotification.Announcement(quickZeroToastMessage).post()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            showQuickZeroToast = false
+        // A failure stays up long enough to find and read at a high zoom.
+        let failed = count == 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + (failed ? 8.0 : 2.0)) {
+            // Not an earlier toast's timer cutting this one short.
+            if token == quickZeroToastToken { showQuickZeroToast = false }
         }
+    }
+
+    /// Ends text editing first, so a number typed into a field and not yet
+    /// committed with Return or Tab is in the preset when it saves.
+    private func commitFieldsThen(_ work: @escaping () -> Void) {
+        // A section name still being typed is written first: its own
+        // commit waits for the focus change, after the save had run.
+        EditorInlineEdit.commit?()
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        DispatchQueue.main.async(execute: work)
     }
 
     private var hasTapRows: Bool {
@@ -1032,6 +1227,15 @@ struct PresetEditorView: View {
             addScreenRegionRow(group: target.joystickIndex, using: proxy, sheetOpening: sheetOpening)
             return
         }
+        if case .showZones(let part) = target.action, !preset.joysticks.isEmpty {
+            let g = min(max(target.joystickIndex, 0), preset.joysticks.count - 1)
+            preset.joysticks[g].isExpanded = true
+            // Once the sheet has slid in and the group is built.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (sheetOpening ? 0.7 : 0.05)) {
+                ShowZonesRequest(groupIndex: g, part: part).post()
+            }
+            return
+        }
         guard let bindingID = locateBindingID(for: target) else { return }
         // A collapsed group has no rows to scroll to; open it first.
         if let g = preset.joysticks.firstIndex(where: { $0.bindings.contains { $0.id == bindingID } }),
@@ -1047,7 +1251,7 @@ struct PresetEditorView: View {
         let settle = sheetOpening ? 0.6 : 0.05
         DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
             guard token == jumpToken else { return }
-            withAnimation(.smooth(duration: 0.55)) {
+            withAnimation(editorReduceMotion ? nil : .smooth(duration: 0.55)) {
                 proxy.scrollTo(bindingID, anchor: .center)
             }
         }
@@ -1075,25 +1279,19 @@ struct PresetEditorView: View {
         regionsBeforeDrawing = Set(CursorRegionService.shared.allRegions().map(\.id))
         performJump(to: EditorJumpTarget(joystickIndex: g, inputSerialized: row.input.serialized, bindingID: row.id),
                     using: proxy, sheetOpening: sheetOpening)
-        DispatchQueue.main.asyncAfter(deadline: .now() + (sheetOpening ? 0.9 : 0.5)) { drawingScreenRegions = true }
+        // Drawn in the group's Regions section, on the screen, right here.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (sheetOpening ? 0.9 : 0.5)) {
+            ShowZonesRequest(bindingID: row.id, part: .screen).post()
+        }
     }
 
-    /// After the drawing sheet closes: the waiting row takes the region
-    /// drawn there (or, failing that, the first one no row uses yet).
+    /// The first screen region drawn after "Draw a screen region" goes to
+    /// the row that waits for it.
     private func attachDrawnRegion() {
-        guard let rowID = regionRowAwaitingRegion else { return }
+        guard let rowID = regionRowAwaitingRegion,
+              let region = CursorRegionService.shared.allRegions().first(where: { !regionsBeforeDrawing.contains($0.id) })
+        else { return }
         regionRowAwaitingRegion = nil
-        let regions = CursorRegionService.shared.allRegions()
-        let used = Set(preset.joysticks.flatMap(\.bindings).compactMap(\.input.cursorRegionID))
-        guard let region = regions.first(where: { !regionsBeforeDrawing.contains($0.id) })
-                ?? regions.first(where: { !used.contains($0.id) }) else {
-            // Nothing drawn and nothing free: the waiting row goes, rather
-            // than staying as an empty row the editor would save.
-            for g in preset.joysticks.indices {
-                preset.joysticks[g].bindings.removeAll { $0.id == rowID && $0.outputs.isEmpty }
-            }
-            return
-        }
         for g in preset.joysticks.indices {
             if let i = preset.joysticks[g].bindings.firstIndex(where: { $0.id == rowID }) {
                 preset.joysticks[g].bindings[i].input.cursorRegionID = region.id
@@ -1123,78 +1321,218 @@ struct PresetEditorView: View {
         return nil
     }
 
-    // MARK: - Engine Paused Banner
-
-    /// Yellow banner at the top of the editor while a preset is being edited
-    /// over a running engine. Outputs are paused (no cursor motion, no
-    /// keystrokes, no MIDI) but the engine keeps polling inputs so the green
-    /// row highlight still fires when you press a button on the controller.
-    /// Outputs resume automatically when the editor closes.
-
     // MARK: - Header
 
+    /// Features added to this preset's built-in since it was made, one line
+    /// each: what it is, Add and No Thanks. Add is an edit like any other.
+    @ViewBuilder
+    private var builtInUpdateOffers: some View {
+        let offers = BuiltInUpdate.offers(for: preset).filter { !declinedUpdates.contains($0.id) }
+        let added = BuiltInUpdate.all.filter { addedUpdates.contains($0.id) && $0.isApplied(preset) }
+        if !offers.isEmpty || !added.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(offers) { u in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(u.title).font(.callout.weight(.semibold))
+                            Text(u.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        Button("No Thanks") {
+                            BuiltInUpdate.decline(u, for: preset)
+                            declinedUpdates.insert(u.id)
+                            AccessibilityNotification.Announcement(String(localized: "Not added: \(u.title)")).post()
+                        }
+                        .buttonStyle(.solidSecondaryCompact)
+                        Button("Add") { addBuiltInUpdate(u) }
+                            .buttonStyle(.solidCompact)
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+                ForEach(added) { u in
+                    Label(String(localized: "Added: \(u.title). Undo takes it out; Save keeps it."), systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Only the update's rows and regions: the regions go where the region
+    /// editors hold them until Save, so Undo takes both back as one step.
+    private func addBuiltInUpdate(_ u: BuiltInUpdate) {
+        let regions = u.apply(&preset)
+        for (key, list) in regions {
+            if Preset.regionWorkingSetOwner == preset.id {
+                for r in list { StickRegionService.shared.upsert(r, stickIndex: key) }
+            } else {
+                preset.stickRegions["\(key)", default: []] += list
+            }
+        }
+        addedUpdates.insert(u.id)
+        AccessibilityNotification.Announcement(String(localized: "Added: \(u.title). Undo takes it out; Save keeps it.")).post()
+    }
+
+    /// Activate and Emergency Stop: stacked in the header, side by side in
+    /// the top row (Activate in the corner). Both copies are laid out; the one in view is the source
+    /// of the matched geometry, so switching moves the buttons from one
+    /// place to the other.
+    private func runButtons(inTopRow: Bool) -> some View {
+        let shown = inTopRow == headerCollapsed
+        let activate = EditorRunBanner(presetID: preset.id, runnable: preset.isRunnable, part: .button, announces: shown) {
+            onToggleActive?(preset)
+            // Started from here: run the draft, not the saved copy,
+            // once the engine is up.
+            scheduleLiveApply()
+        }
+        .matchedGeometryEffect(id: "activate", in: headerMorph, isSource: shown)
+        let stop = PresetDetailView.EmergencyStopHeaderButton()
+            .matchedGeometryEffect(id: "emergencyStop", in: headerMorph, isSource: shown)
+        // In the top row Activate takes the corner, with Emergency Stop to
+        // its left; in the header Activate is on top.
+        return Group {
+            if inTopRow {
+                HStack(spacing: 8) { stop; activate }
+            } else {
+                VStack(spacing: 8) { activate; stop }
+            }
+        }
+        .fixedSize()
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .accessibilityHidden(!shown)
+        // Out of the Tab loop too: Space on the copy out of view ran it.
+        .disabled(!shown)
+    }
+
+    /// The top row the header becomes once scrolled away: the editor's
+    /// title where it always is, the preset's name in the middle, and the
+    /// run buttons side by side on the right, on the editor's own glass.
+    private var collapsedTopRow: some View {
+        ZStack {
+            HStack(spacing: 12) {
+                Text("Edit Bindings & Mappings")
+                    .font(.headline)
+                    .opacity(headerCollapsed ? 1 : 0)
+                Spacer(minLength: 12)
+                runButtons(inTopRow: true)
+            }
+            Text(ShippedText.t(preset.name))
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 360)
+                .opacity(headerCollapsed ? 1 : 0)
+                .offset(y: headerCollapsed ? 0 : 8)
+        }
+        .padding(.leading, 20)
+        // The row spans the scroll bar too; the buttons end where the
+        // header's did, over the rows' right edge.
+        .padding(.trailing, 20 + (NSScroller.preferredScrollerStyle == .legacy
+                                  ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0))
+        .padding(.vertical, 10)
+        .background(
+            VisualEffectBackground()
+                .overlay(Color(nsColor: .windowBackgroundColor).opacity(0.62))
+                .opacity(headerCollapsed ? 1 : 0)
+        )
+        .allowsHitTesting(headerCollapsed)
+        .accessibilityElement(children: .contain)
+        .accessibilityHidden(!headerCollapsed)
+    }
+
     private var headerSection: some View {
-        VStack(spacing: 12) {
-            HStack {
+        // A grid, so the label column is as wide as its longest label in
+        // every language ("Étiquette :", "Клавиша:") and the fields line up.
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 12) {
+            GridRow {
                 Text("Name:")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-                TextField("Preset Name", text: $preset.name)
+                    .fixedSize()
+                    .gridColumnAlignment(.trailing)
+                TextField("Preset Name", text: .shipped($preset.name))
+                    .voiceNames("Name", "Preset Name")
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedHeaderField, equals: .name)
             }
-            HStack {
+            GridRow {
                 Text("Tag:")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-                TextField("Tag / Description", text: $preset.tag)
+                    .fixedSize()
+                TextField("Tag / Description", text: .shipped($preset.tag))
+                    .voiceNames("Tag", "Tag / Description")
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedHeaderField, equals: .tag)
             }
-            HStack(spacing: 8) {
+            GridRow {
                 Text("Key:")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
-                if let spec = preset.activateHotKey {
-                    HotKeyRecorderField(spec: spec, label: "Preset shortcut") { preset.activateHotKey = $0 }
-                        // Undo and Redo change the chord from outside.
-                        .id(spec)
-                    Button("Remove") { preset.activateHotKey = nil }
+                    .fixedSize()
+                HStack(spacing: 8) {
+                    if let spec = preset.activateHotKey {
+                        HotKeyRecorderField(spec: spec, label: "Preset shortcut", voiceName: "Key") { new in
+                            preset.activateHotKey = new
+                            // Said, with a clash, since the warning beside it
+                            // is only drawn.
+                            let said = PresetHotKeyService.conflicts(for: new, excluding: preset.id, in: presetStore.presets)
+                                ? String(localized: "Preset shortcut set to \(new.spokenString). Another shortcut already uses it.")
+                                : String(localized: "Preset shortcut set to \(new.spokenString)")
+                            AccessibilityNotification.Announcement(said).post()
+                        }
+                        // Undo and Redo change the chord from outside; the
+                        // field follows (onChange inside), not rebuilt, so
+                        // focus stays on it.
+                        Button("Remove") {
+                            preset.activateHotKey = nil
+                            AccessibilityNotification.Announcement(String(localized: "Preset shortcut removed")).post()
+                        }
+                            .buttonStyle(.plain)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        if PresetHotKeyService.conflicts(for: spec, excluding: preset.id,
+                                                         in: presetStore.presets) {
+                            Label("Another shortcut already uses this", systemImage: "exclamationmark.triangle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        } else if PresetHotKeyService.shared.failed.contains(preset.id),
+                                  preset.activateHotKey == presetStore.presets.first(where: { $0.id == preset.id })?.activateHotKey {
+                            Label("Another app already uses this shortcut", systemImage: "exclamationmark.triangle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text("Switches to this preset from anywhere. Press it again to stop.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("Add a shortcut") {
+                            let spec = HotKeySpec(keyCode: UInt32(kVK_ANSI_1),
+                                                  modifiers: UInt32(controlKey | optionKey | cmdKey))
+                            preset.activateHotKey = spec
+                            // Said: a live, system-wide chord was just set.
+                            let said = PresetHotKeyService.conflicts(for: spec, excluding: preset.id, in: presetStore.presets)
+                                ? String(localized: "Preset shortcut set to \(spec.spokenString). Another shortcut already uses it.")
+                                : String(localized: "Preset shortcut set to \(spec.spokenString)")
+                            AccessibilityNotification.Announcement(said).post()
+                        }
                         .buttonStyle(.plain)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
-                    if PresetHotKeyService.conflicts(for: spec, excluding: preset.id,
-                                                     in: presetStore.presets) {
-                        Label("Another shortcut already uses this", systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
-                            .foregroundStyle(.orange)
-                    } else if PresetHotKeyService.shared.failed.contains(preset.id),
-                              preset.activateHotKey == presetStore.presets.first(where: { $0.id == preset.id })?.activateHotKey {
-                        Label("Another app already uses this shortcut", systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
-                            .foregroundStyle(.orange)
-                    } else {
-                        Text("Switches to this preset from anywhere. Press it again to stop.")
+                        .foregroundStyle(Color.accentColor)
+                        Text("A system-wide key that turns this preset on.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                } else {
-                    Button("Add a shortcut") {
-                        preset.activateHotKey = HotKeySpec(
-                            keyCode: UInt32(kVK_ANSI_1),
-                            modifiers: UInt32(controlKey | optionKey | cmdKey))
-                    }
-                    .buttonStyle(.plain)
-                    .font(.callout)
-                    .foregroundStyle(Color.accentColor)
-                    Text("A system-wide key that turns this preset on.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
         }
     }
@@ -1208,8 +1546,9 @@ struct PresetEditorView: View {
     /// editor on the planet.
     private func recordHistory() {
         guard !isApplyingHistory else { return }
-        if let previous = lastSnapshot, previous != preset,
-           Self.ignoringLayout(previous) != Self.ignoringLayout(preset) {
+        let now = fullState
+        if let previous = lastSnapshot, previous != now,
+           Self.ignoringLayout(previous) != Self.ignoringLayout(now) {
             undoStack.append(previous)
             // Bound the history so a long editing session can't grow an
             // unbounded stack of whole-preset deep copies.
@@ -1218,25 +1557,64 @@ struct PresetEditorView: View {
             }
             redoStack.removeAll()
         }
-        lastSnapshot = preset
+        lastSnapshot = now
+    }
+
+    /// The preset with the regions the region editors are working on: they
+    /// live in the region services while the editor is open, so a step of
+    /// history without them could not undo a region drawn, moved or typed.
+    private var fullState: Preset {
+        var p = preset
+        if Preset.regionWorkingSetOwner == preset.id { p.captureRegionsFromServices() }
+        return p
+    }
+
+    /// A step back or forward puts its regions back where the editors read them.
+    private func restore(_ snapshot: Preset) {
+        let restored = keepingPlace(snapshot)
+        preset = restored
+        if Preset.regionWorkingSetOwner == preset.id { restored.applyRegionsToServices() }
+        lastSnapshot = restored
+        // The services announce the load on the next turn; that is not an edit.
+        DispatchQueue.main.async {
+            lastSnapshot = fullState
+            isApplyingHistory = false
+        }
+    }
+
+    /// A step back or forward changes what the preset does, not where it
+    /// sits: history kept across Save held the old sidebar order and
+    /// folder, so Undo then Save moved a preset dragged since back.
+    private func keepingPlace(_ snapshot: Preset) -> Preset {
+        var p = snapshot
+        p.sortOrder = preset.sortOrder
+        p.groupID = preset.groupID
+        p.isActive = preset.isActive
+        return p
     }
 
     private func performUndo() {
-        guard let previous = undoStack.popLast() else { return }
+        // A region change still settling is a step of its own first.
+        recordHistory()
+        guard let previous = undoStack.popLast() else {
+            AccessibilityNotification.Announcement(String(localized: "Nothing to undo")).post(); return
+        }
         isApplyingHistory = true
-        redoStack.append(preset)
-        preset = previous
-        lastSnapshot = previous
-        DispatchQueue.main.async { isApplyingHistory = false }
+        redoStack.append(fullState)
+        restore(previous)
+        AccessibilityNotification.Announcement(String(localized: "Undone")).post()
     }
 
     private func performRedo() {
-        guard let next = redoStack.popLast() else { return }
+        // A region change still settling is a fresh edit: it clears redo.
+        recordHistory()
+        guard let next = redoStack.popLast() else {
+            AccessibilityNotification.Announcement(String(localized: "Nothing to redo")).post(); return
+        }
         isApplyingHistory = true
-        undoStack.append(preset)
-        preset = next
-        lastSnapshot = next
-        DispatchQueue.main.async { isApplyingHistory = false }
+        undoStack.append(fullState)
+        restore(next)
+        AccessibilityNotification.Announcement(String(localized: "Redone")).post()
     }
 
     // MARK: - Binding Helpers
@@ -1254,18 +1632,89 @@ struct PresetEditorView: View {
 
     private func addBinding(to joystickIndex: Int) {
         withAnimation {
+            // No output until one is picked: a running preset keeps working
+            // in the editor, and a default A key typed into it from button 0.
             let newBinding = BindingModel(
                 input: InputEvent.button(0),
-                outputs: [OutputAction(type: .key, keyCode: 4)]
+                outputs: []
             )
             preset.joysticks[joystickIndex].bindings.append(newBinding)
         }
+        AccessibilityNotification.Announcement(String(localized: "Row \(preset.joysticks[joystickIndex].bindings.count) added")).post()
     }
 
     private func removeBinding(at bindingIndex: Int, from joystickIndex: Int) {
         withAnimation {
             preset.joysticks[joystickIndex].bindings.remove(at: bindingIndex)
         }
+        AccessibilityNotification.Announcement(String(localized: "Row \(bindingIndex + 1) removed")).post()
+        // Focus to the row now in its place, else the one before.
+        let rows = preset.joysticks[joystickIndex].bindings
+        let next = rows.indices.contains(bindingIndex) ? rows[bindingIndex].id : rows.last?.id
+        focusBindingID = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focusBindingID = next }
+    }
+
+    /// Adds a ready-made set of motion rows to the group of the row it was
+    /// picked on, after that row, skipping inputs the group already reads.
+    /// A motion row with no output yet becomes the first of them.
+    private func setUpMotion(_ setup: MotionSetup, from rowID: UUID) {
+        guard let g = preset.joysticks.firstIndex(where: { $0.bindings.contains { $0.id == rowID } }),
+              var r = preset.joysticks[g].bindings.firstIndex(where: { $0.id == rowID }) else { return }
+        // A motion row with nothing set on it yet (Insert rows makes four,
+        // with a name and a heading only) is filled in place by the setup
+        // row for its input. A held control, deadzone, invert or any other
+        // option counts as set: those rows are left as they are.
+        func isEmpty(_ b: BindingModel) -> Bool {
+            b.input.type == .motion && b.outputs.isEmpty && b.macroSteps == nil
+                && b.holdOutputs == nil && b.doubleTapOutputs == nil && b.modifiers.isEmpty
+                && b.deadzone == nil && b.outerDeadzone == nil && b.invertAxis == nil && b.sensitivityCurve == nil
+                && b.variableSensitivity == nil && b.toggleMode == nil && b.turboEnabled == nil
+                && b.fromNeutral == nil && b.hapticEnabled == nil && b.speechEnabled == nil
+        }
+        var bindings = preset.joysticks[g].bindings
+        var changed = 0
+        var toInsert: [BindingModel] = []
+        for row in setup.rows {
+            if let i = bindings.firstIndex(where: { $0.input.serialized == row.input.serialized }) {
+                // Already read: filled when empty, unless the setup row would
+                // add nothing to it (the shake rows have no outputs).
+                if isEmpty(bindings[i]), !isEmpty(row) || bindings[i].note != row.note {
+                    bindings[i] = row.takingPlace(of: bindings[i])
+                    changed += 1
+                }
+            } else {
+                toInsert.append(row)
+            }
+        }
+        // The run of rows under the picked row's heading: new rows go after
+        // it, so they never split that heading in two.
+        let oldSection = bindings[r].section
+        var runStart = r, runEnd = r
+        while runStart > 0, bindings[runStart - 1].section == oldSection { runStart -= 1 }
+        while runEnd + 1 < bindings.count, bindings[runEnd + 1].section == oldSection { runEnd += 1 }
+        // The row it was picked on, when empty and not one of the set,
+        // becomes the first new row instead of staying behind blank: when
+        // it starts or ends its run, so its old heading stays in one piece.
+        if isEmpty(bindings[r]), !setup.rows.contains(where: { $0.input.serialized == bindings[r].input.serialized }),
+           r == runStart || r == runEnd,
+           let first = toInsert.first {
+            bindings[r] = first.takingPlace(of: bindings[r])
+            toInsert.removeFirst()
+            changed += 1
+            r = min(r, bindings.count - 1)
+            bindings.insert(contentsOf: toInsert, at: r + 1)
+        } else {
+            bindings.insert(contentsOf: toInsert, at: min(runEnd + 1, bindings.count))
+        }
+        changed += toInsert.count
+        withAnimation { preset.joysticks[g].bindings = bindings }
+        // Focus stays on the row the menu was picked on.
+        focusBindingID = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focusBindingID = rowID }
+        let said = changed == 0 ? String(localized: "These motion rows are already in this group")
+            : changed == 1 ? String(localized: "1 motion row added") : String(localized: "\(changed) motion rows added")
+        AccessibilityNotification.Announcement(said).post()
     }
 
     private func duplicateBinding(at bindingIndex: Int, in joystickIndex: Int) {
@@ -1276,6 +1725,7 @@ struct PresetEditorView: View {
             let clone = original.duplicated()
             preset.joysticks[joystickIndex].bindings.insert(clone, at: bindingIndex + 1)
         }
+        AccessibilityNotification.Announcement(String(localized: "Row duplicated as row \(bindingIndex + 2)")).post()
     }
 
     private func sortBindings(in joystickIndex: Int) {
@@ -1297,7 +1747,10 @@ struct PresetEditorView: View {
                 let aOrder = Self.bindingSortOrder(for: a.input.type)
                 let bOrder = Self.bindingSortOrder(for: b.input.type)
                 if aOrder != bOrder { return aOrder < bOrder }
-                return a.input.index < b.input.index
+                if a.input.index != b.input.index { return a.input.index < b.input.index }
+                // Then by direction, as Sort All Bindings does: the D-pad's
+                // four rows kept whatever order they came in.
+                return Preset.directionRank(a.input) < Preset.directionRank(b.input)
             }
         }
     }
@@ -1315,6 +1768,7 @@ struct PresetEditorView: View {
         case .extMouse:        return 8
         case .cursorRegion:    return 9
         case .stickRegion:     return 10
+        case .stickGesture:    return 10
         case .midi:            return 11
         case .chassisTap:      return 12
         }
@@ -1341,12 +1795,18 @@ struct PresetEditorView: View {
             clone.unreadableRows = source.unreadableRows
             preset.joysticks.insert(clone, after: index)
         }
+        AccessibilityNotification.Announcement(String(localized: "Input device duplicated")).post()
     }
 
     private func removeJoystick(at index: Int) {
+        let rows = preset.joysticks.indices.contains(index) ? preset.joysticks[index].bindings.count : 0
         withAnimation {
             preset.joysticks.remove(at: index)
         }
+        // The menu that removed it went with it: say what happened.
+        AccessibilityNotification.Announcement(rows == 1
+            ? String(localized: "Input device removed, 1 row. Undo with Command Z.")
+            : String(localized: "Input device removed, \(rows) rows. Undo with Command Z.")).post()
     }
 
     // MARK: - Scanning
@@ -1371,11 +1831,11 @@ struct PresetEditorView: View {
     }
 
     private func touchpadOptionLabel(_ e: InputEvent) -> String {
-        if e.type == .button { return "Touchpad press (click the pad down)" }
+        if e.type == .button { return String(localized: "Touchpad press (click the pad down)") }
         switch e.touchpadGestureKind {
-        case .oneFingerTap: return "Touchpad tap (one finger)"
-        case .doubleTap: return "Touchpad double tap"
-        case .twoFingerTap: return "Two-finger tap"
+        case .oneFingerTap: return String(localized: "Touchpad tap (one finger)")
+        case .doubleTap: return String(localized: "Touchpad double tap")
+        case .twoFingerTap: return String(localized: "Two-finger tap")
         default: return e.displayName
         }
     }
@@ -1394,6 +1854,32 @@ struct PresetEditorView: View {
             // the chord never fired after a re-pair or on another Mac.
             var event = event
             if event.type == .midi { event.midiDeviceID = nil }
+            // Not the row's own input, nor a control already in the chord:
+            // "A while holding A" silenced the plain A row too.
+            let otherSlots = mods.indices.filter { $0 != scanningModifierSlot }
+            if event.serialized == row.input.serialized
+                || otherSlots.contains(where: { mods[$0].serialized == event.serialized }) {
+                AccessibilityNotification.Announcement(String(localized: "That control is already part of this row. Nothing was added.")).post()
+                showingScanOverlay = false
+                controllerService.stopScanning()
+                scanningBinding = nil
+                scanningModifier = false
+                scanningModifierSlot = nil
+                return
+            }
+            // A controller's control is read on the row's own controller, so
+            // one held on another device would never count: refused, said.
+            let controllerTypes: Set<InputType> = [.button, .axis, .hat, .motion, .touchpad, .touchpadRegion, .touchpadGesture, .stickRegion, .stickGesture]
+            let rowSlot = controllerService.effectiveSlots(for: preset.joysticks)[scanning.joystickIndex] ?? scanning.joystickIndex
+            if controllerTypes.contains(event.type), let from = controllerService.lastScanSlot, from != rowSlot {
+                AccessibilityNotification.Announcement(String(localized: "Hold a control on the same controller as this row. Nothing was added.")).post()
+                showingScanOverlay = false
+                controllerService.stopScanning()
+                scanningBinding = nil
+                scanningModifier = false
+                scanningModifierSlot = nil
+                return
+            }
             if let slot = scanningModifierSlot, mods.indices.contains(slot) {
                 mods[slot] = event
             } else {
@@ -1402,10 +1888,22 @@ struct PresetEditorView: View {
             row.setModifiers(mods)
             scanningModifierSlot = nil
             preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex] = row
+            AccessibilityNotification.Announcement(String(localized: "Row \(scanning.bindingIndex + 1): also holding \(MappingEngine.spokenInputName(event, family: preset.buttonFamily))")).post()
             showingScanOverlay = false
             controllerService.stopScanning()
             scanningBinding = nil
             scanningModifier = false
+            return
+        }
+        // A control on another connected controller would be read on this
+        // row's own one (its button 3 is a different control): refused and
+        // said, as for a held control. A group with no controller of its own
+        // connected yet still takes it.
+        if refusesScanFromOtherController(event, joystickIndex: scanning.joystickIndex) {
+            AccessibilityNotification.Announcement(String(localized: "Press a control on the controller this row reads. Nothing was changed.")).post()
+            showingScanOverlay = false
+            controllerService.stopScanning()
+            scanningBinding = nil
             return
         }
         // Always record the input on the binding so the row reflects what
@@ -1423,10 +1921,56 @@ struct PresetEditorView: View {
         if scanned.type == .midi, previous.type == .midi, scanned.midiKind == previous.midiKind,
            scanned.midiKind == .cc || scanned.midiKind == .pitchBend {
             scanned.midiCCMode = previous.midiCCMode
-            scanned.axisDirection = previous.axisDirection
+            // A pitch bend keeps the way it was just bent.
+            if scanned.midiKind == .cc { scanned.axisDirection = previous.axisDirection }
             scanned.midiTurnStep = previous.midiTurnStep
         }
         preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].input = scanned
+        if scanned.type != previous.type {
+            BindingRowView.clearOptionsWithoutControls(&preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex])
+        }
+        // The scanned direction is the one the control really moved, so an
+        // Invert left from before would make the row answer the other way.
+        if [.axis, .motion, .touchpad].contains(scanned.type) {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].invertAxis = nil
+        }
+        // A Mac key, mouse or MIDI row has no Second control box: a chord
+        // left from a controller row could not be seen or removed.
+        if [.extKey, .extMouse, .midi].contains(scanned.type) {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].setModifiers([])
+        }
+        // A MIDI row has no Invert or Deadzone controls, so what an earlier
+        // stick or trigger set there is cleared rather than kept unseen.
+        if scanned.type == .midi || scanned.type == .touchpad, previous.type == .axis {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].variableSensitivity = nil
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].rampMs = nil
+        }
+        if scanned.type == .midi, previous.type != .midi {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].invertAxis = nil
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].deadzone = nil
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].outerDeadzone = nil
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].sensitivityCurve = nil
+        }
+        // A pedal, throttle or lever pressed from where it rests at one end
+        // reads its whole travel; a stick pushed from the middle does not.
+        // Not on a trigger slot (which reads 0 to 1 anyway) or another kind
+        // of input: the option is cleared there, as its toggle is hidden.
+        if !(scanned.type == .axis && scanned.index != 4 && scanned.index != 5) {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].fullTravel = nil
+        }
+        // Only tilt angles are measured from the grip.
+        if !(scanned.type == .motion && [.pitchAngle, .rollAngle, .yawAngle].contains(scanned.motionChannel ?? .gyroX)) {
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].fromNeutral = nil
+        }
+        if scanned.type == .axis, scanned.index != 4, scanned.index != 5 {
+            let rest = controllerService.lastScanSlot.flatMap { controllerService.scanRestValue(slot: $0, axis: scanned.index) }
+            let fromEnd = rest.map { r in
+                scanned.axisDirection == .positive ? r < -0.8 : scanned.axisDirection == .negative ? r > 0.8 : false
+            } ?? false
+            preset.joysticks[scanning.joystickIndex].bindings[scanning.bindingIndex].fullTravel = fromEnd ? true : nil
+        }
+        // The overlay's "Detected" line shows for a moment only; say it.
+        AccessibilityNotification.Announcement(String(localized: "Row \(scanning.bindingIndex + 1) input: \(MappingEngine.spokenInputName(scanned, family: preset.buttonFamily))")).post()
         // Remember which device these rows came from, when the press came
         // from the controller this group drives: its pinned controller, or
         // the slot it falls back to, not simply the slot with its number.
@@ -1443,7 +1987,9 @@ struct PresetEditorView: View {
         // Motion-scanned input: gate on calibration. If no motion-capable
         // controller has been calibrated, prompt the user to run calibration
         // first - tilt-to-aim feels wrong otherwise.
-        if event.type == .motion {
+        // Only for a GameController pad: the Steam Controllers keep their own
+        // zero, and the calibration sheet does not list them.
+        if event.type == .motion, (controllerService.lastScanSlot ?? 0) < controllerService.connectedControllers.count {
             let anyCalibrated = controllerService.connectedControllers.contains { ctrl in
                 let key = MotionCalibrationService.identityKey(for: ctrl)
                 return MotionCalibrationService.shared.isCalibrated(forKey: key)
@@ -1539,6 +2085,12 @@ struct PresetEditorView: View {
             // Sensible defaults to make this feel like the showcase preset.
             var binding = preset.joysticks[pending.joystickIndex].bindings[pending.bindingIndex]
             binding.variableSensitivity = true
+            // A pointer row is moved by the control, not pressed: a hold,
+            // double tap, macro, toggle or turbo left from before stopped
+            // the continuous path, and the pointer never moved.
+            binding.holdOutputs = nil; binding.holdThresholdMs = nil
+            binding.doubleTapOutputs = nil; binding.doubleTapWindowMs = nil
+            binding.macroSteps = nil; binding.toggleMode = nil; binding.turboEnabled = nil
             if pending.event.type == .axis {
                 // Mild smooth curve + moderate deadzone for joysticks.
                 binding.deadzone = 0.10
@@ -1574,12 +2126,21 @@ private extension Array {
 /// SLSRegisterCursorWithImages` eating roughly half the editor's scroll time.
 ///
 /// Clicking the field still focuses it normally.
-private struct NoInitialTextFocus: NSViewRepresentable {
-    func makeNSView(context: Context) -> ClearFocusView { ClearFocusView() }
+struct NoInitialTextFocus: NSViewRepresentable {
+    /// Hands the focus to the nearest list instead of to nothing, so the
+    /// arrow keys move through it from launch (the sidebar's search field).
+    var focusNearestList = false
+
+    func makeNSView(context: Context) -> ClearFocusView {
+        let v = ClearFocusView()
+        v.focusNearestList = focusNearestList
+        return v
+    }
     func updateNSView(_ nsView: ClearFocusView, context: Context) {}
 
     final class ClearFocusView: NSView {
         private var done = false
+        var focusNearestList = false
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -1597,9 +2158,26 @@ private struct NoInitialTextFocus: NSViewRepresentable {
         }
 
         private func clear(_ window: NSWindow) {
-            if window.firstResponder is NSText {
+            guard window.firstResponder is NSText else { return }
+            if focusNearestList, let list = nearestTable() {
+                window.makeFirstResponder(list)
+            } else {
                 window.makeFirstResponder(nil)
             }
+        }
+
+        private func nearestTable() -> NSTableView? {
+            func find(_ v: NSView) -> NSTableView? {
+                if let t = v as? NSTableView { return t }
+                for sub in v.subviews { if let t = find(sub) { return t } }
+                return nil
+            }
+            var ancestor = superview
+            while let a = ancestor {
+                if let t = find(a) { return t }
+                ancestor = a.superview
+            }
+            return nil
         }
     }
 }
@@ -1624,97 +2202,290 @@ private struct ChassisTapWarning: View {
 
     private var message: String? {
         guard sensorPresent else {
-            return "This Mac has no motion sensor, so the Tap the Mac bindings will not fire."
+            return String(localized: "This Mac has no motion sensor, so the Tap the Mac bindings will not fire.")
         }
         let s = ChassisTapService.shared.calibrationSnapshot(window: 0)
         if s.running && s.wakeDenied && s.silence > 0.5 {
-            return "macOS refused to switch the motion sensor on, so taps are not being heard right now."
+            return String(localized: "macOS refused to switch the motion sensor on, so taps are not being heard right now.")
         }
         if s.running && s.notResponding {
-            return "The motion sensor on this Mac is not responding, so taps are not being heard."
+            return String(localized: "The motion sensor on this Mac is not responding, so taps are not being heard.")
         }
         return nil
     }
 }
 
-/// Yellow banner at the top of the editor while a preset is being edited
-/// over a running engine. Its own view, so only it observes the engine.
-private struct EnginePausedBanner: View {
+/// The bar at the top of the editor: whether this preset is on, with the
+/// same Activate and Deactivate as the preset page. A running preset keeps
+/// working while the editor is open, so the bar warns and recommends turning
+/// it off, rather than pausing it. Its own view, so only it observes the
+/// engine.
+private struct EditorRunBanner: View {
+    let presetID: UUID
+    let runnable: Bool
+    /// The Activate button, in the header's column; or the line about the
+    /// preset being on (or why it cannot be activated), under the header.
+    enum Part { case button, notes }
+    var part: Part = .button
+    /// Off for the copy out of view, so a change is said once.
+    var announces = true
+    let onToggle: () -> Void
     @EnvironmentObject private var mappingEngine: MappingEngine
+    @EnvironmentObject private var presetStore: PresetStore
 
-    /// Whether the running preset's pointer rows still work in the editor.
-    private var pointerPasses: Bool { mappingEngine.editorPassthroughApplies }
-    private var overridden: Bool { mappingEngine.editorOverride }
-
+    private var isOn: Bool { mappingEngine.isRunning && presetStore.activePresetId == presetID }
+    /// Another preset running behind the editor.
+    private var otherName: String? {
+        guard mappingEngine.isRunning, let id = presetStore.activePresetId, id != presetID else { return nil }
+        return presetStore.presets.first(where: { $0.id == id })?.shownName
+    }
     private var held: Bool { mappingEngine.editorDraftHeld }
+    /// Paused from the menu bar before the editor opened; that pause stays.
+    private var pausedByUser: Bool { mappingEngine.outputsPaused }
 
-    private var title: String {
-        if held { return "This change waits for Save, so you can still get around" }
-        if overridden { return "The controller works while editing" }
-        return pointerPasses ? "Paused while editing, except the pointer and Escape, Return, Tab, arrows and Space" : "Outputs paused while editing"
+    private var offTitle: String {
+        if let otherName {
+            return pausedByUser
+                ? String(localized: "This preset is off. \(otherName) is paused while you edit this one")
+                : String(localized: "This preset is off. \(otherName) is running")
+        }
+        return String(localized: "This preset is off")
     }
 
-    private var detail: String {
+    private var offNote: String {
+        runnable
+            ? String(localized: "Your changes take effect once it is on. Activate it to try them as you make them.")
+            : String(localized: "Add a row to be able to activate it.")
+    }
+
+    /// The line under the warning, when there is more to say.
+    private var onNote: String {
         if held {
-            return "Your edits apply to the running preset as you make them, but this one would leave it with no rows, or take away the pointer or the Escape, Return, Tab, arrow and Space rows, and then the controller could not reach Undo, Cancel or Save. The running preset keeps its last version until you save."
+            return String(localized: "This change waits for Save: it would take away the rows that get you around the editor, so the running preset keeps its last version until you save.")
         }
-        if overridden {
-            return "Override is on: the running preset sends everything, keys and MIDI included, while the editor is open. Scan still holds outputs back while it listens. Your edits apply as you make them; Cancel puts the saved preset back."
-        }
-        return pointerPasses
-            ? "Other keys and MIDI are paused while editing. The controller still moves the pointer, clicks, scrolls, and sends Escape, Return, Tab, the arrows and Space, so Save and Cancel stay in reach. Inputs still highlight rows. Override lets the running preset work fully while you edit."
-            : "Outputs paused while editing. Inputs still highlight rows; the cursor, keystrokes, and MIDI resume when you close the editor. Override lets the running preset work fully while you edit."
+        if pausedByUser { return String(localized: "Its outputs are paused.") }
+        return String(localized: "It is recommended to turn it off while editing.")
     }
 
+    /// One stable row, whichever way the preset is: Activate and Deactivate
+    /// are the same button in the same place, so keyboard and VoiceOver focus
+    /// stay on it when it flips. Only the text beside it and the box around
+    /// the row change. On: the warning, centered in the box, with a hidden
+    /// copy of the button on the left so the text stays centered at any text
+    /// size without running under the button. Off: no box, only Activate at
+    /// the top right, with a plain line beside it when another preset is
+    /// running or paused while this one is edited, or when it cannot be
+    /// activated yet.
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: overridden ? "play.circle.fill" : "pause.circle.fill")
-                .font(.callout)
-                .iconTint(overridden ? .green : .yellow)
-            Text(title)
-                .font(.callout.weight(.semibold))
-            Button(overridden ? "Pause Again" : "Override") {
-                mappingEngine.editorOverride.toggle()
-            }
-            .buttonStyle(.solidSecondaryCompact)
-            .controlSize(.small)
-            .help(overridden ? "Pause the running preset's outputs while the editor is open"
-                             : "Let the running preset work fully while the editor is open")
+        switch part {
+        case .button:
+            // One stable button: Activate and Deactivate are the same control
+            // in the same place, so focus stays on it when it flips.
+            toggleButton
+                .accessibilityValue(isOn ? "" : offTitle)
+                // Started or stopped from the menu bar or a hotkey while the
+                // editor is open, it changes with nothing to focus, so say it.
+                .onChange(of: isOn) { _, on in
+                    guard announces else { return }
+                    AccessibilityNotification.Announcement(
+                        on ? String(localized: "Warning! This preset is on.") + " " + onNote : offTitle).post()
+                }
+        case .notes:
+            notes
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill((overridden ? Color.green : Color.yellow).opacity(0.15))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke((overridden ? Color.green : Color.yellow).opacity(0.55), lineWidth: 1)
-        )
-        .frame(maxWidth: .infinity)
-        .help(detail)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(detail)
+    }
+
+    /// On: the warning, centered in a box. Off: a plain line only when
+    /// another preset is running or paused while this one is edited, or
+    /// when it cannot be activated yet.
+    @ViewBuilder
+    private var notes: some View {
+        if isOn {
+            VStack(spacing: 2) {
+                Label {
+                    Text("Warning! This preset is on.")
+                        .font(.callout.weight(.semibold))
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .iconTint(.yellow)
+                        .accessibilityHidden(true)
+                }
+                Text(onNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.yellow.opacity(0.15)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow.opacity(0.55), lineWidth: 1))
+        } else if otherName != nil || !runnable {
+            VStack(alignment: .trailing, spacing: 2) {
+                if otherName != nil {
+                    Text(offTitle)
+                }
+                if !runnable {
+                    // Why Activate is dimmed, where it can be read.
+                    Text(offNote)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var toggleButton: some View {
+        Button(action: onToggle) {
+            Label {
+                Text(isOn ? String(localized: "Deactivate") : String(localized: "Activate"))
+            } icon: {
+                Image(systemName: isOn ? "stop.fill" : "play.fill").imageScale(.small)
+            }
+            // As wide as the Emergency Stop under it.
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(SolidButton(tint: isOn ? .red : .green))
+        .controlSize(.small)
+        .disabled(!isOn && !runnable)
+        .help(isOn ? "" : offNote)
+        .accessibilityHint(isOn
+                           ? String(localized: "Stops the mapping engine for this preset")
+                           : (runnable
+                              ? String(localized: "Starts the mapping engine and applies this preset")
+                              : offNote))
+        .accessibilityInputLabels(isOn ? [Text("Deactivate")] : [Text("Activate")])
     }
 }
 
-/// The editor's live-input hooks and the region drawing sheet the
-/// visualizer's "Draw a screen region" opens, in one modifier so the
-/// editor's long modifier chain stays cheap to type-check.
+/// The editor's live-input hooks, and the watch on screen regions that
+/// gives the visualizer's "Draw a screen region" row the region drawn for
+/// it, in one modifier so the editor's long modifier chain stays cheap to
+/// type-check.
 private struct EditorLiveHooks: ViewModifier {
     let hasTapRows: Bool
     let keyboardMouseRows: [Bool]
     let onTapRowsChange: () -> Void
     let onKeyboardMouseChange: () -> Void
-    @Binding var drawingScreenRegions: Bool
-    let onDrawingDismiss: () -> Void
+    let onScreenRegionsChange: () -> Void
     func body(content: Content) -> some View {
         content
             .onChange(of: hasTapRows) { _, _ in onTapRowsChange() }
             .onChange(of: keyboardMouseRows) { _, _ in onKeyboardMouseChange() }
-            .sheet(isPresented: $drawingScreenRegions, onDismiss: onDrawingDismiss) {
-                CursorRegionsView().glassBackground()
+            .onReceive(CursorRegionService.shared.$regions.map(\.count).removeDuplicates()) { _ in
+                onScreenRegionsChange()
             }
+    }
+}
+
+/// No backdrop of its own behind the sheet's title and bottom bars, so they
+/// sit on the sheet's frosted glass like the rows do.
+private struct ClearToolbarBackdrop: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .toolbarBackground(.hidden, for: .windowToolbar)
+            .toolbarBackground(.hidden, for: .automatic)
+            // The top strip holds nothing (the title is drawn in the editor
+            // and the buttons sit in the bottom bar) but drew a dark band.
+            .toolbar(.hidden, for: .windowToolbar)
+            // The title bar draws a material of its own over the sheet's
+            // glass; a transparent title bar lets the same glass show there.
+            .background(TransparentTitlebar().frame(width: 0, height: 0))
+    }
+}
+
+/// Makes the sheet window's title bar transparent, so the frosted glass
+/// behind the rows also shows behind the title.
+private struct TransparentTitlebar: NSViewRepresentable {
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
+            window.titleVisibility = .hidden
+            // Not shown, but VoiceOver and Voice Control name the sheet by it.
+            window.title = String(localized: "Edit Bindings & Mappings")
+            // A transparent title bar over nothing shows the dark window
+            // behind it; the editor's own backdrop has to reach up under it.
+            window.styleMask.insert(.fullSizeContentView)
+            DispatchQueue.main.async { [weak self] in self?.matchChrome() }
+            // A second attach must not stack a second set of observers.
+            NotificationCenter.default.removeObserver(self)
+            for name in [NSWindow.didResizeNotification, NSWindow.didUpdateNotification] {
+                NotificationCenter.default.addObserver(self, selector: #selector(chromeChanged), name: name, object: window)
+            }
+        }
+
+        @objc private func chromeChanged() { matchChrome() }
+
+        private static let tintID = NSUserInterfaceItemIdentifier("EditorChromeTint")
+
+        /// The two bands, made the same glass as the rows: the window's own
+        /// glass under the bottom bar is a darker material, so it takes the
+        /// rows' material and window tint; the scroll view's backdrop strip
+        /// under the title is hidden, so the rows' glass shows there.
+        func matchChrome() {
+            guard let window, let frame = window.contentView?.superview else { return }
+            // SwiftUI clears the title to match navigationTitle("").
+            if window.title.isEmpty { window.title = String(localized: "Edit Bindings & Mappings") }
+            if let fx = frame.subviews.first(where: { $0 is NSVisualEffectView }) as? NSVisualEffectView {
+                // The material and tint the sheet's own glass uses (glassBackground).
+                if fx.material != .hudWindow { fx.material = .hudWindow }
+                if fx.blendingMode != .behindWindow { fx.blendingMode = .behindWindow }
+                if fx.state != .followsWindowActiveState { fx.state = .followsWindowActiveState }
+                if !fx.subviews.contains(where: { $0.identifier == Self.tintID }) {
+                    let tint = NSView(frame: fx.bounds)
+                    tint.identifier = Self.tintID
+                    tint.autoresizingMask = [.width, .height]
+                    tint.wantsLayer = true
+                    tint.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.62).cgColor
+                    fx.addSubview(tint)
+                }
+            }
+            // This runs after every event (the backdrop strip comes back when
+            // the scroll view rebuilds), so it never descends into a scroll
+            // view's rows: only the scroll view's own chrome is looked at,
+            // and a walk stays a few dozen views however long the preset is.
+            func walk(_ v: NSView) {
+                if let scroll = v as? NSScrollView {
+                    // The rows' scroll view painted a gray of its own over the
+                    // glass, which the bars did not have.
+                    if scroll.drawsBackground { scroll.drawsBackground = false }
+                    for sub in scroll.subviews where sub !== scroll.contentView && !sub.isHidden
+                        && String(describing: type(of: sub)) == "BackdropView" {
+                        sub.isHidden = true
+                    }
+                    return
+                }
+                v.subviews.forEach(walk)
+            }
+            walk(frame)
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
+    }
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// No scroll edge pocket under the toolbars: rows fade under the title by
+/// the header fade instead of meeting a solid band (macOS 26 and later;
+/// earlier systems draw none).
+private struct SoftScrollEdges: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            // The pocket macOS draws under the title was a dark band even
+            // at rest; the header fade already dissolves rows under it.
+            content.scrollEdgeEffectHidden(true, for: .all)
+        } else {
+            content
+        }
     }
 }
 
@@ -1769,5 +2540,82 @@ enum EditorHistory {
         copy.sortOrder = nil
         for i in copy.joysticks.indices { copy.joysticks[i].isExpanded = true }
         return copy
+    }
+}
+
+
+/// The inline edit in progress in the editor (a section heading, a row's
+/// note), which Escape ends before it reaches the editor's Cancel.
+enum EditorInlineEdit {
+    @MainActor static var end: (() -> Bool)?
+    /// Which field set `end`, so a field losing focus after another edit
+    /// has started clears only its own closure.
+    @MainActor static var owner: AnyHashable?
+
+    /// Writes the field's text where it belongs, for a Save that comes
+    /// before the field's own commit (which runs on its next update).
+    @MainActor static var commit: (() -> Void)?
+
+    @MainActor static func begin(_ id: AnyHashable, onCommit: (() -> Void)? = nil, _ close: @escaping () -> Bool) {
+        owner = id
+        end = close
+        commit = onCommit
+    }
+
+    /// The field's commit again, from its latest render: rows moved while
+    /// it was being typed, and the first one renamed the rows that had
+    /// moved into the old place.
+    @MainActor static func refreshCommit(_ id: AnyHashable, _ onCommit: @escaping () -> Void) {
+        guard owner == id else { return }
+        commit = onCommit
+    }
+
+    @MainActor static func reset() {
+        end = nil
+        owner = nil
+        commit = nil
+    }
+
+    @MainActor static func clear(_ id: AnyHashable) {
+        guard owner == id else { return }
+        end = nil
+        owner = nil
+        commit = nil
+    }
+}
+
+/// Where the editor's header ends, in the scroll view's own space, so the
+/// header can turn into the top row once it has scrolled away.
+private struct EditorHeaderBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+
+/// A region drawn, moved, resized, renamed or typed in a region editor
+/// changes a region service, not the preset: each one is a step of the
+/// editor's undo history too. Read a turn later, once the change has landed.
+private struct RegionHistoryHooks: ViewModifier {
+    let onChange: () -> Void
+    /// Changes in quick succession (every step of a drag) settle into one
+    /// step: the history records once they have stopped for a moment.
+    @State private var pending: DispatchWorkItem?
+
+    private func settle() {
+        pending?.cancel()
+        let work = DispatchWorkItem {
+            // A drag held still is still one drag: wait for the button to
+            // come up, so Undo goes back to where the drag started.
+            if NSEvent.pressedMouseButtons & 1 != 0 { settle(); return }
+            onChange()
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(StickRegionService.shared.$regionsByStick.dropFirst()) { _ in settle() }
+            .onReceive(CursorRegionService.shared.$regions.dropFirst()) { _ in settle() }
+            .onReceive(NotificationCenter.default.publisher(for: TouchpadService.regionsDidChange)) { _ in settle() }
     }
 }
