@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import CoreGraphics
 import ApplicationServices
+import Carbon.HIToolbox
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -93,6 +94,12 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         /// A finger scroll gesture started (true) or finished, momentum
         /// included (false). Wheel mice never send this.
         case scrollGesture(deviceID: String, active: Bool)
+        /// A pen tablet pointer event (CGEventType 23): tip pressure 0 to 1,
+        /// tilt -1 to 1 each way, the barrel button bitmask.
+        case tabletPoint(deviceID: String, pressure: Float, tiltX: Float, tiltY: Float, buttons: Int)
+        /// A pen entered (true) or left the tablet's range; eraser says
+        /// which end is near.
+        case tabletProximity(deviceID: String, entering: Bool, eraser: Bool)
 
         var deviceID: String {
             switch self {
@@ -100,7 +107,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                  .mouseButtonDown(let id, _), .mouseButtonUp(let id, _),
                  .mouseMove(let id, _, _), .scroll(let id, _, _),
                  .pressureChanged(let id, _, _), .mouseDoubleClick(let id, _),
-                 .scrollGesture(let id, _):
+                 .scrollGesture(let id, _), .tabletPoint(let id, _, _, _, _), .tabletProximity(let id, _, _):
                 return id
             }
         }
@@ -167,6 +174,10 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// True while the listen-only mouse `CGEventTap` is installed.
     @Published private(set) var cgEventTapInstalled = false
     @Published private(set) var cgEventTapReceivedAnyEvent = false
+    /// A password field has the keyboard (Secure Event Input): the global
+    /// monitor gets no key events until it lets go. Polled while keys are
+    /// being read, so the Live Visualizer and Scan can say why keys are quiet.
+    @Published private(set) var secureInputBlocking = false
 
     /// Synthetic device IDs kept only so binding strings saved by older
     /// builds ("ekb 4 builtin.keyboard") still parse without crashing.
@@ -333,7 +344,39 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             mark("ems doubleClick \(b) +", dev: dev, until: Date().addingTimeInterval(0.35))
         case .scrollGesture(let dev, let active):
             if active { mark("ems scrollGesture 0 +", dev: dev, until: .distantFuture) } else { unmark("ems scrollGesture 0 +", dev: dev) }
+        case .tabletPoint(let dev, let pressure, let tiltX, let tiltY, let buttons):
+            if pressure > Self.penPressureThreshold { mark("ems penPressure 0 +", dev: dev, until: .distantFuture) } else { unmark("ems penPressure 0 +", dev: dev) }
+            for (kind, value) in [("penTiltX", tiltX), ("penTiltY", tiltY)] {
+                if value > Self.penTiltThreshold { mark("ems \(kind) 0 +", dev: dev, until: .distantFuture) } else { unmark("ems \(kind) 0 +", dev: dev) }
+                if value < -Self.penTiltThreshold { mark("ems \(kind) 0 -", dev: dev, until: .distantFuture) } else { unmark("ems \(kind) 0 -", dev: dev) }
+            }
+            for bit in 0..<8 {
+                if buttons & (1 << bit) != 0 { mark("ems penButton \(bit) +", dev: dev, until: .distantFuture) } else { unmark("ems penButton \(bit) +", dev: dev) }
+            }
+        case .tabletProximity(let dev, let entering, let eraser):
+            if entering { mark("ems penInRange 0 +", dev: dev, until: .distantFuture) } else { unmark("ems penInRange 0 +", dev: dev) }
+            if entering && eraser { mark("ems penEraser 0 +", dev: dev, until: .distantFuture) } else { unmark("ems penEraser 0 +", dev: dev) }
         }
+    }
+
+    static let penPressureThreshold: Float = 0.1
+    static let penTiltThreshold: Float = 0.25
+    static let tabletID = "tablet"
+
+    /// A tablet pointer event's fields (CGEventTypes.h kCGTabletEventPointPressure 19,
+    /// TiltX 20, TiltY 21, PointButtons 18).
+    static func tabletPoint(of event: CGEvent) -> (pressure: Float, tiltX: Float, tiltY: Float, buttons: Int) {
+        (Float(event.getDoubleValueField(.tabletEventPointPressure)),
+         Float(event.getDoubleValueField(.tabletEventTiltX)),
+         Float(event.getDoubleValueField(.tabletEventTiltY)),
+         Int(event.getIntegerValueField(.tabletEventPointButtons)))
+    }
+
+    /// A tablet proximity event's fields: kCGTabletProximityEventEnterProximity
+    /// (38) and PointerType (37; NSPointingDeviceType 3 is the eraser).
+    static func tabletProximity(of event: CGEvent) -> (entering: Bool, eraser: Bool) {
+        (event.getIntegerValueField(.tabletProximityEventEnterProximity) != 0,
+         event.getIntegerValueField(.tabletProximityEventPointerType) == 3)
     }
 
     /// Keys read by asking macOS for their physical state each tick rather
@@ -409,6 +452,13 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     private func publishLive() {
         pollKeys()
         reconcileHeld()
+        let secure = !keyboardConsumers.isEmpty && IsSecureEventInputEnabled()
+        if secure != secureInputBlocking {
+            secureInputBlocking = secure
+            ActivityLog.shared.info("Keyboard", secure
+                ? "A password field has the keyboard (Secure Input): keyboard rows pause until it is dismissed"
+                : "Secure Input ended: keyboard rows resume")
+        }
         let now = Date()
         for (k, until) in liveUntil where until <= now { liveUntil.removeValue(forKey: k) }
         if liveUntil.count != rawActiveInputs.count || !rawActiveInputs.isSuperset(of: liveUntil.keys) {
@@ -437,7 +487,12 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                 let e: Event = .keyUp(deviceID: String(parts[2]), hidCode: code)
                 noteLive(e); events.send(e)
             } else if parts.count == 5, parts[0] == "ems", parts[1] == "button", let b = Int(parts[2]),
-                      let button = CGMouseButton(rawValue: UInt32(b)),
+                      // CGMouseButton defines left, right and center only
+                      // (CGEventTypes.h); the window server's answer for 3 to
+                      // 31 is undefined, and a false there released every held
+                      // side button 33 ms after its press. The tap sees every
+                      // otherMouseUp, so those are trusted to it.
+                      b <= 2, let button = CGMouseButton(rawValue: UInt32(b)),
                       !CGEventSource.buttonState(.combinedSessionState, button: button) {
                 let e: Event = .mouseButtonUp(deviceID: String(parts[4]), button: b)
                 noteLive(e); events.send(e)
@@ -535,7 +590,10 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             (1 << CGEventType.leftMouseDragged.rawValue) |
             (1 << CGEventType.rightMouseDragged.rawValue) |
             (1 << CGEventType.otherMouseDragged.rawValue)
-        let mask: CGEventMask =
+        // Pen tablets post their own event types next to the mouse ones;
+        // they need no permission beyond the tap already running.
+        let tablet: CGEventMask = (1 << CGEventType.tabletPointer.rawValue) | (1 << CGEventType.tabletProximity.rawValue)
+        let mask: CGEventMask = tablet |
             (1 << CGEventType.leftMouseDown.rawValue) |
             (1 << CGEventType.leftMouseUp.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
@@ -782,9 +840,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                              dx: Int(event.getIntegerValueField(.mouseEventDeltaX)),
                              dy: Int(event.getIntegerValueField(.mouseEventDeltaY)))
         case .scrollWheel:
-            let delta = Self.scrollDeltas(of: event)
+            let delta = Self.scrollDeltas(of: event, carry: &scrollCarry)
             out = .scroll(deviceID: dev, dx: delta.dx, dy: delta.dy)
             also = scrollGestureTransition(event, dev: dev)
+        case .tabletPointer:
+            let p = Self.tabletPoint(of: event)
+            out = .tabletPoint(deviceID: Self.tabletID, pressure: p.pressure, tiltX: p.tiltX, tiltY: p.tiltY, buttons: p.buttons)
+        case .tabletProximity:
+            let p = Self.tabletProximity(of: event)
+            out = .tabletProximity(deviceID: Self.tabletID, entering: p.entering, eraser: p.eraser)
         default:
             out = nil
         }
@@ -854,20 +918,38 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Leftover fractions of a step from continuous scrolls, per axis.
+    private var scrollCarry: (x: Double, y: Double) = (0, 0)
+
     /// A scroll event's movement: dx from a tilt wheel or a sideways swipe,
-    /// dy from the wheel itself.
-    static func scrollDeltas(of event: CGEvent) -> (dx: Int, dy: Int) {
-        // A slow trackpad or Magic Mouse scroll moves a few points with no
-        // whole line, so the line delta is 0: the point delta's direction
-        // counts as one step then. A notched wheel always has a line delta.
-        func axis(_ line: CGEventField, _ point: CGEventField) -> Int {
-            let l = Int(event.getIntegerValueField(line))
-            if l != 0 { return l }
-            let p = event.getIntegerValueField(point)
-            return p > 0 ? 1 : (p < 0 ? -1 : 0)
+    /// dy from the wheel itself. A notched wheel sends whole lines. A
+    /// continuous scroll (trackpad, Magic Mouse, a free spinning wheel)
+    /// sends points with `kCGScrollWheelEventIsContinuous` set and a line
+    /// delta that is usually 0: about ten points make a line (CGEvent.h),
+    /// so points are added up and the remainder carried to the next event,
+    /// or a 3 point nudge and a 60 point flick both counted as one step.
+    static func scrollDeltas(of event: CGEvent, carry: inout (x: Double, y: Double)) -> (dx: Int, dy: Int) {
+        let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
+        let dx = scrollSteps(line: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
+                             point: Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),
+                             continuous: continuous, carry: &carry.x)
+        let dy = scrollSteps(line: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)),
+                             point: Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)),
+                             continuous: continuous, carry: &carry.y)
+        return (dx, dy)
+    }
+
+    /// Steps for one axis of one scroll event; `carry` keeps the fraction.
+    static func scrollSteps(line: Int, point: Int, continuous: Bool, carry: inout Double) -> Int {
+        if continuous {
+            carry += Double(point) / 10
+            let steps = Int(carry.rounded(.towardZero))
+            carry -= Double(steps)
+            return steps
         }
-        return (axis(.scrollWheelEventDeltaAxis2, .scrollWheelEventPointDeltaAxis2),
-                axis(.scrollWheelEventDeltaAxis1, .scrollWheelEventPointDeltaAxis1))
+        carry = 0
+        if line != 0 { return line }
+        return point > 0 ? 1 : (point < 0 ? -1 : 0)
     }
 
     /// Keys and buttons already noted this session, so an unusual one is
@@ -1025,7 +1107,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// Decodes an NSSystemDefined event into (HID code, pressed). Returns nil
     /// for anything that is not a recognized aux key press or release.
     static func mediaKey(from ev: NSEvent) -> (hid: Int, isDown: Bool)? {
-        guard ev.type == .systemDefined, ev.subtype.rawValue == 8 else { return nil }
+        guard ev.type == .systemDefined else { return nil }
+        // The eject key has its own subtype (IOLLEvent.h NX_SUBTYPE_EJECT_KEY,
+        // 10) with no down or up in data1: it is a press, released by the
+        // caller a moment later.
+        if ev.subtype.rawValue == 10 { return (313, true) }
+        guard ev.subtype.rawValue == 8 else { return nil }
+        // Bit 0 of data1 is set on the autorepeat of a held key: the same
+        // press again, not a new one.
+        if ev.data1 & 0x1 != 0 { return nil }
         let keyType = (ev.data1 & 0xFFFF_0000) >> 16
         let state = (ev.data1 & 0x0000_FF00) >> 8
         guard state == 0x0A || state == 0x0B else { return nil }
@@ -1084,6 +1174,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             if media.isDown, !receivedAnyKeyboardEvent { receivedAnyKeyboardEvent = true }
             noteLive(e)
             events.send(e)
+            // Eject (subtype 10) carries no release of its own.
+            if ev.subtype.rawValue == 10, media.isDown {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    guard let self else { return }
+                    let up: Event = .keyUp(deviceID: dev, hidCode: media.hid)
+                    self.noteLive(up)
+                    self.events.send(up)
+                }
+            }
             return
         }
         // Modifiers never send key down or key up; they send flagsChanged,

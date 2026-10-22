@@ -72,9 +72,9 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>InputConfig uses Bluetooth only to disconnect a wireless controller when you ask it to.</string>
+	<string>InputConfig uses Bluetooth to read Switch 2 controllers, and to connect and disconnect wireless controllers, when you ask it to or turn that on in Settings.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>InputConfig uses Bluetooth only to disconnect a wireless controller when you ask it to.</string>
+	<string>InputConfig uses Bluetooth to read Switch 2 controllers, and to connect and disconnect wireless controllers, when you ask it to or turn that on in Settings.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

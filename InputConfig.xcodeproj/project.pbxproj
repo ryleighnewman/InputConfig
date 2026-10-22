@@ -7,6 +7,40 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F77BC1B9AD215983710BCCE0 /* ControllerPowerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */; };
+		13F153E07F8E10D6818A76E2 /* Switch2BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */; };
+		20800DC9D9838B7E4209FA89 /* SteamController2015Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515245B55E86BEACE66E5CF8 /* SteamController2015Commands.swift */; };
+		652AF8BC526501941C360E6B /* MacroPadLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E2E92D776171ACC6DA223EA /* MacroPadLayouts.swift */; };
+		9FB0ACA14019F1B8A7899A71 /* PlayStationCapabilityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8837A4FC4CC6BB660AB6C01 /* PlayStationCapabilityProbe.swift */; };
+		E1B908B981B372E43734D26D /* XboxBluetoothLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D40198202B5CE7C5449FEC1 /* XboxBluetoothLayout.swift */; };
+		A4FDB4637C5DC2201B3D46AD /* ThrustmasterWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8013237A1A5F3B62D9A628A /* ThrustmasterWheel.swift */; };
+		8C4CFC27416B4F2C3CB19854 /* Switch2Calibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 146770DD8EE12370D2A60931 /* Switch2Calibration.swift */; };
+		C27F9057513CD478A2065742 /* SteamController2026Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A3ACA5534CA5C564567F497 /* SteamController2026Commands.swift */; };
+		C75506A50AE04E8AE684517D /* HIDReportDecoder+Generic.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E9B017E4328177BEBA8E77 /* HIDReportDecoder+Generic.swift */; };
+		4E9173C8E01E79E7C83733C4 /* HIDReportDecoder+Elgato.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC804B96C19CD20FDFF3011F /* HIDReportDecoder+Elgato.swift */; };
+		60F767369A9E468FB4E25373 /* HIDReportDecoder+Valve.swift in Sources */ = {isa = PBXBuildFile; fileRef = E28EF7AEEF1CA6A4E50A2C4D /* HIDReportDecoder+Valve.swift */; };
+		A4F39DFDAA625C8D560B97B7 /* HIDReportDecoder+Nintendo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6BD670A56D6EA54D6271492 /* HIDReportDecoder+Nintendo.swift */; };
+		749E6A47052D67687CBED7A5 /* HIDReportDecoder+Sony.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72DBE92183A8850026851B95 /* HIDReportDecoder+Sony.swift */; };
+		9B0CA88B44A0CFD6A9C001C8 /* HIDReportDecoder+Xbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7B59BE95D9F82E96B21EC28 /* HIDReportDecoder+Xbox.swift */; };
+		5210CCE941132CA94A665BFB /* SDLGameControllerDB+Consoles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3094B51F0C7466196BB04D2B /* SDLGameControllerDB+Consoles.swift */; };
+		BCA1A5CE9EC1566BAE6D5B46 /* SonyBluetoothCRC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79241D1C8D909384FBB4E77E /* SonyBluetoothCRC.swift */; };
+		B3200F2952BB9AB9B249BF99 /* RawHIDStartupCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BFD3EBF0F1360F887970050 /* RawHIDStartupCommands.swift */; };
+		56FAA0A60BFE0721A01C6155 /* RawHIDReportApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9677416244B3F38C8F3DEFB0 /* RawHIDReportApplier.swift */; };
+		1084BDC9264204A8A6ECB06A /* Fixtures+Output.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE40AB8ADDFCBB60A7A609BC /* Fixtures+Output.swift */; };
+		8D346FBCC6244EA477F77D10 /* Fixtures+ExternalInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1CA55B97EF6E5E82F8BD294 /* Fixtures+ExternalInput.swift */; };
+		4E7558AA40C5E28D3C95EAE2 /* Fixtures+MacroPads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 455D4BC1C05A0B7A25D1EC83 /* Fixtures+MacroPads.swift */; };
+		1ADC5DE284EC4830EF004ED9 /* Fixtures+Sim.swift in Sources */ = {isa = PBXBuildFile; fileRef = F126AE3CE9C19C3FFC655183 /* Fixtures+Sim.swift */; };
+		9A0EBD24F64F587C10BBF3E0 /* Fixtures+Logitech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EEC4BF6D9C53028684E5430 /* Fixtures+Logitech.swift */; };
+		B8DF6DF7BBA61EBB55EA50CE /* Fixtures+Elgato.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50012D2BE44E9428C01CED7B /* Fixtures+Elgato.swift */; };
+		6C0F834AB3C3ACE3927BF9CF /* Fixtures+Valve.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA74840E4CFC97B72387B571 /* Fixtures+Valve.swift */; };
+		07A1BA3B9530AC683991A0AA /* Fixtures+Nintendo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33293AF2E163B9925E59E014 /* Fixtures+Nintendo.swift */; };
+		963C7ADCDF7F88C421D84AAF /* Fixtures+Xbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEBCA748D600B4B19739EB9 /* Fixtures+Xbox.swift */; };
+		2CD3DBBA012D196C67955054 /* Fixtures+PlayStation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C09CD2949942ED35CCDEE3 /* Fixtures+PlayStation.swift */; };
+		8AC9D97A08215D45D266D544 /* Fixtures+Access.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01729328D003E4F88C603F55 /* Fixtures+Access.swift */; };
+		E91634C68BCD374F098FDDB1 /* HIDFixtureCorpus.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F9CF1650495DE623E2705E /* HIDFixtureCorpus.swift */; };
+		D59535055BF24FD233534EA3 /* HIDFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38BDBDE1740400FA58F6DE3 /* HIDFixture.swift */; };
+		7D401DE8E2A7BB1E59E76981 /* DualSenseEdgeProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05008883110C25988EEC8349 /* DualSenseEdgeProfiles.swift */; };
+		A0C9C6EF2DF38DD206A01D75 /* AccessControllerPortService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C08D587F442A32F7BB2C60 /* AccessControllerPortService.swift */; };
 		0E46623A5B439FBDD3CC72FB /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 686B462A282363F0A92B39CA /* IOKit.framework */; };
 		12F586F001E7C3D2B8750E19 /* DebugLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD0D3A62AD97DC81F3FF52B /* DebugLogView.swift */; };
 		1D832C989E14A5A9DE291597 /* GameController.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8038B8B7970BB4B800991EE0 /* GameController.framework */; };
@@ -152,6 +186,7 @@
 		FB1LY000092 /* Layout+UnrecognizedHID.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY000091 /* Layout+UnrecognizedHID.swift */; };
 		FB1LY900001 /* Layout+EightBitDoPro3.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2LY900001 /* Layout+EightBitDoPro3.swift */; };
 		FB1VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift */; };
+		FB1VIZPROF00001 /* Visualizer/ControllerProfilesViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2VIZPROF00001 /* Visualizer/ControllerProfilesViews.swift */; };
 		FB1VIZLEGEND0001 /* Visualizer/CanvasLegend.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2VIZLEGEND0001 /* Visualizer/CanvasLegend.swift */; };
 		FB2001GYROVIZ001000000000 /* GyroVisualizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001GYROVIZ002000000000 /* GyroVisualizationView.swift */; };
 		FBF0HELPER001STEAMCTRL /* SteamControllerHelper in Copy Helpers */ = {isa = PBXBuildFile; fileRef = FBF1HELPER001STEAMCTRL /* SteamControllerHelper */; };
@@ -173,6 +208,40 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerPowerService.swift"; sourceTree = "<group>"; };
+		8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Switch2BluetoothService.swift"; sourceTree = "<group>"; };
+		515245B55E86BEACE66E5CF8 /* SteamController2015Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamController2015Commands.swift"; sourceTree = "<group>"; };
+		2E2E92D776171ACC6DA223EA /* MacroPadLayouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroPadLayouts.swift; sourceTree = "<group>"; };
+		D8837A4FC4CC6BB660AB6C01 /* PlayStationCapabilityProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayStationCapabilityProbe.swift; sourceTree = "<group>"; };
+		1D40198202B5CE7C5449FEC1 /* XboxBluetoothLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XboxBluetoothLayout.swift; sourceTree = "<group>"; };
+		A8013237A1A5F3B62D9A628A /* ThrustmasterWheel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThrustmasterWheel.swift; sourceTree = "<group>"; };
+		146770DD8EE12370D2A60931 /* Switch2Calibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Switch2Calibration.swift; sourceTree = "<group>"; };
+		1A3ACA5534CA5C564567F497 /* SteamController2026Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamController2026Commands.swift; sourceTree = "<group>"; };
+		F4E9B017E4328177BEBA8E77 /* HIDReportDecoder+Generic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Generic.swift"; sourceTree = "<group>"; };
+		AC804B96C19CD20FDFF3011F /* HIDReportDecoder+Elgato.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Elgato.swift"; sourceTree = "<group>"; };
+		E28EF7AEEF1CA6A4E50A2C4D /* HIDReportDecoder+Valve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Valve.swift"; sourceTree = "<group>"; };
+		F6BD670A56D6EA54D6271492 /* HIDReportDecoder+Nintendo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Nintendo.swift"; sourceTree = "<group>"; };
+		72DBE92183A8850026851B95 /* HIDReportDecoder+Sony.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Sony.swift"; sourceTree = "<group>"; };
+		B7B59BE95D9F82E96B21EC28 /* HIDReportDecoder+Xbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HIDReportDecoder+Xbox.swift"; sourceTree = "<group>"; };
+		3094B51F0C7466196BB04D2B /* SDLGameControllerDB+Consoles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SDLGameControllerDB+Consoles.swift"; sourceTree = "<group>"; };
+		79241D1C8D909384FBB4E77E /* SonyBluetoothCRC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SonyBluetoothCRC.swift; sourceTree = "<group>"; };
+		8BFD3EBF0F1360F887970050 /* RawHIDStartupCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawHIDStartupCommands.swift; sourceTree = "<group>"; };
+		9677416244B3F38C8F3DEFB0 /* RawHIDReportApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawHIDReportApplier.swift; sourceTree = "<group>"; };
+		BE40AB8ADDFCBB60A7A609BC /* Fixtures+Output.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Output.swift"; sourceTree = "<group>"; };
+		B1CA55B97EF6E5E82F8BD294 /* Fixtures+ExternalInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+ExternalInput.swift"; sourceTree = "<group>"; };
+		455D4BC1C05A0B7A25D1EC83 /* Fixtures+MacroPads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+MacroPads.swift"; sourceTree = "<group>"; };
+		F126AE3CE9C19C3FFC655183 /* Fixtures+Sim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Sim.swift"; sourceTree = "<group>"; };
+		9EEC4BF6D9C53028684E5430 /* Fixtures+Logitech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Logitech.swift"; sourceTree = "<group>"; };
+		50012D2BE44E9428C01CED7B /* Fixtures+Elgato.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Elgato.swift"; sourceTree = "<group>"; };
+		DA74840E4CFC97B72387B571 /* Fixtures+Valve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Valve.swift"; sourceTree = "<group>"; };
+		33293AF2E163B9925E59E014 /* Fixtures+Nintendo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Nintendo.swift"; sourceTree = "<group>"; };
+		CDEBCA748D600B4B19739EB9 /* Fixtures+Xbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Xbox.swift"; sourceTree = "<group>"; };
+		A7C09CD2949942ED35CCDEE3 /* Fixtures+PlayStation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+PlayStation.swift"; sourceTree = "<group>"; };
+		01729328D003E4F88C603F55 /* Fixtures+Access.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+Access.swift"; sourceTree = "<group>"; };
+		A5F9CF1650495DE623E2705E /* HIDFixtureCorpus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDFixtureCorpus.swift; sourceTree = "<group>"; };
+		B38BDBDE1740400FA58F6DE3 /* HIDFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDFixture.swift; sourceTree = "<group>"; };
+		05008883110C25988EEC8349 /* DualSenseEdgeProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DualSenseEdgeProfiles.swift; sourceTree = "<group>"; };
+		F0C08D587F442A32F7BB2C60 /* AccessControllerPortService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessControllerPortService.swift; sourceTree = "<group>"; };
 		0FD0D3A62AD97DC81F3FF52B /* DebugLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogView.swift; sourceTree = "<group>"; };
 		1A95E8B26BF8FC8349144B7B /* ExamplePresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExamplePresets.swift; sourceTree = "<group>"; };
 		1ADD0DB9D63A081D226051F7 /* InputSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputSimulator.swift; sourceTree = "<group>"; };
@@ -346,6 +415,7 @@
 		FB2LY000091 /* Layout+UnrecognizedHID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+UnrecognizedHID.swift"; sourceTree = "<group>"; };
 		FB2LY900001 /* Layout+EightBitDoPro3.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoPro3.swift"; sourceTree = "<group>"; };
 		FB2VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Visualizer/ControllerCanvas.swift; sourceTree = "<group>"; };
+		FB2VIZPROF00001 /* Visualizer/ControllerProfilesViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Visualizer/ControllerProfilesViews.swift; sourceTree = "<group>"; };
 		FB2VIZLEGEND0001 /* Visualizer/CanvasLegend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Visualizer/CanvasLegend.swift; sourceTree = "<group>"; };
 		FBF1HELPER001STEAMCTRL /* SteamControllerHelper */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; name = SteamControllerHelper; path = SteamControllerHelper/SteamControllerHelper; sourceTree = "<group>"; };
 		FBPRIV0002PRIVACYREF000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -402,6 +472,26 @@
 			path = InputConfig;
 			sourceTree = "<group>";
 		};
+		73B5D21B8CCA501A2687F2FE /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				A5F9CF1650495DE623E2705E /* HIDFixtureCorpus.swift */,
+				01729328D003E4F88C603F55 /* Fixtures+Access.swift */,
+				A7C09CD2949942ED35CCDEE3 /* Fixtures+PlayStation.swift */,
+				CDEBCA748D600B4B19739EB9 /* Fixtures+Xbox.swift */,
+				33293AF2E163B9925E59E014 /* Fixtures+Nintendo.swift */,
+				DA74840E4CFC97B72387B571 /* Fixtures+Valve.swift */,
+				50012D2BE44E9428C01CED7B /* Fixtures+Elgato.swift */,
+				9EEC4BF6D9C53028684E5430 /* Fixtures+Logitech.swift */,
+				F126AE3CE9C19C3FFC655183 /* Fixtures+Sim.swift */,
+				455D4BC1C05A0B7A25D1EC83 /* Fixtures+MacroPads.swift */,
+				B1CA55B97EF6E5E82F8BD294 /* Fixtures+ExternalInput.swift */,
+				BE40AB8ADDFCBB60A7A609BC /* Fixtures+Output.swift */,
+				B38BDBDE1740400FA58F6DE3 /* HIDFixture.swift */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
 		84CA7AFC808DE0FA4D590CA6 /* Models */ = {
 			isa = PBXGroup;
 			children = (
@@ -410,6 +500,7 @@
 				FB2001SCAFFOLD000001 /* ControllerScaffold.swift */,
 				FB2001BUTTONNAMES001 /* ButtonNames.swift */,
 				FB3LY000102 /* Layouts */,
+				73B5D21B8CCA501A2687F2FE /* Fixtures */,
 				5AEC52DE5A4CD75E782F3060 /* OutputAction.swift */,
 				8C2207F21589E350202E2A6D /* Preset.swift */,
 				FB20010010CTRLPROFILE00001 /* ControllerProfile.swift */,
@@ -454,6 +545,16 @@
 				2C5119FD097588A76BA1AD62 /* MappingEngine.swift */,
 				FB20010009MIDISERVICE00001 /* MIDIService.swift */,
 				FB2001000FMENUBARCTRL00001 /* MenuBarController.swift */,
+				9677416244B3F38C8F3DEFB0 /* RawHIDReportApplier.swift */,
+				8BFD3EBF0F1360F887970050 /* RawHIDStartupCommands.swift */,
+				79241D1C8D909384FBB4E77E /* SonyBluetoothCRC.swift */,
+				3094B51F0C7466196BB04D2B /* SDLGameControllerDB+Consoles.swift */,
+				B7B59BE95D9F82E96B21EC28 /* HIDReportDecoder+Xbox.swift */,
+				72DBE92183A8850026851B95 /* HIDReportDecoder+Sony.swift */,
+				F6BD670A56D6EA54D6271492 /* HIDReportDecoder+Nintendo.swift */,
+				E28EF7AEEF1CA6A4E50A2C4D /* HIDReportDecoder+Valve.swift */,
+				AC804B96C19CD20FDFF3011F /* HIDReportDecoder+Elgato.swift */,
+				F4E9B017E4328177BEBA8E77 /* HIDReportDecoder+Generic.swift */,
 				FB20010013HIDREPORTDEC0001 /* HIDReportDecoder.swift */,
 				FB20010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift */,
 				FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */,
@@ -530,6 +631,7 @@
 				FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */,
 				FB2VIZLEGEND0001 /* Visualizer/CanvasLegend.swift */,
 				FB2VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift */,
+				FB2VIZPROF00001 /* Visualizer/ControllerProfilesViews.swift */,
 				FB20010015STATSVIEW000001 /* StatsView.swift */,
 				FB2001001EIMPORTREVIEW001 /* ImportReviewSheet.swift */,
 				FB20010003HELPVIEW0000001 /* HelpGuideView.swift */,
@@ -547,10 +649,21 @@
 		FB2001DEVICESGROUP01 /* Devices */ = {
 			isa = PBXGroup;
 			children = (
+				F0C08D587F442A32F7BB2C60 /* AccessControllerPortService.swift */,
+				05008883110C25988EEC8349 /* DualSenseEdgeProfiles.swift */,
 				FB2001001ADSSUPPSVC0000001 /* DualSenseSupplementService.swift */,
 				FB20010004EIGHTBITDO000001 /* EightBitDoDetector.swift */,
+				515245B55E86BEACE66E5CF8 /* SteamController2015Commands.swift */,
+				1A3ACA5534CA5C564567F497 /* SteamController2026Commands.swift */,
+				146770DD8EE12370D2A60931 /* Switch2Calibration.swift */,
+				A8013237A1A5F3B62D9A628A /* ThrustmasterWheel.swift */,
+				1D40198202B5CE7C5449FEC1 /* XboxBluetoothLayout.swift */,
+				D8837A4FC4CC6BB660AB6C01 /* PlayStationCapabilityProbe.swift */,
+				2E2E92D776171ACC6DA223EA /* MacroPadLayouts.swift */,
 				FB2001LOGIWHEEL01 /* LogitechWheel.swift */,
 				FB20010013STEAMCTRLSVC001 /* SteamControllerService.swift */,
+				8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */,
+				5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */,
 				FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */,
 			);
 			path = Devices;
@@ -809,6 +922,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/SteamControllerHelper/main.swift",
+				"$(SRCROOT)/InputConfig/Services/Devices/SteamController2015Commands.swift",
 			);
 			name = "Build Helpers";
 			outputFileListPaths = (
@@ -818,7 +932,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Compile the helpers from source, universal, when a binary is missing,\n# older than its source, or not universal. They are not checked in, so a\n# fresh clone failed to build, and an archive shipped whatever binary was\n# left on disk.\nset -e\nbuild_helper() {\n  name=\"$1\"\n  src=\"${SRCROOT}/$name/main.swift\"\n  out=\"${SRCROOT}/$name/$name\"\n  archs=$(lipo -archs \"$out\" 2>/dev/null || true)\n  universal=0\n  case \"$archs\" in *arm64*) case \"$archs\" in *x86_64*) universal=1 ;; esac ;; esac\n  if [ ! -f \"$out\" ] || [ \"$src\" -nt \"$out\" ] || [ \"$universal\" = 0 ]; then\n    echo \"Building $name (universal)\"\n    xcrun --sdk macosx swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" -o \"$out.arm64\"\n    xcrun --sdk macosx swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" -o \"$out.x86_64\"\n    lipo -create \"$out.arm64\" \"$out.x86_64\" -output \"$out\"\n    rm -f \"$out.arm64\" \"$out.x86_64\"\n  fi\n}\nbuild_helper SteamControllerHelper\n";
+			shellScript = "# Compile the helpers from source, universal, when a binary is missing,\n# older than its source, or not universal. They are not checked in, so a\n# fresh clone failed to build, and an archive shipped whatever binary was\n# left on disk.\nset -e\nbuild_helper() {\n  name=\"$1\"\n  src=\"${SRCROOT}/$name/main.swift\"\n  shared=\"${SRCROOT}/InputConfig/Services/Devices/SteamController2015Commands.swift\"\n  out=\"${SRCROOT}/$name/$name\"\n  archs=$(lipo -archs \"$out\" 2>/dev/null || true)\n  universal=0\n  case \"$archs\" in *arm64*) case \"$archs\" in *x86_64*) universal=1 ;; esac ;; esac\n  if [ ! -f \"$out\" ] || [ \"$src\" -nt \"$out\" ] || [ \"$shared\" -nt \"$out\" ] || [ \"$universal\" = 0 ]; then\n    echo \"Building $name (universal)\"\n    xcrun --sdk macosx swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" \"$shared\" -o \"$out.arm64\"\n    xcrun --sdk macosx swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" \"$shared\" -o \"$out.x86_64\"\n    lipo -create \"$out.arm64\" \"$out.x86_64\" -output \"$out\"\n    rm -f \"$out.arm64\" \"$out.x86_64\"\n  fi\n}\nbuild_helper SteamControllerHelper\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -827,6 +941,40 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F77BC1B9AD215983710BCCE0 /* ControllerPowerService.swift in Sources */,
+				13F153E07F8E10D6818A76E2 /* Switch2BluetoothService.swift in Sources */,
+				20800DC9D9838B7E4209FA89 /* SteamController2015Commands.swift in Sources */,
+				652AF8BC526501941C360E6B /* MacroPadLayouts.swift in Sources */,
+				9FB0ACA14019F1B8A7899A71 /* PlayStationCapabilityProbe.swift in Sources */,
+				E1B908B981B372E43734D26D /* XboxBluetoothLayout.swift in Sources */,
+				A4FDB4637C5DC2201B3D46AD /* ThrustmasterWheel.swift in Sources */,
+				8C4CFC27416B4F2C3CB19854 /* Switch2Calibration.swift in Sources */,
+				C27F9057513CD478A2065742 /* SteamController2026Commands.swift in Sources */,
+				C75506A50AE04E8AE684517D /* HIDReportDecoder+Generic.swift in Sources */,
+				4E9173C8E01E79E7C83733C4 /* HIDReportDecoder+Elgato.swift in Sources */,
+				60F767369A9E468FB4E25373 /* HIDReportDecoder+Valve.swift in Sources */,
+				A4F39DFDAA625C8D560B97B7 /* HIDReportDecoder+Nintendo.swift in Sources */,
+				749E6A47052D67687CBED7A5 /* HIDReportDecoder+Sony.swift in Sources */,
+				9B0CA88B44A0CFD6A9C001C8 /* HIDReportDecoder+Xbox.swift in Sources */,
+				5210CCE941132CA94A665BFB /* SDLGameControllerDB+Consoles.swift in Sources */,
+				BCA1A5CE9EC1566BAE6D5B46 /* SonyBluetoothCRC.swift in Sources */,
+				B3200F2952BB9AB9B249BF99 /* RawHIDStartupCommands.swift in Sources */,
+				56FAA0A60BFE0721A01C6155 /* RawHIDReportApplier.swift in Sources */,
+				1084BDC9264204A8A6ECB06A /* Fixtures+Output.swift in Sources */,
+				8D346FBCC6244EA477F77D10 /* Fixtures+ExternalInput.swift in Sources */,
+				4E7558AA40C5E28D3C95EAE2 /* Fixtures+MacroPads.swift in Sources */,
+				1ADC5DE284EC4830EF004ED9 /* Fixtures+Sim.swift in Sources */,
+				9A0EBD24F64F587C10BBF3E0 /* Fixtures+Logitech.swift in Sources */,
+				B8DF6DF7BBA61EBB55EA50CE /* Fixtures+Elgato.swift in Sources */,
+				6C0F834AB3C3ACE3927BF9CF /* Fixtures+Valve.swift in Sources */,
+				07A1BA3B9530AC683991A0AA /* Fixtures+Nintendo.swift in Sources */,
+				963C7ADCDF7F88C421D84AAF /* Fixtures+Xbox.swift in Sources */,
+				2CD3DBBA012D196C67955054 /* Fixtures+PlayStation.swift in Sources */,
+				8AC9D97A08215D45D266D544 /* Fixtures+Access.swift in Sources */,
+				E91634C68BCD374F098FDDB1 /* HIDFixtureCorpus.swift in Sources */,
+				D59535055BF24FD233534EA3 /* HIDFixture.swift in Sources */,
+				7D401DE8E2A7BB1E59E76981 /* DualSenseEdgeProfiles.swift in Sources */,
+				A0C9C6EF2DF38DD206A01D75 /* AccessControllerPortService.swift in Sources */,
 				306FAA3C20CF616DF8599590 /* BindingRowView.swift in Sources */,
 				FB2001GYROVIZ001000000000 /* GyroVisualizationView.swift in Sources */,
 				FB10010008CTRLTYPEDET00001 /* ControllerTypeDetector.swift in Sources */,
@@ -905,6 +1053,7 @@
 				FB10010018VIRTUALCTRL0001 /* VirtualControllerView.swift in Sources */,
 				FB1VIZLEGEND0001 /* Visualizer/CanvasLegend.swift in Sources */,
 				FB1VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift in Sources */,
+				FB1VIZPROF00001 /* Visualizer/ControllerProfilesViews.swift in Sources */,
 				FB1001000FTOUCHPADSVC00001 /* TouchpadService.swift in Sources */,
 				D1BABA54C5FFEC5A13FA70B6 /* GameControllerService.swift in Sources */,
 				3501D77D98DA73834FBEFB69 /* HIDLightController.swift in Sources */,
@@ -1015,7 +1164,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -1023,7 +1172,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.7;
+				MARKETING_VERSION = 1.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;
@@ -1106,7 +1255,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 33;
+				CURRENT_PROJECT_VERSION = 34;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1115,7 +1264,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.7;
+				MARKETING_VERSION = 1.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;

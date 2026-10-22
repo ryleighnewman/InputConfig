@@ -25,7 +25,9 @@ final class TipJarService: ObservableObject {
         "com.inputconfig.app.tip.small",    // suggested $0.99
         "com.inputconfig.app.tip.med",      // suggested $2.99
         "com.inputconfig.app.tip.large",    // suggested $4.99
-        "com.inputconfig.app.tip.generous"  // suggested $9.99
+        "com.inputconfig.app.tip.generous", // suggested $9.99
+        "com.inputconfig.app.tip.huge",     // suggested $24.99
+        "com.inputconfig.app.tip.patron"    // suggested $99.99
     ]
 
     /// Monthly auto-renewable tip IDs. All in the "Recurring Tips" group.

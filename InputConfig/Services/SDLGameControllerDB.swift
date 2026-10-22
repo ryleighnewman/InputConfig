@@ -44,7 +44,9 @@ enum SDLGameControllerDB {
         guard let elements else { return nil }
         let fitting = rows.filter { fits($0, elements) }
         let v = version ?? 0
-        return fitting.min { abs($0.version - v) < abs($1.version - v) }
+        // Nearest version; on a tie the newer firmware's row, which tends to
+        // name more controls.
+        return fitting.min { (abs($0.version - v), -$0.version) < (abs($1.version - v), -$1.version) }
     }
 
     /// Whether every source a row names (b3, a1, +a2, a1~, h0.4) exists on
@@ -148,57 +150,6 @@ enum SDLGameControllerDB {
             18: "Left Paddle 2", 19: "Right Paddle 2",
         ]
         return (0..<count).map { known[$0] ?? "Button \($0)" }
-    }
-
-    /// A decode plan that puts every control the row names on its
-    /// InputConfig slot. nil when the row points at controls the
-    /// descriptor does not have, which means the row is for a different
-    /// firmware and the plain descriptor layout is the safer reading.
-    /// A row with the standard targets it leaves out filled in, where the
-    /// device's button order says where they are:
-    /// - A PlayStation-licensed pad or stick in the DualShock order (Square
-    ///   b0, Cross b1, Circle b2, Triangle b3, L1 b4, R1 b5, Share b8,
-    ///   Options b9) has L3 on b10, R3 on b11 and, past PS on b12, a PS4 or
-    ///   PS5 model's touchpad click on b13 (a PS3 model reports 13 buttons,
-    ///   so it has no b13 to fill). Rows for the Victrix Pro FS and
-    ///   the PDP Versus Fighting leave L3 and R3 out, the Qanba Drone's the
-    ///   touchpad, so those presses landed on the extra slots and the drawn
-    ///   buttons stayed dark.
-    /// - The 8BitDo Pro 2 (2DC8:6003 and 6006) has its back buttons on b2
-    ///   (PR, right) and b5 (PL, left), as SDL's own 8BitDo driver reads
-    ///   them (SDL_hidapi_8bitdo.c); its rows name neither.
-    /// Only buttons the device has and the row does not already use.
-    static func completed(_ mapping: Mapping, buttonCount: Int) -> Mapping {
-        var entries = mapping.entries
-        let used = Set(entries.values.compactMap { v -> Int? in
-            var s = Substring(v)
-            if let f = s.first, f == "+" || f == "-" { s = s.dropFirst() }
-            if s.hasSuffix("~") { s = s.dropLast() }
-            guard s.first == "b" else { return nil }
-            return Int(s.dropFirst())
-        })
-        func add(_ target: String, _ button: Int) {
-            guard entries[target] == nil, button < buttonCount, !used.contains(button) else { return }
-            entries[target] = "b\(button)"
-        }
-        let dualShockOrder = ["x": "b0", "a": "b1", "b": "b2", "y": "b3", "leftshoulder": "b4", "rightshoulder": "b5",
-                              "back": "b8", "start": "b9"]
-        if dualShockOrder.allSatisfy({ entries[$0.key] == $0.value }) {
-            add("leftstick", 10)
-            add("rightstick", 11)
-            // A PS3 model has 13 buttons and no touchpad; one with a b13 and
-            // no PS3 in its name is a PS4 or PS5 class device.
-            if entries["guide"] == "b12", !mapping.name.uppercased().contains("PS3") {
-                add("touchpad", 13)
-            }
-        }
-        if mapping.vendorID == 0x2DC8, mapping.productID == 0x6003 || mapping.productID == 0x6006 {
-            add("paddle1", 2)
-            add("paddle2", 5)
-        }
-        guard entries != mapping.entries else { return mapping }
-        return Mapping(vendorID: mapping.vendorID, productID: mapping.productID, version: mapping.version,
-                       name: mapping.name, entries: entries)
     }
 
     static func layout(for elements: HIDDescriptorParser.SDLElements,
@@ -317,6 +268,35 @@ enum SDLGameControllerDB {
             && !buttonSlotsUsed.contains(axes[i].1.index + 2) {
             axes[i].1.digitalButton = axes[i].1.index + 2
         }
+        // A PlayStation shaped row (Square b0, Cross b1, Circle b2,
+        // Triangle b3, triggers on axes) leaves the DualShock's digital L2
+        // and R2 bits (b6, b7) unmapped. A Victrix Pro FS and GP2040-CE
+        // boards set only those bits and leave the analog bytes at 0
+        // (SDL_hidapi_ps4.c), so the bits also press L2 and R2 and force
+        // the trigger axes full. The extras loop below still numbers the
+        // same bits from 22, for presets that already use them.
+        let dualShockShape = ["x": "b0", "a": "b1", "b": "b2", "y": "b3"].allSatisfy { mapping.entries[$0.key] == $0.value }
+        if dualShockShape, mapping.entries["lefttrigger"]?.hasPrefix("a") == true, mapping.entries["righttrigger"]?.hasPrefix("a") == true {
+            for (n, slot) in [(6, 6), (7, 7)] where !usedButtons.contains(n) && n < elements.buttons.count && elements.buttons[n].bitSize == 1 {
+                let e = elements.buttons[n]
+                buttons.append((e.reportID, .init(bitOffset: e.bitOffset, index: slot, forcesAxis: slot - 2)))
+            }
+        }
+        // A row that names no stick (the Hori Pokken row GP2040-CE's Switch
+        // mode inherits) on a device whose descriptor has X, Y and Z, Rz or
+        // Rx, Ry: those go on the stick slots the plain layout would use.
+        if ["leftx", "lefty", "rightx", "righty"].allSatisfy({ mapping.entries[$0] == nil }) {
+            func unused(_ usage: Int) -> Int? {
+                elements.axes.indices.first { !usedAxes.contains($0) && elements.axes[$0].usagePage == 0x01 && elements.axes[$0].usage == usage }
+            }
+            let pairs: [(Int, Int)] = [(0x30, 0), (0x31, 1)]
+                + ((unused(0x32) != nil && unused(0x35) != nil) ? [(0x32, 2), (0x35, 3)] : [(0x33, 2), (0x34, 3)])
+            for (usage, slot) in pairs {
+                guard let n = unused(usage) else { continue }
+                axes.append((elements.axes[n].reportID, axis(elements.axes[n], slot: slot, unipolar: false, half: nil, inverted: false)))
+                usedAxes.insert(n)
+            }
+        }
 
         // Unmapped controls keep working on the extra slots.
         var nextButton = firstExtraButton
@@ -365,44 +345,6 @@ enum SDLGameControllerDB {
         case "dpright": return .right
         default: return nil
         }
-    }
-
-    /// Third-party pads that speak the PlayStation 4 or 5 protocol (Razer,
-    /// Nacon, Hori, PDP, Mad Catz, Qanba and others), as SDL's
-    /// controller_list.h lists them (zlib license; Sony's own pads and the
-    /// Logitech G29's PS4 mode left out). SDL reads them with its own
-    /// PS4/PS5 drivers, so the database has no Mac rows for most; read in
-    /// descriptor order, Square, Cross, L3, R3, PS and Mute fired the wrong
-    /// rows. They take Sony's own row instead (Cross 0, Circle 1, Square 2,
-    /// Triangle 3, PS 10, L3 11, R3 12).
-    static let playStation4Class: Set<Int> = [
-        0x0079_181B, 0x044F_D00E, 0x0738_8250, 0x0738_8384, 0x0738_8480, 0x0738_8481,
-        0x0C12_0E10, 0x0C12_0E13, 0x0C12_0E15, 0x0C12_0E20, 0x0C12_0EF6, 0x0C12_1CF6,
-        0x0C12_1E10, 0x0C12_2E18, 0x0E6F_0203, 0x0E6F_0207, 0x0E6F_020A, 0x0F0D_0055,
-        0x0F0D_005E, 0x0F0D_0066, 0x0F0D_0084, 0x0F0D_0087, 0x0F0D_008A, 0x0F0D_009C,
-        0x0F0D_00A0, 0x0F0D_00EE, 0x0F0D_011C, 0x0F0D_0123, 0x0F0D_0162, 0x11C0_4001,
-        0x146B_0D01, 0x146B_0D02, 0x146B_0D06, 0x146B_0D08, 0x146B_0D09, 0x146B_0D10,
-        0x146B_0D13, 0x146B_1103, 0x1532_1000, 0x1532_1004, 0x1532_1007, 0x1532_1008,
-        0x1532_1009, 0x1532_100A, 0x1532_1100, 0x20D6_792A, 0x2C22_2000, 0x2C22_2300,
-        0x2C22_2500, 0x3285_0D16, 0x3285_0D17, 0x7545_0104, 0x9886_0025, 0x7545_1122,
-    ]
-    static let playStation5Class: Set<Int> = [
-        0x0E6F_0209, 0x0F0D_0163, 0x0F0D_0184, 0x1532_100B, 0x1532_100C, 0x1532_1012,
-        0x1532_1024, 0x1532_1026, 0x3285_0D18, 0x3285_0D19, 0x358A_0104, 0x358A_0304,
-    ]
-
-    /// Sony's own row, for a PlayStation-class pad with no row of its own,
-    /// when its descriptor has every control that row names.
-    static func playStationClassMapping(vendorID: Int32, productID: Int32,
-                                        elements: HIDDescriptorParser.SDLElements) -> Mapping? {
-        let id = Int(vendorID) << 16 | Int(productID)
-        let sony: Int32
-        if playStation5Class.contains(id) { sony = 0x0CE6 }
-        else if playStation4Class.contains(id) { sony = 0x05C4 }
-        else { return nil }
-        guard let row = mappings.first(where: { $0.vendorID == 0x054C && $0.productID == sony }) else { return nil }
-        let borrowed = Mapping(vendorID: vendorID, productID: productID, version: 0, name: row.name, entries: row.entries)
-        return fits(borrowed, elements) ? borrowed : nil
     }
 
     /// A ready profile for a device the database knows, or nil.

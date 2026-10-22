@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig gebruikt Bluetooth alleen om een draadloze controller los te koppelen wanneer je dat vraagt.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig gebruikt Bluetooth om Switch 2-controllers te lezen, en om draadloze controllers te verbinden en te verbreken, als je daarom vraagt of het in Instellingen inschakelt.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig gebruikt Bluetooth alleen om een draadloze controller los te koppelen wanneer je dat vraagt.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig gebruikt Bluetooth om Switch 2-controllers te lezen, en om draadloze controllers te verbinden en te verbreken, als je daarom vraagt of het in Instellingen inschakelt.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle rechten voorbehouden.";

@@ -139,13 +139,17 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     var points: [String] {
         // Each point keeps the right-to-left mark the whole text opens with.
         let rtl = explanation.hasPrefix("\u{200F}")
-        return explanation.withoutRTLMark
-            .replacingOccurrences(of: "e.g. ", with: "e.g.\u{00A0}")
+        // An abbreviation's period is not a sentence's end: "vs." split
+        // "throttle vs. FPS aim" into two broken points.
+        let abbreviations = ["e.g.", "i.e.", "vs.", "etc."]
+        var text = explanation.withoutRTLMark
+        for a in abbreviations { text = text.replacingOccurrences(of: a + " ", with: a + "\u{00A0}") }
+        return text
             .components(separatedBy: ". ")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
-            .map { $0.replacingOccurrences(of: "e.g.\u{00A0}", with: "e.g. ") }
+            .map { point in abbreviations.reduce(point) { $0.replacingOccurrences(of: $1 + "\u{00A0}", with: $1 + " ") } }
             .map { rtl ? "\u{200F}" + $0 : $0 }
     }
 
@@ -227,11 +231,11 @@ struct FeatureDemoView: View {
     /// The sheet's height: taller with the text, but never past the screen,
     /// or the Close and Open buttons sat under the Dock on a 13-inch display
     /// at the Largest text size.
-    private var sheetHeight: CGFloat { Metrics.sheetHeight(ideal: 500 + extraTextHeight, floor: 440) }
+    private var sheetHeight: CGFloat { Metrics.sheetHeight(ideal: 556 + extraTextHeight, floor: 470) }
     /// What a small screen took off the ideal height. The points band gives
     /// it up and scrolls; the demo keeps its room.
-    private var heightShortfall: CGFloat { max(0, 500 + extraTextHeight - sheetHeight) }
-    private var pointsHeight: CGFloat { max(48, 104 + extraTextHeight - heightShortfall) }
+    private var heightShortfall: CGFloat { max(0, 556 + extraTextHeight - sheetHeight) }
+    private var pointsHeight: CGFloat { max(56, 160 + extraTextHeight - heightShortfall) }
     let kind: FeatureDemoKind
     let onJumpToPreset: (String) -> Void
     let onOpenStatistics: () -> Void
@@ -296,8 +300,11 @@ struct FeatureDemoView: View {
                     }
                 }
                 .padding(.leading, 60)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: pointsHeight)
+                .padding(.top, 8)
+                // Top-aligned under the title: a long card used to center
+                // its points in a fixed band and run up into the title.
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: pointsHeight, alignment: .top)
             }
             .id(shown)
             .compositingGroup()
@@ -491,12 +498,16 @@ struct FeatureDemoView: View {
     /// The animation is a picture of the points above it: one quiet element
     /// for VoiceOver instead of shapes and a caption that changes each second.
     private var pointsBlock: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 7) {
             ForEach(Array(shown.points.enumerated()), id: \.offset) { _, point in
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("-")
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    // A small dot in the card's color, sat on the text's
+                    // first line.
+                    Circle()
+                        .fill(tint.opacity(0.85))
+                        .frame(width: 5, height: 5)
+                        .alignmentGuide(.firstTextBaseline) { d in d[.bottom] + 1 }
                         .accessibilityHidden(true)
-                        .foregroundStyle(.hint)
                     Text(point)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1418,45 +1429,77 @@ private struct GyroDemo: View {
             let cursorX = CGFloat(yaw) * 66
             let cursorY = -CGFloat(pitch) * 40
 
-            HStack(spacing: 24) {
-                // Shared 3D gyro model. Magnitudes are scaled so the demo
-                // looks lively without spinning too aggressively.
-                GyroVisualizationView(
-                    gyroX: pitch * 1.2,
-                    gyroY: yaw * 1.2,
-                    gyroZ: roll * 0.8,
-                    rollAngle: roll * 0.35,
-                    pitchAngle: pitch * 0.35,
-                    yawAngle: yaw * 0.45,
-                    mode: .compact
-                )
+            HStack(spacing: 28) {
+                VStack(spacing: 10) {
+                    // Shared 3D gyro model. Magnitudes are scaled so the demo
+                    // looks lively without spinning too aggressively.
+                    GyroVisualizationView(
+                        gyroX: pitch * 1.2,
+                        gyroY: yaw * 1.2,
+                        gyroZ: roll * 0.8,
+                        rollAngle: roll * 0.35,
+                        pitchAngle: pitch * 0.35,
+                        yawAngle: yaw * 0.45,
+                        mode: .compact
+                    )
+                    .scaleEffect(1.25)
+                    .frame(width: 120, height: 120)
+                    Text("Turn and tilt the controller")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 150)
+                }
 
                 Image(systemName: "arrow.forward")
+                    .font(.title3)
                     .foregroundStyle(.hint)
 
-                // Cursor that mirrors the controller's tilt - the runtime
-                // effect when you bind gyro to mouse motion.
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                        .frame(width: 170, height: 106)
-                    // Crosshair grid
-                    Path { p in
-                        p.move(to: CGPoint(x: 85, y: 0))
-                        p.addLine(to: CGPoint(x: 85, y: 106))
-                        p.move(to: CGPoint(x: 0, y: 53))
-                        p.addLine(to: CGPoint(x: 170, y: 53))
+                // A small screen: the pointer goes where the controller
+                // points, with a short trail so the motion reads in a still.
+                VStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.black.opacity(0.28))
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1)
+                        // A soft grid, so the screen reads as a surface.
+                        Path { p in
+                            for i in 1..<4 {
+                                let x = 230 * CGFloat(i) / 4
+                                p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: 140))
+                            }
+                            for i in 1..<3 {
+                                let y = 140 * CGFloat(i) / 3
+                                p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: 230, y: y))
+                            }
+                        }
+                        .stroke(Color.secondary.opacity(0.12), lineWidth: 0.5)
+                        // The trail: where the pointer was over the last
+                        // half second, fading out.
+                        ForEach(1..<9) { k in
+                            let back = t - Double(k) * 0.06
+                            let x = CGFloat(sin(back / 3.5 * 2 * .pi)) * 88
+                            let y = -CGFloat(sin(back / 2.2 * 2 * .pi)) * 50
+                            Circle()
+                                .fill(Color.teal.opacity(0.5 * (1 - Double(k) / 9)))
+                                .frame(width: 7 - CGFloat(k) * 0.5, height: 7 - CGFloat(k) * 0.5)
+                                .offset(x: x, y: y)
+                        }
+                        Image(systemName: "cursorarrow")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.5), radius: 2)
+                            .offset(x: cursorX * 88 / 66 + 6, y: cursorY * 50 / 40 + 8)
                     }
-                    .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
-
-                    Image(systemName: "cursorarrow.rays")
-                        .font(.title2)
-                        .iconTint(.teal)
-                        .offset(x: cursorX, y: cursorY)
+                    .frame(width: 230, height: 140)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    // The screen's own coordinates: turning right moves right.
+                    .environment(\.layoutDirection, .leftToRight)
+                    Text("The pointer follows")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                // The screen's own coordinates: turning right moves right.
-                .environment(\.layoutDirection, .leftToRight)
             }
         }
     }

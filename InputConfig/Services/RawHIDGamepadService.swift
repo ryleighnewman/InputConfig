@@ -94,71 +94,51 @@ final class RawHIDGamepadService: ObservableObject {
     /// with their start-up commands; their state from before is stale.
     nonisolated static func wakesSilent(_ pad: RawHIDGamepad) -> Bool {
         switch pad.profile?.layout {
-        case .dualShock3?, .switch2Pro?, .switch2GameCube?: return true
+        case .dualShock3?, .switch2Pro?, .switch2GameCube?, .switch2JoyConLeft?, .switch2JoyConRight?: return true
         default:
             return pad.vendorID == 0x057E && pad.productID == ControllerProfileDatabase.gameCubeAdapterProductID
         }
     }
 
-    /// Commands some pads need before they send anything.
+    /// The Switch 2 controllers started by Switch2USBEnabler and read from
+    /// report 0x05 (Pro, GameCube, Joy-Con 2 left and right).
+    nonisolated static func isSwitch2Layout(_ layout: ControllerProfile.ReportLayout?) -> Bool {
+        switch layout {
+        case .switch2Pro?, .switch2GameCube?, .switch2JoyConLeft?, .switch2JoyConRight?: return true
+        default: return false
+        }
+    }
+
+    /// Commands some pads need before they send anything. The report bytes
+    /// come from RawHIDStartupCommands, so the bench can check them.
     private func sendStartupCommands(_ device: IOHIDDevice, profile: ControllerProfile?,
                                      vendorID: Int32, productID: Int32) {
-        // A DualShock 3 on USB stays silent until the host puts it in
-        // operational mode. SDL_hidapi_ps3.c (and the kernel) read feature
-        // reports 0xF2 (17 bytes) and 0xF5 (8 bytes), then send a one-byte
-        // output report, which ShanWan clones skip (it sets them rumbling
-        // non-stop). The 0xF4 feature report this app sent before follows
-        // as a fallback. Without any of it the pad enumerates, opens, and
-        // never emits a single input report.
-        if let p = profile, case .dualShock3 = p.layout {
-            var f2 = [UInt8](repeating: 0, count: 17), f2Length = CFIndex(f2.count)
-            IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, 0xF2, &f2, &f2Length)
-            var f5 = [UInt8](repeating: 0, count: 8), f5Length = CFIndex(f5.count)
-            IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, 0xF5, &f5, &f5Length)
-            let name = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? ""
-            let shanWan = vendorID == 0x2563 || vendorID == 0x20BC
-                || (vendorID == 0x054C && name.lowercased().hasPrefix("shanwan"))
-            if !shanWan {
-                var poke: [UInt8] = [0xF5]
-                HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0xF5, &poke, poke.count)
-            }
-            var enable: [UInt8] = [0x42, 0x0C, 0x00, 0x00]
-            HIDWrite.setReport(device,
-                                 kIOHIDReportTypeFeature,
-                                 0xF4,
-                                 &enable,
-                                 enable.count)
-        }
-        // A Logitech wheel in its own mode: its range set to 900 degrees as
-        // SDL does when it opens one, so the angle the Live Visualizer
-        // shows is the wheel's real one.
-        if vendorID == LogitechWheel.vendor, let commands = LogitechWheel.rangeCommands(product: productID) {
-            for command in commands {
-                var bytes = command
-                HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0, &bytes, bytes.count)
+        let name = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? ""
+        let steps = RawHIDStartupCommands.steps(for: profile, vendorID: vendorID, productID: productID, productName: name)
+        for step in steps {
+            switch step {
+            case .getFeature(let id, let length):
+                var buffer = [UInt8](repeating: 0, count: length), bufferLength = CFIndex(length)
+                IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, id, &buffer, &bufferLength)
+            case .set(let type, let id, let report):
+                var bytes = report
+                let kr = HIDWrite.setReport(device, type, id, &bytes, bytes.count)
+                if kr != kIOReturnSuccess, RawHIDStartupCommands.isGameCubeStart(step, vendorID: vendorID, productID: productID) {
+                    ActivityLog.shared.warning("Devices", "GameCube adapter did not accept its start command (\(kr))")
+                }
             }
         }
         // The Switch 2 Pro Controller is silent in the same way, but its
         // start-up commands go to a separate USB interface, not through HID.
-        if let p = profile, p.layout == .switch2Pro || p.layout == .switch2GameCube {
+        if let p = profile, Self.isSwitch2Layout(p.layout) {
             Switch2USBEnabler.shared.enableConnectedControllers()
         }
         // The 2026 Steam Controller sends its gyro and accelerometer only
         // when asked, and only while something reads it.
         if let p = profile, p.layout == .steamController2026 {
             applySteam2026IMU(device)
-            if steam2026LizardOff { sendSteam2026Setting(device, setting: 9, value: 0) }
+            if steam2026LizardOff { sendSteam2026Setting(device, setting: SteamController2026Commands.lizardSetting, value: 0) }
             ensureSteam2026LizardTimer()
-        }
-        // The GameCube controller adapter (WUP-028) reports nothing until
-        // the host sends the one-byte 0x13 start command on its output
-        // endpoint.
-        if vendorID == 0x057E && productID == 0x0337 {
-            var start: [UInt8] = [0x13]
-            let kr = HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x13, &start, start.count)
-            if kr != kIOReturnSuccess {
-                ActivityLog.shared.warning("Devices", "GameCube adapter did not accept its start command (\(kr))")
-            }
         }
     }
     private var reportBuffers: [UInt64: UnsafeMutablePointer<UInt8>] = [:]
@@ -220,15 +200,11 @@ final class RawHIDGamepadService: ObservableObject {
     /// thread: a blocking write over Bluetooth stalled the poll loop.
     nonisolated static let steam2026Queue = DispatchQueue(label: "InputConfig.steamController2026")
 
-    /// One settings write (feature report 1, message 0x87).
-    nonisolated private func sendSteam2026Setting(_ device: IOHIDDevice, setting: UInt8, value: UInt16) {
-        var report = [UInt8](repeating: 0, count: 64)
-        report[0] = 0x01
-        report[1] = 0x87                 // set settings values
-        report[2] = 3                    // one setting: number, then a 16-bit value
-        report[3] = setting
-        report[4] = UInt8(value & 0xFF)
-        report[5] = UInt8(value >> 8)
+    /// One settings write (feature report 1, message 0x87). Nothing is sent
+    /// to a pad with no device (a synthetic one).
+    nonisolated private func sendSteam2026Setting(_ device: IOHIDDevice?, setting: UInt8, value: UInt16) {
+        guard let device else { return }
+        let report = SteamController2026Commands.setting(setting, value: value)
         // On the controller's own queue: a feature write over Bluetooth
         // waits for the controller's answer, and on the main thread that
         // wait stalled the engine's poll.
@@ -255,7 +231,7 @@ final class RawHIDGamepadService: ObservableObject {
         steam2026LizardOff = off
         deviceLookupLock.unlock()
         for pad in activeSteam2026Pads() {
-            sendSteam2026Setting(pad.device, setting: 9, value: off ? 0 : 1)   // lizard mode
+            sendSteam2026Setting(pad.device, setting: SteamController2026Commands.lizardSetting, value: off ? 0 : 1)   // lizard mode
         }
         _ = changed
         // Always: a pad may have arrived since the last call.
@@ -289,7 +265,7 @@ final class RawHIDGamepadService: ObservableObject {
                 guard stillOff else { return }
                 let pads = self.activeSteam2026Pads()
                 if pads.isEmpty { self.ensureSteam2026LizardTimer(); return }
-                for pad in pads { self.sendSteam2026Setting(pad.device, setting: 9, value: 0) }
+                for pad in pads { self.sendSteam2026Setting(pad.device, setting: SteamController2026Commands.lizardSetting, value: 0) }
             }
             timer.resume()
             self.steam2026LizardTimer = timer
@@ -303,8 +279,8 @@ final class RawHIDGamepadService: ObservableObject {
         deviceLookupLock.lock()
         let on = !decodeReasons.isEmpty
         deviceLookupLock.unlock()
-        let devices = device.map { [$0] } ?? activeSteam2026Pads().map(\.device)
-        for d in devices { sendSteam2026Setting(d, setting: 48, value: on ? 0x18 : 0) }
+        let devices = device.map { [$0] } ?? activeSteam2026Pads().compactMap(\.device)
+        for d in devices { sendSteam2026Setting(d, setting: SteamController2026Commands.imuSetting, value: on ? SteamController2026Commands.imuOnValue : 0) }
     }
 
     /// Rumble both motors at `intensity` (0 to 1) for `durationMs`.
@@ -350,9 +326,9 @@ final class RawHIDGamepadService: ObservableObject {
     }
 
     /// Output report 0x80: type, intensity, then each motor's speed and gain.
-    nonisolated private func writeSteam2026Rumble(_ device: IOHIDDevice, speed: UInt16) {
-        let lo = UInt8(speed & 0xFF), hi = UInt8(speed >> 8)
-        var report: [UInt8] = [0x80, 0x00, 0x00, 0x00, lo, hi, 0x00, lo, hi, 0x00]
+    nonisolated private func writeSteam2026Rumble(_ device: IOHIDDevice?, speed: UInt16) {
+        guard let device else { return }
+        var report = SteamController2026Commands.rumble(speed: speed)
         HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x80, &report, report.count)
     }
 
@@ -382,8 +358,8 @@ final class RawHIDGamepadService: ObservableObject {
             connectedGamepads.removeAll { $0.id == key }
             ActivityLog.shared.info("Devices", "A Steam Controller left the Steam Controller Puck")
         } else {
-            applySteam2026IMU(pad.device)
-            if lizardOff { sendSteam2026Setting(pad.device, setting: 9, value: 0) }
+            if let device = pad.device { applySteam2026IMU(device) }
+            if lizardOff { sendSteam2026Setting(pad.device, setting: SteamController2026Commands.lizardSetting, value: 0) }
             ensureSteam2026LizardTimer()
             if !connectedGamepads.contains(where: { $0.id == key }) { connectedGamepads.append(pad) }
             ActivityLog.shared.info("Devices", "A Steam Controller connected through the Steam Controller Puck")
@@ -461,6 +437,54 @@ final class RawHIDGamepadService: ObservableObject {
         }
     }
 
+    // MARK: - Pads from another transport
+
+    /// Keys for pads that reach the app through something other than
+    /// IOHIDManager (Switch 2 controllers over Bluetooth LE); a range IOKit
+    /// registry IDs never use.
+    nonisolated static let externalKeyBase: UInt64 = 0xB1E0_0000_0000_0000
+    private static var externalCounter: UInt64 = 0
+
+    /// Lists a pad fed by another transport, with the profile its IDs name
+    /// (the transport rule is not applied: these profiles say USB because
+    /// that is the only HID road), and returns its key; nil when no profile
+    /// knows the product. Decoding follows the same gate as every raw pad.
+    @discardableResult
+    func attachExternalPad(vendorID: Int32, productID: Int32, transport: String, productName: String) -> UInt64? {
+        guard let profile = ControllerProfileDatabase.profile(forVendor: vendorID, product: productID) else { return nil }
+        Self.externalCounter += 1
+        let key = Self.externalKeyBase | Self.externalCounter
+        let pad = RawHIDGamepad(testProfile: profile, vendorID: vendorID, productID: productID,
+                                transport: transport, id: key, productName: productName)
+        deviceLookupLock.lock()
+        gamepadsByKey[key] = pad
+        deviceLookupLock.unlock()
+        connectedGamepads.append(pad)
+        return key
+    }
+
+    /// One report from that transport, through the live dispatcher.
+    func injectExternal(key: UInt64, reportID: UInt32, bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+        var scratch = bytes
+        scratch.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            dispatch(key: key, reportID: reportID, reportPointer: base, length: CFIndex(buffer.count))
+        }
+    }
+
+    /// The pad left (the link closed, or the setting was turned off).
+    func detachExternalPad(key: UInt64) {
+        deviceLookupLock.lock()
+        let pad = gamepadsByKey.removeValue(forKey: key)
+        lastReports.removeValue(forKey: key)
+        dormantKeys.remove(key)
+        deviceLookupLock.unlock()
+        pad?.resetState()
+        pad?.imu.reset()
+        connectedGamepads.removeAll { $0.id == key }
+    }
+
     /// Every pad: each interface's own, the extra players, the GameCube ports.
     nonisolated private func allPadsLocked() -> [RawHIDGamepad] {
         Array(gamepadsByKey.values) + playerPads.values.flatMap(\.values) + gameCubePorts.values.flatMap(\.values)
@@ -481,6 +505,8 @@ final class RawHIDGamepadService: ObservableObject {
         if TestCapture.inTestRun { return }
         #endif
         guard manager == nil else { return }
+        // Switch 2 controllers over Bluetooth LE, when the setting is on.
+        Switch2BluetoothService.shared.startIfEnabled()
         HIDDeviceRegistry.noteHandDevicesBefore17()
 
         let mgr = IOHIDManagerCreate(kCFAllocatorDefault,
@@ -568,7 +594,8 @@ final class RawHIDGamepadService: ObservableObject {
                 self.deviceLookupLock.unlock()
                 pads.forEach { $0.resetState() }
                 for pad in self.openDevices.values {
-                    self.sendStartupCommands(pad.device, profile: pad.profile,
+                    guard let device = pad.device else { continue }
+                    self.sendStartupCommands(device, profile: pad.profile,
                                              vendorID: pad.vendorID, productID: pad.productID)
                 }
             }
@@ -684,10 +711,11 @@ final class RawHIDGamepadService: ObservableObject {
         awaitingGameController.removeAll()
 
         for (_, gamepad) in openDevices {
-            IOHIDDeviceUnscheduleFromRunLoop(gamepad.device,
+            guard let device = gamepad.device else { continue }
+            IOHIDDeviceUnscheduleFromRunLoop(device,
                                              CFRunLoopGetMain(),
                                              CFRunLoopMode.commonModes.rawValue)
-            IOHIDDeviceClose(gamepad.device, IOOptionBits(kIOHIDOptionsTypeNone))
+            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         }
         for (_, buf) in reportBuffers { buf.deallocate() }
         reportBuffers.removeAll()
@@ -817,9 +845,10 @@ final class RawHIDGamepadService: ObservableObject {
     /// `release(devices:)` for one device.
     func release(vendorID: Int32, productID: Int32) {
         for gamepad in openDevices.values where gamepad.vendorID == vendorID && gamepad.productID == productID {
-            HIDDeviceRegistry.remember(gamepad.device, false)
+            guard let device = gamepad.device else { continue }
+            HIDDeviceRegistry.remember(device, false)
             ActivityLog.shared.info("Devices", "Disconnected \(gamepad.productName)")
-            handleDeviceDetached(gamepad.device)
+            handleDeviceDetached(device)
         }
         var set = HIDDeviceRegistry.rememberedPairs()
         set.remove(HIDDeviceRegistry.pairKey(vendorID: vendorID, productID: productID))
@@ -888,10 +917,11 @@ final class RawHIDGamepadService: ObservableObject {
         // same location with the same identity is gone from the registry,
         // so close it now rather than leave a dead slot behind.
         for stale in openDevices.values where stale.id != info.key
-            && stale.vendorID == info.vendorID && stale.productID == info.productID
-            && Self.location(of: stale.device) == info.locationID
-            && !Self.isLive(stale.device) {
-            handleDeviceDetached(stale.device)
+            && stale.vendorID == info.vendorID && stale.productID == info.productID {
+            guard let staleDevice = stale.device,
+                  Self.location(of: staleDevice) == info.locationID,
+                  !Self.isLive(staleDevice) else { continue }
+            handleDeviceDetached(staleDevice)
         }
 
         // A Logitech wheel in Driving Force EX compatibility mode: switched to
@@ -903,12 +933,22 @@ final class RawHIDGamepadService: ObservableObject {
             let bcd = (IOHIDDeviceGetProperty(device, kIOHIDVersionNumberKey as CFString) as? NSNumber)?.intValue ?? 0
             if let switchTo = LogitechWheel.nativeModeCommand(product: info.productID, bcdDevice: bcd) {
                 wheelsSwitched[info.locationID] = Date()
-                var bytes = switchTo.bytes
                 // A report can only be sent to an open device; it is closed
                 // again at once, since the wheel re-attaches as a new one.
                 var kr = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
                 if kr == kIOReturnSuccess {
-                    kr = HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0, &bytes, bytes.count)
+                    // The G923's switch goes on report 0x30 (hid-lg4ff.c "Report
+                    // ID must be 0x30"); IOKit takes the ID at byte 0 for a
+                    // numbered report. Which framing this wheel honors is not
+                    // yet measured, so a refusal is retried without the ID
+                    // byte and both results are logged.
+                    var bytes = switchTo.reportID == 0 ? switchTo.bytes : [switchTo.reportID] + switchTo.bytes
+                    kr = HIDWrite.setReport(device, kIOHIDReportTypeOutput, CFIndex(switchTo.reportID), &bytes, bytes.count)
+                    if kr != kIOReturnSuccess, switchTo.reportID != 0 {
+                        ActivityLog.shared.info("Devices", "\(info.productName): mode switch on report \(String(format: "0x%02X", switchTo.reportID)) with the ID byte refused (error \(kr)); trying without it")
+                        var bare = switchTo.bytes
+                        kr = HIDWrite.setReport(device, kIOHIDReportTypeOutput, CFIndex(switchTo.reportID), &bare, bare.count)
+                    }
                     IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
                 }
                 ActivityLog.shared.info("Devices", kr == kIOReturnSuccess
@@ -977,6 +1017,61 @@ final class RawHIDGamepadService: ObservableObject {
                 layout: .generic(layout),
                 physicalButtonNames: genericButtonNames(for: layout)
             )
+        }
+        // Contour jog and shuttle controllers and 3Dconnexion 6DoF mice:
+        // their descriptors flag held positions and counters as relative
+        // axes; MacroPadLayouts reads them as what they are.
+        if profile == nil,
+           let original = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data,
+           let parsed = HIDDescriptorParser.parseExtended(original),
+           MacroPadLayouts.applies(vendorID: info.vendorID, productID: info.productID, parsed) {
+            let plan = MacroPadLayouts.normalize(parsed, vendorID: info.vendorID, productID: info.productID)
+            var layout = plan.legacyLayout
+            layout.extended = plan
+            profile = ControllerProfile(
+                identifier: "macropad-\(info.vendorID)-\(info.productID)",
+                displayName: info.productName,
+                vendorID: info.vendorID,
+                productMatches: [.exact(info.productID)],
+                layout: .generic(layout),
+                physicalButtonNames: genericButtonNames(for: layout)
+            )
+        }
+
+        // A Thrustmaster base in native mode: steering and pedals on the
+        // same plan as the Logitech wheels (ThrustmasterWheel).
+        if profile == nil, ThrustmasterWheel.isWheel(vendor: info.vendorID, product: info.productID),
+           let original = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data,
+           let parsed = HIDDescriptorParser.parseExtended(original) {
+            let wheel = ThrustmasterWheel.normalize(parsed)
+            var layout = wheel.legacyLayout
+            layout.extended = wheel
+            profile = ControllerProfile(
+                identifier: "thrustmaster-wheel-\(info.productID)",
+                displayName: info.productName,
+                vendorID: info.vendorID,
+                productMatches: [.exact(info.productID)],
+                layout: .generic(layout),
+                physicalButtonNames: genericButtonNames(for: layout)
+            )
+        }
+
+        // An Xbox pad over Bluetooth that GameController does not list: the
+        // hand written layout, which knows every firmware's report shape.
+        if profile == nil, XboxBluetoothLayout.isXboxBluetooth(vendorID: info.vendorID, productID: info.productID),
+           info.transport.localizedCaseInsensitiveContains("Bluetooth") {
+            profile = XboxBluetoothLayout.profile(productID: info.productID, productName: info.productName)
+            ActivityLog.shared.info("Devices", "\(info.productName): read with the Xbox Bluetooth layout")
+        }
+
+        // A third party PlayStation pad or stick: asked for its capability
+        // report (feature 0x03), which names its protocol and kind, and read
+        // with the DualShock 4 or third party DualSense layout when it
+        // answers. A pad that does not answer goes on to the rows below.
+        if profile == nil, PlayStationCapabilityProbe.shouldProbe(vendorID: info.vendorID, productID: info.productID),
+           let caps = PlayStationCapabilityProbe.probe(device, name: info.productName) {
+            profile = PlayStationCapabilityProbe.profile(for: caps, vendorID: info.vendorID, productID: info.productID,
+                                                         productName: info.productName)
         }
 
         // Second pass: SDL's GameControllerDB, which knows which of a
@@ -1264,11 +1359,11 @@ final class RawHIDGamepadService: ObservableObject {
 
         forcedKeys.remove(key)
         awaitingGameController.remove(key)
-        if let gamepad = openDevices.removeValue(forKey: key) {
-            IOHIDDeviceUnscheduleFromRunLoop(gamepad.device,
+        if let gamepad = openDevices.removeValue(forKey: key), let device = gamepad.device {
+            IOHIDDeviceUnscheduleFromRunLoop(device,
                                              CFRunLoopGetMain(),
                                              CFRunLoopMode.commonModes.rawValue)
-            IOHIDDeviceClose(gamepad.device, IOOptionBits(kIOHIDOptionsTypeNone))
+            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         }
         if let buf = reportBuffers.removeValue(forKey: key) {
             buf.deallocate()
@@ -1285,23 +1380,36 @@ final class RawHIDGamepadService: ObservableObject {
         gameCubePortSyncPending.remove(key)
         var ports = gameCubePorts[key] ?? [:]
         deviceLookupLock.unlock()
-        guard let adapter = openDevices[key] else { return }
+        deviceLookupLock.lock()
+        let listed = gamepadsByKey[key]
+        deviceLookupLock.unlock()
+        guard let adapter = openDevices[key] ?? listed else { return }
 
         var added: [RawHIDGamepad] = []
         var removedIDs: Set<UInt64> = []
         for port in 2...4 {
             if occupied.contains(port), ports[port] == nil {
                 // A distinct ID per port; registry entry IDs never use the top byte.
-                let pad = RawHIDGamepad(
-                    device: adapter.device,
-                    id: key ^ (UInt64(port) << 56),
-                    vendorID: adapter.vendorID,
-                    productID: adapter.productID,
-                    productName: adapter.productName,
-                    manufacturer: adapter.manufacturer,
-                    transport: adapter.transport,
-                    profile: ControllerProfileDatabase.gameCubeAdapterPort(port)
-                )
+                let portID = key ^ (UInt64(port) << 56)
+                let portProfile = ControllerProfileDatabase.gameCubeAdapterPort(port)
+                let pad: RawHIDGamepad
+                if let device = adapter.device {
+                    pad = RawHIDGamepad(
+                        device: device,
+                        id: portID,
+                        vendorID: adapter.vendorID,
+                        productID: adapter.productID,
+                        productName: adapter.productName,
+                        manufacturer: adapter.manufacturer,
+                        transport: adapter.transport,
+                        profile: portProfile
+                    )
+                } else {
+                    // A synthetic adapter's ports are synthetic too.
+                    pad = RawHIDGamepad(testProfile: portProfile, vendorID: adapter.vendorID,
+                                        productID: adapter.productID, transport: adapter.transport,
+                                        id: portID, productName: adapter.productName)
+                }
                 ports[port] = pad
                 added.append(pad)
                 ActivityLog.shared.info("Devices", "GameCube adapter: controller plugged into port \(port)")
@@ -1336,6 +1444,7 @@ final class RawHIDGamepadService: ObservableObject {
             .filter { Date().timeIntervalSince($0.value) < 10 && !forcedKeys.contains($0.key) }
             .max { $0.value < $1.value }?.key
         for gamepad in openDevices.values {
+            guard let device = gamepad.device else { continue }
             // A pad GameController supports by name that was connected by
             // hand during its grace wait (it seemed to do nothing) is handed
             // back too, and forgotten, or it was read twice from then on.
@@ -1346,11 +1455,11 @@ final class RawHIDGamepadService: ObservableObject {
             // here moments ago because GameController was slow to list it:
             // the controller that just appeared is that pad.
             let listedLate = lateCandidate == gamepad.id
-            guard listedLate || isListedByGameController(gamepad.device) else { continue }
+            guard listedLate || isListedByGameController(device) else { continue }
             supportedOpenedAt[gamepad.id] = nil
-            if forcedKeys.contains(gamepad.id) { HIDDeviceRegistry.remember(gamepad.device, false) }
+            if forcedKeys.contains(gamepad.id) { HIDDeviceRegistry.remember(device, false) }
             ActivityLog.shared.info("Devices", "GameController now reads \(gamepad.productName); stopped reading it directly")
-            handleDeviceDetached(gamepad.device)
+            handleDeviceDetached(device)
         }
     }
 
@@ -1367,8 +1476,20 @@ final class RawHIDGamepadService: ObservableObject {
                                     length: CFIndex) {
         deviceLookupLock.lock()
         let key = deviceToKey[ObjectIdentifier(deviceRef)]
+        deviceLookupLock.unlock()
+        guard let key else { return }
+        dispatch(key: key, reportID: reportID, reportPointer: reportPointer, length: length)
+    }
+
+    /// The dispatcher proper, by interface key, so a synthetic pad with no
+    /// IOHIDDevice (the replay hook) takes the same path as a real one.
+    nonisolated func dispatch(key: UInt64,
+                              reportID: UInt32,
+                              reportPointer: UnsafeMutablePointer<UInt8>,
+                              length: CFIndex) {
+        deviceLookupLock.lock()
         let decoding = !decodeReasons.isEmpty
-        let pad = key.flatMap { gamepadsByKey[$0] }
+        let pad = gamepadsByKey[key]
         let known = pad != nil
         let isAdapter = pad.map {
             $0.vendorID == 0x057E && $0.productID == ControllerProfileDatabase.gameCubeAdapterProductID
@@ -1383,13 +1504,13 @@ final class RawHIDGamepadService: ObservableObject {
         // costs the memcmp alone. Only while decoding: the saved report is
         // what a decode start replays, so the state always matches it.
         var unchanged = false
-        if let key, let pad, decoding, !isAdapter, playerPads[key] == nil,
+        if let pad, decoding, !isAdapter, playerPads[key] == nil,
            Self.stateIsOnlyBytes(pad.profile?.layout),
            let last = lastReports[key]?[reportID], last.count == length {
             unchanged = last.withUnsafeBufferPointer { memcmp($0.baseAddress, reportPointer, length) == 0 }
         }
         // Copied in place, so a steady stream allocates nothing.
-        if let key, known, !unchanged {
+        if known, !unchanged {
             lastReports[key, default: [:]][reportID, default: []]
                 .overwrite(with: UnsafeBufferPointer(start: reportPointer, count: length))
         }
@@ -1397,8 +1518,13 @@ final class RawHIDGamepadService: ObservableObject {
             pad.profile?.layout == .steamController2026 ? pad : nil
         }
         deviceLookupLock.unlock()
+        #if DEBUG
+        if let pad, HIDCapture.target != nil, HIDCapture.matches(vendorID: pad.vendorID, productID: pad.productID) {
+            HIDCapture.log("\(HIDCapture.elapsedMs) in \(String(format: "%02x", reportID)) \(HIDCapture.hex(Array(UnsafeBufferPointer(start: reportPointer, count: length))))")
+        }
+        #endif
 
-        guard let key, known, !unchanged else { return }
+        guard known, !unchanged else { return }
         let data = Data(bytes: reportPointer, count: length)
         // Nobody reading: skip the work, except the GameCube adapter's port
         // bookkeeping, which decides which ports show as pads. It decodes
@@ -1427,7 +1553,7 @@ final class RawHIDGamepadService: ObservableObject {
     /// IDs at the call site).
     nonisolated private static func stateIsOnlyBytes(_ layout: ControllerProfile.ReportLayout?) -> Bool {
         switch layout {
-        case .xinput, .dualShock3, .switch2Pro, .switch2GameCube: return true
+        case .xinput, .dualShock3, .dualShock4, .dualSenseAlt, .xboxBluetooth, .switch2Pro, .switch2GameCube, .switch2JoyConLeft, .switch2JoyConRight: return true
         case .generic(let generic): return HIDExtendedLayoutRegistry.extended(for: generic).relativeAxisSlots.isEmpty
         default: return false
         }
@@ -1446,64 +1572,14 @@ final class RawHIDGamepadService: ObservableObject {
             handleSteam2026Report(data, key: key, gamepad: gamepad, profile: profile)
             return
         }
-        // Another player's report: its own pad decodes it.
-        if let players, let id = data.first, let player = players[Int(id)], let playerProfile = player.profile {
-            applyDecoded(HIDReportDecoder.decode(report: data, profile: playerProfile), to: player, profile: playerProfile)
-            return
-        }
-        // A Switch 2 controller also sends replies and other report kinds;
-        // only its input report is a controller state.
-        if profile.layout == .switch2Pro, !HIDReportDecoder.isSwitch2ProInputReport(data) { return }
-        if profile.layout == .switch2GameCube, !HIDReportDecoder.isSwitch2GameCubeInputReport(data) { return }
-        let isGameCubeAdapter = gamepad.vendorID == 0x057E
-            && gamepad.productID == ControllerProfileDatabase.gameCubeAdapterProductID
-        // The adapter's own slot is port 1, there whether or not a pad is
-        // plugged into it. An empty port reads as zero bytes, which decoded
-        // as both sticks pegged down-left; it reads as a pad at rest
-        // instead, like ports 2 to 4, which are only read when occupied.
-        if isGameCubeAdapter, data.first == 0x21,
-           !ControllerProfileDatabase.gameCubeAdapterPortOccupied(data, port: 1) {
-            // Reset, not merge: an empty state merged into the last one
-            // left a button held when the pad was unplugged held for good.
-            gamepad.resetState()
-        } else if profile.layout == .switch2Pro || profile.layout == .switch2GameCube {
-            var decoded = HIDReportDecoder.decode(report: data, profile: profile)
-            gamepad.removeStickRest(&decoded)
-            gamepad.updateState(decoded)
-        } else if case .streamDeck(let format) = profile.layout, !format.oneShotSlots.isEmpty {
-            // A Stream Deck + turn or touch strip gesture is one report with
-            // no release. Held until the next report, a single turn stayed
-            // pressed while the Plus sent nothing more, and turns in a row
-            // read as one long press; each is a short press of its own.
-            if replay {
-                // The saved report may be the last dial turn or swipe; played
-                // again it would be a press nobody made.
-                var decoded = HIDReportDecoder.decode(report: data, profile: profile)
-                for slot in format.oneShotSlots { decoded.buttons.removeValue(forKey: slot) }
-                gamepad.updateState(decoded)
-            } else {
-                gamepad.updateState(HIDReportDecoder.decode(report: data, profile: profile), pulsing: format.oneShotSlots)
-            }
-        } else {
-            applyDecoded(HIDReportDecoder.decode(report: data, profile: profile), to: gamepad, profile: profile)
-        }
+        // The rest lives in RawHIDReportApplier, shared with the bench.
+        let applied = RawHIDReportApplier.apply(
+            data: data, to: gamepad, profile: profile, players: players, replay: replay, steam2026: nil)
+        guard applied else { return }
 
-        if isGameCubeAdapter {
+        if RawHIDReportApplier.isGameCubeAdapter(gamepad) {
             dispatchGameCubePorts(data, key: key, decode: true)
         }
-    }
-
-    /// Merge a decoded report. A descriptor pad's relative axes (a knob's
-    /// turns) are short pushes that let go on their own; the rest is a merge.
-    nonisolated private func applyDecoded(_ decoded: ControllerState, to pad: RawHIDGamepad, profile: ControllerProfile) {
-        if case .generic(let generic) = profile.layout {
-            let relative = HIDExtendedLayoutRegistry.extended(for: generic).relativeAxisSlots
-            if !relative.isEmpty {
-                pad.updateState(decoded, pulsingAxes: relative)
-                return
-            }
-        }
-        pad.updateState(decoded)
     }
 
     /// Ports 2 to 4 of a GameCube adapter: decode each occupied port into
@@ -1747,6 +1823,153 @@ private func rawHIDInputReportCallback(context: UnsafeMutableRawPointer?,
                        length: reportLength)
 }
 
+#if DEBUG
+// MARK: - Synthetic pads (the bench and the replay hook)
+
+extension RawHIDGamepadService {
+    /// True while synthetic pads exist: HIDWrite and HIDRead swallow every
+    /// report instead of reaching a real device.
+    nonisolated(unsafe) static var debugReplayActive = false
+    /// Synthetic keys live in a reserved range whose top byte registry entry
+    /// IDs never use, so GameCube port IDs (key ^ port << 56) cannot collide.
+    nonisolated static let debugSyntheticKeyBase: UInt64 = 0xFA5E_0000_0000_0000
+    private static var debugSyntheticCounter: UInt64 = 0
+
+    nonisolated static func isDebugSyntheticKey(_ key: UInt64) -> Bool {
+        key >> 48 == debugSyntheticKeyBase >> 48
+    }
+
+    /// Lists a pad with no IOHIDDevice behind it, resolving its profile the
+    /// way an attach does (the profile database, else the descriptor), and
+    /// holds decoding on for it. Returns its key, or nil when no profile
+    /// could be made. No start-up commands, no IOKit callback.
+    @discardableResult
+    func debugInstallSyntheticPad(vendorID: Int32, productID: Int32, transport: String,
+                                  productName: String, descriptor: [UInt8]?) -> UInt64? {
+        guard let profile = debugResolveProfile(vendorID: vendorID, productID: productID, transport: transport,
+                                                productName: productName, descriptor: descriptor) else { return nil }
+        Self.debugSyntheticCounter += 1
+        let key = Self.debugSyntheticKeyBase | Self.debugSyntheticCounter
+        let pad = RawHIDGamepad(testProfile: profile, vendorID: vendorID, productID: productID,
+                                transport: transport, id: key, productName: productName)
+        deviceLookupLock.lock()
+        gamepadsByKey[key] = pad
+        deviceLookupLock.unlock()
+        connectedGamepads.append(pad)
+        Self.debugReplayActive = true
+        setDecodingWanted(true, reason: "replay")
+        return key
+    }
+
+    /// Removes every synthetic pad, its ports and players, and lets go of
+    /// the decoding hold.
+    func debugRemoveSyntheticPads() {
+        deviceLookupLock.lock()
+        let keys = gamepadsByKey.keys.filter { Self.isDebugSyntheticKey($0) }
+        var ids: Set<UInt64> = []
+        var pads: [RawHIDGamepad] = []
+        for key in keys {
+            ids.insert(key)
+            if let pad = gamepadsByKey.removeValue(forKey: key) { pads.append(pad) }
+            for pad in (gameCubePorts.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
+            for pad in (playerPads.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
+            lastReports.removeValue(forKey: key)
+            dormantKeys.remove(key)
+            gameCubePortSyncPending.remove(key)
+        }
+        deviceLookupLock.unlock()
+        pads.forEach { $0.resetState(); $0.imu.reset() }
+        connectedGamepads.removeAll { ids.contains($0.id) }
+        Self.debugReplayActive = false
+        setDecodingWanted(false, reason: "replay")
+    }
+
+    /// Feeds one report to a synthetic pad through the live dispatcher
+    /// (dedupe, decode gate, GameCube ports and all). Main thread only.
+    func debugInject(key: UInt64, reportID: UInt32, bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+        var scratch = bytes
+        scratch.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            dispatch(key: key, reportID: reportID, reportPointer: base, length: CFIndex(buffer.count))
+        }
+    }
+
+    /// The profile passes of handleDeviceAttached for a device that is only
+    /// bytes: the hand-coded database, a Logitech wheel's descriptor, the
+    /// SDL GameControllerDB, then the plain descriptor parser.
+    private func debugResolveProfile(vendorID: Int32, productID: Int32, transport: String,
+                                     productName: String, descriptor: [UInt8]?) -> ControllerProfile? {
+        if let profile = ControllerProfileDatabase.profile(forVendor: vendorID, product: productID, transport: transport) {
+            return profile
+        }
+        // The Xbox Bluetooth layout needs no descriptor, as on a live attach.
+        if XboxBluetoothLayout.isXboxBluetooth(vendorID: vendorID, productID: productID),
+           transport.localizedCaseInsensitiveContains("Bluetooth") {
+            return XboxBluetoothLayout.profile(productID: productID, productName: productName)
+        }
+        guard let descriptor, !descriptor.isEmpty else { return nil }
+        let data = Data(descriptor)
+        if LogitechWheel.isWheel(vendor: vendorID, product: productID),
+           let parsed = HIDDescriptorParser.parseExtended(data) {
+            let pedals = LogitechWheel.addSeparatePedals(parsed, descriptorLength: data.count,
+                                                         vendor: vendorID, product: productID)
+            let wheel = LogitechWheel.normalize(pedals, product: productID)
+            var layout = wheel.legacyLayout
+            layout.extended = wheel
+            return ControllerProfile(
+                identifier: "logitech-wheel-\(productID)",
+                displayName: productName,
+                vendorID: vendorID,
+                productMatches: [.exact(productID)],
+                layout: .generic(layout),
+                physicalButtonNames: genericButtonNames(for: layout)
+            )
+        }
+        if let parsed = HIDDescriptorParser.parseExtended(data), MacroPadLayouts.applies(vendorID: vendorID, productID: productID, parsed) {
+            let plan = MacroPadLayouts.normalize(parsed, vendorID: vendorID, productID: productID)
+            var layout = plan.legacyLayout
+            layout.extended = plan
+            return ControllerProfile(
+                identifier: "macropad-\(vendorID)-\(productID)",
+                displayName: productName,
+                vendorID: vendorID,
+                productMatches: [.exact(productID)],
+                layout: .generic(layout),
+                physicalButtonNames: genericButtonNames(for: layout)
+            )
+        }
+        if ThrustmasterWheel.isWheel(vendor: vendorID, product: productID),
+           let parsed = HIDDescriptorParser.parseExtended(data) {
+            let wheel = ThrustmasterWheel.normalize(parsed)
+            var layout = wheel.legacyLayout
+            layout.extended = wheel
+            return ControllerProfile(
+                identifier: "thrustmaster-wheel-\(productID)",
+                displayName: productName,
+                vendorID: vendorID,
+                productMatches: [.exact(productID)],
+                layout: .generic(layout),
+                physicalButtonNames: genericButtonNames(for: layout)
+            )
+        }
+        if let profile = SDLGameControllerDB.profile(descriptor: data, vendorID: vendorID, productID: productID,
+                                                     version: nil, productName: productName) {
+            return profile
+        }
+        guard let layout = HIDDescriptorParser.parse(data) else { return nil }
+        return ControllerProfile(
+            identifier: "generic-hid-\(vendorID)-\(productID)",
+            displayName: productName,
+            vendorID: vendorID,
+            productMatches: [.exact(productID)],
+            layout: .generic(layout),
+            physicalButtonNames: genericButtonNames(for: layout)
+        )
+    }
+}
+#endif
+
 private extension Array where Element == UInt8 {
     /// Replace the contents, reusing the storage when the length matches.
     mutating func overwrite(with source: UnsafeBufferPointer<UInt8>) {
@@ -1803,7 +2026,7 @@ extension RawHIDGamepadService {
         let interfaces = HIDDeviceRegistry.Transport.allCases
             .flatMap { registry.entries(on: $0) }
             .map { registry.devices(for: $0) }
-            .first { $0.contains { $0 === gamepad.device } } ?? [gamepad.device]
+            .first { $0.contains { $0 === gamepad.device } } ?? [gamepad.device].compactMap { $0 }
         if gamepad.transport.localizedCaseInsensitiveContains("bluetooth") {
             let outcome = disconnectBluetooth(interfaces: interfaces, name: gamepad.displayName)
             if case .disconnected = outcome { return outcome }

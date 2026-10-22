@@ -44,6 +44,15 @@ extension ControllerLayout {
         // place of its own on the body.
         offBody: [
             OffBodyInput(serialized: "btn 4", reason: "Legacy alias of the L full-press click (also btn 6), kept so older bumper rows still fire", copy: true),
+            OffBodyInput(serialized: "mtn gyroX +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn gyroY +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn gyroZ +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn accelX +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn accelY +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn accelZ +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn rollAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
+            OffBodyInput(serialized: "mtn pitchAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
+            OffBodyInput(serialized: "mtn yawAngle +", reason: "Turn angle the app integrates from the gyroscope"),
         ],
         // The raw profile names it; the vendor and product IDs back that up.
         // 0x2073 is only this controller, so neither rule matches the Switch 2
@@ -53,7 +62,7 @@ extension ControllerLayout {
             [.vidPid(vendor: 0x057E, products: [0x2073])],
         ],
         matchPriority: 30,
-        readability: .partial("Experimental, USB only: read from its report 0x05 the way SDL reads it, analog L and R included; not yet checked on a real pad"),
+        readability: .partial("Experimental, USB only: read from its report 0x05 the way SDL reads it, analog L and R and the motion sensors included; not yet checked on a real pad"),
         approximate: true,
         sources: [
             "en-americas-support.nintendo.com Nintendo GameCube Controller Diagram (answer 68429, the Switch 2 model)",

@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig solo usa Bluetooth para desconectar un mando inalámbrico cuando se lo pides.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig usa Bluetooth para leer mandos de Switch 2, y para conectar y desconectar mandos inalámbricos, cuando se lo pides o lo activas en Ajustes.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig solo usa Bluetooth para desconectar un mando inalámbrico cuando se lo pides.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig usa Bluetooth para leer mandos de Switch 2, y para conectar y desconectar mandos inalámbricos, cuando se lo pides o lo activas en Ajustes.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Todos los derechos reservados.";

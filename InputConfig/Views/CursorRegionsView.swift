@@ -172,6 +172,10 @@ struct CursorRegionsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(RegionEditorHint.purpose(.screen))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 regionsList
                 HStack(spacing: 20) {
                     statBlock("Pointer", pointerOnly)

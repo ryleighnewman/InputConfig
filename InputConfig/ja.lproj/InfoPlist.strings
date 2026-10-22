@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfigは、ユーザが操作したときにワイヤレスコントローラの接続を解除する目的でのみBluetoothを使用します。";
+"NSBluetoothAlwaysUsageDescription" = "InputConfigは、Switch 2コントローラーの読み取り、およびワイヤレスコントローラーの接続と接続解除のために、依頼されたとき、または設定でオンにしたときにBluetoothを使用します。";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfigは、ユーザが操作したときにワイヤレスコントローラの接続を解除する目的でのみBluetoothを使用します。";
+"NSBluetoothPeripheralUsageDescription" = "InputConfigは、Switch 2コントローラーの読み取り、およびワイヤレスコントローラーの接続と接続解除のために、依頼されたとき、または設定でオンにしたときにBluetoothを使用します。";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. All rights reserved.";

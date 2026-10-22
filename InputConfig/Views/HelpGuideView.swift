@@ -148,6 +148,12 @@ struct HelpGuideView: View {
                     showingHome = false
                     return .handled
                 }
+                // A question or guide opens in the app's language.
+                let shown = HelpLocalizer.siteURL(url)
+                if shown != url {
+                    NSWorkspace.shared.open(shown)
+                    return .handled
+                }
             }
             return .systemAction
         })

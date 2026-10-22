@@ -219,7 +219,7 @@ enum ControllerScaffold {
         /// Hats past the first (a flight stick's second and third POV).
         var extraHats: [Int] = []
         /// An older Logitech wheel's one pedal axis on axi 1, gas one way
-        /// and brake the other (LogitechWheel.combinedPedalProducts).
+        /// and brake the other (no Logitech wheel is read that way any more).
         var combinedPedal = false
         /// A descriptor device with one trigger slot axis, listed with the
         /// extras, so no row is made for a trigger it does not have.
@@ -373,6 +373,18 @@ enum ControllerScaffold {
                 caps.triggers = true
                 caps.dpad = true
                 caps.buttons = (0...12).map { ($0, standardName($0, fam, model)) }
+            case .dualShock4, .dualSenseAlt:
+                caps.sticks = twoSticks
+                caps.triggers = true
+                caps.dpad = true
+                caps.buttons = (0...13).map { ($0, standardName($0, fam, model)) }
+            case .xboxBluetooth(let share):
+                caps.sticks = twoSticks
+                caps.triggers = true
+                caps.dpad = true
+                caps.buttons = [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12].map { ($0, standardName($0, fam)) }
+                    + (share ? [(14, LayoutText.t(names[14]))] : [])
+                    + (XboxBluetoothLayout.eliteProductIDs.contains(gamepad.productID) ? [16, 17, 18, 19].map { ($0, LayoutText.t(names[$0])) } : [])
             case .streamDeck(let format):
                 let first = ControllerProfile.StreamDeckFormat.firstSlot
                 caps.buttonHeadings = .streamDeck(format)
@@ -385,6 +397,20 @@ enum ControllerScaffold {
                 caps.triggers = true
                 caps.dpad = true
                 caps.buttons = [0, 1, 2, 3, 5, 9, 10, 14, 15, 16].map { ($0, standardName($0, fam)) }
+                // Its IMU rides in report 0x05, decoded with the Pro's.
+                caps.gyro = true
+            case .switch2JoyConLeft, .switch2JoyConRight:
+                // One stick, the four face buttons (arrows or letters by
+                // position), SL and SR, the shoulder and trigger of that
+                // side, its menu buttons and the back button; drawn with
+                // the first Joy-Con's drawing of that side.
+                caps.sticks = [(SectionName.leftStick, 0, 1, String(localized: "Stick"))]
+                caps.triggers = false
+                caps.dpad = false
+                let shared = [0, 1, 2, 3, 4, 5, 6, 7]
+                let menu = gamepad.profile?.layout == .switch2JoyConLeft ? [8, 11, 14, 16] : [9, 10, 12, 15, 17]
+                caps.buttons = (shared + menu).map { ($0, $0 < names.count ? LayoutText.t(names[$0]) : standardName($0, fam)) }
+                caps.gyro = true
             case .steamController2026:
                 caps = steam2026Capabilities(deviceName: gamepad.displayName)
             case .switch2Pro:
@@ -393,19 +419,16 @@ enum ControllerScaffold {
                 caps.dpad = true
                 caps.buttons = (0...12).map { ($0, standardName($0, fam)) }
                     + [14, 15, 16, 17].map { ($0, $0 < names.count ? LayoutText.t(names[$0]) : String(localized: "Button \($0)")) }
+                // The 6-axis sensor, read from report 0x05 once the enabler
+                // switches it on.
+                caps.gyro = true
             case .generic(let layout):
                 let axisCount = layout.axisByteOffsets.count
                 let reportedAxes = Set((layout.extended?.reports ?? []).flatMap(\.axes).map(\.index))
                 if gamepad.profile?.identifier.hasPrefix("logitech-wheel-") == true {
                     // A wheel: steering and pedals, not a stick (axi 1 is the clutch).
                     caps.steering = reportedAxes.contains(0)
-                    if LogitechWheel.combinedPedalProducts.contains(gamepad.productID) {
-                        // One axis for both pedals: a row each way, not a
-                        // single "Clutch" row that fired on one of them.
-                        caps.combinedPedal = reportedAxes.contains(1)
-                    } else {
-                        caps.pedals = [(5, String(localized: "Gas")), (4, String(localized: "Brake")), (1, String(localized: "Clutch"))].filter { reportedAxes.contains($0.0) }
-                    }
+                    caps.pedals = [(5, String(localized: "Gas")), (4, String(localized: "Brake")), (1, String(localized: "Clutch"))].filter { reportedAxes.contains($0.0) }
                 } else if fam == .gameCube {
                     caps.sticks = gameCubeSticks
                 } else if let id = gamepad.profile?.identifier, id.hasPrefix("generic-hid-") || id.hasPrefix("sdl-") {
@@ -483,7 +506,7 @@ enum ControllerScaffold {
             if purpose == .layout,
                controller.productCategory.localizedCaseInsensitiveContains("access")
                 || name.localizedCaseInsensitiveContains("access controller") {
-                applyAccessControllerLayout(&caps, family: fam ?? .playstation)
+                applyAccessControllerLayout(&caps, family: fam ?? .playstation, ports: service.accessPortDevices(forSlot: slot))
                 return caps
             }
 
@@ -497,7 +520,9 @@ enum ControllerScaffold {
             // extra button or axis and is offered then. The mirror purpose
             // keeps the full shape so the visualizer draws what is reported.
             if purpose == .layout,
-               (controller.productCategory + " " + name).localizedCaseInsensitiveContains("adaptive") {
+               // "Xbox Adaptive", as Layout+XboxAdaptive requires: PDP's
+               // One-Handed Joystick Adaptive Controller has no jacks.
+               (controller.productCategory + " " + name).localizedCaseInsensitiveContains("xbox adaptive") {
                 caps.sticks = twoSticks
                 caps.triggers = true
                 caps.dpad = true
@@ -555,7 +580,7 @@ enum ControllerScaffold {
             caps.gyro = info.supportsMotion
             caps.touchpad = info.hasTouchpad
             if purpose == .layout, info.name.localizedCaseInsensitiveContains("access controller") {
-                applyAccessControllerLayout(&caps, family: fam ?? .playstation)
+                applyAccessControllerLayout(&caps, family: fam ?? .playstation, ports: service.accessPortDevices(forSlot: slot))
                 return caps
             }
             // The real stick and trigger counts when the device gave them:
@@ -673,12 +698,29 @@ enum ControllerScaffold {
     /// as the right stick, so those get rows too. The two center buttons
     /// report as Options (8), Menu (9), or Home (10) depending on the
     /// profile; all three are offered so whichever one it sends has a row.
-    private static func applyAccessControllerLayout(_ caps: inout DeviceCapabilities, family: FaceLetters?) {
+    private static func applyAccessControllerLayout(_ caps: inout DeviceCapabilities, family: FaceLetters?,
+                                                    ports: [Int: AccessControllerPortService.PortDevice]) {
         caps.sticks = [(SectionName.stick, 0, 1, String(localized: "Stick")),
                        (SectionName.rightStick, 2, 3, String(localized: "Right stick"))]
         caps.triggers = true
         caps.family = family
         caps.buttons = [0, 1, 2, 3, 4, 5, 11, 12, 8, 9, 10].map { ($0, standardName($0, family)) }
+        // The sockets and buttons by their own numbers, whatever the profile
+        // maps them to.
+        caps.buttons += (0..<12).map { bit in
+            let index = AccessControllerPortService.buttonBase + bit
+            return (index, AccessControllerPortService.buttonLabel(index))
+        }
+        // What is in each expansion port right now, read on its own.
+        for (port, device) in ports.sorted(by: { $0.key < $1.key }) {
+            let x = 8 + (port - 1) * 2
+            switch device {
+            case .stick: caps.sticks.append((String(localized: "Expansion port E\(port)"), x, x + 1, String(localized: "E\(port) stick")))
+            case .trigger: caps.extraAxes.append((x, String(localized: "E\(port) trigger")))
+            case .button: caps.buttons.append((AccessControllerPortService.portButtonBase + port - 1, String(localized: "E\(port) button")))
+            case .invalidPlug: break
+            }
+        }
     }
 
     private static let twoSticks: [(section: String, x: Int, y: Int, label: String)] = [
@@ -796,6 +838,17 @@ enum ControllerScaffold {
                 Control(input: "ems scrollX 0 + any", section: "Scroll", name: String(localized: "Scroll right")),
                 Control(input: "ems scrollGesture 0 + any", section: "Scroll", name: String(localized: "Scroll gesture (fingers scrolling)")),
                 Control(input: "ems doubleClick 0 + any", section: "Mouse buttons", name: String(localized: "Double click")),
+                // Pen tablets (Wacom, Huion, XP-Pen) post tablet events next to
+                // the mouse ones; the tip's click is still a mouse button.
+                Control(input: "ems penPressure 0 + any", section: "Pen", name: String(localized: "Pen pressure")),
+                Control(input: "ems penTiltX 0 - any", section: "Pen", name: String(localized: "Pen tilt left")),
+                Control(input: "ems penTiltX 0 + any", section: "Pen", name: String(localized: "Pen tilt right")),
+                Control(input: "ems penTiltY 0 - any", section: "Pen", name: String(localized: "Pen tilt up")),
+                Control(input: "ems penTiltY 0 + any", section: "Pen", name: String(localized: "Pen tilt down")),
+                Control(input: "ems penButton 0 + any", section: "Pen", name: String(localized: "Pen button 1")),
+                Control(input: "ems penButton 1 + any", section: "Pen", name: String(localized: "Pen button 2")),
+                Control(input: "ems penEraser 0 + any", section: "Pen", name: String(localized: "Pen eraser end")),
+                Control(input: "ems penInRange 0 + any", section: "Pen", name: String(localized: "Pen near the tablet")),
             ]
         }
         if caps.macTaps {

@@ -57,8 +57,13 @@ final class Switch2USBEnabler: @unchecked Sendable {
     /// has (report 0x09 is the Pro Controller's), as SDL's Switch 2 driver
     /// asks; `decodeSwitch2GameCube` reads it with SDL's offsets.
     static let gameCubeProductID = 0x2073
+    /// Joy-Con 2 (L) and (R) in the Joy-Con 2 charging grip, over USB: the
+    /// same start-up sequence on the same vendor interface, read from
+    /// report 0x05 with SDL's solo layouts (SDL_hidapi_switch2.c).
+    static let joyConLeftProductID = 0x2066
+    static let joyConRightProductID = 0x2067
     /// Every product this enabler starts.
-    static let productIDs = [proControllerProductID, gameCubeProductID]
+    static let productIDs = [proControllerProductID, gameCubeProductID, joyConLeftProductID, joyConRightProductID]
     static let vendorInterfaceNumber = 1
 
     /// The start-up sequence, sent in order on the bulk OUT pipe of the
@@ -76,29 +81,31 @@ final class Switch2USBEnabler: @unchecked Sendable {
         [0x11, 0x91, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00],
         [0x0A, 0x91, 0x00, 0x08, 0x00, 0x14, 0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x35, 0x00, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         [0x0C, 0x91, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x27, 0x00, 0x00, 0x00],
-        // Report format: the one `decodeSwitch2Pro` reads (input report
-        // 0x09). `commands(for:)` asks the GameCube controller for 0x05.
-        [0x03, 0x91, 0x00, 0x0A, 0x00, 0x04, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00],
+        // Report format 0x05: the 64 byte report SDL asks every Switch 2
+        // controller for, with the IMU at 0x31 (decodeSwitch2Pro and
+        // decodeSwitch2GameCube). The short format 0x09 the community
+        // enablers ask for carries no documented motion bytes.
+        [0x03, 0x91, 0x00, 0x0A, 0x00, 0x04, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00],
         [0x10, 0x91, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00],
         [0x01, 0x91, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00],
         // A full 8-byte header (it was sent 7 bytes long).
         [0x03, 0x91, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00],
-        [0x0A, 0x91, 0x00, 0x02, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0x00],
+        [0x0A, 0x91, 0x00, 0x02, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00],
         // Player light 1 on, so the controller shows it is connected.
         [0x09, 0x91, 0x00, 0x07, 0x00, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
     ]
 
-    /// The start-up sequence for one product: the GameCube controller is
-    /// asked for its report 0x05 instead of 0x09.
-    static func commands(for product: Int) -> [[UInt8]] {
-        guard product == gameCubeProductID else { return initCommands }
-        return initCommands.map { command in
-            guard command.count == 12, command[0] == 0x03, command[3] == 0x0A else { return command }
-            var c = command
-            c[8] = 0x05
-            return c
-        }
+    /// The start-up sequence for one product: the same for both today
+    /// (both are asked for report 0x05).
+    /// The player LED command (SDL_hidapi_switch2.c UpdateSlotLED): the
+    /// start command's frame with the LED mask at byte 8, patterns 1, 3, 7,
+    /// 15, 9, 5, 13, 6 for players 1 to 8. Not sent yet.
+    static func playerLEDCommand(player: Int) -> [UInt8] {
+        let masks: [UInt8] = [0x01, 0x03, 0x07, 0x0F, 0x09, 0x05, 0x0D, 0x06]
+        return [0x09, 0x91, 0x00, 0x07, 0x00, 0x08, 0x00, 0x00, masks[max(0, player - 1) % 8], 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
     }
+
+    static func commands(for product: Int) -> [[UInt8]] { initCommands }
 
     private let queue = DispatchQueue(label: "com.inputconfig.switch2-usb", qos: .userInitiated)
     private let lock = NSLock()
@@ -190,7 +197,13 @@ final class Switch2USBEnabler: @unchecked Sendable {
         let inPipe = inAddress.flatMap { try? interface.copyPipe(withAddress: Int($0)) }
         let product = (IORegistryEntryCreateCFProperty(service, "idProduct" as CFString, kCFAllocatorDefault, 0)?
             .takeRetainedValue() as? NSNumber)?.intValue ?? Self.proControllerProductID
-        for command in Self.commands(for: product) {
+        let commands = Self.commands(for: product)
+        for (i, command) in commands.enumerated() {
+            // The pad's own stick and trigger calibration, read from its
+            // flash before the start command (the last one), as SDL does.
+            if i == commands.count - 1, let inPipe {
+                readCalibration(outPipe: outPipe, inPipe: inPipe, product: Int32(product))
+            }
             let data = NSMutableData(bytes: command, length: command.count)
             var sent: UInt = 0
             try outPipe.__sendIORequest(with: data, bytesTransferred: &sent, completionTimeout: 1.0)
@@ -202,6 +215,35 @@ final class Switch2USBEnabler: @unchecked Sendable {
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
+    }
+
+    /// Reads the five flash blocks that hold the stick and trigger
+    /// calibration (Switch2Calibration.addresses) and stores what parses.
+    /// A block that does not answer or parse is left out, and the decoders
+    /// fall back to their fixed constants for it.
+    private func readCalibration(outPipe: IOUSBHostPipe, inPipe: IOUSBHostPipe, product: Int32) {
+        var replies: [UInt32: [UInt8]] = [:]
+        for address in Switch2Calibration.addresses {
+            let command = Switch2Calibration.readCommand(address: address)
+            let data = NSMutableData(bytes: command, length: command.count)
+            var sent: UInt = 0
+            guard (try? outPipe.__sendIORequest(with: data, bytesTransferred: &sent, completionTimeout: 0.5)) != nil,
+                  let reply = NSMutableData(length: Switch2Calibration.replyLength) else { continue }
+            var got: UInt = 0
+            guard (try? inPipe.__sendIORequest(with: reply, bytesTransferred: &got, completionTimeout: 0.3)) != nil,
+                  got >= UInt(Switch2Calibration.replyLength) else {
+                ActivityLog.shared.info("Devices", String(format: "Switch 2 flash 0x%06X: no reply", address))
+                continue
+            }
+            replies[address] = Array(UnsafeBufferPointer(start: reply.bytes.assumingMemoryBound(to: UInt8.self), count: Int(got)))
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        let cal = Switch2Calibration.from(replies: replies)
+        Switch2Calibration.store(cal, product: product)
+        func describe(_ s: Switch2Calibration.Stick?) -> String {
+            s.map { "neutral \($0.neutralX),\($0.neutralY) max \($0.maxX),\($0.maxY) min \($0.minX),\($0.minY)" } ?? "none"
+        }
+        ActivityLog.shared.info("Devices", "Switch 2 calibration: left \(describe(cal.left)); right \(describe(cal.right)); trigger zero \(cal.triggerZeroL.map(String.init) ?? "none"), \(cal.triggerZeroR.map(String.init) ?? "none")")
     }
 
     /// The bulk endpoints of the vendor interface, found by walking the

@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig는 사용자가 요청할 때 무선 컨트롤러의 연결을 해제하는 용도로만 Bluetooth를 사용합니다.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig는 요청하거나 설정에서 켠 경우 Switch 2 컨트롤러를 읽고 무선 컨트롤러를 연결하거나 끊기 위해 Bluetooth를 사용합니다.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig는 사용자가 요청할 때 무선 컨트롤러의 연결을 해제하는 용도로만 Bluetooth를 사용합니다.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig는 요청하거나 설정에서 켠 경우 Switch 2 컨트롤러를 읽고 무선 컨트롤러를 연결하거나 끊기 위해 Bluetooth를 사용합니다.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. 모든 권리 보유.";

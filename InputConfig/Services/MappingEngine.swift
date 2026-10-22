@@ -9,6 +9,7 @@ import GameController
 class MappingEngine: ObservableObject {
     @Published var isRunning: Bool = false {
         didSet {
+            if isRunning, !oldValue { ControllerPowerService.shared.presetStarted() }
             #if DEBUG
             if isRunning { Self.debugRunning[ObjectIdentifier(self)] = activePreset?.name ?? "?" } else { Self.debugRunning.removeValue(forKey: ObjectIdentifier(self)) }
             #endif
@@ -282,7 +283,7 @@ class MappingEngine: ObservableObject {
     /// Pointer motion and scrolling from a held stick carry on through
     /// those edges; they have no press to repeat.
     private static func waitsForRelease(_ binding: BindingModel) -> Bool {
-        guard binding.holdOutputs == nil, binding.doubleTapOutputs == nil, binding.macroSteps == nil,
+        guard binding.holdOutputs == nil, binding.doubleTapOutputs == nil, binding.tripleTapOutputs == nil, binding.macroSteps == nil,
               binding.toggleMode != true, binding.turboEnabled != true, !binding.outputs.isEmpty else { return true }
         return !binding.outputs.allSatisfy { $0.type == .mouseMotion || $0.type == .mouseWheel }
     }
@@ -295,7 +296,7 @@ class MappingEngine: ObservableObject {
     private var appActionRowCache: [UUID: Bool] = [:]
     private func appActionRow(_ binding: BindingModel) -> Bool {
         if let known = appActionRowCache[binding.id] { return known }
-        let all = binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? [])
+        let all = binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) + (binding.tripleTapOutputs ?? [])
             + (binding.macroSteps ?? []).map(\.action)
         let has = all.contains { $0.type == .appAction }
         appActionRowCache[binding.id] = has
@@ -801,7 +802,7 @@ class MappingEngine: ObservableObject {
         preset.joysticks.contains { group in
             group.bindings.contains { row in
                 if excludingTouchpad, row.input.type == .touchpad || row.input.type == .touchpadGesture { return false }
-                let lists = [row.outputs] + [row.holdOutputs, row.doubleTapOutputs].compactMap { $0 }
+                let lists = [row.outputs] + [row.holdOutputs, row.doubleTapOutputs, row.tripleTapOutputs].compactMap { $0 }
                     + [row.macroSteps?.map(\.action) ?? []]
                 return lists.contains { $0.contains { pointerOutputTypes.contains($0.type) } }
             }
@@ -921,6 +922,7 @@ class MappingEngine: ObservableObject {
         modifierKeyDownMark.removeAll()
         holdFired.removeAll()
         lastTapTime.removeAll()
+        tapCount.removeAll()
         gestureRecognizers.removeAll()
         pendingSingleTapToken.removeAll()
         secondTapPressed.removeAll()
@@ -1147,6 +1149,7 @@ class MappingEngine: ObservableObject {
             macrosInFlight = macrosInFlight.filter { !$0.hasPrefix(prefix) }
             secondTapPressed = secondTapPressed.filter { !$0.hasPrefix(prefix) }
             lastTapTime = lastTapTime.filter { !$0.key.hasPrefix(prefix) }
+            tapCount = tapCount.filter { !$0.key.hasPrefix(prefix) }
             // Running chains on these rows stop pressing (their press hop
             // checks the token), so a new press does not run a second chain.
             macroChainToken = macroChainToken.filter { !$0.key.hasPrefix(prefix) }
@@ -1186,6 +1189,7 @@ class MappingEngine: ObservableObject {
             modifierKeyDownMark = modifierKeyDownMark.filter { !$0.key.hasPrefix(prefix) }
             holdFired = holdFired.filter { !$0.hasPrefix(prefix) }
             lastTapTime = lastTapTime.filter { !$0.key.hasPrefix(prefix) }
+            tapCount = tapCount.filter { !$0.key.hasPrefix(prefix) }
         }
     }
 
@@ -1217,7 +1221,7 @@ class MappingEngine: ObservableObject {
             group.bindings.contains { row in
                 row.blockOriginal == true && row.input.type == .extMouse
                     && (row.input.extMouseKind ?? .button) == .button && row.input.index == button
-                    && (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []))
+                    && (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []) + (row.tripleTapOutputs ?? []))
                         .contains { pointerOutputTypes.contains($0.type) }
             }
         }
@@ -1428,6 +1432,7 @@ class MappingEngine: ObservableObject {
         modifierKeyDownMark.removeAll()
         holdFired.removeAll()
         lastTapTime.removeAll()
+        tapCount.removeAll()
         gestureRecognizers.removeAll()
         secondTapPressed.removeAll()
         pendingSingleTapToken.removeAll()
@@ -1543,6 +1548,11 @@ class MappingEngine: ObservableObject {
                 blue: override.floatB, brightness: bri)
             log("Applied preset light-bar override (\(override.r),\(override.g),\(override.b))")
         }
+        let feelL = preset.triggerFeelLeft ?? 0, feelR = preset.triggerFeelRight ?? 0
+        if feelL > 0 || feelR > 0 {
+            controllerService.applyPresetTriggerFeel(left: feelL, right: feelR)
+            log("Applied preset trigger feel L\(feelL) R\(feelR)")
+        }
 
         // Polling rate is configurable from Settings → General → Polling Rate.
         // Default 120 Hz balances latency vs. UI cost; 240 doubles latency
@@ -1573,7 +1583,7 @@ class MappingEngine: ObservableObject {
         // paid for 125 wakeups a second they never used.
         let movesPointer = preset.joysticks.contains { group in
             group.bindings.contains { row in
-                (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? [])).contains {
+                (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []) + (row.tripleTapOutputs ?? [])).contains {
                     $0.type == .mouseMotion || $0.type == .mouseWheel || $0.type == .mouseWheelStep
                 }
             }
@@ -1818,6 +1828,7 @@ class MappingEngine: ObservableObject {
         modifierKeyDownMark.removeAll()
         holdFired.removeAll()
         lastTapTime.removeAll()
+        tapCount.removeAll()
         gestureRecognizers.removeAll()
         secondTapPressed.removeAll()
         pendingSingleTapToken.removeAll()
@@ -1904,6 +1915,7 @@ class MappingEngine: ObservableObject {
         // starts from the light the preset itself set up.
         releaseHeldLights()
         controllerService.endOutputLights()
+        controllerService.revertTriggerFeel()
         if controllerService.revertTemporaryLights() {
             log("Reverted light bar to general color")
         }
@@ -2588,7 +2600,7 @@ class MappingEngine: ObservableObject {
                 } else {
                     // Normal mode
                     let usesDeferred = binding.macroSteps?.isEmpty != false
-                        && (binding.holdOutputs != nil || binding.doubleTapOutputs != nil)
+                        && (binding.holdOutputs != nil || binding.doubleTapOutputs != nil || binding.tripleTapOutputs != nil)
                     if isActive && !wasActive {
                         StatsService.shared.recordButtonPress(inputKey: inputKey)
                         if debugEnabled {
@@ -2600,7 +2612,7 @@ class MappingEngine: ObservableObject {
                             let what: String
                             if let steps = binding.macroSteps, !steps.isEmpty {
                                 what = (steps.count == 1 ? String(localized: "macro, 1 step") : String(localized: "macro, \(steps.count) steps"))
-                            } else if binding.holdOutputs != nil || binding.doubleTapOutputs != nil {
+                            } else if binding.holdOutputs != nil || binding.doubleTapOutputs != nil || binding.tripleTapOutputs != nil {
                                 what = String(localized: "tap: \(Self.describe(binding.outputs))")
                             } else {
                                 what = Self.describe(binding.outputs)
@@ -2637,7 +2649,7 @@ class MappingEngine: ObservableObject {
                             // the double tap's second half, however long it
                             // is held: the pending single is called off now,
                             // not left to fire while the button is down.
-                            if binding.doubleTapOutputs != nil, let last = lastTapTime[bindKey],
+                            if binding.doubleTapOutputs != nil || binding.tripleTapOutputs != nil, let last = lastTapTime[bindKey],
                                nowMonotonic - last <= Double(max(100, min(2000, binding.doubleTapWindowMs ?? 300))) / 1000.0 {
                                 pendingSingleTapToken[bindKey, default: 0] += 1
                                 secondTapPressed.insert(bindKey)
@@ -2681,7 +2693,8 @@ class MappingEngine: ObservableObject {
                         // still goes out ahead of the hold.
                         if secondTapPressed.contains(bindKey) {
                             lastTapTime.removeValue(forKey: bindKey)
-                            pulse(binding.outputs, bindKey: bindKey)
+                            let taps = tapCount.removeValue(forKey: bindKey) ?? 1
+                            pulseTaps(binding, count: taps, bindKey: bindKey)
                         }
                         if debugEnabled { log("HOLD: \(inputKey)", joystick: joystickIndex) }
                         activity(String(localized: "\(binding.input.displayName) held \u{2192} \(Self.describe(hold))"), joystick: joystickIndex)
@@ -3292,8 +3305,20 @@ class MappingEngine: ObservableObject {
             externalDoubleClickUntil["\(dev)/\(btn)"] = Date().addingTimeInterval(0.2)
         case .scrollGesture(let dev, let active):
             if active { externalScrollGestureActive.insert(dev) } else { externalScrollGestureActive.remove(dev) }
+        case .tabletPoint(_, let pressure, let tiltX, let tiltY, let buttons):
+            externalPen.pressure = pressure
+            externalPen.tiltX = tiltX
+            externalPen.tiltY = tiltY
+            externalPen.buttons = buttons
+        case .tabletProximity(_, let entering, let eraser):
+            externalPen.inRange = entering
+            externalPen.eraser = entering && eraser
+            if !entering { externalPen.pressure = 0; externalPen.buttons = 0 }
         }
     }
+
+    /// The pen tablet's state, from the tap's tablet events.
+    private var externalPen = (pressure: Float(0), tiltX: Float(0), tiltY: Float(0), buttons: 0, inRange: false, eraser: false)
 
     /// Evaluates an external `.extKey` or `.extMouse` input against the
     /// parallel state maps. `nil` device ID matches any device - useful
@@ -3336,6 +3361,20 @@ class MappingEngine: ObservableObject {
             case .scrollGesture:
                 if let dev = input.extDeviceID { return externalScrollGestureActive.contains(dev) }
                 return !externalScrollGestureActive.isEmpty
+            case .penPressure:
+                return externalPen.pressure > ExternalInputDeviceService.penPressureThreshold
+            case .penTiltX, .penTiltY:
+                let value = input.extMouseKind == .penTiltX ? externalPen.tiltX : externalPen.tiltY
+                switch input.axisDirection {
+                case .negative: return value < -ExternalInputDeviceService.penTiltThreshold
+                default: return value > ExternalInputDeviceService.penTiltThreshold
+                }
+            case .penButton:
+                return externalPen.buttons & (1 << max(0, input.index)) != 0
+            case .penEraser:
+                return externalPen.eraser
+            case .penInRange:
+                return externalPen.inRange
             case .moveX, .moveY, .scrollX, .scrollY:
                 // Half-axis style: positive direction means delta > 0, etc.
                 // Threshold is 1 because HID deltas come through as integer
@@ -3654,7 +3693,7 @@ class MappingEngine: ObservableObject {
                 // the modifier, so they keep it (Shift Command 4 on a double
                 // tap became Command 4). The engine never reads a key it holds
                 // itself, so a pulse after release cannot latch the input.
-                let deferred = row.macroSteps == nil && (row.holdOutputs != nil || row.doubleTapOutputs != nil)
+                let deferred = row.macroSteps == nil && (row.holdOutputs != nil || row.doubleTapOutputs != nil || row.tripleTapOutputs != nil)
                 let heldLists = deferred ? [row.holdOutputs].compactMap { $0 }
                                          : [row.outputs] + [row.holdOutputs].compactMap { $0 }
                 if heldLists.contains(where: { $0.contains { $0.type == .key && $0.keyCode == input.index } }) {
@@ -4211,6 +4250,11 @@ class MappingEngine: ObservableObject {
             case .lightBar:
                 fireLightOutput(output, press: press, owner: owner)
 
+            case .controllerProfile:
+                // On press only, like a System Function; the controller
+                // changes its active profile and says so in its report.
+                if press { controllerService.switchAccessProfiles(output.resolvedProfileAction) }
+
             case .midiNote:
                 let note = output.midiNote ?? 60
                 let vel = output.midiVelocity ?? 100
@@ -4454,39 +4498,72 @@ class MappingEngine: ObservableObject {
             lastTapTime.removeValue(forKey: bindKey)
             // The tap before this press was a clean tap; its single action,
             // called off when this press began, still goes out.
-            if secondTapPressed.remove(bindKey) != nil { pulse(binding.outputs, bindKey: bindKey) }
+            if secondTapPressed.remove(bindKey) != nil {
+                let taps = tapCount.removeValue(forKey: bindKey) ?? 1
+                pulseTaps(binding, count: taps, bindKey: bindKey)
+            }
             return
         }
-        // Released before the hold threshold: this press is a tap.
-        if binding.doubleTapOutputs != nil {
+        // Released before the hold threshold: this press is a tap. With a
+        // double or triple tap action the taps are counted: each tap inside
+        // the window of the one before adds one; the count fires at once
+        // when it reaches the row's highest action, else once the window
+        // lapses with no further tap.
+        if binding.doubleTapOutputs != nil || binding.tripleTapOutputs != nil {
             let window = Double(max(100, min(2000, binding.doubleTapWindowMs ?? 300))) / 1000.0
-            if secondTapPressed.remove(bindKey) != nil
-                || lastTapTime[bindKey].map({ now - $0 <= window }) == true {
-                // Second tap inside the window: the double action fires and
-                // the pending single-tap is canceled via the token bump.
+            let chained = secondTapPressed.remove(bindKey) != nil
+                || lastTapTime[bindKey].map({ now - $0 <= window }) == true
+            let count = chained ? (tapCount[bindKey] ?? 1) + 1 : 1
+            let highest = binding.tripleTapOutputs != nil ? 3 : 2
+            if count >= highest {
+                // The last tap of the chain: its action fires now, and the
+                // pending lower count is canceled via the token bump.
                 lastTapTime.removeValue(forKey: bindKey)
+                tapCount.removeValue(forKey: bindKey)
                 pendingSingleTapToken[bindKey, default: 0] += 1
-                pulse(binding.doubleTapOutputs ?? [], bindKey: bindKey)
+                pulseTaps(binding, count: count, bindKey: bindKey)
             } else {
-                // First tap: wait out the window before firing the single
-                // action, in case a second tap arrives.
+                // Wait out the window before firing this count's action, in
+                // case another tap arrives.
                 lastTapTime[bindKey] = now
+                tapCount[bindKey] = count
                 let token = (pendingSingleTapToken[bindKey] ?? 0) + 1
                 pendingSingleTapToken[bindKey] = token
                 let gen = engineGeneration
-                let outputs = binding.outputs
                 DispatchQueue.main.asyncAfter(deadline: .now() + window) { [weak self] in
                     guard let self,
                           self.engineGeneration == gen,
                           self.pendingSingleTapToken[bindKey] == token,
                           self.lastTapTime[bindKey] != nil else { return }
                     self.lastTapTime.removeValue(forKey: bindKey)
-                    self.pulse(outputs, bindKey: bindKey)
+                    self.tapCount.removeValue(forKey: bindKey)
+                    self.pulseTaps(binding, count: count, bindKey: bindKey)
                 }
             }
         } else {
             // Plain tap-vs-hold: the tap action fires as a quick pulse.
             pulse(binding.outputs, bindKey: bindKey)
+        }
+    }
+
+    /// How many taps a chain has reached, per binding, beside lastTapTime.
+    private var tapCount: [String: Int] = [:]
+
+    /// The action a chain of `count` taps fires: one tap the row's outputs,
+    /// two its double tap action, three its triple tap action. A count with
+    /// no action of its own (two taps on a row with only a triple tap
+    /// action) sends the row's outputs that many times, as separate taps
+    /// would have.
+    private func pulseTaps(_ binding: BindingModel, count: Int, bindKey: String) {
+        if count >= 3, let triple = binding.tripleTapOutputs { pulse(triple, bindKey: bindKey); return }
+        if count >= 2, let double = binding.doubleTapOutputs { pulse(double, bindKey: bindKey); return }
+        let gen = engineGeneration
+        for i in 0..<max(1, count) {
+            if i == 0 { pulse(binding.outputs, bindKey: bindKey); continue }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09 * Double(i)) { [weak self] in
+                guard let self, self.engineGeneration == gen else { return }
+                self.pulse(binding.outputs, bindKey: bindKey)
+            }
         }
     }
 

@@ -228,6 +228,18 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
     /// moment the gesture begins until the fingers lift and any momentum
     /// runs out. A wheel mouse never reports this.
     case scrollGesture
+    /// A pen on a tablet (Wacom, Huion, XP-Pen, Gaomon): the tip's pressure
+    /// 0 to 1 past a light threshold.
+    case penPressure
+    /// The pen's tilt, -1 to 1 each way; a direction row fires past a quarter.
+    case penTiltX
+    case penTiltY
+    /// The pen's barrel buttons, by number from the tablet's bitmask.
+    case penButton
+    /// The eraser end is the one near the tablet.
+    case penEraser
+    /// A pen is within reach of the tablet.
+    case penInRange
 
     var id: String { rawValue }
 
@@ -242,6 +254,12 @@ enum ExtMouseKind: String, Codable, CaseIterable, Identifiable {
         case .deepPress: return String(localized: "Deep Press")
         case .doubleClick: return String(localized: "Double click")
         case .scrollGesture: return String(localized: "Scroll gesture")
+        case .penPressure: return String(localized: "Pen pressure")
+        case .penTiltX: return String(localized: "Pen tilt X")
+        case .penTiltY: return String(localized: "Pen tilt Y")
+        case .penButton: return String(localized: "Pen button")
+        case .penEraser: return String(localized: "Pen eraser")
+        case .penInRange: return String(localized: "Pen in range")
         }
     }
 }
@@ -465,6 +483,18 @@ struct InputEvent: Codable, Hashable, Identifiable {
                 return String(localized: "Mouse Double Click \(index &+ 1)")
             case .scrollGesture:
                 return String(localized: "Scroll Gesture")
+            case .penPressure:
+                return String(localized: "Pen Pressure")
+            case .penTiltX:
+                return String(localized: "Pen Tilt \(axisDirection?.displayName ?? "+")")
+            case .penTiltY:
+                return String(localized: "Pen Tilt \(axisDirection == .negative ? "Up" : "Down")")
+            case .penButton:
+                return String(localized: "Pen Button \(index &+ 1)")
+            case .penEraser:
+                return String(localized: "Pen Eraser")
+            case .penInRange:
+                return String(localized: "Pen In Range")
             }
         case .cursorRegion:
             // Like `.touchpadRegion`, the human name lives in the

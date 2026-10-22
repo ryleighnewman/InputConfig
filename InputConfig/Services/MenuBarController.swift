@@ -464,6 +464,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             return
         }
         guard let presetStore, let mappingEngine else { return }
+        autoClose?.cancel()
+        autoClose = nil
+        // The app in front before the pop-up, to hand the focus back to
+        // when it closes: activating for the pop-up raised the main window.
+        let front = NSWorkspace.shared.frontmostApplication
+        appBeforePopover = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
 
         // Keep the CPU/RAM readout live while the popover is open.
         SystemStatsService.shared.retain()
@@ -473,9 +479,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             mappingEngine: mappingEngine,
             controllerService: controllerService,
             onToggle: { [weak self] preset in self?.toggle(preset) },
-            onNewPreset: { [weak self] in self?.dismissThen { self?.newPreset() } },
-            onSmartMaker: { [weak self] in self?.dismissThen { self?.openSmartMaker() } },
-            onStatistics: { [weak self] in self?.dismissThen { self?.openStatistics() } },
             onOpen: { [weak self] in self?.dismissThen { self?.openMainWindow() } },
             onSettings: { [weak self] in self?.dismissThen { self?.openSettings() } },
             onHelp: { [weak self] in self?.dismissThen { self?.openHelpGuides() } },
@@ -495,9 +498,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         SystemStatsService.shared.release()
+        autoClose?.cancel()
+        autoClose = nil
+        // Back to the app that was in front, unless the pop-up was closed
+        // to open the window, Settings or a sheet here.
+        if let app = appBeforePopover, !app.isTerminated { app.activate() }
+        appBeforePopover = nil
     }
 
+    private var appBeforePopover: NSRunningApplication?
+
     private func dismissThen(_ action: @escaping () -> Void) {
+        appBeforePopover = nil
         popover?.performClose(nil)
         action()
     }
@@ -511,8 +523,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         } else if preset.isRunnable {
             Self.activate(preset, store: presetStore, engine: mappingEngine)
         }
-        popover?.performClose(nil)
+        // The pop-up stays open so the check mark shows the change, then
+        // closes on its own a few seconds later, or when clicked away.
+        autoClose?.cancel()
+        let close = DispatchWorkItem { [weak self] in self?.popover?.performClose(nil) }
+        autoClose = close
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: close)
     }
+
+    /// The pending close after a preset was started or stopped from the
+    /// pop-up; cancelled when the pop-up opens again.
+    private var autoClose: DispatchWorkItem?
 
     // MARK: - App actions (controller-triggered runtime control)
 
@@ -555,7 +576,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
             let usable: [Preset] = {
                 if let folder = active?.groupID {
-                    let inFolder = store.presets(in: folder).filter(usableHere)
+                    let inFolder = store.presets(in: folder).filter { usableHere($0) && !store.isHiddenBuiltIn($0) }
                     if inFolder.count > 1 { return inFolder }
                 }
                 return store.presetsInSidebarOrder.filter(usableHere)
@@ -760,9 +781,7 @@ private struct MenuBarPopoverView: View {
     @ObservedObject var mappingEngine: MappingEngine
     weak var controllerService: GameControllerService?
     let onToggle: (Preset) -> Void
-    let onNewPreset: () -> Void
-    let onSmartMaker: () -> Void
-    let onStatistics: () -> Void
+    @State private var query = ""
     let onOpen: () -> Void
     let onSettings: () -> Void
     let onHelp: () -> Void
@@ -864,7 +883,8 @@ private struct MenuBarPopoverView: View {
                     Section("Favorites") { ForEach(favorites) { presetMenuButton($0) } }
                 }
                 if favorites.isEmpty || !presetStore.showFavoritesOnly {
-                    ForEach(presetStore.inSidebarOrder(presetStore.groups)) { group in
+                    ForEach(presetStore.inSidebarOrder(presetStore.groups.filter {
+                        !presetStore.hideBuiltInPresets || !presetStore.isInBuiltInFolder($0.id) })) { group in
                         let ps = presetStore.presets(in: group.id)
                         if !ps.isEmpty { Section(ShippedText.t(group.name)) { ForEach(ps) { presetMenuButton($0) } } }
                     }
@@ -950,12 +970,55 @@ private struct MenuBarPopoverView: View {
 
     private var quickActions: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                squareButton("New Preset", "plus.rectangle.on.rectangle", action: onNewPreset)
-                squareButton("Smart Preset", "wand.and.stars", action: onSmartMaker)
-                squareButton("Statistics", "chart.line.uptrend.xyaxis", action: onStatistics)
-            }
+            presetFinder
             emergencyStopButton
+        }
+    }
+
+    /// The presets started most recently, or with something typed, every
+    /// preset that matches, each one click from starting or stopping.
+    private var presetFinder: some View {
+        let typed = !query.trimmingCharacters(in: .whitespaces).isEmpty
+        let list = typed ? Array(presetStore.search(query).prefix(8)) : Array(presetStore.recentPresets.prefix(5))
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Search presets", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .accessibilityLabel("Search presets")
+                    .onSubmit { if typed, let first = list.first, first.isRunnable || first.isActive { onToggle(first) } }
+                if typed {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
+            .padding(.bottom, 4)
+            if typed && list.isEmpty {
+                Text("No presets match")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+            } else if !typed && !list.isEmpty {
+                Text("Recent")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            ForEach(list) { preset in
+                MenuPresetRow(preset: preset) { onToggle(preset) }
+            }
         }
     }
 
@@ -979,7 +1042,7 @@ private struct MenuBarPopoverView: View {
                 ? LocalizedList.and([label(service.controllerButton), label(EmergencyStopService.startButton)])
                 : label(service.controllerButton)
             let secsText = service.holdSeconds.formatted(.number.precision(.fractionLength(0...1)))
-            ways.append(String(localized: "Hold \(name) \(secsText) s") + service.accessControllerHoldNote)
+            ways.append(String(localized: "Hold \(name) \(secsText) s") + service.connectedHoldNote(service: controllerService))
         }
         let presetWays = activePresetEmergencyInputs
         if !presetWays.isEmpty {
@@ -1046,22 +1109,6 @@ private struct MenuBarPopoverView: View {
                 .filter { b in b.outputs.contains { $0.type == .appAction && $0.appActionKind == .emergencyStop } }
                 .map { b in ButtonNames.inputName(b.input, family: naming.family, model: naming.model) }
         }
-    }
-
-    private func squareButton(_ title: LocalizedStringKey, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 18)).iconTint(.green).accessibilityHidden(true)
-                // Two centered lines for a long translation ("Smart
-                // forhåndsinnstilling"), still inside the 62 point square.
-                Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-                    .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity).frame(minHeight: 62)
-            .innerWell(radius: 11)
-            .contentShape(RoundedRectangle(cornerRadius: 11))
-        }
-        .buttonStyle(.plain).help(title)
     }
 
     // MARK: Status - the "Recent" slot, showing engine state (InputConfig domain)
@@ -1156,9 +1203,6 @@ private struct MenuBarPopoverView: View {
                 .help("Devices")
                 .accessibilityLabel("Devices")
             }
-            MenuFooterIcon(symbol: "sparkles", help: "What's New in InputConfig") {
-                MenuBarController.shared.showWhatsNew()
-            }
             MenuFooterIcon(symbol: "macwindow", help: "Open InputConfig", action: onOpen)
             MenuFooterIcon(symbol: "gearshape", help: "Settings", action: onSettings)
         }
@@ -1179,6 +1223,39 @@ private extension View {
         } else {
             background(.ultraThinMaterial)
         }
+    }
+}
+
+/// One preset in the menu bar's list: its name, whether it is running,
+/// and a click starts or stops it.
+private struct MenuPresetRow: View {
+    let preset: Preset
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: preset.isActive ? "checkmark.circle.fill" : (preset.isRunnable ? "circle" : "circle.dashed"))
+                    .font(.caption)
+                    .foregroundStyle(preset.isActive ? AnyShapeStyle(Color.green) : AnyShapeStyle(.secondary))
+                    .accessibilityHidden(true)
+                Text(preset.shownName)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .hoverFill(hovering)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .disabled(!preset.isRunnable && !preset.isActive)
+        .accessibilityLabel(preset.isActive ? String(localized: "\(preset.shownName), running") : preset.shownName)
+        .accessibilityHint(preset.isActive ? String(localized: "Stops this preset") : String(localized: "Starts this preset"))
     }
 }
 

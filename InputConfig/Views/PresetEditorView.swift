@@ -324,7 +324,12 @@ struct PresetEditorView: View {
                                 // Plain values so the row views stay free of
                                 // store subscriptions; used by the App Action
                                 // output's target-preset picker.
-                                availablePresets: presetStore.presets.map { (id: $0.id, name: $0.shownName) }
+                                availablePresets: presetStore.presets.map { (id: $0.id, name: $0.shownName) },
+                                triggerFeel: (preset.triggerFeelLeft ?? 0, preset.triggerFeelRight ?? 0),
+                                onSetTriggerFeel: { left, level in
+                                    let value = level == 0 ? nil : level
+                                    if left { preset.triggerFeelLeft = value } else { preset.triggerFeelRight = value }
+                                }
                             )
                             .id(joystick.id)
                         }
@@ -1020,6 +1025,7 @@ struct PresetEditorView: View {
             row.holdThresholdMs = nil
             row.doubleTapOutputs = nil
             row.doubleTapWindowMs = nil
+            row.tripleTapOutputs = nil
             row.turboEnabled = true
             row.hapticEnabled = true
             row.hapticIntensity = 0.7
@@ -1033,6 +1039,7 @@ struct PresetEditorView: View {
             row.holdThresholdMs = nil
             row.doubleTapOutputs = nil
             row.doubleTapWindowMs = nil
+            row.tripleTapOutputs = nil
             row.macroSteps = [
                 MacroStep(action: OutputAction(type: .key, keyCode: 227), delayMs: 0, holdMs: 40),
                 MacroStep(action: OutputAction(type: .key, keyCode: 6), delayMs: 30, holdMs: 40),
@@ -1667,7 +1674,7 @@ struct PresetEditorView: View {
         // option counts as set: those rows are left as they are.
         func isEmpty(_ b: BindingModel) -> Bool {
             b.input.type == .motion && b.outputs.isEmpty && b.macroSteps == nil
-                && b.holdOutputs == nil && b.doubleTapOutputs == nil && b.modifiers.isEmpty
+                && b.holdOutputs == nil && b.doubleTapOutputs == nil && b.tripleTapOutputs == nil && b.modifiers.isEmpty
                 && b.deadzone == nil && b.outerDeadzone == nil && b.invertAxis == nil && b.sensitivityCurve == nil
                 && b.variableSensitivity == nil && b.toggleMode == nil && b.turboEnabled == nil
                 && b.fromNeutral == nil && b.hapticEnabled == nil && b.speechEnabled == nil
@@ -2089,7 +2096,7 @@ struct PresetEditorView: View {
             // double tap, macro, toggle or turbo left from before stopped
             // the continuous path, and the pointer never moved.
             binding.holdOutputs = nil; binding.holdThresholdMs = nil
-            binding.doubleTapOutputs = nil; binding.doubleTapWindowMs = nil
+            binding.doubleTapOutputs = nil; binding.doubleTapWindowMs = nil; binding.tripleTapOutputs = nil
             binding.macroSteps = nil; binding.toggleMode = nil; binding.turboEnabled = nil
             if pending.event.type == .axis {
                 // Mild smooth curve + moderate deadzone for joysticks.

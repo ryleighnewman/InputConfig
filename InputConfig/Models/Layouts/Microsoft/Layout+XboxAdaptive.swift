@@ -159,14 +159,18 @@ extension ControllerLayout {
                       printed: "LB", inputs: .button(4), callout: .below, name: "LB jack"),
         PlacedControl(id: "jack-xbox", kind: .other, face: .top, center: CGPoint(x: xboxAdaptiveJackX(8), y: 0.36), size: 0.026,
                       symbol: "logo.xbox", inputs: .button(10), note: sharedJackNote, callout: .above, overlayOf: "xbox", name: "Xbox button jack"),
-        PlacedControl(id: "jack-x1", kind: .stick, face: .top, center: CGPoint(x: xboxAdaptiveJackX(9), y: 0.36), size: 0.026,
-                      printed: "X1", inputs: ControlInputs(axes: [.x(0), .y(1)]),
-                      readable: .conditional("An analog joystick plugged in here reads as the left stick; a switch sends whatever the Xbox Accessories app assigns it"),
-                      callout: .below, name: "X1 jack (left stick)"),
-        PlacedControl(id: "jack-x2", kind: .stick, face: .top, center: CGPoint(x: xboxAdaptiveJackX(10), y: 0.36), size: 0.026,
-                      printed: "X2", inputs: ControlInputs(axes: [.x(2), .y(3)]),
-                      readable: .conditional("An analog joystick plugged in here reads as the right stick; a switch sends whatever the Xbox Accessories app assigns it"),
-                      callout: .above, name: "X2 jack (right stick)"),
+        // X1 and X2 are 3.5 mm switch jacks like the others, not stick
+        // jacks: by default they send left stick up and left stick down
+        // (the LipSync firmware's XAC table and the Hackaday dissection
+        // agree); analog sticks enter through the two USB ports only.
+        PlacedControl(id: "jack-x1", kind: .other, face: .top, center: CGPoint(x: xboxAdaptiveJackX(9), y: 0.36), size: 0.026,
+                      printed: "X1", inputs: ControlInputs(axes: [.y(1)]),
+                      readable: .conditional("A switch plugged in here sends left stick up by default; the Xbox Accessories app can reassign it"),
+                      callout: .below, name: "X1 jack"),
+        PlacedControl(id: "jack-x2", kind: .other, face: .top, center: CGPoint(x: xboxAdaptiveJackX(10), y: 0.36), size: 0.026,
+                      printed: "X2", inputs: ControlInputs(axes: [.y(1)]),
+                      readable: .conditional("A switch plugged in here sends left stick down by default; the Xbox Accessories app can reassign it"),
+                      callout: .above, name: "X2 jack"),
         PlacedControl(id: "jack-view", kind: .other, face: .top, center: CGPoint(x: xboxAdaptiveJackX(11), y: 0.36), size: 0.026,
                       symbol: "rectangle.on.rectangle", inputs: .button(8), note: sharedJackNote, callout: .below, overlayOf: "view", name: "View jack"),
         PlacedControl(id: "jack-menu", kind: .other, face: .top, center: CGPoint(x: xboxAdaptiveJackX(12), y: 0.36), size: 0.026,

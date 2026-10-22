@@ -28,6 +28,10 @@ struct StickRegionsView: View {
     /// deadzones are drawn on it and each one is listed, a click away.
     var partRows: [RegionPartRow] = []
     var onJumpToRow: ((UUID) -> Void)? = nil
+    /// A DualSense or DualSense Edge group: its triggers' feel in this
+    /// preset (0 off, 1 light, 2 medium, 3 firm), and how to change it.
+    var triggerFeel: (left: Int, right: Int) = (0, 0)
+    var onSetTriggerFeel: ((_ left: Bool, _ level: Int) -> Void)? = nil
 
     @State private var selectedStick: Int = 0  // 0 = left, 1 = right, 2 = an axis's travel
     /// The axis whose bands are shown when `selectedStick` is 2.
@@ -230,10 +234,21 @@ struct StickRegionsView: View {
             .frame(width: showsBands ? 90 + 16 + 110 : plotSize)
 
             VStack(alignment: .leading, spacing: 12) {
-                Text(RegionEditorHint.text)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(RegionEditorHint.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(RegionEditorHint.purpose(showsBands ? .trigger : .stick))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                // A DualSense trigger's feel, the preset's own setting, next
+                // to the trigger's regions where a pull is set up.
+                if showsBands, (bandAxis == 4 || bandAxis == 5), let onSetTriggerFeel {
+                    triggerFeelControl(left: bandAxis == 4, set: onSetTriggerFeel)
+                }
                 regionsList
                 HStack(spacing: 20) {
                     statBlocks
@@ -251,6 +266,25 @@ struct StickRegionsView: View {
                 }
             }
             .frame(width: 320 * scale, alignment: .leading)
+        }
+    }
+
+    private func triggerFeelControl(left: Bool, set: @escaping (Bool, Int) -> Void) -> some View {
+        let level = left ? triggerFeel.left : triggerFeel.right
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Trigger feel")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Picker("Trigger feel", selection: Binding(get: { level }, set: { set(left, $0) })) {
+                ForEach(0...3, id: \.self) { Text(TriggerFeelName.name($0)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            Text("The DualSense's resistance across the pull while this preset runs.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1614,10 +1648,26 @@ struct StickRegionHandles: View {
     }
 }
 
-/// The one line every region editor shows on how to use it.
+/// The one line every region editor shows on how to use it, and the line
+/// after it on what a region is for, worded for the thing drawn.
 enum RegionEditorHint {
     static var text: String {
         String(localized: "Drag on empty space to draw a region, drag a region to move it, and drag its dots to resize it. Right-click a region to rename, duplicate or delete it.")
+    }
+
+    enum Kind { case trigger, stick, touchpad, screen }
+
+    static func purpose(_ kind: Kind) -> String {
+        switch kind {
+        case .trigger:
+            return String(localized: "Then give each region its own action in its row: a light pull can aim while a full pull fires, so one trigger does two jobs.")
+        case .stick:
+            return String(localized: "Then give each region its own action in its row: a small push can walk while the edge sprints, or each direction can send its own key.")
+        case .touchpad:
+            return String(localized: "Then give each region its own action in its row: a tap or a press in a corner can do something different from the middle.")
+        case .screen:
+            return String(localized: "Then give each region its own action in its row: the pointer reaching a corner of the screen can run a shortcut or switch apps.")
+        }
     }
 }
 

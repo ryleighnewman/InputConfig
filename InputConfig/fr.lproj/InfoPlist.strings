@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig utilise le Bluetooth uniquement pour déconnecter une manette sans fil lorsque vous le demandez.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig utilise le Bluetooth pour lire les manettes Switch 2, et pour connecter et déconnecter les manettes sans fil, quand vous le demandez ou l'activez dans les Réglages.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig utilise le Bluetooth uniquement pour déconnecter une manette sans fil lorsque vous le demandez.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig utilise le Bluetooth pour lire les manettes Switch 2, et pour connecter et déconnecter les manettes sans fil, quand vous le demandez ou l'activez dans les Réglages.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Tous droits réservés.";

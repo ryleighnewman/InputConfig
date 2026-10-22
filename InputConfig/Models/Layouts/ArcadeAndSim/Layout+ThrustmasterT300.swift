@@ -9,12 +9,12 @@ extension ControllerLayout {
     /// strip holds what sits behind the rim: the two shift paddles on the
     /// wheel, and L3, R3, MODE and the USB switch on the base's front.
     ///
-    /// Read path: raw HID descriptor (no profile, no GameControllerDB row).
-    /// Inputs follow the normal PC mode descriptor (044F:B66E): X steering
-    /// on axi 0, then the slot rules put Y (clutch) on axi 1, Z (gas) on
-    /// axi 2 and Rz (brake) on axi 3; 13 buttons in the order Thrustmaster's
-    /// PC mapping numbers them (1 to 13 there, 0 to 12 here) and one hat.
-    /// The pedals are 10 bit bipolar axes, so each rests at one end.
+    /// Read path: raw HID descriptor (no profile, no GameControllerDB row),
+    /// put on the wheel convention by ThrustmasterWheel.normalize: X
+    /// steering on axis 0, Y (clutch) on 1, Rz (brake) on 4, Z (gas) on 5,
+    /// each pedal 0 released and 1 floored (rest end assumed, see that
+    /// file); 13 buttons in the order Thrustmaster's PC mapping numbers
+    /// them (1 to 13 there, 0 to 12 here) and one hat.
     static let thrustmasterT300 = ControllerLayout(
         id: .thrustmasterT300,
         displayName: "Thrustmaster T300 RS",
@@ -141,17 +141,17 @@ extension ControllerLayout {
         // T3PA pedals, left to right: clutch, brake, gas (gas is the taller head).
         PlacedControl(id: "clutch", kind: .pedal, center: CGPoint(x: 0.27, y: 0.72), size: 0.12, height: 0.2,
                       shape: .roundedRect(corner: 0.18), printed: "Clutch",
-                      inputs: ControlInputs(axes: [AxisRef(index: 1, role: .y, unipolar: false)]),
+                      inputs: ControlInputs(axes: [.analog(1)]),
                       readable: .conditional("Only with a three pedal set such as the T3PA (T300 RS GT Edition); the T300 RS ships with two pedals"),
-                      note: "Y axis, rests at one end. MODE + L3 + R3 on the base swaps it with the gas pedal", callout: .below),
+                      note: "Reads 0 released and 1 floored, like a trigger. MODE + L3 + R3 on the base swaps it with the gas pedal", callout: .below),
         PlacedControl(id: "brake", kind: .pedal, center: CGPoint(x: 0.5, y: 0.72), size: 0.12, height: 0.2,
                       shape: .roundedRect(corner: 0.18), printed: "Brake",
-                      inputs: ControlInputs(axes: [AxisRef(index: 3, role: .y, unipolar: false)]),
-                      note: "Rz axis, rests at one end", callout: .below),
+                      inputs: ControlInputs(axes: [.analog(4)]),
+                      note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
         PlacedControl(id: "gas", kind: .pedal, center: CGPoint(x: 0.73, y: 0.708), size: 0.12, height: 0.23,
                       shape: .roundedRect(corner: 0.18), printed: "Gas",
-                      inputs: ControlInputs(axes: [AxisRef(index: 2, role: .y, unipolar: false)]),
-                      note: "Z axis, rests at one end", callout: .below),
+                      inputs: ControlInputs(axes: [.analog(5)]),
+                      note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
 
         // Back, as held: the paddles behind the upper spokes.
         PlacedControl(id: "lpaddle", kind: .paddle, face: .back, center: CGPoint(x: 0.184, y: 0.33), size: 0.09, height: 0.15,

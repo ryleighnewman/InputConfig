@@ -86,13 +86,14 @@ final class HIDDeviceRegistry: ObservableObject {
         case consumer     // Consumer page (media keys, remotes)
         case vendor       // Vendor-defined page
         case config       // Known configuration channel (VIA, Logitech HID++): never offered
+        case unsupported  // A model of a read family this version has no decoder for: never offered
         case other
 
         /// Interfaces InputConfig may open without Input Monitoring.
         var adoptable: Bool {
             switch self {
             case .gamepad, .vendor, .other: return true
-            case .keyboard, .pointer, .consumer, .config: return false
+            case .keyboard, .pointer, .consumer, .config, .unsupported: return false
             }
         }
 
@@ -104,6 +105,7 @@ final class HIDDeviceRegistry: ObservableObject {
             case .consumer: return String(localized: "arrives as media keys: bind Keyboard Key › Play / Pause")
             case .vendor: return String(localized: "vendor-specific device")
             case .config: return String(localized: "configuration channel")
+            case .unsupported: return String(localized: "not read by this version of InputConfig")
             case .other: return String(localized: "device")
             }
         }
@@ -546,9 +548,10 @@ final class HIDDeviceRegistry: ObservableObject {
         // A Stream Deck's key interface is on the Consumer page but sends
         // key states, not media keys; it is offered like a vendor device.
         if ControllerProfileDatabase.isStreamDeck(vendorID: vid, productID: pid) { kind = .vendor }
-        // Another Elgato model is not media keys either; it is just not read
-        // yet, so it gets the plain label.
-        else if vid == ControllerProfileDatabase.streamDeckVendorID && kind == .consumer { kind = .other }
+        // Another Elgato model is not media keys either, and it has no
+        // decoder: offered, it would be read bit by bit as "Bit 0" to
+        // "Bit 127", so it is listed and never offered.
+        else if vid == ControllerProfileDatabase.streamDeckVendorID && kind == .consumer { kind = .unsupported }
         // Jog and shuttle controllers (Contour ShuttleXpress and ShuttlePRO,
         // Griffin PowerMate) declare a Consumer collection but send their
         // buttons and wheels as ordinary fields that never become media keys,
@@ -579,7 +582,7 @@ final class HIDDeviceRegistry: ObservableObject {
         func rank(_ k: Kind) -> Int {
             switch k { case .gamepad: return 0; case .keyboard: return 1; case .pointer: return 2
                        case .vendor: return 3; case .other: return 4; case .consumer: return 5
-                       case .config: return 6 }
+                       case .unsupported: return 6; case .config: return 7 }
         }
         // Equal ranks by the interface's registry ID, not arrival order:
         // Rescan or a relaunch could make another interface the one kept
@@ -736,7 +739,12 @@ final class HIDDeviceRegistry: ObservableObject {
             // pad: listed on every version, with a reason that fits, unless
             // its racing wheel support is reading the wheel.
             let xboxWheel = isGIP && vid == 0x046D && [0xC261, 0xC262, 0xC26D, 0xC26E].contains(Int(pid))
-            if isGIP && gipReadable && !xboxWheel { continue }
+            // XboxGamepad.dext (macOS 15 and later) matches 045E:02EA (One S),
+            // 0B00 (Elite Series 2) and 0B12 (Series X|S) exactly; every
+            // other GIP pad (One 1537, Elite 1, Adaptive, third party) stays
+            // unread over USB on every macOS.
+            let gipReadByMacOS = vid == 0x045E && [0x02EA, 0x0B00, 0x0B12].contains(Int(pid))
+            if isGIP && gipReadable && !xboxWheel && gipReadByMacOS { continue }
             if xboxWheel && wheelsLeftOut < racingWheelsRead {
                 wheelsLeftOut += 1
                 continue
@@ -749,8 +757,10 @@ final class HIDDeviceRegistry: ObservableObject {
                 ?? String(format: String(localized: "USB controller %04X:%04X"), locale: .current, vid, pid)
             let reason = xboxWheel
                 ? String(localized: "Logitech wheel for Xbox: macOS cannot read it in this mode; the PlayStation and PC version of the wheel works")
-                : isGIP
+                : isGIP && gipReadByMacOS
                 ? String(localized: "Xbox One or Series pad: update to macOS 15 to use it over USB, or use Bluetooth")
+                : isGIP
+                ? String(localized: "Xbox One (1537), Elite Series 1, Adaptive or third party Xbox pad: macOS does not read it over USB; use Bluetooth or the pad's other mode")
                 : String(localized: "Xbox 360 style pad: macOS cannot read it; if the pad has another mode (DInput, Switch) or Bluetooth, use that")
             found[parentID] = UnreadablePad(id: parentID, name: name, vendorID: vid, productID: pid, reason: reason)
 

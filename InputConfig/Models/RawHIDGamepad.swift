@@ -28,8 +28,12 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     let profile: ControllerProfile?
 
     /// Underlying HID device. Held strongly so it isn't released while
-    /// the input report callback is registered.
-    let device: IOHIDDevice
+    /// the input report callback is registered. nil for a synthetic pad
+    /// (the test bench and the replay hook), which no report is ever sent to.
+    let device: IOHIDDevice?
+
+    /// The Switch 2 stick calibration once it has been read; nil until then.
+    var switch2Calibration: Switch2Calibration?
 
     private let lock = NSLock()
     private var _state = ControllerState()
@@ -52,6 +56,20 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         self.profile = profile
     }
 
+    /// A pad with no device behind it, fed reports by the bench or the
+    /// replay hook.
+    init(testProfile: ControllerProfile, vendorID: Int32, productID: Int32,
+         transport: String, id: UInt64, productName: String? = nil) {
+        self.device = nil
+        self.id = id
+        self.vendorID = vendorID
+        self.productID = productID
+        self.productName = productName ?? testProfile.displayName
+        self.manufacturer = nil
+        self.transport = transport
+        self.profile = testProfile
+    }
+
     /// Atomic snapshot of the latest decoded controller state. Safe to
     /// call from any thread.
     var state: ControllerState {
@@ -72,16 +90,38 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     func resetState() {
         lock.lock()
         _state = ControllerState()
+        counters = [:]
         pulses = [:]
         pulseGeneration &+= 1
         lock.unlock()
         imu.dropTurn()
     }
 
+    /// The last counter value per wrapping axis (a jog wheel), to take deltas.
+    private var counters: [Int: Int] = [:]
+
     func updateState(_ newValue: ControllerState) {
+        // A wrapping counter (a Contour jog): the delta since the last
+        // report, Int8 wrapped, becomes a push in its direction; the first
+        // report only sets the reference.
+        if !newValue.relativeSteps.isEmpty {
+            var pushes = ControllerState()
+            var pushed: [Int] = []
+            lock.lock()
+            for (axis, raw) in newValue.relativeSteps {
+                if let old = counters[axis] {
+                    let delta = Int(Int8(truncatingIfNeeded: raw - old))
+                    if delta != 0 { pushes.axes[axis] = delta > 0 ? 1 : -1; pushed.append(axis) }
+                }
+                counters[axis] = raw
+            }
+            lock.unlock()
+            if !pushed.isEmpty { updateState(pushes, pulsingAxes: pushed) }
+        }
         // A report that carries motion is a fresh IMU sample, so its rates
         // are not read as a stalled link's.
         if !newValue.motion.isEmpty { imu.markReport() }
+        ControllerPowerService.shared.noteRaw(key: id, state: newValue)
         lock.lock()
         _state.buttons.merge(newValue.buttons) { _, new in new }
         _state.axes.merge(newValue.axes) { _, new in new }

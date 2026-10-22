@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "Az InputConfig a Bluetoothot csak arra használja, hogy kérésére leválasszon egy vezeték nélküli vezérlőt.";
+"NSBluetoothAlwaysUsageDescription" = "Az InputConfig Bluetoothot használ a Switch 2 kontrollerek olvasásához, valamint vezeték nélküli kontrollerek csatlakoztatásához és leválasztásához, ha kéred vagy bekapcsolod a Beállításokban.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "Az InputConfig a Bluetoothot csak arra használja, hogy kérésére leválasszon egy vezeték nélküli vezérlőt.";
+"NSBluetoothPeripheralUsageDescription" = "Az InputConfig Bluetoothot használ a Switch 2 kontrollerek olvasásához, valamint vezeték nélküli kontrollerek csatlakoztatásához és leválasztásához, ha kéred vagy bekapcsolod a Beállításokban.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Minden jog fenntartva.";

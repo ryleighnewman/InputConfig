@@ -21,9 +21,12 @@ enum ControllerProfileDatabase {
 
         // MARK: 8BitDo
 
-        // The Ultimate 2C wired (0x310A) and the Ultimate wired in XInput
-        // mode (0x3106) send the XInput report layout through a HID
-        // interface. Only these two exact IDs: the rest of the 0x30xx and
+        // The Ultimate 2C (0x310A) and the Ultimate (0x3106) in X mode are
+        // Xbox 360 class USB devices (xpad.c XTYPE_XBOX360, interface class
+        // 0xFF subclass 0x5D), which macOS never exposes as HID: this
+        // profile cannot match a device on stock macOS and is kept as the
+        // XInput decoder's reference for the test bench, like 045E:028E
+        // below. Only these two exact IDs: the rest of the 0x30xx and
         // 0x31xx blocks (0x3011-0x3017, 0x301B, 0x301D, 0x3100-0x3105, and
         // others) are ordinary HID gamepads and wireless dongles whose
         // reports the descriptor parser reads correctly and the XInput
@@ -104,6 +107,28 @@ enum ControllerProfileDatabase {
             requiredTransport: "USB"
         ),
 
+        // Joy-Con 2 (L) and (R), each on its own: over USB in the charging
+        // grip (started by Switch2USBEnabler) or over Bluetooth LE
+        // (Switch2BluetoothService, which lists them with the transport
+        // "Bluetooth LE"). Read sideways, as one is held alone, with the
+        // first Joy-Con drawings' numbering.
+        ControllerProfile(
+            identifier: "nintendo-switch2-joycon-left",
+            displayName: "Joy-Con 2 (L) (Experimental)",
+            vendorID: 0x057E,
+            productMatches: [.exact(0x2066)],
+            layout: .switch2JoyConLeft,
+            physicalButtonNames: switch2JoyConLeftButtonNames
+        ),
+        ControllerProfile(
+            identifier: "nintendo-switch2-joycon-right",
+            displayName: "Joy-Con 2 (R) (Experimental)",
+            vendorID: 0x057E,
+            productMatches: [.exact(0x2067)],
+            layout: .switch2JoyConRight,
+            physicalButtonNames: switch2JoyConRightButtonNames
+        ),
+
         // MARK: Valve
 
         // The 2026 Steam Controller: 0x1302 on a USB cable, 0x1303 over
@@ -135,47 +160,58 @@ enum ControllerProfileDatabase {
             vendorID: 0x054C,
             productMatches: [.exact(0x0268)],
             layout: .dualShock3,
-            physicalButtonNames: dualShock3ButtonNames
+            physicalButtonNames: dualShock3ButtonNames,
+            // Over Bluetooth the pad needs the host's address written by a
+            // pairing tool first and its reports differ; the wired path is
+            // the one this app reads.
+            requiredTransport: "USB"
         ),
     ]
 
     static let streamDeckVendorID: Int32 = 0x0FD9
 
-    /// (product, name, keys, first key byte, mirrored row length)
-    private static let streamDeckModels: [(Int32, String, Int, Int, Int)] = [
-        (0x0060, "Stream Deck", 15, 1, 5),
-        (0x0063, "Stream Deck Mini", 6, 1, 0),
-        (0x0090, "Stream Deck Mini", 6, 1, 0),
-        (0x00B3, "Stream Deck Mini", 6, 1, 0),
-        (0x006D, "Stream Deck", 15, 4, 0),
-        (0x0080, "Stream Deck MK.2", 15, 4, 0),
-        (0x00A5, "Stream Deck MK.2", 15, 4, 0),
-        (0x006C, "Stream Deck XL", 32, 4, 0),
-        (0x008F, "Stream Deck XL", 32, 4, 0),
-        (0x0084, "Stream Deck +", 8, 4, 0),
-        (0x009A, "Stream Deck Neo", 10, 4, 0),
-        (0x00B8, "Stream Deck Module 6", 6, 1, 0),
-        (0x00B9, "Stream Deck Module 15", 15, 4, 0),
-        (0x00BA, "Stream Deck Module 32", 32, 4, 0),
-        (0x0086, "Stream Deck Pedal", 3, 4, 0),
+    /// (product, name, keys, first key byte, mirrored row length, dials, touch strip).
+    /// Key counts, dials and strips per Elgato's HID documentation and
+    /// python-elgato-streamdeck; the Plus XL (0x00C6), Studio (0x00AA) and
+    /// Module 15 Scissor (0x00E4) rows are from the documentation alone.
+    private static let streamDeckModels: [(Int32, String, Int, Int, Int, Int, Bool)] = [
+        (0x0060, "Stream Deck", 15, 1, 5, 0, false),
+        (0x0063, "Stream Deck Mini", 6, 1, 0, 0, false),
+        (0x0090, "Stream Deck Mini", 6, 1, 0, 0, false),
+        (0x00B3, "Stream Deck Mini", 6, 1, 0, 0, false),
+        (0x006D, "Stream Deck", 15, 4, 0, 0, false),
+        (0x0080, "Stream Deck MK.2", 15, 4, 0, 0, false),
+        (0x00A5, "Stream Deck MK.2", 15, 4, 0, 0, false),
+        (0x006C, "Stream Deck XL", 32, 4, 0, 0, false),
+        (0x008F, "Stream Deck XL", 32, 4, 0, 0, false),
+        (0x0084, "Stream Deck +", 8, 4, 0, 4, true),
+        (0x00C6, "Stream Deck + XL", 36, 4, 0, 6, true),
+        (0x00AA, "Stream Deck Studio", 32, 4, 0, 2, false),
+        (0x009A, "Stream Deck Neo", 10, 4, 0, 0, false),
+        (0x00B8, "Stream Deck Module 6", 6, 1, 0, 0, false),
+        (0x00B9, "Stream Deck Module 15", 15, 4, 0, 0, false),
+        (0x00E4, "Stream Deck Module 15", 15, 4, 0, 0, false),
+        (0x00BA, "Stream Deck Module 32", 32, 4, 0, 0, false),
+        (0x0086, "Stream Deck Pedal", 3, 4, 0, 0, false),
     ]
 
     static let streamDeckProfiles: [ControllerProfile] = streamDeckModels.map { model in
-        let (pid, name, keys, offset, mirror) = model
+        let (pid, name, keys, offset, mirror, dials, strip) = model
         let first = ControllerProfile.StreamDeckFormat.firstSlot
         // The Neo's two touch points under its screen follow its 8 keys.
         var keyNames = pid == 0x0086
             ? ["Left pedal", "Middle pedal", "Right pedal"]
             : (pid == 0x009A ? (1...8).map { "Key \($0)" } + ["Left touch", "Right touch"]
                              : (1...keys).map { "Key \($0)" })
-        // The Plus's four dials and its touch strip follow its 8 keys, in
-        // the order StreamDeckFormat numbers them.
-        let plus = pid == 0x0084
+        // Dials and the touch strip follow the keys, in the order
+        // StreamDeckFormat numbers them.
         let format = ControllerProfile.StreamDeckFormat(keys: keys, keyOffset: offset, mirrorColumns: mirror,
-                                                        dials: plus ? 4 : 0, touchStrip: plus)
-        if plus {
-            keyNames += (1...4).map { "Dial \($0) press" }
-            keyNames += (1...4).flatMap { ["Dial \($0) turn left", "Dial \($0) turn right"] }
+                                                        dials: dials, touchStrip: strip)
+        if dials > 0 {
+            keyNames += (1...dials).map { "Dial \($0) press" }
+            keyNames += (1...dials).flatMap { ["Dial \($0) turn left", "Dial \($0) turn right"] }
+        }
+        if strip {
             keyNames += ["Touch strip tap", "Touch strip long press", "Swipe left", "Swipe right"]
         }
         return ControllerProfile(
@@ -324,6 +360,25 @@ enum ControllerProfileDatabase {
         "Button 13", "Capture", "C", "GL", "GR",
     ]
 
+    /// A Joy-Con 2 (L) held sideways: the arrows by position (Layout+JoyConLeft),
+    /// SL and SR on the rail, L and ZL on the far edge, Minus, Capture, GL.
+    static let switch2JoyConLeftButtonNames: [String] = [
+        "Left arrow", "Up arrow", "Down arrow", "Right arrow",
+        "SL", "SR", "L", "ZL",
+        "Minus", "Button 9", "Button 10",
+        "L3", "Button 12",
+        "Button 13", "Capture", "Button 15", "GL", "Button 17",
+    ]
+    /// A Joy-Con 2 (R) held sideways: A, B, X, Y by letter (Layout+JoyConRight),
+    /// SL and SR, R and ZR, Plus, Home, C, GR.
+    static let switch2JoyConRightButtonNames: [String] = [
+        "A", "B", "X", "Y",
+        "SL", "SR", "R", "ZR",
+        "Button 8", "Plus", "Home",
+        "Button 11", "R3",
+        "Button 13", "Button 14", "C", "Button 16", "GR",
+    ]
+
     /// Same indices as the adapter's, plus the Switch 2 model's extras.
     static let switch2GameCubeButtonNames: [String] = [
         "A", "B", "X", "Y",
@@ -339,6 +394,14 @@ enum ControllerProfileDatabase {
         "L", "Z",
         "L (full press)", "R (full press)",
         "Button 8", "Start",
+    ]
+
+    /// Sony order, also used for third party PS4 and PS5 class pads.
+    static let dualShock4ButtonNames: [String] = [
+        "Cross", "Circle", "Square", "Triangle",
+        "L1", "R1", "L2", "R2",
+        "Share", "Options", "PS",
+        "L3", "R3", "Touchpad",
     ]
 
     static let dualShock3ButtonNames: [String] = [

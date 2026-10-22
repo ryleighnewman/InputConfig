@@ -50,6 +50,9 @@ struct ControllerCanvas: View {
     /// DualSense's triggers), by the controls' ids; nil draws nothing.
     var between: (first: String, second: String, view: AnyView)? = nil
     /// Wraps a control so a click opens its inspector.
+    /// Controls ringed in the accent color: what a profile editor beside
+    /// the drawing is looking at.
+    var highlighted: Set<String> = []
     let inspect: (PlacedControl, AnyView) -> AnyView
 
     @Environment(\.colorScheme) private var colorScheme
@@ -252,6 +255,14 @@ struct ControllerCanvas: View {
                             .accessibilityHint([caption(control).map(HotKeySpec.spokenMarks), deadzone(control)?.help]
                                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ". "))
                             .frame(width: frame.width, height: frame.height)
+                            .overlay {
+                                if highlighted.contains(control.id) {
+                                    shapePath(control.shape, in: CGSize(width: frame.width + 10, height: frame.height + 10))
+                                        .stroke(Color.accentColor, lineWidth: 2.5)
+                                        .frame(width: frame.width + 10, height: frame.height + 10)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .position(x: frame.midX, y: frame.midY)
                     }
                 }
@@ -315,8 +326,15 @@ struct ControllerCanvas: View {
     /// instead. Worked out once per drawing, at the narrowest drawing a key
     /// can leave (the widest columns), so a pill that fits there fits with
     /// any captions.
+    /// What the per-drawing caches are keyed by: the model and variant, and
+    /// the controls themselves, which the Access controller changes as
+    /// devices come and go on its expansion ports.
+    private var cacheSignature: String {
+        "\(layout.id.rawValue)|\(variant ?? "")|" + layout.controls.map { "\($0.id):\($0.kind)" }.joined(separator: ",")
+    }
+
     private var crowdedPills: Set<String> {
-        let cacheKey = "\(layout.id.rawValue)|\(variant ?? "")"
+        let cacheKey = "\(cacheSignature)"
         if let hit = Self.crowdedCache[cacheKey] { return hit }
         let w: CGFloat = 560
         let keyed = bands(margin: maxKey + keyGap), laid = stack(keyed)
@@ -420,7 +438,7 @@ struct ControllerCanvas: View {
                 if let t = keyText(c, size: controlFrame(c, band: b, top: laid.tops[n], width: w).size) { texts.append(t) }
             }
         }
-        let cacheKey = "\(layout.id.rawValue)|\(variant ?? "")|" + texts.joined(separator: "\u{1}")
+        let cacheKey = "\(cacheSignature)|" + texts.joined(separator: "\u{1}")
         if let hit = Self.fractionCache[cacheKey] { return hit }
         let widest = texts.map { CaptionLayout.measure($0, fontSize: CaptionLayout.fontSize(forWidth: w)) }.max() ?? 0
         let fraction = min(maxKey, max(0.12, (widest + 10) / w))
@@ -511,7 +529,7 @@ struct ControllerCanvas: View {
         }
         // The layout is the same until the drawing, its size or its
         // captions change; a press only relights a line.
-        let cacheKey = "\(layout.id.rawValue)|\(variant ?? "")|\(Int(w))x\(h < 100_000 ? Int(h) : -1)|\(anchors)|\(keyFraction)|"
+        let cacheKey = "\(cacheSignature)|\(Int(w))x\(h < 100_000 ? Int(h) : -1)|\(anchors)|\(keyFraction)|"
             + items.map { "\($0.c.id)=\($0.text)" }.joined(separator: "\u{1}")
         if let hit = Self.keyCache[cacheKey] {
             return hit.map { e in
@@ -1021,6 +1039,10 @@ struct ControllerCanvas: View {
             let raw = size.height * 0.42
             guard let text = lg.text, !text.isEmpty else { return true }
             return raw >= 7.5 && CaptionLayout.measure(text, fontSize: max(7.5, min(12, raw))) * 1.1 <= size.width - 4
+        case .stick where c.printed != nil:
+            // A stick drawn in an Access controller's expansion port: its
+            // port's name goes in the key, the stick draws no text.
+            return false
         case .stick, .lever, .hat, .dpad, .trackpad, .wheel, .slider, .dial, .pedal, .light, .port:
             return true
         default:
@@ -1643,7 +1665,7 @@ struct ControllerCanvas: View {
             .fill((tint ?? .secondary).opacity(tint == nil ? (bar ? 0.5 : 0.25) : 0.9))
             .shadow(color: tint?.opacity(0.7) ?? .clear, radius: tint == nil ? 0 : 4)
             .frame(width: size.width, height: size.height)
-            .accessibilityLabel(spoken(c, String(localized: "Light")))
+            .accessibilityLabel(spoken(c, String(localized: "controller-light.label", defaultValue: "Light")))
     }
 
     /// A steering wheel: its rim, with a mark at the top that turns as far

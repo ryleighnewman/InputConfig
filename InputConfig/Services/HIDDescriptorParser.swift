@@ -1055,6 +1055,7 @@ struct HIDExtendedLayout: Equatable {
         var index: Int
         var bitSize: Int = 1      // A pressure button reads its whole field
         var pressAbove: Int = 0   // Pressed when the field reads more than this
+        var forcesAxis: Int? = nil // Pressed, this axis reads 1 (a stick's digital L2 bit over an analog byte it leaves at 0)
     }
 
     struct Axis: Equatable {
@@ -1070,6 +1071,7 @@ struct HIDExtendedLayout: Equatable {
         var digitalButton: Int?   // Button slot mirrored at > 0.12, only where no physical button exists
         var inverted: Bool = false // Flip the value (a GameControllerDB "~" axis, or a "-" half axis)
         var relative: Bool = false // Reports a change since the last report (a knob), not a position
+        var wrapCounter: Bool = false // A position counter that wraps (a jog wheel): the pad takes the delta from the last report
     }
 
     /// A D-pad direction sent as its own button, folded into a hat. Some

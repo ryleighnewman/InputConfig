@@ -83,7 +83,10 @@ enum VisualizerRegionEditor: Equatable {
         switch self {
         case .touchpadSetup: return String(localized: "Edit touchpad regions")
         case .screenRegions: return String(localized: "Edit screen regions")
-        case .stickZones: return String(localized: "Edit stick regions")
+        case .stickZones(let key):
+            return (key ?? 0) >= StickRegionService.bandKeyBase
+                ? String(localized: "Edit trigger regions")
+                : String(localized: "Edit stick regions")
         }
     }
 
@@ -233,6 +236,8 @@ struct VirtualControllerView<Trailing: View>: View {
     /// Points a group at a connected controller by the name its device menu
     /// uses (nil: Automatic, the pad at its own number).
     var onChangeDevice: ((Int, String?) -> Void)? = nil
+    /// A trigger's feel set from its inspector: left or right, 0 to 3.
+    var onChangeTriggerFeel: ((_ left: Bool, _ level: Int) -> Void)? = nil
 
     /// Edit mode and zoom live with the host, which draws their controls on
     /// the Live Visualizer title row; the panel reads and writes them here.
@@ -305,6 +310,15 @@ struct VirtualControllerView<Trailing: View>: View {
 
     /// Popover state for the on-controller light-bar widget.
     @State private var showLightBarPopover: Bool = false
+    /// The controller's stored profiles, from the chip above the drawing.
+    @State private var showProfilesPopover: Bool = false
+    /// The Access controller profile open in the editor beside the
+    /// drawing, the drawing control its selected row is about, and the
+    /// save in flight.
+    @State private var accessProfileEditing: AccessControllerPortService.Profile? = nil
+    @State private var accessEditorSelection: String? = nil
+    @State private var accessEditorSaving = false
+    @State private var accessEditorError: String? = nil
 
     /// Transient feedback after the user clicks "Reset gyroscope" in
     /// the Motion popover. Shows for ~1.5s then clears.
@@ -581,6 +595,10 @@ struct VirtualControllerView<Trailing: View>: View {
         .debugVizZoom($control.scale)
         #if DEBUG
         .onReceive(DebugMarketing.shared.$cursorRegionSize) { debugCursorRegionSize = $0 }
+        // `post inputconfig.debug.inspect canvas-r2` opens that control's inspector.
+        .onReceive(DebugHookRelay.shared.publisher("inputconfig.debug.inspect")) { note in
+            openInspectorLabel = note.object as? String
+        }
         #endif
     }
 
@@ -779,8 +797,9 @@ struct VirtualControllerView<Trailing: View>: View {
             // Hold the map to a controller-sized column. Without this the
             // spacers between the widget groups stretch to the panel's full
             // width, which scattered the triggers to the far edges and left
-            // a hole in the middle.
-            .frame(maxWidth: 520)
+            // a hole in the middle. The profile editor beside the drawing
+            // gets a column of its own.
+            .frame(maxWidth: accessProfileEditing != nil ? 520 + 346 : 520)
             .padding(18)
             .scaleEffect(visualizerScale, anchor: .center)
             .offset(x: panOffset.width + dragInProgress.width,
@@ -1507,6 +1526,7 @@ struct VirtualControllerView<Trailing: View>: View {
         case .deepPress: return "deepPress"
         case .doubleClick: return "doubleClick"
         case .scrollGesture: return "scrollGesture"
+        case .penPressure, .penTiltX, .penTiltY, .penButton, .penEraser, .penInRange: return "pen"
         }
     }
 
@@ -1974,7 +1994,34 @@ struct VirtualControllerView<Trailing: View>: View {
         let top = layout.controls(on: .top, variant: resolved.variant)
         let lightBetween = showsLightBar && Self.isTrigger("l2", in: top) && Self.isTrigger("r2", in: top)
             && !top.contains(where: { $0.kind == .light })
+        HStack(alignment: .top, spacing: 16) {
+        // The profile editor, beside the drawing it refers to.
+        if resolved.layout.id == .psAccess, accessProfileEditing != nil {
+            AccessProfileEditorPanel(
+                profile: Binding(get: { accessProfileEditing ?? AccessControllerPortService.Profile(number: 1, name: "") },
+                                 set: { accessProfileEditing = $0 }),
+                selection: $accessEditorSelection,
+                saving: accessEditorSaving,
+                error: accessEditorError,
+                onSave: {
+                    guard let profile = accessProfileEditing else { return }
+                    accessEditorSaving = true
+                    accessEditorError = nil
+                    controllerService.writeAccessProfile(profile, slot: deviceSlot) { result in
+                        accessEditorSaving = false
+                        switch result {
+                        case .success: accessProfileEditing = nil; accessEditorSelection = nil
+                        case .failure(let e): accessEditorError = e.localizedDescription
+                        }
+                    }
+                },
+                onCancel: { accessProfileEditing = nil; accessEditorSelection = nil; accessEditorError = nil })
+            .frame(width: 330)
+            .fixedSize(horizontal: true, vertical: false)
+        }
         VStack(spacing: 8) {
+            // The profiles the controller stores, above the drawing.
+            controllerProfilesChip(layout: resolved.layout)
             // The preset's light bar color is set here: for a pad with a
             // light, or a drawing of one with nothing plugged in.
             if showsLightBar && !lightBetween {
@@ -1987,7 +2034,7 @@ struct VirtualControllerView<Trailing: View>: View {
                 legend: { CanvasLegend.legend(for: physical($0), in: layout, family: family, model: model, choice: choice) },
                 ownLegend: { CanvasLegend.legend(for: physical($0), in: layout, family: layout.family,
                                                  model: resolved.layout.modelNames, choice: .automatic) },
-                caption: { boundCaption(for: $0, layout: layout, rowsByKey: rowsByKey) },
+                caption: { triggerFeelCaption($0, base: boundCaption(for: $0, layout: layout, rowsByKey: rowsByKey)) },
                 touchPoints: { surface in
                     guard surface == 0, sonyTouch else { return [] }
                     let tp = TouchpadService.shared
@@ -2026,7 +2073,14 @@ struct VirtualControllerView<Trailing: View>: View {
                         if gyroOnTop { motionWidgetIfAvailable }
                     }))
                     : nil,
+                highlighted: accessEditorHighlight,
                 inspect: { control, view in
+                    // With the profile editor open, a socket or port on the
+                    // drawing selects its row instead of opening its inspector.
+                    if accessProfileEditing != nil, let key = Self.accessEditorKey(for: control) {
+                        return AnyView(Button { accessEditorSelection = key } label: { view }.buttonStyle(.plain)
+                            .accessibilityHint("Selects this control's row in the profile editor"))
+                    }
                     let name = canvasName(physical(control), layout: layout, family: family, model: model, choice: choice)
                     // A touch surface's zones are drawn in Touchpad Setup, a
                     // stick's or a trigger's in the stick zones sheet, on it alone.
@@ -2065,6 +2119,112 @@ struct VirtualControllerView<Trailing: View>: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .layoutPriority(1)
+        }
+        .frame(maxWidth: .infinity)
+        #if DEBUG
+        // Opens profile N (1...3) in the editor, for a capture or a check
+        // without a click: Marketing/tools/post inputconfig.debug.accessprofile 2
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("inputconfig.debug.accessprofile"))) { note in
+            let number = Int((note.object as? String) ?? "") ?? 1
+            let state = controllerService.accessProfileState(forSlot: deviceSlot)
+            accessProfileEditing = state.profiles[number]
+            accessEditorSelection = accessProfileEditing == nil ? nil : "socket1"
+        }
+        .onAppear { DebugHookRelay.shared.ensure("inputconfig.debug.accessprofile") }
+        #endif
+    }
+
+    /// The editor row a drawn control belongs to, when it has one.
+    private static func accessEditorKey(for c: PlacedControl) -> String? {
+        if c.id.hasPrefix("socket") || c.id == "center" || c.id == "stick" { return c.id }
+        if c.face == .top, c.id.count == 2, c.id.hasPrefix("e") { return c.id }
+        return nil
+    }
+
+    private var accessEditorHighlight: Set<String> {
+        guard accessProfileEditing != nil, let key = accessEditorSelection else { return [] }
+        return [key]
+    }
+
+    // MARK: - Stored profiles and trigger feel
+
+    /// The chip above an Access controller's or a DualSense Edge's drawing.
+    @ViewBuilder
+    private func controllerProfilesChip(layout: ControllerLayout) -> some View {
+        if layout.id == .psAccess {
+            let state = controllerService.accessProfileState(forSlot: deviceSlot)
+            if state.connected {
+                AccessProfilesChip(state: state, isPresented: $showProfilesPopover,
+                                   onUse: { number, done in controllerService.setAccessProfile(number, slot: deviceSlot, completion: done) },
+                                   onEdit: { profile in
+                                       showProfilesPopover = false
+                                       accessProfileEditing = profile
+                                       accessEditorSelection = "socket1"
+                                       accessEditorError = nil
+                                   },
+                                   onRefresh: { controllerService.refreshAccessProfiles(forSlot: deviceSlot) })
+                    .frame(maxWidth: 640, alignment: .leading)
+            }
+        } else if layout.id == .dualSenseEdge {
+            let profiles = controllerService.edgeProfiles(forSlot: deviceSlot)
+            if !profiles.isEmpty {
+                EdgeProfilesChip(profiles: profiles, isPresented: $showProfilesPopover)
+                    .frame(maxWidth: 640, alignment: .leading)
+            }
+        }
+    }
+
+    /// The pad drawn is a DualSense or DualSense Edge that is here, so its
+    /// triggers can be given a feel.
+    private var drawsDualSenseTriggers: Bool {
+        guard let info else { return false }
+        return info.brand == .dualSense || info.name.localizedCaseInsensitiveContains("dualsense")
+    }
+
+    /// Which trigger an inspector key is, when it is one on a DualSense.
+    private func triggerSide(forInspectorKey key: String?) -> Bool? {
+        guard drawsDualSenseTriggers else { return nil }
+        switch key {
+        case "canvas-l2": return true
+        case "canvas-r2": return false
+        default: return nil
+        }
+    }
+
+    /// The adaptive trigger's resistance while this preset runs.
+    @ViewBuilder
+    private func triggerFeelRow(left: Bool) -> some View {
+        let level = (left ? preset.triggerFeelLeft : preset.triggerFeelRight) ?? 0
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Trigger feel")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Picker("Trigger feel", selection: Binding(
+                get: { level },
+                set: { onChangeTriggerFeel?(left, $0) })) {
+                ForEach(0...3, id: \.self) { Text(TriggerFeelName.name($0)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(maxWidth: .infinity)
+            .disabled(onChangeTriggerFeel == nil)
+            Text("Resistance across the pull while this preset runs; the trigger is let go when it stops.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A trigger with a feel says so under the drawing, after its rows.
+    private func triggerFeelCaption(_ c: PlacedControl, base: String?) -> String? {
+        guard drawsDualSenseTriggers, c.id == "l2" || c.id == "r2" else { return base }
+        let level = (c.id == "l2" ? preset.triggerFeelLeft : preset.triggerFeelRight) ?? 0
+        guard level > 0 else { return base }
+        let feel = String(localized: "\(TriggerFeelName.name(level)) feel")
+        return base.map { "\($0), \(feel.lowercased())" } ?? feel
     }
 
     /// What a control's inspector lists: its own inputs, and for a touch
@@ -2996,7 +3156,15 @@ struct VirtualControllerView<Trailing: View>: View {
                 .buttonStyle(.solidSecondaryCompact)
                 .help(editor == .touchpadSetup ? String(localized: "Draw and name this preset's touchpad regions")
                       : editor == .screenRegions ? String(localized: "Draw and name this preset's screen regions")
-                      : String(localized: "Draw and name this preset's stick regions"))
+                      : editor.buttonTitle == String(localized: "Edit trigger regions")
+                        ? String(localized: "Draw and name this preset's trigger regions")
+                        : String(localized: "Draw and name this preset's stick regions"))
+            }
+            // A DualSense trigger's feel: a setting of this preset, so it
+            // comes after what the trigger does, under its own line.
+            if let left = triggerSide(forInspectorKey: key) {
+                Divider()
+                triggerFeelRow(left: left)
             }
         }
         .padding(14)
@@ -3027,6 +3195,9 @@ struct VirtualControllerView<Trailing: View>: View {
         if let double = b.doubleTapOutputs, !double.isEmpty {
             details.append(String(localized: "Double tap: \(OutputAction.names(double).joined(separator: " + "))"))
         }
+        if let triple = b.tripleTapOutputs, !triple.isEmpty {
+            details.append(String(localized: "Triple tap: \(OutputAction.names(triple).joined(separator: " + "))"))
+        }
         if !b.modifiers.isEmpty {
             let family = controllerService.naming(forSlot: deviceSlot, presetFamily: preset.buttonFamily)
             let held = b.modifiers
@@ -3045,7 +3216,7 @@ struct VirtualControllerView<Trailing: View>: View {
             if turbo { details.append(String(localized: "Repeats rapidly while held")) }
         }
         let repeatApplies = b.macroSteps?.isEmpty == false
-            || (!toggles && !turbo && b.holdOutputs == nil && b.doubleTapOutputs == nil)
+            || (!toggles && !turbo && b.holdOutputs == nil && b.doubleTapOutputs == nil && b.tripleTapOutputs == nil)
         if let n = b.repeatCount, n > 1, repeatApplies { details.append(String(localized: "Fires \(n) times")) }
         if preset.joysticks.count > 1 { details.append(String(localized: "On \(groupDeviceName(match.joystickIndex))")) }
         let headline = !note.isEmpty ? note : (outputs.isEmpty ? String(localized: "Nothing chosen yet") : outputs)
@@ -5322,5 +5493,18 @@ private struct SharpZoom: ViewModifier {
     let active: Bool
     func body(content: Content) -> some View {
         if active { content.drawingGroup() } else { content }
+    }
+}
+
+/// The names of the trigger feel levels, 0 to 3.
+enum TriggerFeelName {
+    static func name(_ level: Int) -> String {
+        switch level {
+        // Its own key: "Light" alone is the appearance, translated as bright.
+        case 1: return String(localized: "trigger-feel.light", defaultValue: "Light")
+        case 2: return String(localized: "Medium")
+        case 3: return String(localized: "Firm")
+        default: return String(localized: "Off")
+        }
     }
 }

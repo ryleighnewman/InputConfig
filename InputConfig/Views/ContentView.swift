@@ -823,7 +823,7 @@ struct ContentView: View {
                                 .selectionDisabled()
                         }
                         ForEach(found) { preset in
-                            presetRow(for: preset, leadingInset: 6)
+                            presetRow(for: preset, leadingInset: -4)
                         }
                     } header: {
                         sidebarHeader(found.count == 1 ? "1 preset" : "\(found.count) presets")
@@ -834,7 +834,7 @@ struct ContentView: View {
                 } else if presetStore.showFavoritesOnly && !presetStore.favoritePresets.isEmpty {
                     Section {
                         ForEach(presetStore.favoritePresets) { preset in
-                            presetRow(for: preset, leadingInset: 6)
+                            presetRow(for: preset, leadingInset: -4)
                         }
                     } header: {
                         sidebarHeader("Favorites")
@@ -1017,10 +1017,12 @@ struct ContentView: View {
             .accessibilityLabel("Sort presets")
             .accessibilityValue(presetStore.sidebarSort.title)
         }
-        .padding(.leading, 20)
-        // 20 points from the sort arrows to the sidebar's edge, as from the
-        // field to the other edge: the menu adds about 4.5 of its own.
-        .padding(.trailing, 15.5)
+        // On the controller icons' edge, 12 points in; the sort arrows sit
+        // as far from the other edge (the menu adds about 4.5 of its own).
+        .padding(.leading, 12)
+        .padding(.trailing, 7.5)
+        // Clear of a selected controller row's highlight above it.
+        .padding(.top, 8)
         .padding(.bottom, 6)
         // The field waits for a click: focused at launch it took the keys
         // meant for the list and the app's shortcuts.
@@ -1039,17 +1041,7 @@ struct ContentView: View {
 
     /// Every preset whose name, tag or folder holds each typed word, in the
     /// sidebar's order.
-    private var sidebarSearchResults: [Preset] {
-        func fold(_ t: String) -> String { t.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) }
-        let words = fold(sidebarQuery).split(whereSeparator: \.isWhitespace).map(String.init)
-        let folderNames = Dictionary(uniqueKeysWithValues: presetStore.groups.map { ($0.id, ShippedText.t($0.name)) })
-        let hits = presetStore.presets.filter { p in
-            let text = fold([p.shownName, ShippedText.t(p.tag), p.groupID.flatMap { folderNames[$0] } ?? ""]
-                .joined(separator: " "))
-            return words.allSatisfy { text.contains($0) }
-        }
-        return presetStore.inSidebarOrder(hits)
-    }
+    private var sidebarSearchResults: [Preset] { presetStore.search(sidebarQuery) }
 
     /// The whole library: New Preset, the user's own presets and folders,
     /// then the shipped ones.
@@ -1079,12 +1071,12 @@ struct ContentView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 4, leading: 1.5, bottom: 2, trailing: 18))
+            .listRowInsets(EdgeInsets(top: 4, leading: -6, bottom: 2, trailing: 18))
             .selectionDisabled()
             .accessibilityHint("Creates a preset and opens it in the editor")
 
             ForEach(presetStore.presets(in: nil)) { preset in
-                presetRow(for: preset, leadingInset: 6)
+                presetRow(for: preset, leadingInset: -4)
             }
             topLevelFolders(presetStore.userTopLevelGroups, builtIn: false)
 
@@ -1095,13 +1087,17 @@ struct ContentView: View {
             // row. Only a heading: these are ordinary presets in the
             // user's own folder, edits stick, a preset moved out
             // stays out, and updates never rewrite them.
-            Text("Built-in Presets")
-                .font(.caption)
-                .foregroundStyle(.hint)
-                .listRowInsets(EdgeInsets(top: 0, leading: -25.5, bottom: 10, trailing: 2))
-                .selectionDisabled()
-                .accessibilityAddTraits(.isHeader)
-            topLevelFolders(presetStore.builtInTopLevelGroups, builtIn: true)
+            // Settings, Data & storage can take the whole shipped library
+            // out of the list.
+            if !presetStore.hideBuiltInPresets {
+                Text("Built-in Presets")
+                    .font(.caption)
+                    .foregroundStyle(.hint)
+                    .listRowInsets(EdgeInsets(top: 0, leading: -25.5, bottom: 10, trailing: 2))
+                    .selectionDisabled()
+                    .accessibilityAddTraits(.isHeader)
+                topLevelFolders(presetStore.builtInTopLevelGroups, builtIn: true)
+            }
         } header: {
             sidebarHeader("My Presets")
         }
@@ -2097,7 +2093,13 @@ struct ContentView: View {
                         rgbSpeed: $controllerService.rgbCycleSpeed,
                         onDisconnect: { RawHIDGamepadService.shared.disconnect(gameController: controller) },
                         experimental: ControllerLayoutResolver.readsExperimentally(service: controllerService, slot: index),
-                        currentBrightness: { controllerService.lightBrightness[index] ?? 2 }
+                        currentBrightness: { controllerService.lightBrightness[index] ?? 2 },
+                        ports: controllerService.accessPortDevices(forSlot: index),
+                        accessProfile: {
+                            let p = controllerService.accessProfile(forSlot: index)
+                            return p.number > 0 ? (p.number, p.profile?.name) : nil
+                        }(),
+                        edgeProfiles: controllerService.edgeProfiles(forSlot: index)
                     )
                 }
 
@@ -4231,6 +4233,12 @@ struct ControllerChipView: View {
     /// Read when the popover opens: the stored levels are not published,
     /// so a plain value went stale after the first change.
     var currentBrightness: () -> UInt8 = { 2 }
+    /// What is in a PlayStation Access controller's expansion ports.
+    var ports: [Int: AccessControllerPortService.PortDevice] = [:]
+    /// The profile an Access controller has active, with its name when known.
+    var accessProfile: (number: Int, name: String?)? = nil
+    /// The profiles stored on a DualSense Edge, read over USB.
+    var edgeProfiles: [DualSenseEdgeProfiles.Profile] = []
 
     @State private var showPopover = false
     /// Why the last Disconnect could not disconnect, shown in the popover.
@@ -4358,6 +4366,28 @@ struct ControllerChipView: View {
         }
         parts.append(info.buttonCount == 1 ? String(localized: "1 btn") : String(localized: "\(info.buttonCount) btns"))
         parts.append(info.shownAxisCount == 1 ? String(localized: "1 axis") : String(localized: "\(info.shownAxisCount) axes"))
+        // What is in a PlayStation Access controller's expansion ports.
+        for (port, device) in ports.sorted(by: { $0.key < $1.key }) {
+            switch device {
+            case .stick: parts.append(String(localized: "E\(port) stick"))
+            case .trigger: parts.append(String(localized: "E\(port) trigger"))
+            case .button: parts.append(String(localized: "E\(port) button"))
+            case .invalidPlug: parts.append(String(localized: "E\(port) unrecognized"))
+            }
+        }
+        let saved = edgeProfiles.filter(\.assigned)
+        if !saved.isEmpty {
+            parts.append(String(localized: "Profiles: \(saved.map { $0.name.isEmpty ? $0.slot.name : $0.name }.joined(separator: ", "))"))
+        }
+        if let accessProfile {
+            // The PS5 names a slot "Profile N" by default: said once, not twice.
+            let plain = String(localized: "Profile \(accessProfile.number)")
+            if let name = accessProfile.name, !name.isEmpty, name != plain, name != "Profile \(accessProfile.number)" {
+                parts.append(String(localized: "Profile \(accessProfile.number): \(name)"))
+            } else {
+                parts.append(plain)
+            }
+        }
         return parts.joined(separator: ", ")
     }
 
@@ -5818,6 +5848,7 @@ struct PresetDetailView: View {
                         onChangeDevice: { slot, name in
                             setGroupDevice(name, slot: slot)
                         },
+                        onChangeTriggerFeel: { left, level in setPresetTriggerFeel(left: left, level: level) },
                         control: visualizerControl(for: slot)
                     )
                     .environmentObject(controllerService)
@@ -6181,6 +6212,16 @@ struct PresetDetailView: View {
     /// While this preset is the active one, the controller shows the
     /// override right away, mirroring what the engine does at start. With
     /// the override cleared, the controller goes back to its general color.
+    /// A trigger's feel from the Live Visualizer, pushed to the pad at once
+    /// while this preset is the active one.
+    private func setPresetTriggerFeel(left: Bool, level: Int) {
+        let value: Int? = level == 0 ? nil : level
+        if left { preset.triggerFeelLeft = value } else { preset.triggerFeelRight = value }
+        if MenuBarController.shared.activePresetID == preset.id {
+            controllerService.applyPresetTriggerFeel(left: preset.triggerFeelLeft ?? 0, right: preset.triggerFeelRight ?? 0)
+        }
+    }
+
     private func pushPresetLightBarLive() {
         guard presetStore.activePresetId == preset.id else { return }
         let slots = controllerService.controllerDetails.keys.filter {
@@ -7184,6 +7225,10 @@ final class DebugHookRelay: NSObject {
             self, selector: #selector(relay(_:)), name: Notification.Name(name), object: nil,
             suspensionBehavior: .deliverImmediately)
     }
+    func publisher(_ name: String) -> NotificationCenter.Publisher {
+        ensure(name)
+        return NotificationCenter.default.publisher(for: Notification.Name(name))
+    }
     @objc private func relay(_ note: Notification) {
         let n = note
         Task { @MainActor in
@@ -7578,7 +7623,7 @@ struct DebugAutomationHooks: ViewModifier {
                             let key = b.input.serialized
                             rowKeys.insert(key)
                             if InputEvent.parse(key)?.serialized != key { out.append("\(p.name): input does not round-trip: \(key)") }
-                            let fires = !b.outputs.isEmpty || !(b.holdOutputs ?? []).isEmpty || !(b.doubleTapOutputs ?? []).isEmpty
+                            let fires = !b.outputs.isEmpty || !(b.holdOutputs ?? []).isEmpty || !(b.doubleTapOutputs ?? []).isEmpty || !(b.tripleTapOutputs ?? []).isEmpty
                                 || !(b.macroSteps ?? []).isEmpty || b.hapticEnabled == true || b.speechEnabled == true
                             if !fires { out.append("\(p.name): row sends nothing: \(key)") }
                             for o in b.outputs where OutputAction.parse(o.serialized)?.serialized != o.serialized {
@@ -7780,15 +7825,45 @@ struct DebugAutomationHooks: ViewModifier {
                 InputSimulator.shared.keyDown(code)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { InputSimulator.shared.keyUp(code) }
             }
+            .onReceive(dnc("inputconfig.debug.tipjar")) { _ in
+                TipJarWindowController.shared.show()
+            }
+            .onReceive(dnc("inputconfig.debug.testbench")) { _ in
+                // The whole test bench, headless: counts and every failure
+                // to testbench.txt, for a check from the shell.
+                Task { @MainActor in
+                    _ = await TestBenchService.shared.runAll()
+                    let text = TestBenchService.shared.headlessReport
+                    try? text.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("testbench.txt"),
+                                    atomically: true, encoding: .utf8)
+                }
+            }
             .onReceive(dnc("inputconfig.debug.enginestate")) { _ in
                 let running = MenuBarController.shared.debugEngineRunning
                 let active = MenuBarController.shared.debugActivePresetName ?? "none"
                 let held = InputSimulator.shared.debugHeldKeyCount
                 let report = DebugStateReport.text(service: controllerService, running: running,
                                                    active: active, held: held)
+                    + DebugReplay.stateText(service: controllerService)
                 try? report.write(to: URL(fileURLWithPath: NSTemporaryDirectory())
                     .appendingPathComponent("enginestate.txt"),
                                   atomically: true, encoding: .utf8)
+            }
+            // `post inputconfig.debug.replay "<fixture-id> [slot]" | "seq:<id>"
+            // | "file:/path [vid:pid]" | "off"`: fixture bytes through the
+            // live pipeline on synthetic pads (see DebugReplay).
+            .onReceive(dnc("inputconfig.debug.replay")) { note in
+                DebugReplay.shared.handle((note.object as? String) ?? "")
+            }
+            // `post inputconfig.debug.eventlog start|stop`: every CGEvent the
+            // engine would post goes to tmp/eventlog.txt instead of the Mac.
+            .onReceive(dnc("inputconfig.debug.eventlog")) { note in
+                DebugReplay.shared.eventLog((note.object as? String) ?? "start")
+            }
+            // `post inputconfig.debug.hidcapture "<vid:pid|all> [seconds]"`:
+            // HID traffic for that device to tmp/hidcapture.txt.
+            .onReceive(dnc("inputconfig.debug.hidcapture")) { note in
+                DebugReplay.shared.hidCapture((note.object as? String) ?? "all")
             }
             .onReceive(dnc("inputconfig.debug.capture")) { note in
                 // In-process render of the frontmost sheet or window for
@@ -7806,6 +7881,11 @@ struct DebugAutomationHooks: ViewModifier {
                     ?? NSApp.keyWindow ?? NSApp.mainWindow
                     ?? NSApp.windows.first { $0.canBecomeMain && $0.contentView != nil && $0.frame.width > 400 }
                 var target = win?.contentView
+                // "<name>-popover" renders an open popover instead.
+                if name.hasSuffix("-popover"),
+                   let pop = NSApp.windows.first(where: { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }) {
+                    target = pop.contentView?.superview ?? pop.contentView
+                }
                 if name.hasSuffix("-full"), let root = target {
                     func scrolls(_ v: NSView) -> [NSScrollView] {
                         (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrolls)
@@ -7956,6 +8036,276 @@ final class DebugMarketing: ObservableObject {
             let f = screen.frame
             CGWarpMouseCursorPosition(CGPoint(x: f.origin.x + f.width * parts[0], y: f.height * parts[1]))
         }
+    }
+}
+
+/// `post inputconfig.debug.replay`: fixture bytes from `HIDFixtureCorpus`
+/// through the live pipeline on synthetic pads, so a slot can be driven
+/// with no hardware attached. Object string grammar:
+///   "<fixture-id> [slot]"      one fixture (slot is informational: the
+///                              service assigns it)
+///   "seq:<sequence-id>"        the steps at their own delays
+///   "file:/path [vid:pid]"     lines "<t_ms> <id hex> <bytes hex>" scheduled
+///                              at their offsets on a raw pad for vid:pid (hex)
+///   "off"                      remove the synthetic pads, release decoding
+/// Refused while the marketing fakes own the slots. Routes that have no
+/// live injection point log "not replayable".
+@MainActor
+final class DebugReplay {
+    static let shared = DebugReplay()
+    static let accessLocation: UInt64 = 0xFA5E_0000_ACCE_5500
+    static let supplementBase: UInt64 = 0xFA5E_0000_D5E0_0000
+    nonisolated static let fileLock = NSLock()
+    private var rawKeys: [String: UInt64] = [:]
+    private var accessInstalled = false
+    private var supplementInstalled: Set<Int32> = []
+    private var scheduled: [DispatchWorkItem] = []
+    private var holdingDecode = false
+
+    private init() {
+        // A leaked decode reason keeps real pads decoding at full rate.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in DebugReplay.shared.stop() }
+        }
+    }
+
+    private func log(_ text: String) {
+        ActivityLog.shared.info("Replay", text)
+    }
+
+    func handle(_ spec: String) {
+        let parts = spec.split(separator: " ").map(String.init)
+        guard let first = parts.first else {
+            log("usage: <fixture-id> [slot] | seq:<id> | file:/path [vid:pid] | off")
+            return
+        }
+        if first == "off" { stop(); log("off"); return }
+        let marketing = DebugMarketing.shared
+        if (marketing.fakeSet?.isEmpty == false) || marketing.fakeController {
+            log("refused: marketing fakes own the slots (fakeset or fakecontroller is on)")
+            return
+        }
+        GameControllerService.debugScriptedStates = [:]
+        holdDecode()
+        if first.hasPrefix("seq:") {
+            playSequence(String(first.dropFirst(4)))
+        } else if first.hasPrefix("file:") {
+            playFile(String(first.dropFirst(5)), vidpid: parts.dropFirst().first)
+        } else {
+            playFixture(first, slot: parts.dropFirst().first)
+        }
+    }
+
+    private func holdDecode() {
+        guard !holdingDecode else { return }
+        holdingDecode = true
+        RawHIDGamepadService.shared.setDecodingWanted(true, reason: "replay")
+    }
+
+    func stop() {
+        for item in scheduled { item.cancel() }
+        scheduled.removeAll()
+        RawHIDGamepadService.shared.debugRemoveSyntheticPads()
+        rawKeys.removeAll()
+        accessInstalled = false
+        supplementInstalled.removeAll()
+        if holdingDecode {
+            holdingDecode = false
+            RawHIDGamepadService.shared.setDecodingWanted(false, reason: "replay")
+        }
+    }
+
+    private func playFixture(_ id: String, slot: String?) {
+        guard let fixture = HIDFixtureCorpus.all.first(where: { $0.id == id }) else {
+            log("no fixture named \(id)")
+            return
+        }
+        inject(fixture.route, reportID: fixture.reportID, bytes: fixture.bytes,
+               device: fixture.device, transport: fixture.transport, id: fixture.id)
+        log("\(id): \(fixture.bytes.count) bytes" + (slot.map { ", slot \($0) requested (the service assigns slots)" } ?? ""))
+    }
+
+    private func playSequence(_ id: String) {
+        guard let seq = HIDFixtureCorpus.sequences.first(where: { $0.id == id }) else {
+            log("no sequence named \(id)")
+            return
+        }
+        let transport: HIDFixture.Transport = {
+            if case .rawHID(_, _, let t) = seq.route, t?.lowercased().contains("bluetooth") == true { return .bluetooth }
+            return .usb
+        }()
+        var offsetMs = 0
+        for (index, step) in seq.steps.enumerated() {
+            offsetMs += step.delayMs
+            let bytes = HIDFixture.parse(step.hex)
+            schedule(afterMs: offsetMs) { [weak self] in
+                self?.inject(seq.route, reportID: step.reportID, bytes: bytes,
+                             device: seq.id, transport: transport, id: "\(seq.id)#\(index)")
+            }
+        }
+        log("seq:\(id): \(seq.steps.count) steps over \(offsetMs) ms")
+    }
+
+    private func playFile(_ path: String, vidpid: String?) {
+        guard let ids = Self.parseVidPid(vidpid) else {
+            log("file replay needs vid:pid (hex) after the path")
+            return
+        }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            log("cannot read \(path)")
+            return
+        }
+        let route = HIDFixture.Route.rawHID(vendorID: ids.vid, productID: ids.pid, transport: nil)
+        var count = 0
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard fields.count >= 3, let ms = Int(fields[0]), let id = UInt8(fields[1], radix: 16) else { continue }
+            let bytes = HIDFixture.parse(fields[2...].joined(separator: " "))
+            guard !bytes.isEmpty else { continue }
+            count += 1
+            let lineNumber = count
+            schedule(afterMs: ms) { [weak self] in
+                self?.inject(route, reportID: id, bytes: bytes, device: "capture",
+                             transport: .usb, id: "file line \(lineNumber)")
+            }
+        }
+        log("file:\(path): \(count) reports scheduled on \(String(format: "%04x:%04x", ids.vid, ids.pid))")
+    }
+
+    private func schedule(afterMs ms: Int, _ body: @escaping @MainActor () -> Void) {
+        let item = DispatchWorkItem { MainActor.assumeIsolated { body() } }
+        scheduled.append(item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(ms) / 1000, execute: item)
+    }
+
+    static func parseVidPid(_ text: String?) -> (vid: Int32, pid: Int32)? {
+        guard let text else { return nil }
+        let halves = text.split(separator: ":")
+        guard halves.count == 2, let vid = Int32(halves[0], radix: 16), let pid = Int32(halves[1], radix: 16) else { return nil }
+        return (vid, pid)
+    }
+
+    private func rawKey(vendorID: Int32, productID: Int32, transport: String, name: String, descriptor: [UInt8]?) -> UInt64? {
+        let mapKey = "\(vendorID):\(productID)"
+        if let key = rawKeys[mapKey] { return key }
+        guard let key = RawHIDGamepadService.shared.debugInstallSyntheticPad(
+            vendorID: vendorID, productID: productID, transport: transport, productName: name, descriptor: descriptor) else {
+            log("could not install a synthetic pad for \(String(format: "%04x:%04x", vendorID, productID))")
+            return nil
+        }
+        rawKeys[mapKey] = key
+        return key
+    }
+
+    private func inject(_ route: HIDFixture.Route, reportID: UInt8, bytes: [UInt8], device: String,
+                        transport: HIDFixture.Transport, id: String) {
+        let raw = RawHIDGamepadService.shared
+        switch route {
+        case .rawHID(let vid, let pid, let t):
+            let name = t ?? (transport == .bluetooth ? "Bluetooth" : "USB")
+            guard let key = rawKey(vendorID: vid, productID: pid, transport: name, name: device, descriptor: nil) else { return }
+            raw.debugInject(key: key, reportID: UInt32(reportID), bytes: bytes)
+        case .descriptor(_, let desc, let vid, let pid, _):
+            // The fixture's device name, as IOKit would report it; the
+            // route's name is a locator for the bench.
+            let transportName = transport == .bluetooth ? "Bluetooth" : "USB"
+            guard let key = rawKey(vendorID: vid, productID: pid, transport: transportName, name: device, descriptor: desc) else { return }
+            raw.debugInject(key: key, reportID: UInt32(reportID), bytes: bytes)
+        case .accessPorts:
+            if !accessInstalled {
+                _ = AccessControllerPortService.shared.debugInstallSyntheticPad(location: Self.accessLocation,
+                                                                               overUSB: transport != .bluetooth)
+                accessInstalled = true
+            }
+            AccessControllerPortService.shared.debugInject(location: Self.accessLocation, bytes: bytes)
+        case .dualSenseSupplement(let pid):
+            let location = Self.supplementBase | UInt64(UInt32(bitPattern: pid))
+            if !supplementInstalled.contains(pid) {
+                _ = DualSenseSupplementService.shared.debugInstall(location: location, productID: pid)
+                supplementInstalled.insert(pid)
+            }
+            DualSenseSupplementService.shared.debugInject(location: location, bytes: bytes)
+        default:
+            log("\(id): not replayable (route \(route) has no live injection point)")
+        }
+    }
+
+    // MARK: - eventlog and hidcapture
+
+    nonisolated static func append(_ line: String, to url: URL) {
+        fileLock.lock(); defer { fileLock.unlock() }
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    /// "start" routes every engine CGEvent to tmp/eventlog.txt as
+    /// "type keycode flags x,y" lines; "stop" posts to the Mac again.
+    func eventLog(_ arg: String) {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("eventlog.txt")
+        if arg.trimmingCharacters(in: .whitespaces) == "stop" {
+            InputSimulator.debugEventSink = nil
+            Self.append("# eventlog stop", to: url)
+            log("eventlog stopped")
+            return
+        }
+        Self.fileLock.lock(); try? Data().write(to: url); Self.fileLock.unlock()
+        Self.append("# eventlog start \(ISO8601DateFormatter().string(from: Date()))", to: url)
+        Self.append("# type keycode flags x,y", to: url)
+        InputSimulator.debugEventSink = { event in
+            let p = event.location
+            let line = "\(event.type.rawValue) \(event.getIntegerValueField(.keyboardEventKeycode)) \(event.flags.rawValue) \(Int(p.x)),\(Int(p.y))"
+            DebugReplay.append(line, to: url)
+        }
+        log("eventlog started")
+    }
+
+    /// "<vid:pid|all> [seconds]": starts an HIDCapture window (10 s default).
+    func hidCapture(_ arg: String) {
+        let parts = arg.split(separator: " ").map(String.init)
+        let who = parts.first ?? "all"
+        let seconds = parts.dropFirst().first.flatMap(Double.init) ?? 10
+        if who == "all" {
+            HIDCapture.start(vendorID: nil, productID: nil, seconds: seconds)
+        } else if let ids = Self.parseVidPid(who) {
+            HIDCapture.start(vendorID: ids.vid, productID: ids.pid, seconds: seconds)
+        } else {
+            log("hidcapture: usage <vid:pid|all> [seconds]")
+            return
+        }
+        log("hidcapture \(who) for \(Int(seconds)) s to \(HIDCapture.url.path)")
+    }
+
+    /// Appended to enginestate.txt: every raw pad's decoded state and the
+    /// Access single-pad view (empty when nothing is attached or installed).
+    static func stateText(service svc: GameControllerService) -> String {
+        var out = ""
+        for (slot, pad) in svc.rawHIDGamepadSlots.sorted(by: { $0.key < $1.key }) {
+            let st = pad.state
+            let pressed = st.buttons.filter { $0.value > 0.5 }.keys.sorted()
+            let axes = st.axes.sorted { $0.key < $1.key }.map { "a\($0.key)=" + String(format: "%.2f", $0.value) }
+            let hats = st.hats.sorted { $0.key < $1.key }.map { "h\($0.key)=\($0.value.x),\($0.value.y)" }
+            out += "raw slot \(slot) \(pad.productName) [\(String(format: "%04x:%04x", pad.vendorID, pad.productID))]: pressed \(pressed) axes \(axes.joined(separator: " ")) hats \(hats.joined(separator: " "))\n"
+        }
+        let access = AccessControllerPortService.shared
+        let axes = access.axes(for: nil, accessSlotCount: 1)
+        let buttons = access.buttons(for: nil, accessSlotCount: 1)
+        let ports = access.portDevices(for: nil, accessSlotCount: 1)
+        let active = access.activeProfile(for: nil, accessSlotCount: 1)
+        if !axes.isEmpty || !buttons.isEmpty || !ports.isEmpty || active.number != 0 {
+            let axisText = axes.sorted { $0.key < $1.key }.map { "a\($0.key)=" + String(format: "%.2f", $0.value) }
+            let pressed = buttons.filter { $0.value > 0.5 }.keys.sorted()
+            let portText = ports.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
+            out += "access pad: axes \(axisText.joined(separator: " ")) pressed \(pressed) ports {\(portText.joined(separator: ", "))} activeProfile \(active.number) \(active.profile?.name ?? "")\n"
+        }
+        return out
     }
 }
 #endif
@@ -8386,6 +8736,12 @@ enum DebugStateReport {
             out += String(format: "  peak |rate| since last read x=%.2f y=%.2f z=%.2f rad/s | raw accel x=%+.3f y=%+.3f z=%+.3f g\n",
                           pk.x, pk.y, pk.z, acc.x, acc.y, acc.z)
             out += "  " + svc.debugPitchFusion(for: controller) + "\n"
+            if let idle = ControllerPowerService.shared.debugIdleSeconds(controller) {
+                out += "  idle for \(idle) s (idle disconnect \(ControllerPowerService.shared.idleDisconnectOn ? "on, \(ControllerPowerService.shared.idleMinutes) min" : "off"), reconnect \(ControllerPowerService.shared.autoReconnectOn ? "on" : "off"))\n"
+            }
+            let turned = svc.debugIntegratedAngle(for: controller)
+            out += String(format: "  turned since last drain x=%+.3f y=%+.3f z=%+.3f rad (%+.0f %+.0f %+.0f deg)\n",
+                          turned.x, turned.y, turned.z, turned.x * 180 / .pi, turned.y * 180 / .pi, turned.z * 180 / .pi)
         }
         let presses = PhysicalPressLogStore.shared.recent.suffix(12)
         out += "recent physical presses (\(PhysicalPressLogStore.shared.recent.count) logged):\n"

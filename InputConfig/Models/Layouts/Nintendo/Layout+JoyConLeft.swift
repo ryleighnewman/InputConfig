@@ -28,9 +28,10 @@ extension ControllerLayout {
         maker: .nintendo,
         family: .nintendo,
         modelNames: ButtonNames.ModelNames(
-            renamed: [0: "Left arrow", 1: "Up arrow", 2: "Down arrow", 3: "Right arrow", 4: "SL", 5: "SR", 8: "Minus", 9: "Minus", 10: "Capture"],
+            renamed: [0: "Left arrow", 1: "Up arrow", 2: "Down arrow", 3: "Right arrow", 4: "SL", 5: "SR", 6: "L", 7: "ZL", 8: "Minus", 9: "Minus", 10: "Capture", 16: "GL"],
             short: [4: "SL", 5: "SR"],
-            absent: [6, 7, 12, 13, 15, 16, 17, 18, 19]),
+            // 6, 7 and 16 (L, ZL, GL) arrive only from a Joy-Con 2 read directly.
+            absent: [12, 13, 15, 17, 18, 19]),
         aspect: 102.0 / 35.9,
         topStrip: 0.14,
         backStrip: 0.27,
@@ -52,9 +53,13 @@ extension ControllerLayout {
         // "Joy-Con 2", so neither contains "Joy-Con (L)".
         match: [
             [.brand(.joyConLeft), .gcProductCategoryContains("Joy-Con (L)")],
+            // A Joy-Con 2 (L) read directly (USB grip or Bluetooth LE)
+            // takes this drawing with the same numbering.
+            [.rawProfileLayout("switch2JoyConLeft")],
+            [.vidPid(vendor: 0x057E, products: [0x2066])],
         ],
         matchPriority: 10,
-        readability: .partial("L and ZL never reach the Mac; Minus, Capture and the stick press indices are unverified on hardware"),
+        readability: .partial("On a first Joy-Con L and ZL never reach the Mac and the Minus, Capture and stick press indices are unverified; a Joy-Con 2 is read directly (USB grip or Bluetooth LE) with L, ZL, GL and its motion sensors, not yet checked on one"),
         approximate: true,
         sources: [
             "nintendo.com Joy-Con specifications (102 x 35.9 x 28.4 mm; stick, four buttons, L/ZL, SL/SR, Minus, Capture, SYNC, player lights)",
@@ -114,8 +119,8 @@ extension ControllerLayout {
         // Front, left end: L sits on the end of the body (the top edge when
         // upright). macOS does not expose it on a single Joy-Con.
         PlacedControl(id: "l", kind: .shoulder, center: CGPoint(x: 0.022, y: 0.36), size: 0.025, height: 0.15,
-                      shape: .capsule(angleDegrees: 0), printed: "L",
-                      readable: .notReported("GameController does not expose L on a single Joy-Con, and the raw HID read is switched off for it")),
+                      shape: .capsule(angleDegrees: 0), printed: "L", inputs: .button(6),
+                      note: "Reaches the Mac only on a Joy-Con 2 read directly; GameController does not expose it on a first Joy-Con"),
 
         // Front: Minus in the corner by the rail, the stick, the arrow
         // diamond (positional numbering, see the note at the top), Capture
@@ -151,7 +156,7 @@ extension ControllerLayout {
 
         // Back, as held: ZL behind L at the left end.
         PlacedControl(id: "zl", kind: .trigger(.digital), face: .back, center: CGPoint(x: 0.07, y: 0.5), size: 0.083, height: 0.18,
-                      shape: .roundedRect(corner: 0.35), printed: "ZL",
-                      readable: .notReported("GameController does not expose ZL on a single Joy-Con, and the raw HID read is switched off for it")),
+                      shape: .roundedRect(corner: 0.35), printed: "ZL", inputs: .button(7),
+                      note: "Reaches the Mac only on a Joy-Con 2 read directly; GameController does not expose it on a first Joy-Con"),
     ]
 }

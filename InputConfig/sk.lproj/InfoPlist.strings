@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig používa Bluetooth iba na odpojenie bezdrôtového ovládača, keď o to požiadate.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig používa Bluetooth na čítanie ovládačov Switch 2 a na pripájanie a odpájanie bezdrôtových ovládačov, keď o to požiadate alebo to zapnete v Nastaveniach.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig používa Bluetooth iba na odpojenie bezdrôtového ovládača, keď o to požiadate.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig používa Bluetooth na čítanie ovládačov Switch 2 a na pripájanie a odpájanie bezdrôtových ovládačov, keď o to požiadate alebo to zapnete v Nastaveniach.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Všetky práva vyhradené.";

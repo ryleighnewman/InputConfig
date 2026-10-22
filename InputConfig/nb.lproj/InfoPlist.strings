@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig bruker bare Bluetooth til å koble fra en trådløs kontroller når du ber om det.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig bruker Bluetooth til å lese Switch 2-kontrollere og til å koble til og fra trådløse kontrollere, når du ber om det eller slår det på i Innstillinger.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig bruker bare Bluetooth til å koble fra en trådløs kontroller når du ber om det.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig bruker Bluetooth til å lese Switch 2-kontrollere og til å koble til og fra trådløse kontrollere, når du ber om det eller slår det på i Innstillinger.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle rettigheter forbeholdt.";

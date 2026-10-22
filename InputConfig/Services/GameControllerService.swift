@@ -89,6 +89,8 @@ struct ControllerState {
     /// up positive), `.gyroY` is roll (right side down positive). The
     /// pointing path positions the pointer from these.
     var motionAbsolute: [MotionChannel: Float] = [:]
+    /// Detents a relative axis (a knob, a scroll wheel) turned this report, signed; nothing reads it yet.
+    var relativeSteps: [Int: Int] = [:]
 
     /// Pre-size the backing dictionaries so the per-frame population in the
     /// 120 Hz poll loop (and the 30 Hz raw-input refresh) does not repeatedly
@@ -669,6 +671,9 @@ class GameControllerService: ObservableObject {
                         out.append(ExtraButton(label: name, index: idx, pressed: pressed))
                     }
                 }
+                // A PlayStation Access controller's own buttons, read raw.
+                let existing = Set(out.map(\.index))
+                out += accessPortExtraButtons(forSlot: slot).filter { !existing.contains($0.index) }
             }
             return out.sorted { $0.index < $1.index }
         }
@@ -733,6 +738,12 @@ class GameControllerService: ObservableObject {
         if let extras = cachedExtraAxes[slot], !extras.isEmpty {
             return extras.map { axis, index, name in
                 ExtraAxis(label: name, index: index, value: axis.value)
+            }
+        }
+        let ports = accessPortAxes(forSlot: slot)
+        if !ports.isEmpty {
+            return ports.sorted { $0.key < $1.key }.map { index, value in
+                ExtraAxis(label: AccessControllerPortService.axisLabel(index), index: index, value: value)
             }
         }
         if let gamepad = rawHIDGamepadSlots[slot] {
@@ -914,6 +925,8 @@ class GameControllerService: ObservableObject {
         startAccessoryWatch()
         // Everything else on the bus, for the InputConfig ▸ Devices menu.
         HIDDeviceRegistry.shared.start()
+        // Idle disconnect and reconnect attempts (both off by default).
+        ControllerPowerService.shared.start()
 
         // DualSense / DualSense Edge supplement. Apple's framework
         // surfaces the standard DualSense buttons but NOT the Edge's
@@ -923,6 +936,11 @@ class GameControllerService: ObservableObject {
         // matching slot's ControllerState.
         DualSenseSupplementService.shared.onStateChange = { [weak self] in Self.reportActivity(self) }
         DualSenseSupplementService.shared.start()
+
+        // PlayStation Access controller: its own buttons, its stick and
+        // its expansion ports, which GameController does not read, come
+        // from the raw report and are merged into the controller's slot.
+        AccessControllerPortService.shared.start()
 
         // MIDI input. Opens one CoreMIDI client and connects to every
         // source, so a MIDI keyboard / pad controller is bindable the
@@ -1332,6 +1350,7 @@ class GameControllerService: ObservableObject {
         // end is a pad that left; re-asserting its color painted the pad
         // that remained. Slots still in use were rewritten above.
         lastAppliedColor = lastAppliedColor.filter { $0.key < connectedControllers.count }
+        lastShownColor = lastShownColor.filter { $0.key < connectedControllers.count }
         // Nothing left to hold a color on: no controller, or no Sony pad.
         if connectedControllers.isEmpty || dualSenseSlots.union(dualShockSlots).isEmpty {
             InProcessLightWriter.shared.stopHold()
@@ -1438,6 +1457,17 @@ class GameControllerService: ObservableObject {
         return gyroTotalSamples[ObjectIdentifier(controller)] ?? 0
     }
     private var gyroTotalSamples: [ObjectIdentifier: Int] = [:]
+    #endif
+
+    #if DEBUG
+    /// The rotation integrated since the engine last drained it (radians
+    /// about X, Y and Z), for the bench's turn test: with no preset
+    /// running nothing drains it, so a quarter turn on a table should move
+    /// one component by about 1.57.
+    func debugIntegratedAngle(for controller: GCController) -> SIMD3<Float> {
+        gyroLock.lock(); defer { gyroLock.unlock() }
+        return gyroAccumulators[ObjectIdentifier(controller)]?.angle ?? .zero
+    }
     #endif
 
     private func installGyroIntegrator(_ motion: GCMotion, for controller: GCController) {
@@ -2027,7 +2057,8 @@ class GameControllerService: ObservableObject {
             "Direction Pad X Axis", "Direction Pad Y Axis",
         ]
         var axisResult: [(GCControllerAxisInput, Int, String)] = []
-        var nextAxis = 6
+        // An Access slot's 6 to 15 belong to AccessControllerPortService, so its GameController extras start at 16.
+        var nextAxis = isAccess ? 16 : 6
         for (name, axis) in controller.physicalInputProfile.axes.sorted(by: { $0.key < $1.key })
         where !standardAxisNames.contains(name) {
             // The touchpad's finger positions are axes too, with raw HID
@@ -2557,7 +2588,11 @@ class GameControllerService: ObservableObject {
     private var lastAppliedColor: [Int: (r: UInt8, g: UInt8, b: UInt8)] = [:]
     /// The color this app last put on a slot's light bar, for the Live
     /// Visualizer when the preset sets none.
-    func shownLightColor(slot: Int) -> (r: UInt8, g: UInt8, b: UInt8)? { lastAppliedColor[slot] }
+    /// The color the light is set to, before Dim scales it: the drawing
+    /// shows the color itself, and a dimmed one drawn at a quarter read as
+    /// black. Off still draws dark.
+    private var lastShownColor: [Int: (r: UInt8, g: UInt8, b: UInt8)] = [:]
+    func shownLightColor(slot: Int) -> (r: UInt8, g: UInt8, b: UInt8)? { lastShownColor[slot] ?? lastAppliedColor[slot] }
 
     /// Last color the RGB rainbow wrote (brightness-scaled, 0-255). When a
     /// focus change interrupts the cycle we snap straight back to THIS color
@@ -2765,6 +2800,69 @@ class GameControllerService: ObservableObject {
     /// Apply a preset's light color to every light-capable slot and keep it
     /// as the override until the preset stops. Safe to call with no
     /// controller connected: the color is applied when one arrives.
+    /// The running preset's trigger feel on every DualSense: 0 none, then
+    /// light, medium and firm resistance across the whole pull.
+    private(set) var presetTriggerFeel: (left: Int, right: Int) = (0, 0)
+
+    func applyPresetTriggerFeel(left: Int, right: Int) {
+        presetTriggerFeel = (max(0, min(3, left)), max(0, min(3, right)))
+        InProcessLightWriter.shared.setTriggerResistance(left: presetTriggerFeel.left, right: presetTriggerFeel.right)
+    }
+
+    /// Lets the triggers go when the preset stops; nothing is sent when no
+    /// preset set a feel, so a pad's own state is left alone.
+    func revertTriggerFeel() {
+        guard presetTriggerFeel != (0, 0) else { return }
+        presetTriggerFeel = (0, 0)
+        InProcessLightWriter.shared.setTriggerResistance(left: 0, right: 0)
+    }
+
+    // MARK: - Access controller profiles
+
+    func accessProfileState(forSlot slot: Int) -> AccessControllerPortService.ProfileState {
+        guard isAccessSlot(slot) else { return AccessControllerPortService.ProfileState() }
+        return AccessControllerPortService.shared.profileState(for: accessIdentity(forSlot: slot),
+                                                               accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    func setAccessProfile(_ number: Int, slot: Int,
+                          completion: @escaping (Result<Void, AccessControllerPortService.ProfileError>) -> Void) {
+        guard isAccessSlot(slot) else { completion(.failure(.notConnected)); return }
+        AccessControllerPortService.shared.setActiveProfile(number, for: accessIdentity(forSlot: slot),
+                                                            accessSlotCount: accessSlotCount(forSlot: slot)) { result in
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func writeAccessProfile(_ profile: AccessControllerPortService.Profile, slot: Int,
+                            completion: @escaping (Result<Void, AccessControllerPortService.ProfileError>) -> Void) {
+        guard isAccessSlot(slot) else { completion(.failure(.notConnected)); return }
+        AccessControllerPortService.shared.writeProfile(profile, for: accessIdentity(forSlot: slot),
+                                                        accessSlotCount: accessSlotCount(forSlot: slot)) { result in
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func refreshAccessProfiles(forSlot slot: Int) {
+        guard isAccessSlot(slot) else { return }
+        AccessControllerPortService.shared.refreshProfiles(for: accessIdentity(forSlot: slot),
+                                                           accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    /// A Controller Profile output: every Access controller here switches.
+    func switchAccessProfiles(_ action: ControllerProfileAction) {
+        for slot in connectedControllers.indices where isAccessSlot(slot) {
+            let state = accessProfileState(forSlot: slot)
+            if state.switchingDisabled {
+                ActivityLog.shared.info("Controllers", "Profile switching is turned off on the Access controller in slot \(slot) (a PS5 setting), so the Controller Profile output did nothing", slot: slot)
+                continue
+            }
+            let target = action.target(from: state.active)
+            guard target != state.active || action == .first || action == .second || action == .third else { continue }
+            setAccessProfile(target, slot: slot) { _ in }
+        }
+    }
+
     func applyPresetLight(red: Float, green: Float, blue: Float, brightness: UInt8?) {
         presetLightOverride = (red, green, blue, brightness)
         if presetRainbow != nil {
@@ -2890,15 +2988,12 @@ class GameControllerService: ObservableObject {
         temporaryLightSlots.insert(index)
         ActivityLog.shared.info("Light bar", String(format: "Preset color on slot %d: R%.0f G%.0f B%.0f", index, red * 255, green * 255, blue * 255), slot: index)
         let bri = brightness ?? lightBrightness[index] ?? 2
-        let scale: Float = switch bri {
-        case 0: 0.0
-        case 1: 0.25
-        default: 1.0
-        }
+        let scale = lightScale(brightness: bri, slot: index)
         let r = UInt8(min(max(red * scale * 255, 0), 255))
         let g = UInt8(min(max(green * scale * 255, 0), 255))
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
         lastAppliedColor[index] = (r, g, b)
+        lastShownColor[index] = scale == 0 ? (0, 0, 0) : (UInt8(min(max(red * 255, 0), 255)), UInt8(min(max(green * 255, 0), 255)), UInt8(min(max(blue * 255, 0), 255)))
         applyAppleLight(at: index, red: r, green: g, blue: b)
         // HOLD the color, don't fire one shot. macOS's controller daemon owns
         // the DualSense light bar and repaints it on its own loop, so a single
@@ -2956,16 +3051,13 @@ class GameControllerService: ObservableObject {
     private func applyLight(at index: Int, red: Float, green: Float, blue: Float) {
         guard index < connectedControllers.count else { return }
         let brightness = lightBrightness[index] ?? 2
-        let scale: Float = switch brightness {
-        case 0: 0.0
-        case 1: 0.25
-        default: 1.0
-        }
+        let scale = lightScale(brightness: brightness, slot: index)
         let r = UInt8(min(max(red * scale * 255, 0), 255))
         let g = UInt8(min(max(green * scale * 255, 0), 255))
         let b = UInt8(min(max(blue * scale * 255, 0), 255))
         connectedControllers[index].playerIndex = .indexUnset
         lastAppliedColor[index] = (r, g, b)
+        lastShownColor[index] = scale == 0 ? (0, 0, 0) : (UInt8(min(max(red * 255, 0), 255)), UInt8(min(max(green * 255, 0), 255)), UInt8(min(max(blue * 255, 0), 255)))
         applyAppleLight(at: index, red: r, green: g, blue: b)
         // Hand the color to the high-rate hold writer, which hammers it onto the
         // LED from its own background queue. macOS 26's gamecontrollerd repaints
@@ -3768,7 +3860,10 @@ class GameControllerService: ObservableObject {
 
     private func installLiveInputHandler(for controller: GCController) {
         if let pad = controller.extendedGamepad {
-            pad.valueChangedHandler = { [weak self] _, _ in Self.reportActivity(self) }
+            pad.valueChangedHandler = { [weak self] gamepad, element in
+                Self.reportActivity(self)
+                ControllerPowerService.shared.noteActivity(controller: gamepad.controller, element: element)
+            }
         } else {
             // Profile-only devices (solo Joy-Con orientations, remote-class or
             // adaptive hardware) need per-element handlers for the same macOS
@@ -3776,13 +3871,22 @@ class GameControllerService: ObservableObject {
             // teardown left them permanently reading zeros until replug.
             let profile = controller.physicalInputProfile
             for (_, button) in profile.buttons {
-                button.valueChangedHandler = { [weak self] _, _, _ in Self.reportActivity(self) }
+                button.valueChangedHandler = { [weak self, weak controller] element, _, _ in
+                    Self.reportActivity(self)
+                    ControllerPowerService.shared.noteActivity(controller: controller, element: element)
+                }
             }
             for (_, axis) in profile.axes {
-                axis.valueChangedHandler = { [weak self] _, _ in Self.reportActivity(self) }
+                axis.valueChangedHandler = { [weak self, weak controller] element, _ in
+                    Self.reportActivity(self)
+                    ControllerPowerService.shared.noteActivity(controller: controller, element: element)
+                }
             }
             for (_, dpad) in profile.dpads {
-                dpad.valueChangedHandler = { [weak self] _, _, _ in Self.reportActivity(self) }
+                dpad.valueChangedHandler = { [weak self, weak controller] element, _, _ in
+                    Self.reportActivity(self)
+                    ControllerPowerService.shared.noteActivity(controller: controller, element: element)
+                }
             }
         }
     }
@@ -3859,6 +3963,14 @@ class GameControllerService: ObservableObject {
         if isIgnored(slot: index) { return ControllerState() }
         #if DEBUG
         if let scripted = Self.debugScriptedStates[index] { return scripted }
+        // A fake Access slot fed by a synthetic raw pad (replay): only what
+        // the Access reader says, as psAccess draws it.
+        if isDebugFakeAccessSlot(index), AccessControllerPortService.shared.debugHasSyntheticPad {
+            var st = ControllerState()
+            for (btnIndex, value) in accessPortButtons(forSlot: index) { st.buttons[btnIndex] = value }
+            for (axisIndex, value) in accessPortAxes(forSlot: index) { st.axes[axisIndex] = value }
+            return st
+        }
         // Marketing capture: drive the sticks and triggers along a slow sweep
         // so calibration plots draw a full trail and the live readouts show
         // real numbers instead of a dead 0%. Never compiled into Release.
@@ -3925,7 +4037,11 @@ class GameControllerService: ObservableObject {
         guard index < connectedControllers.count else {
             if let gamepad = rawHIDGamepadSlots[index] {
                 var state = gamepad.state
-                if gamepad.profile?.layout == .steamController2026 {
+                // Any raw pad read with an IMU (the 2026 Steam Controller,
+                // the Switch 2 controllers): its motion goes through the
+                // shared IMU code, so the turn and the stall guard are the
+                // same for all of them.
+                if gamepad.profile?.layout == .steamController2026 || !state.motion.isEmpty {
                     // A stalled link reads as rest, not as the last turn.
                     state.motion = gamepad.imu.freshMotion(state.motion)
                     // The turn since the last frame, and the right trackpad
@@ -3942,9 +4058,11 @@ class GameControllerService: ObservableObject {
                     }
                     // Both square pads as touch surfaces: right the main
                     // one, left the second.
-                    feedSteamTrackpads(state: state, key: gamepad.id, slot: index,
-                                       right: (touch: 21, x: 8, y: 9, click: 19),
-                                       left: (touch: 20, x: 6, y: 7, click: 18))
+                    if gamepad.profile?.layout == .steamController2026 {
+                        feedSteamTrackpads(state: state, key: gamepad.id, slot: index,
+                                           right: (touch: 21, x: 8, y: 9, click: 19),
+                                           left: (touch: 20, x: 6, y: 7, click: 18))
+                    }
                 }
                 return state
             }
@@ -4012,6 +4130,10 @@ class GameControllerService: ObservableObject {
                     state.buttons[btnIndex] = value
                 }
             }
+            // A PlayStation Access controller's own buttons, read raw.
+            for (btnIndex, value) in accessPortButtons(forSlot: index) {
+                state.buttons[btnIndex] = value
+            }
 
             // --- Axes ---
             state.axes[0] = gamepad.leftThumbstick.xAxis.value
@@ -4028,6 +4150,10 @@ class GameControllerService: ObservableObject {
                 for (axis, axisIndex, _) in extras {
                     state.axes[axisIndex] = axis.value
                 }
+            }
+            // A PlayStation Access controller's expansion ports, read raw.
+            for (axisIndex, value) in accessPortAxes(forSlot: index) {
+                state.axes[axisIndex] = value
             }
 
             // --- Hat (D-pad) ---
@@ -4248,8 +4374,99 @@ class GameControllerService: ObservableObject {
     /// supplement reads only the PS button for these.
     private var dualShockSlots: Set<Int> = []
 
+    /// How many PlayStation Access controllers GameController lists.
+    private var accessSlotCount: Int {
+        connectedControllers.filter { ControllerTypeDetector.detect($0) == .accessController }.count
+    }
+
+    /// How far a brightness level scales a light's color.
+    private func lightScale(brightness: UInt8, slot: Int) -> Float {
+        switch brightness {
+        case 0: return 0
+        case 1: return 0.25
+        default: return 1
+        }
+    }
+
+    /// Whether a slot holds a PlayStation Access controller.
+    private func isAccessSlot(_ slot: Int) -> Bool {
+        if isDebugFakeAccessSlot(slot) { return true }
+        return slot < connectedControllers.count && ControllerTypeDetector.detect(connectedControllers[slot]) == .accessController
+    }
+
+    /// DEBUG only: a marketing fake Access slot, read from the raw reader's
+    /// synthetic pad instead of a GCController. Always false in Release.
+    private func isDebugFakeAccessSlot(_ slot: Int) -> Bool {
+        #if DEBUG
+        return marketingFakeActive && slot < marketingFakeCount && controllerDetails[slot]?.brand == .accessController
+        #else
+        return false
+        #endif
+    }
+
+    /// The identity the raw reader matches a slot's pad by; nil for a fake
+    /// slot, which takes the reader's single pad fallback.
+    private func accessIdentity(forSlot slot: Int) -> SonyPadIdentity? {
+        guard !isDebugFakeAccessSlot(slot), slot < connectedControllers.count else { return nil }
+        return SonyPadIdentity.of(controller: connectedControllers[slot])
+    }
+
+    private func accessSlotCount(forSlot slot: Int) -> Int {
+        isDebugFakeAccessSlot(slot) ? 1 : accessSlotCount
+    }
+
+    /// The stick, expansion port and discovered axes of the Access
+    /// controller in a slot (none for any other controller).
+    private func accessPortAxes(forSlot slot: Int) -> [Int: Float] {
+        guard isAccessSlot(slot) else { return [:] }
+        return AccessControllerPortService.shared.axes(for: accessIdentity(forSlot: slot),
+                                                       accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    /// The Access controller's own buttons that are down, by its numbering.
+    private func accessPortButtons(forSlot slot: Int) -> [Int: Float] {
+        guard isAccessSlot(slot) else { return [:] }
+        return AccessControllerPortService.shared.buttons(for: accessIdentity(forSlot: slot),
+                                                          accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    /// What is in each expansion port of the Access controller in a slot,
+    /// for the drawing and the rows.
+    func accessPortDevices(forSlot slot: Int) -> [Int: AccessControllerPortService.PortDevice] {
+        guard isAccessSlot(slot) else { return [:] }
+        return AccessControllerPortService.shared.portDevices(for: accessIdentity(forSlot: slot),
+                                                              accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    /// The profile the Access controller in a slot has active, with what it
+    /// maps when the controller answered for it (USB only).
+    func accessProfile(forSlot slot: Int) -> (number: Int, profile: AccessControllerPortService.Profile?) {
+        guard isAccessSlot(slot) else { return (0, nil) }
+        return AccessControllerPortService.shared.activeProfile(for: accessIdentity(forSlot: slot),
+                                                                accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
+    /// The Access controller's buttons pressed so far, for the extras row.
+    private func accessPortExtraButtons(forSlot slot: Int) -> [ExtraButton] {
+        guard isAccessSlot(slot) else { return [] }
+        let identity = accessIdentity(forSlot: slot)
+        let service = AccessControllerPortService.shared
+        let down = service.buttons(for: identity, accessSlotCount: accessSlotCount(forSlot: slot))
+        return service.seenButtons(for: identity, accessSlotCount: accessSlotCount(forSlot: slot)).map { index in
+            ExtraButton(label: AccessControllerPortService.buttonLabel(index), index: index, pressed: down[index] != nil)
+        }
+    }
+
     /// The supplement's buttons for one slot's own pad. Two Sony pads used
     /// to share one merged snapshot, so a paddle on either fired on both.
+    /// The profiles stored on a DualSense Edge in a slot, read over USB.
+    func edgeProfiles(forSlot slot: Int) -> [DualSenseEdgeProfiles.Profile] {
+        guard slot < connectedControllers.count,
+              ((connectedControllers[slot].vendorName ?? "") + " " + connectedControllers[slot].productCategory).lowercased().contains("edge") else { return [] }
+        return DualSenseSupplementService.shared.edgeProfiles(for: SonyPadIdentity.of(controller: connectedControllers[slot]),
+            sonySlotCount: dualSenseSlots.count + dualShockSlots.count)
+    }
+
     private func supplementalButtons(forSlot slot: Int) -> [Int: Float] {
         guard slot < connectedControllers.count else { return [:] }
         return DualSenseSupplementService.shared.supplementalButtons(
@@ -5403,7 +5620,9 @@ class GameControllerService: ObservableObject {
                     return names.count
                 }(),
                 axisCount: Self.rawHIDAxisCount(gamepad),
-                supportsMotion: steam2026,
+                // The 2026 Steam Controller and the Switch 2 controllers
+                // carry an IMU in their reports (report 0x05 for Nintendo's).
+                supportsMotion: steam2026 || RawHIDGamepadService.isSwitch2Layout(gamepad.profile?.layout),
                 hasTouchpad: steam2026,
                 hasMicroGamepad: false,
                 physicalButtonNames: names,
@@ -5420,6 +5639,8 @@ class GameControllerService: ObservableObject {
                     : gamepad.profile?.layout == .switch2GameCube
                         || gamepad.profile?.identifier.hasPrefix("nintendo-gamecube-adapter") == true ? .unknown
                     : gamepad.profile?.layout == .switch2Pro ? .switchPro
+                    : gamepad.profile?.layout == .switch2JoyConLeft ? .joyConLeft
+                    : gamepad.profile?.layout == .switch2JoyConRight ? .joyConRight
                     : (ControllerTypeDetector.brand(fromName: "\(gamepad.manufacturer ?? "") \(gamepad.productName)")
                         ?? (gamepad.vendorID == 0x057E ? .switchPro
                             : gamepad.vendorID == 0x054C ? .dualShock4 : .unknown)),
@@ -5818,7 +6039,7 @@ class GameControllerService: ObservableObject {
     /// often the Bluetooth address. nil for an empty slot.
     func deviceFingerprint(forSlot slot: Int) -> String? {
         if let gamepad = rawHIDGamepadSlots[slot] {
-            guard var key = HIDDeviceRegistry.rememberKey(for: gamepad.device) else { return nil }
+            guard let device = gamepad.device, var key = HIDDeviceRegistry.rememberKey(for: device) else { return nil }
             // GameCube adapter ports share one USB device.
             if let id = gamepad.profile?.identifier, id.hasPrefix("nintendo-gamecube-adapter-port") {
                 key += "/" + id.replacingOccurrences(of: "nintendo-gamecube-adapter-", with: "")
@@ -6115,11 +6336,12 @@ extension GameControllerService {
         temporaryLightSlots.insert(slot)
         var bri = presetLightOverride?.brightness ?? lightBrightness[slot] ?? 2
         if bri == 0 { bri = 2 }
-        let scale: Float = bri == 1 ? 0.25 : 1.0
+        let scale = lightScale(brightness: bri, slot: slot)
         let r = UInt8(min(max(color.floatR * scale * 255, 0), 255))
         let g = UInt8(min(max(color.floatG * scale * 255, 0), 255))
         let b = UInt8(min(max(color.floatB * scale * 255, 0), 255))
         lastAppliedColor[slot] = (r, g, b)
+        lastShownColor[slot] = (UInt8(min(max(color.floatR * 255, 0), 255)), UInt8(min(max(color.floatG * 255, 0), 255)), UInt8(min(max(color.floatB * 255, 0), 255)))
         applyAppleLight(at: slot, red: r, green: g, blue: b)
         if writesSonyLight(forSlot: slot) {
             InProcessLightWriter.shared.startHold(red: r, green: g, blue: b,

@@ -4,8 +4,9 @@ import CoreGraphics
 extension ControllerLayout {
     /// Switch 2 Pro Controller (product 0x2069), read raw over a USB-C cable
     /// after Switch2USBEnabler starts it (HIDReportDecoder.decodeSwitch2Pro,
-    /// input report 0x09). macOS GameController does not list it, so the raw
-    /// path is the only one and no pathInputs are needed.
+    /// input report 0x05 with the IMU; the short 0x09 is still read). macOS
+    /// GameController does not list it, so the raw path is the only one and
+    /// no pathInputs are needed.
     ///
     /// Nintendo face buttons use the POSITIONAL scheme, as every Nintendo
     /// layout does: btn 0 is the bottom button (B), 1 the right (A), 2 the
@@ -29,6 +30,17 @@ extension ControllerLayout {
         backStrip: 0.42,
         silhouette: Silhouette(front: switch2ProFront, top: switch2ProTop, back: switch2ProFront),
         controls: switch2ProControls,
+        offBody: [
+            OffBodyInput(serialized: "mtn gyroX +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn gyroY +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn gyroZ +", reason: "Gyroscope inside the body, read from report 0x05 once the enabler switches the sensors on"),
+            OffBodyInput(serialized: "mtn accelX +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn accelY +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn accelZ +", reason: "Accelerometer inside the body, read from report 0x05"),
+            OffBodyInput(serialized: "mtn rollAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
+            OffBodyInput(serialized: "mtn pitchAngle +", reason: "Tilt angle the app integrates from the gyroscope"),
+            OffBodyInput(serialized: "mtn yawAngle +", reason: "Turn angle the app integrates from the gyroscope"),
+        ],
         // The raw profile names it; the vendor and product IDs back that up.
         // GameControllerService gives this pad the .switchPro brand, so this
         // must outrank any Switch Pro rule that matches on brand alone.
@@ -41,12 +53,13 @@ extension ControllerLayout {
             [.brand(.switchPro), .gcHasElement("Button A"), .gcProductCategoryContains("Switch 2")],
         ],
         matchPriority: 30,
-        readability: .partial("USB only, experimental: no Bluetooth, motion, NFC or rumble"),
+        readability: .partial("USB only, experimental: motion read from report 0x05 as SDL reads it, scale not yet checked on a pad; no Bluetooth, NFC or rumble"),
         approximate: true,
         sources: [
             "nintendo.com Switch 2 Pro Controller main specifications (105 x 148 x 60.2 mm)",
             "en-americas-support.nintendo.com Nintendo Switch 2 Pro Controller Diagram (answer 68527)",
             "github.com/caqlayan/procon2-mac README protocol notes (USB report 0x09 button bits)",
+            "SDL_hidapi_switch2.c HandleSwitchProState and its sensor block (report 0x05 buttons, sticks, IMU)",
             "SDL src/joystick/hidapi/SDL_hidapi_switch2.c",
         ]
     )
@@ -124,11 +137,11 @@ extension ControllerLayout {
                       symbol: "house", inputs: .button(10), callout: .above),
         PlacedControl(id: "c", kind: .menuButton, center: CGPoint(x: 0.5, y: 0.38), size: 0.035,
                       printed: "C", inputs: .button(15), note: "GameChat on the console; any function here", callout: .below),
-        // The 6-axis sensor sits inside the body; the enabler switches it on,
-        // but the decoder never reads it.
+        // The 6-axis sensor sits inside the body; the enabler switches it on
+        // and report 0x05 carries it (the motion rows are offBody inputs).
         PlacedControl(id: "gyro", kind: .other, center: CGPoint(x: 0.5, y: 0.6), size: 0.075, height: 0.03,
                       shape: .capsule(angleDegrees: 0), printed: "Gyro",
-                      readable: .notReported("Motion sensors are enabled but not decoded yet, so they cannot be bound")),
+                      readable: .notReported("The sensor itself has no control to click; bind Gyro and Accel rows from the motion inputs")),
 
         // Back, as held: GL under the left middle finger, GR under the right,
         // the audio jack on the bottom edge between the grips.

@@ -35,6 +35,12 @@ struct SettingsView: View {
     /// Mirrors the key ContentView reads to pin the activity log under the
     /// detail pane. On until turned off (see ContentView.showDebugLog).
     @AppStorage("InputConfig.showDebugLog") private var showDebugLog = true
+    @AppStorage(Switch2BluetoothService.enabledKey) private var switch2Bluetooth = false
+    @AppStorage(ControllerPowerService.idleDisconnectKey) private var idleDisconnect = false
+    @AppStorage(ControllerPowerService.idleMinutesKey) private var idleMinutes = ControllerPowerService.defaultMinutes
+    @AppStorage(ControllerPowerService.whileRunningKey) private var idleWhileRunning = false
+    @AppStorage(ControllerPowerService.autoReconnectKey) private var autoReconnect = false
+    @ObservedObject private var switch2BluetoothStatus = Switch2BluetoothStatus.shared
     /// Which letters the face buttons are shown with (Controllers tab).
     @AppStorage(FaceLetters.defaultsKey) private var faceLetters = FaceLetters.automatic.rawValue
     /// Drives the system-wide "toggle most recent preset" hotkey. Same key
@@ -626,6 +632,11 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.solidSecondaryCompact)
                     }
+                    Toggle("Hide built-in presets", isOn: $presetStore.hideBuiltInPresets)
+                    Text("Takes the Built-in Presets folders out of the sidebar, its search and the menu bar. They stay in your library: turn this off to see them again. A preset moved into My Presets stays in view.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 8) {
                         Button("Restore Built-in Presets") {
                             let count = presetStore.restoreBuiltInPresets()
@@ -894,6 +905,51 @@ struct SettingsView: View {
                 // to open from here worked on the shared working set and
                 // saved to nothing: every zone drawn was gone at the next
                 // launch, and a binding made against it dangled for good.
+                section(title: "Wireless controllers") {
+                    Toggle("Disconnect a wireless controller after it sits unused", isOn: $idleDisconnect)
+                        .onChange(of: idleDisconnect) { _, _ in ControllerPowerService.shared.settingsChanged() }
+                    if idleDisconnect {
+                        HStack(spacing: 8) {
+                            Text("After")
+                            Picker("After", selection: $idleMinutes) {
+                                ForEach(ControllerPowerService.minuteChoices, id: \.self) { m in
+                                    Text("\(m) minutes").tag(m)
+                                }
+                            }
+                            .labelsHidden()
+                            .fixedSize()
+                            .onChange(of: idleMinutes) { _, _ in ControllerPowerService.shared.settingsChanged() }
+                        }
+                        .padding(.leading, 20)
+                        Toggle("Also while a preset is running", isOn: $idleWhileRunning)
+                            .padding(.leading, 20)
+                            .onChange(of: idleWhileRunning) { _, _ in ControllerPowerService.shared.settingsChanged() }
+                    }
+                    Text("Unused means no button, stick, trigger or D-pad; motion does not count. A controller on a cable is never disconnected. Press its PS, Xbox or Home button to connect it again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Try to reconnect paired controllers when InputConfig opens, when the Mac wakes and when a preset starts", isOn: $autoReconnect)
+                        .padding(.top, 4)
+                    Text("Only a controller that is switched on and waiting can be reached; most controllers wake only from their own button.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section(title: "Switch 2 controllers over Bluetooth") {
+                    Toggle("Connect Switch 2 Pro, GameCube and Joy-Con 2 controllers over Bluetooth", isOn: $switch2Bluetooth)
+                        .onChange(of: switch2Bluetooth) { _, on in Switch2BluetoothService.shared.setEnabled(on) }
+                    Text("macOS does not read these controllers on its own. Pair one with the Mac first (hold its sync button until the lights sweep); with this on, InputConfig looks for it while the app runs and reads it like the USB-C connection, motion sensors included. Experimental: not yet checked on a controller.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let status = switch2BluetoothStatus.text {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 section(title: "Screen and stick regions") {
                     Text("Each preset has its own. Open it, choose Edit, and draw them from a row's Options.")
                         .font(.caption)
@@ -1781,6 +1837,29 @@ enum Changelog {
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.8", points: [
+            String(localized: "Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth"),
+            String(localized: "Access profiles: a Profile chip in the Live Visualizer lists the three stored profiles over USB-C, switches them, and edits one beside the drawing with the PS5's own settings"),
+            String(localized: "Controller Profile, a new output: a row switches an Access controller to the next, previous, or a numbered profile"),
+            String(localized: "DualSense Edge: its four stored profiles are read over USB-C and listed with what each one remaps"),
+            String(localized: "Trigger feel: click L2 or R2 in the Live Visualizer of a DualSense or DualSense Edge for light, medium or firm resistance"),
+            String(localized: "DualSense over Bluetooth reports its PS button before anything wakes it; DualShock 4 is polled at the system rate; DualShock 3 reads its pressure levels and accelerometer"),
+            String(localized: "Xbox pads over Bluetooth: Share works on every firmware, Elite Series 2 paddles and profiles are read, and the Devices menu names the pads macOS does not read over USB"),
+            String(localized: "Stream Deck +, + XL, Studio and Module 15: dials and touch strip are read; Elgato models the app cannot read yet are listed, not offered"),
+            String(localized: "Logitech wheels: a G923 for PlayStation or a G29 left in another mode is switched to its own, and MOMO, Formula and Driving Force pedals are read separately"),
+            String(localized: "Thrustmaster wheels use the same axes as Logitech wheels, so a preset carries between them"),
+            String(localized: "Switch 2 Pro and GameCube controllers read their stick and trigger calibration and their motion sensors from the controller"),
+            String(localized: "Switch 2 controllers over Bluetooth: with the new Devices setting on, a paired Switch 2 Pro, GameCube or Joy-Con 2 controller is read wirelessly; Joy-Con 2 are read over USB in the grip too"),
+            String(localized: "GP2040-CE boards and sticks in Switch or PS4 mode read every button and stick"),
+            String(localized: "Pen tablets: pressure, tilt, pen buttons, eraser and in range are inputs of their own"),
+            String(localized: "Contour ShuttlePRO and 3Dconnexion SpaceMouse are read, jog, shuttle and all six axes included"),
+            String(localized: "Mouse side buttons held for a hold row stay held, trackpad scrolls count their distance, Eject works, and keyboard rows say when a password field has the keyboard"),
+            String(localized: "Row editor: Add another output is a labeled button under the outputs, Notes sit under Options, and a closed Options line says what it holds"),
+            String(localized: "Triple tap: a row can do something else on three quick taps, beside its hold and double tap actions"),
+            String(localized: "Wireless controllers: optionally disconnect a controller after it sits unused for 5 to 60 minutes, and try to reconnect paired controllers when the app opens, the Mac wakes or a preset starts"),
+            String(localized: "Hide built-in presets, in Settings, Advanced, Data & storage, takes the shipped folders out of the sidebar, its search and the menu bar"),
+            String(localized: "Menu bar: the pop-up lists the presets started last, with a search, in place of the New Preset, Smart Preset and Statistics tiles and the What's New button"),
+        ]),
         Entry(version: "1.7", points: [
             String(localized: "InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese"),
             String(localized: "The Live Visualizer's keyboard takes the shape of your keyboard, ANSI, ISO or JIS, and labels every key with what it types in your input source, so AZERTY, QWERTZ, Dvorak, Cyrillic, Arabic and every other layout macOS has show as printed; key names in the editor and the Live Visualizer follow your keyboard layout too; rows still store each key by its place, so presets work the same on every layout"),

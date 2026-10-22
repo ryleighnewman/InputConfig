@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig usa il Bluetooth solo per disconnettere un controller wireless quando lo richiedi.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig usa il Bluetooth per leggere i controller Switch 2, e per collegare e scollegare i controller wireless, quando glielo chiedi o lo attivi nelle Impostazioni.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig usa il Bluetooth solo per disconnettere un controller wireless quando lo richiedi.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig usa il Bluetooth per leggere i controller Switch 2, e per collegare e scollegare i controller wireless, quando glielo chiedi o lo attivi nelle Impostazioni.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Tutti i diritti riservati.";

@@ -333,7 +333,8 @@ final class LegacyRowCheck {
         guard Numbering15.readFromDescriptor(vendor: pad.vendorID, product: pad.productID),
               !(pad.vendorID == 0x046D && switchedWheelProducts.contains(pad.productID)),
               case .generic(let layout)? = pad.profile?.layout, let new = layout.extended,
-              let descriptor = IOHIDDeviceGetProperty(pad.device, kIOHIDReportDescriptorKey as CFString) as? Data,
+              let device = pad.device,
+              let descriptor = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data,
               let old = Numbering15.parse(descriptor) else { return nil }
         return RawPad(name: pad.displayName, old: old, new: new)
     }

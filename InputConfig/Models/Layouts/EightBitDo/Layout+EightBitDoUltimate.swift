@@ -69,15 +69,13 @@ extension ControllerLayout {
         // and Ultimate C names do not contain these phrases.
         match: [
             [.vidPid(vendor: 0x2DC8, products: [0x3011, 0x3012, 0x3013])],
-            // Wired in X-input mode, read by the XInput report decoder.
-            [.vidPid(vendor: 0x2DC8, products: [0x3106])],
             [.gcVendorNameContains("8BitDo Ultimate Wireless")],
             [.gcVendorNameContains("8BitDo Ultimate Wired")],
             [.gcVendorNameContains("8BitDo Ultimate 2.4G")],
             [.gcVendorNameContains("8BitDo Ultimate Bluetooth")],
         ],
         matchPriority: 20,
-        readability: .partial("P1 and P2 reach the Mac in D-input mode through the raw HID read, and through GameController when it lists them; Star only in D-input mode. The Profile button, mode switch and lights never do. X-input mode is read on a USB cable, not through the 2.4G receiver"),
+        readability: .partial("P1 and P2 reach the Mac in D-input mode through the raw HID read, and through GameController when it lists them; Star only in D-input mode. The Profile button, mode switch and lights never do. X-input mode (2DC8:3106) is an Xbox 360 class USB device macOS does not read; use D-input mode"),
         approximate: true,
         sources: [
             "8bitdo.com Ultimate Bluetooth and Ultimate 2.4G product pages (147.0 x 104.0 x 61.5 mm, two back buttons, profile switch with 3 profiles, 2-way mode switch)",

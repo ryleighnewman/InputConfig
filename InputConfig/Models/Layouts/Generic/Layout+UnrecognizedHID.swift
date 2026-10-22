@@ -43,7 +43,7 @@ extension ControllerLayout {
     /// its report descriptor (for the HID usage of each button).
     static func generatedUnrecognizedHID(for pad: RawHIDGamepad) -> ControllerLayout {
         guard let profile = pad.profile else { return unrecognizedHID }
-        let descriptor = IOHIDDeviceGetProperty(pad.device, kIOHIDReportDescriptorKey as CFString) as? Data
+        let descriptor = pad.device.flatMap { IOHIDDeviceGetProperty($0, kIOHIDReportDescriptorKey as CFString) as? Data }
         return generatedUnrecognizedHID(profile: profile, descriptor: descriptor)
     }
 

@@ -23,6 +23,45 @@ class PresetStore: ObservableObject {
         }
     }
 
+    /// The presets started most recently, newest first, for the menu bar.
+    static let recentKey = "InputConfig.recentPresetIDs"
+    @Published private(set) var recentPresetIDs: [UUID] = {
+        let saved = (UserDefaults.standard.stringArray(forKey: PresetStore.recentKey) ?? []).compactMap(UUID.init)
+        // Before the list existed, the last preset started is the one entry.
+        if saved.isEmpty, let last = UserDefaults.standard.string(forKey: "InputConfig.lastActivatedPresetId").flatMap(UUID.init) {
+            return [last]
+        }
+        return saved
+    }()
+
+    private func noteRecent(_ id: UUID) {
+        recentPresetIDs.removeAll { $0 == id }
+        recentPresetIDs.insert(id, at: 0)
+        if recentPresetIDs.count > 12 { recentPresetIDs.removeLast(recentPresetIDs.count - 12) }
+        UserDefaults.standard.set(recentPresetIDs.map(\.uuidString), forKey: Self.recentKey)
+    }
+
+    /// Recently started presets that still exist and are not hidden.
+    var recentPresets: [Preset] {
+        recentPresetIDs.compactMap { id in presets.first { $0.id == id } }.filter { !isHiddenBuiltIn($0) }
+    }
+
+    /// Every preset whose name, tag or folder holds each typed word, in the
+    /// sidebar's order; hidden built-ins are left out.
+    func search(_ query: String) -> [Preset] {
+        func fold(_ t: String) -> String { t.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) }
+        let words = fold(query).split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return [] }
+        let folderNames = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, ShippedText.t($0.name)) })
+        let hits = presets.filter { p in
+            if isHiddenBuiltIn(p) { return false }
+            let text = fold([p.shownName, ShippedText.t(p.tag), p.groupID.flatMap { folderNames[$0] } ?? ""]
+                .joined(separator: " "))
+            return words.allSatisfy { text.contains($0) }
+        }
+        return inSidebarOrder(hits)
+    }
+
     /// User-defined groups for organizing the sidebar. Stored in a single
     /// `groups.json` file next to the presets. Presets reference a group
     /// by `groupID`; a preset whose `groupID` is nil or unknown shows in
@@ -33,6 +72,7 @@ class PresetStore: ObservableObject {
 
     static let favoritesKey = "InputConfig.favoritePresets"
     static let favoritesOnlyKey = "InputConfig.favoritesOnly"
+    static let hideBuiltInKey = "InputConfig.hideBuiltInPresets"
 
     /// Starred presets, by id. Kept in the app's preferences rather than in
     /// the preset files, so exporting or sharing a preset never carries
@@ -47,6 +87,30 @@ class PresetStore: ObservableObject {
     }
 
     func isFavorite(_ preset: Preset) -> Bool { favoriteIDs.contains(preset.id) }
+
+    /// Leave the Built-in Presets folders out of the sidebar, its search,
+    /// the menu bar list and preset cycling. Nothing is deleted: turning it
+    /// off shows them again, and a starred one stays under Favorites.
+    @Published var hideBuiltInPresets: Bool = UserDefaults.standard.bool(forKey: PresetStore.hideBuiltInKey) {
+        didSet { UserDefaults.standard.set(hideBuiltInPresets, forKey: Self.hideBuiltInKey) }
+    }
+
+    /// Whether a folder is one of the shipped ones or inside one.
+    func isInBuiltInFolder(_ groupID: UUID?) -> Bool {
+        var id = groupID
+        var seen: Set<UUID> = []
+        while let current = id, seen.insert(current).inserted,
+              let group = groups.first(where: { $0.id == current }) {
+            if group.isBuiltIn { return true }
+            id = group.parentID
+        }
+        return false
+    }
+
+    /// A built-in preset the user has chosen not to see.
+    func isHiddenBuiltIn(_ preset: Preset) -> Bool {
+        hideBuiltInPresets && isInBuiltInFolder(preset.groupID)
+    }
 
     /// How the sidebar lists presets, and folders: by name (the default),
     /// by when they were last edited or made, or in the order dragged.
@@ -704,7 +768,8 @@ class PresetStore: ObservableObject {
         func walk(_ group: PresetGroup) -> [Preset] {
             subgroups(of: group.id).flatMap(walk) + presets(in: group.id)
         }
-        return presets(in: nil) + userTopLevelGroups.flatMap(walk) + builtInTopLevelGroups.flatMap(walk)
+        return presets(in: nil) + userTopLevelGroups.flatMap(walk)
+            + (hideBuiltInPresets ? [] : builtInTopLevelGroups.flatMap(walk))
     }
 
     /// Direct child folders of the given folder, in display order.
@@ -2988,6 +3053,7 @@ class PresetStore: ObservableObject {
                     row.outputs = remap(row.outputs)
                     row.holdOutputs = row.holdOutputs.map(remap)
                     row.doubleTapOutputs = row.doubleTapOutputs.map(remap)
+                    row.tripleTapOutputs = row.tripleTapOutputs.map(remap)
                     preset.joysticks[g].bindings[r] = row
                 }
             }
@@ -3126,6 +3192,7 @@ class PresetStore: ObservableObject {
         deactivateAll(announce: false)
         activePresetId = preset.id
         lastActivatedPresetId = preset.id
+        noteRecent(preset.id)
         if let index = presets.firstIndex(where: { $0.id == preset.id }) {
             presets[index].isActive = true
         }

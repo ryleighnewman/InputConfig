@@ -39,6 +39,10 @@ struct JoystickGroupView: View {
     /// Preset list for the App Action target picker, passed as plain values
     /// so the row views stay store-subscription free.
     var availablePresets: [(id: UUID, name: String)] = []
+    /// The preset's DualSense trigger feel and its setter, for the trigger
+    /// regions card (nil setter hides it).
+    var triggerFeel: (left: Int, right: Int) = (0, 0)
+    var onSetTriggerFeel: ((_ left: Bool, _ level: Int) -> Void)? = nil
 
     // Not the mapping engine: nothing here reads it, and observing it
     // re-ran every row on each of its debug log flushes (5 Hz while active).
@@ -589,7 +593,8 @@ struct JoystickGroupView: View {
                              partRows: partRows(part), onJumpToRow: jumpToRow)
         case .band(let axis):
             StickRegionsView(startKey: StickRegionService.bandKeyBase + axis, slot: deviceSlot, embedded: true,
-                             partRows: partRows(part), onJumpToRow: jumpToRow)
+                             partRows: partRows(part), onJumpToRow: jumpToRow,
+                             triggerFeel: triggerFeel, onSetTriggerFeel: readsDualSense ? onSetTriggerFeel : nil)
         }
     }
 
@@ -644,7 +649,7 @@ struct JoystickGroupView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                    } else if GameControllerService.isNoControllerName(controllerName) && !isDeviceIndependentGroup {
+                    } else if GameControllerService.isNoControllerName(controllerName) && !isDeviceIndependentGroup && !needsDevicePrompt {
                         Text("No controller in this slot")
                             .font(.callout)
                             .foregroundStyle(.red.opacity(0.7))
@@ -683,6 +688,11 @@ struct JoystickGroupView: View {
     private var deviceSubtitle: String {
         let caps = scaffoldCapabilities
         if caps.note != nil { return controllerName }
+        // The header already names the device when the group is called by
+        // it, so the line then lists only what the device offers.
+        let headerNamesDevice = joystick.customName?.trimmingCharacters(in: .whitespaces)
+            .caseInsensitiveCompare(caps.deviceName) == .orderedSame
+        if headerNamesDevice, !caps.summary.isEmpty { return caps.summary.prefix(1).uppercased() + caps.summary.dropFirst() }
         return caps.summary.isEmpty ? caps.deviceName : "\(caps.deviceName): \(caps.summary)"
     }
 
@@ -692,6 +702,14 @@ struct JoystickGroupView: View {
         guard deviceSlot == GameControllerService.noSlot, joystick.inputKind == .controller,
               !controllerService.controllerDetails.isEmpty else { return nil }
         return joystick.shownCustomName
+    }
+
+    /// The group is set up for, or reading, a DualSense or DualSense Edge:
+    /// its triggers have a feel to set.
+    private var readsDualSense: Bool {
+        if let model = joystick.controllerModel, model.hasPrefix("dualsense") { return true }
+        guard let info = controllerService.controllerDetails[deviceSlot] else { return false }
+        return info.brand == .dualSense || info.name.localizedCaseInsensitiveContains("dualsense")
     }
 
     private var deviceSlot: Int {
@@ -930,6 +948,17 @@ struct JoystickGroupView: View {
         // "Joystick" was misleading: a group can hold MIDI, keyboard, and
         // mouse bindings that have nothing to do with a gamepad.
         return String(localized: "Input Device \(joystickIndex)")
+    }
+
+    /// The chip has nothing of its own to show (no name picked, no Mac
+    /// input kind, no controller in the slot) and the group's rows need a
+    /// controller: the chip asks for one.
+    private var needsDevicePrompt: Bool {
+        if let custom = joystick.shownCustomName, !custom.isEmpty { return false }
+        if joystick.macInputName != nil { return false }
+        let trimmed = controllerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty || GameControllerService.isNoControllerName(trimmed) else { return false }
+        return !isDeviceIndependentGroup
     }
 
     /// True when every binding in this group comes from a source that does
@@ -1182,9 +1211,13 @@ struct JoystickGroupView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(resolvedHeaderName)
+                // A slot with nothing picked and nothing connected asks for
+                // its device in the chip itself, in the accent color, rather
+                // than a grey "Input Device 0" beside red text.
+                Text(needsDevicePrompt ? String(localized: "Please select your input device") : resolvedHeaderName)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(joystick.customName == nil ? .secondary : .primary)
+                    .foregroundStyle(needsDevicePrompt ? AnyShapeStyle(Color.accentColor)
+                                     : joystick.customName == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9, weight: .semibold))

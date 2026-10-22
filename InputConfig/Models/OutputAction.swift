@@ -29,6 +29,11 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
     /// while the input is held, stays until something else changes it, or
     /// switches the rainbow on and off. Posts no events.
     case lightBar = "lit"
+    /// Switches the profile a PlayStation Access controller has active,
+    /// the same thing its Profile button does: next, previous or one of
+    /// the three by number. Over USB-C only; the action rides in
+    /// `profileAction`. Posts no events.
+    case controllerProfile = "cpf"
 
     var id: String { rawValue }
 
@@ -40,6 +45,7 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
         case .absoluteVolume: return String(localized: "System Volume (follows input)")
         case .systemAction: return String(localized: "System Function")
         case .lightBar: return String(localized: "Light Bar Color")
+        case .controllerProfile: return String(localized: "Controller Profile")
         case .mouseButton: return String(localized: "Mouse Button")
         case .mouseMotion: return String(localized: "Mouse Motion")
         case .mouseWheel: return String(localized: "Mouse Wheel")
@@ -455,6 +461,8 @@ struct OutputAction: Codable, Hashable, Identifiable {
     /// The color and mode of a .lightBar output.
     var lightColor: RGBLightColor?
     var lightMode: LightOutputMode?
+    /// What a .controllerProfile output does.
+    var profileAction: ControllerProfileAction?
 
     init(type: OutputType, keyCode: Int? = nil, mouseButtonIndex: Int? = nil,
          mouseAxis: MouseAxis? = nil, mouseDirection: MouseDirection? = nil, speed: Int? = nil,
@@ -468,7 +476,8 @@ struct OutputAction: Codable, Hashable, Identifiable {
          targetPresetID: UUID? = nil,
          systemActionKind: SystemActionKind? = nil,
          lightColor: RGBLightColor? = nil,
-         lightMode: LightOutputMode? = nil) {
+         lightMode: LightOutputMode? = nil,
+         profileAction: ControllerProfileAction? = nil) {
         self.id = UUID()
         self.type = type
         self.keyCode = keyCode
@@ -489,6 +498,7 @@ struct OutputAction: Codable, Hashable, Identifiable {
         self.systemActionKind = systemActionKind
         self.lightColor = lightColor
         self.lightMode = lightMode
+        self.profileAction = profileAction
     }
 
     var displayName: String {
@@ -573,8 +583,12 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 let color = resolvedLightColor.nearestName.lowercased()
                 return String(localized: "Light bar: \(color), stays on")
             }
+        case .controllerProfile:
+            return resolvedProfileAction.displayName
         }
     }
+
+    var resolvedProfileAction: ControllerProfileAction { profileAction ?? .next }
 
     /// The name written to the activity log: typed text, website
     /// addresses, app paths and Shortcut names are counted, not quoted,
@@ -633,6 +647,8 @@ struct OutputAction: Codable, Hashable, Identifiable {
         case .lightBar:
             if lightColor == nil { lightColor = Self.defaultLightColor }
             if lightMode == nil { lightMode = .whileHeld }
+        case .controllerProfile:
+            if profileAction == nil { profileAction = .next }
         default:
             break
         }
@@ -692,6 +708,9 @@ struct OutputAction: Codable, Hashable, Identifiable {
             // lit <held|set|rainbow> <r> <g> <b>
             let c = resolvedLightColor
             return "lit \(resolvedLightMode.rawValue) \(c.r) \(c.g) \(c.b)"
+        case .controllerProfile:
+            // cpf <next|prev|1|2|3>
+            return "cpf \(resolvedProfileAction.rawValue)"
         }
     }
 
@@ -770,6 +789,9 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 color = RGBLightColor(r: UInt8(clamping: r), g: UInt8(clamping: g), b: UInt8(clamping: b))
             }
             return OutputAction(type: .lightBar, lightColor: color, lightMode: mode)
+        case "cpf":
+            let action = parts.count >= 2 ? (ControllerProfileAction(rawValue: parts[1]) ?? .next) : .next
+            return OutputAction(type: .controllerProfile, profileAction: action)
         case "txt":
             // txt <percent-encoded text>
             let decoded = parts.count >= 2 ? (parts[1].removingPercentEncoding ?? "") : ""
@@ -796,5 +818,50 @@ struct OutputAction: Codable, Hashable, Identifiable {
         case appActionKind, targetPresetID
         case systemActionKind
         case lightColor, lightMode
+        case profileAction
+    }
+}
+
+/// What a Controller Profile output does to a PlayStation Access
+/// controller's active profile.
+enum ControllerProfileAction: String, Codable, CaseIterable, Identifiable {
+    case next = "next"
+    case previous = "prev"
+    case first = "1"
+    case second = "2"
+    case third = "3"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .next: return String(localized: "Controller profile: next")
+        case .previous: return String(localized: "Controller profile: previous")
+        case .first: return String(localized: "Controller profile 1")
+        case .second: return String(localized: "Controller profile 2")
+        case .third: return String(localized: "Controller profile 3")
+        }
+    }
+
+    /// The short name in the editor's menu.
+    var menuName: String {
+        switch self {
+        case .next: return String(localized: "Next")
+        case .previous: return String(localized: "Previous")
+        case .first: return String(localized: "Profile 1")
+        case .second: return String(localized: "Profile 2")
+        case .third: return String(localized: "Profile 3")
+        }
+    }
+
+    /// The profile to make active, from the one active now (1...3).
+    func target(from active: Int) -> Int {
+        switch self {
+        case .next: return active >= 3 || active < 1 ? 1 : active + 1
+        case .previous: return active <= 1 ? 3 : active - 1
+        case .first: return 1
+        case .second: return 2
+        case .third: return 3
+        }
     }
 }

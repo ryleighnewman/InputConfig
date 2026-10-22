@@ -189,6 +189,10 @@ enum ButtonNames {
         case (.gameCube, 3): return String(localized: "C-stick Y")
         case (.gameCube, 4): return String(localized: "L (analog)")
         case (.gameCube, 5): return String(localized: "R (analog)")
+        // A PlayStation Access controller's own stick and its expansion
+        // ports E1 to E4, read raw (AccessControllerPortService); no other
+        // PlayStation pad has axes past the triggers.
+        case (.playstation, 6...15): return AccessControllerPortService.axisLabel(index)
         case (_, 0): return String(localized: "Left stick X")
         case (_, 1): return String(localized: "Left stick Y")
         case (_, 2): return String(localized: "Right stick X")

@@ -89,6 +89,8 @@ final class DualSenseSupplementService: @unchecked Sendable {
     private var pollHealthLogged: Set<String> = []
     private var pollTickCount: Int = 0
     private let pollQueue = DispatchQueue(label: "com.inputconfig.dsedgepoll")
+    /// A DualSense Edge's stored profiles, by location, read once on USB.
+    private var edgeProfiles: [UInt64: [DualSenseEdgeProfiles.Profile]] = [:]
     /// Last-seen bytes 8-49 EXCLUDING known counter slots so we log
     /// any change that could be the Edge's paddle/FN bits without
     /// also logging every counter increment 250×/sec.
@@ -245,6 +247,15 @@ final class DualSenseSupplementService: @unchecked Sendable {
         lastButtons2.removeValue(forKey: location)
         lock.unlock()
 
+        // A DualSense Edge on USB answers for its four stored profiles.
+        let transport = (IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String ?? "").uppercased()
+        if pid == 0x0DF2, transport.contains("USB") {
+            let profiles = DualSenseEdgeProfiles.read(device)
+            lock.lock()
+            edgeProfiles[location] = profiles
+            lock.unlock()
+        }
+
         // Use the location ID directly as the callback context. Safe
         // because the ID is just a UInt64 packed into the pointer
         // bits; no object lifetime to manage.
@@ -317,6 +328,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         productIDs.removeValue(forKey: location)
         identities.removeValue(forKey: location)
         supplementalState.removeValue(forKey: location)
+        edgeProfiles.removeValue(forKey: location)
         lastButtons2.removeValue(forKey: location)
         lastLoggedByte11.removeValue(forKey: location)
         lastSignificantBytes.removeValue(forKey: location)
@@ -352,6 +364,12 @@ final class DualSenseSupplementService: @unchecked Sendable {
                       reportPointer: UnsafePointer<UInt8>,
                       length: Int) {
         guard length >= 8 else { return }
+        #if DEBUG
+        if HIDCapture.target != nil, HIDCapture.matches(vendorID: 0x054C, productID: nil) {
+            let bytes = Array(UnsafeBufferPointer(start: reportPointer, count: length))
+            HIDCapture.log("\(HIDCapture.elapsedMs) in \(String(format: "%02x", bytes.first ?? 0)) \(HIDCapture.hex(bytes))")
+        }
+        #endif
 
         // Mark the stream alive so the GET_REPORT poll stands down for
         // this device (streamed reports are lower-latency than polling).
@@ -447,35 +465,39 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// A Bluetooth report (0x31, 0x11) counts only at its full 78 bytes with
     /// a good CRC, as SDL and the kernel check it: a damaged or short one
     /// read as PS, FN or paddle presses that never happened.
-    private static func buttons2(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool) -> UInt8? {
+    static func buttons2(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool) -> UInt8? {
         if isDS4 {
             if r[0] == 0x01 && length > 7 { return r[7] & 0x01 }
             if r[0] == 0x11 && bluetoothReportIsWhole(r, length: length) { return r[9] & 0x01 }
             return nil
         }
-        if r[0] == 0x01 && length > 10 { return r[10] }
+        // USB 0x01 is 64 bytes with buttons[2] at [10]. Over Bluetooth a pad
+        // nobody has woken sends the simple 0x01 report (10 bytes, or 78 on
+        // some firmware): buttons[2] sits at [7] and only PS (bit 0) and the
+        // touchpad click (bit 1) exist there, the rest is a counter
+        // (SDL_hidapi_ps5.c PS5SimpleStatePacket_t, UpdateDevice size 10 or 78).
+        if r[0] == 0x01 {
+            if length == 64 { return r[10] }
+            if length == 10 || length == 78 { return r[7] & 0x03 }
+            return nil
+        }
         if r[0] == 0x31 && bluetoothReportIsWhole(r, length: length) { return r[11] }
         return nil
+    }
+
+    /// The same, from a copied report, for the test bench.
+    static func buttons2(from bytes: [UInt8], isDS4: Bool) -> UInt8? {
+        bytes.withUnsafeBufferPointer { p in
+            p.baseAddress.flatMap { buttons2($0, length: p.count, isDS4: isDS4) }
+        }
     }
 
     /// A Sony Bluetooth input report: 78 bytes, the last four a CRC-32 of
     /// the input header byte 0xA1 followed by the first 74.
     static func bluetoothReportIsWhole(_ r: UnsafePointer<UInt8>, length: Int) -> Bool {
-        guard length == 78 else { return false }
-        var crc: UInt32 = 0xFFFF_FFFF
-        func add(_ byte: UInt8) { crc = (crc >> 8) ^ crcTable[Int((crc ^ UInt32(byte)) & 0xFF)] }
-        add(0xA1)
-        for i in 0..<74 { add(r[i]) }
-        crc ^= 0xFFFF_FFFF
-        let sent = UInt32(r[74]) | UInt32(r[75]) << 8 | UInt32(r[76]) << 16 | UInt32(r[77]) << 24
-        return crc == sent
+        SonyBluetoothCRC.inputReportIsWhole(r, length: length)
     }
 
-    private static let crcTable: [UInt32] = (0..<256).map { i -> UInt32 in
-        var c = UInt32(i)
-        for _ in 0..<8 { c = (c & 1 != 0) ? (c >> 1) ^ 0xEDB8_8320 : c >> 1 }
-        return c
-    }
 
     /// Decode one buttons[2] byte into the supplemental button snapshot.
     private func applyButtons2(_ b2: UInt8, locationID: UInt64) {
@@ -485,7 +507,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         // entry by entry; now an unchanged report costs one lock and one
         // byte compare, and the dictionary is built only on an edge.
         lock.lock()
-        guard liveDevices[locationID] != nil else { lock.unlock(); return }
+        guard isAttachedLocked(locationID) else { lock.unlock(); return }
         if lastButtons2[locationID] == b2 { lock.unlock(); return }
         lock.unlock()
         let psDown   = (b2 & 0x01) != 0
@@ -514,7 +536,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         // Only while the pad is still attached: a poll started before a
         // detach finished afterwards and wrote state back for a gone pad,
         // which read as a PS button held on the next pad.
-        guard liveDevices[locationID] != nil else { lock.unlock(); return }
+        guard isAttachedLocked(locationID) else { lock.unlock(); return }
         let changed = (supplementalState[locationID] != snapshot)
         supplementalState[locationID] = snapshot
         lastButtons2[locationID] = b2
@@ -536,6 +558,69 @@ final class DualSenseSupplementService: @unchecked Sendable {
                   fnRight ? 1 : 0, lPaddle ? 1 : 0, rPaddle ? 1 : 0)
         }
     }
+
+    /// A location with a device open, or a DEBUG synthetic one. Call locked.
+    private func isAttachedLocked(_ location: UInt64) -> Bool {
+        if liveDevices[location] != nil { return true }
+        #if DEBUG
+        return syntheticLocations.contains(location)
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - Synthetic pads (DEBUG)
+
+    #if DEBUG
+    /// Locations installed by hand, never by IOKit; they have no device,
+    /// no stream and are never polled.
+    private var syntheticLocations: Set<UInt64> = []
+
+    /// Registers `location` as a pad with the given product ID so
+    /// `debugInject` reports decode as that model (DS4 or DualSense) and
+    /// `supplementalButtons(for:)` finds the result. `identity` lets a
+    /// stand-in slot match by identity; nil relies on the one-pad fallback.
+    func debugInstall(location: UInt64, productID: Int32, identity: SonyPadIdentity? = nil) {
+        lock.lock()
+        syntheticLocations.insert(location)
+        productIDs[location] = productID
+        if let identity { identities[location] = identity } else { identities.removeValue(forKey: location) }
+        supplementalState[location] = [:]
+        lastButtons2.removeValue(forKey: location)
+        lastStreamAt[location] = CFAbsoluteTimeGetCurrent()
+        lock.unlock()
+    }
+
+    /// Feeds one raw input report (report ID first) through the same
+    /// `handleReport` the IOKit callback uses.
+    func debugInject(location: UInt64, bytes: [UInt8]) {
+        bytes.withUnsafeBufferPointer { p in
+            guard let base = p.baseAddress else { return }
+            handleReport(locationID: location, reportPointer: base, length: p.count)
+        }
+    }
+
+    /// Drops every synthetic location and its state; real pads are untouched.
+    func debugRemoveSynthetic() {
+        lock.lock()
+        let locations = syntheticLocations
+        syntheticLocations = []
+        var changed = false
+        for location in locations {
+            if !(supplementalState[location] ?? [:]).isEmpty { changed = true }
+            productIDs.removeValue(forKey: location)
+            identities.removeValue(forKey: location)
+            supplementalState.removeValue(forKey: location)
+            lastButtons2.removeValue(forKey: location)
+            lastStreamAt.removeValue(forKey: location)
+            reportCounter.removeValue(forKey: location)
+            lastSignificantBytes.removeValue(forKey: location)
+        }
+        let notify = changed ? onStateChange : nil
+        lock.unlock()
+        notify?()
+    }
+    #endif
 
     // MARK: - GET_REPORT polling (the Bluetooth path)
 
@@ -666,6 +751,11 @@ final class DualSenseSupplementService: @unchecked Sendable {
                           gr == kIOReturnSuccess ? "ok" : String(format: "0x%08X", UInt32(bitPattern: gr)), len)
                 }
                 guard gr == kIOReturnSuccess, len > 7 else { continue }
+                #if DEBUG
+                if HIDCapture.target != nil, HIDCapture.matches(vendorID: 0x054C, productID: nil) {
+                    HIDCapture.log("\(HIDCapture.elapsedMs) get 1 \(String(format: "%02lx", rid)) \(HIDCapture.hex(Array(buf.prefix(Int(len)))))")
+                }
+                #endif
                 // GetReport buffers carry the same layout as the streamed
                 // callback buffer: report ID at [0].
                 let parsed: UInt8? = buf.withUnsafeBufferPointer { p in
@@ -688,6 +778,17 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// matches it. Without a match the old merged state is returned only when
     /// there is exactly one Sony pad on both sides, so with two pads one
     /// pad's paddles can never fire bindings on the other's slot.
+    /// The profiles stored on the DualSense Edge behind a slot (USB only).
+    func edgeProfiles(for identity: SonyPadIdentity?, sonySlotCount: Int) -> [DualSenseEdgeProfiles.Profile] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let identity, let loc = identities.first(where: { $0.value.matches(identity) })?.key {
+            return edgeProfiles[loc] ?? []
+        }
+        guard sonySlotCount <= 1, edgeProfiles.count == 1 else { return [] }
+        return edgeProfiles.values.first ?? []
+    }
+
     func supplementalButtons(for identity: SonyPadIdentity?, sonySlotCount: Int) -> [Int: Float] {
         lock.lock()
         defer { lock.unlock() }

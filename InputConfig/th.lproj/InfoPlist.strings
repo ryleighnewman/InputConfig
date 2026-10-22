@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig ใช้ Bluetooth เพื่อตัดการเชื่อมต่อคอนโทรลเลอร์ไร้สายเมื่อคุณสั่งเท่านั้น";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig ใช้ Bluetooth เพื่ออ่านคอนโทรลเลอร์ Switch 2 และเพื่อเชื่อมต่อและตัดการเชื่อมต่อคอนโทรลเลอร์ไร้สาย เมื่อคุณสั่งหรือเปิดใช้ในการตั้งค่า";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig ใช้ Bluetooth เพื่อตัดการเชื่อมต่อคอนโทรลเลอร์ไร้สายเมื่อคุณสั่งเท่านั้น";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig ใช้ Bluetooth เพื่ออ่านคอนโทรลเลอร์ Switch 2 และเพื่อเชื่อมต่อและตัดการเชื่อมต่อคอนโทรลเลอร์ไร้สาย เมื่อคุณสั่งหรือเปิดใช้ในการตั้งค่า";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "ลิขสิทธิ์ © 2026 Ryleigh Newman สงวนลิขสิทธิ์";

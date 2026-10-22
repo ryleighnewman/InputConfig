@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "يستخدم InputConfig البلوتوث (Bluetooth) فقط لفصل ذراع تحكم لاسلكي عندما تطلب ذلك.";
+"NSBluetoothAlwaysUsageDescription" = "يستخدم InputConfig البلوتوث لقراءة وحدات تحكم Switch 2، ولتوصيل وحدات التحكم اللاسلكية وفصلها، عندما تطلب ذلك أو تفعّله في الإعدادات.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "يستخدم InputConfig البلوتوث (Bluetooth) فقط لفصل ذراع تحكم لاسلكي عندما تطلب ذلك.";
+"NSBluetoothPeripheralUsageDescription" = "يستخدم InputConfig البلوتوث لقراءة وحدات تحكم Switch 2، ولتوصيل وحدات التحكم اللاسلكية وفصلها، عندما تطلب ذلك أو تفعّله في الإعدادات.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. جميع الحقوق محفوظة.";

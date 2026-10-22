@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig использует Bluetooth только для отключения беспроводного контроллера по вашей просьбе.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig использует Bluetooth для чтения контроллеров Switch 2, а также для подключения и отключения беспроводных контроллеров по вашей просьбе или если это включено в Настройках.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig использует Bluetooth только для отключения беспроводного контроллера по вашей просьбе.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig использует Bluetooth для чтения контроллеров Switch 2, а также для подключения и отключения беспроводных контроллеров по вашей просьбе или если это включено в Настройках.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "© 2026 Ryleigh Newman. Все права защищены.";

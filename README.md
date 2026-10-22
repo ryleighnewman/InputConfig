@@ -9,7 +9,7 @@ replace a keyboard entirely if using one is difficult. It works in every app, no
 only games.
 
 Works with PS5 DualSense and DualSense Edge, PS4 DualShock 4, Xbox Wireless, Series
-and Elite, Switch Pro and Joy-Con, 8BitDo Pro 2 and Ultimate 2C, the PlayStation Access Controller, the
+and Elite, Switch Pro, Switch 2 and Joy-Con, 8BitDo Pro 2 and Ultimate 2C, the PlayStation Access Controller, the
 Xbox Adaptive Controller, MIDI keyboards and pad controllers, and any HID-compatible
 gamepad. No drivers, no subscription, no account.
 
@@ -30,20 +30,20 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.7
+## What's new in 1.8
 
-- InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese
-- The Live Visualizer's keyboard takes the shape of your keyboard, ANSI, ISO or JIS, and labels every key with what it types in your input source, so AZERTY, QWERTZ, Dvorak, Cyrillic, Arabic and every other layout macOS has show as printed; key names in the editor and the Live Visualizer follow your keyboard layout too; rows still store each key by its place, so presets work the same on every layout
-- Stick regions are rings: an area between two distances from the center and two directions, so pushing a stick past half way up is one button and all the way up another
-- Triggers and single axes take bands, a range of their travel such as the last third of a trigger pull, each one a button
-- Stick gestures: flicks of a stick in order, such as pulling it straight back twice, fire a row; pick the flicks or record them by doing them; with Quick flicks only on, a push held out never counts
-- Each device group in the editor ends with a Regions card listing that device's touchpad, trackpads, sticks, triggers and screen, where regions are drawn, moved and resized, right-clicked to rename, duplicate or delete, and each part's rows are a click away; every Edit regions button opens it there
-- Set Up Full Gyro, on any motion row, adds the rows for gyro aiming, tilting to move with the arrow keys, or shakes and jabs, and skips rows the group already has
-- New app actions turn motion on and off with one press, or let the motion rows work only while a button is held, from any input, a key or a foot pedal included
-- Starting a preset by hand that keeps the pointer off the screen edges, recenters or hides it, or takes over mouse buttons first says so and lists every way to stop it, from your own Emergency Stop settings; check Don't show this again to skip it for that preset
-- Game presets no longer pull the pointer to the middle of the screen or hide it, so inventories and menus work with the stick again; the games lock and hide the mouse themselves while you play. The built-in Minecraft preset and game presets from the Smart Preset Maker are updated
-- Long dropdowns in the editor, and the Live Visualizer's controller menu, start with Search: type to find any choice in them, nested ones too, then pick it with the arrow keys and Return
-- The sidebar can be searched and sorted by name, or by when presets were edited or made; a new library starts A to Z and an existing one keeps its own order
+- Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth
+- Access profiles: a Profile chip in the Live Visualizer lists the three stored profiles over USB-C, switches them, and edits one beside the drawing with the PS5's own settings
+- Controller Profile, a new output: a row switches an Access controller to the next, previous, or a numbered profile
+- DualSense Edge: its four stored profiles are read over USB-C and listed with what each one remaps
+- Trigger feel: click L2 or R2 in the Live Visualizer of a DualSense or DualSense Edge for light, medium or firm resistance
+- Switch 2 controllers over Bluetooth: with the new Devices setting on, a paired Switch 2 Pro, GameCube or Joy-Con 2 controller is read wirelessly; Joy-Con 2 are read over USB in the grip too
+- Switch 2 Pro and GameCube controllers read their stick and trigger calibration and their motion sensors from the controller
+- Xbox pads over Bluetooth: Share works on every firmware, Elite Series 2 paddles and profiles are read, and the Devices menu names the pads macOS does not read over USB
+- Pen tablets: pressure, tilt, pen buttons, eraser and in range are inputs of their own
+- Contour ShuttlePRO and 3Dconnexion SpaceMouse are read, jog, shuttle and all six axes included
+- Triple tap: a row can do something else on three quick taps, beside its hold and double tap actions
+- Wireless controllers: optionally disconnect a controller after it sits unused for 5 to 60 minutes, and try to reconnect paired controllers when the app opens, the Mac wakes or a preset starts
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
@@ -226,14 +226,15 @@ tools. Check for yourself before you switch.
 
 ## Supported controllers
 
-- PlayStation Access Controller (and other adaptive hardware)
-- PlayStation DualSense (PS5) and DualSense Edge, including the Edge's paddles and extra buttons
+- PlayStation Access Controller, with its sockets, expansion ports and stored profiles (and other adaptive hardware)
+- PlayStation DualSense (PS5) and DualSense Edge, including the Edge's paddles, extra buttons and stored profiles
 - PlayStation DualShock 4 (PS4)
 - Xbox Wireless Controller (One, Series X|S), Xbox Elite Series 2, and the Xbox Adaptive Controller
-- Nintendo Switch Pro Controller and Joy-Cons
+- Nintendo Switch Pro Controller and Joy-Cons, and the Switch 2 Pro, Joy-Con 2 and GameCube controllers
 - 8BitDo Pro 2, SN30 Pro+, SN30 Pro, and Ultimate 2C
-- Steam Controller (2015 and 2026), Stadia Controller, and the Logitech G29, G920 and G923 wheels
-- Any MFi or HID-compatible gamepad
+- Steam Controller (2015 and 2026), Stadia Controller, the Logitech G29, G920 and G923 wheels, and Thrustmaster wheels
+- Any MFi or HID-compatible gamepad, GP2040-CE boards and fight sticks included
+- Pen tablets, the Contour ShuttlePRO and the 3Dconnexion SpaceMouse
 - MIDI keyboards, pad controllers, knob boxes, and control surfaces
 - Stream Deck keys, and the Stream Deck + dials and touch strip
 - Your Mac keyboard, mouse, and trackpad
@@ -255,7 +256,8 @@ and MIDI: Media Deck presets are ready to remap.
 
 **Can I map the DualSense Edge back paddles and FN buttons?**
 Yes. The Edge's back paddles, both FN buttons, and the mute button are bindable like
-any other input, over both USB and Bluetooth.
+any other input, over both USB and Bluetooth. Over USB-C the app also reads its four stored
+profiles and lists what each one remaps.
 
 **Can a button run a Siri Shortcut or change the volume?**
 Yes. System Functions are outputs like any other: volume, mute, media keys,

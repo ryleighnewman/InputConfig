@@ -269,12 +269,8 @@ func sendSCFeature(_ device: IOHIDDevice, _ cmd: [UInt8], label: String) -> IORe
 ///        SETTING_RIGHT_TRACKPAD_MODE (8) = TRACKPAD_NONE (7)
 /// Values are UInt16 LE, so each setting is reg, lo, hi.
 func sendDisableLizardMode(_ device: IOHIDDevice) {
-    sendSCFeature(device, [0x81], label: "clear digital mappings")
-    sendSCFeature(device, [0x87, 0x09,
-                           0x07, 0x07, 0x00,
-                           0x08, 0x07, 0x00,
-                           0x30, 0x18, 0x00],
-                  label: "disable trackpad mouse")
+    sendSCFeature(device, SteamController2015Commands.clearDigitalMappings, label: "clear digital mappings")
+    sendSCFeature(device, SteamController2015Commands.disableTrackpadMouse, label: "disable trackpad mouse")
 }
 
 /// Ask for the raw gyroscope and accelerometer in every input report, as
@@ -283,14 +279,14 @@ func sendDisableLizardMode(_ device: IOHIDDevice) {
 /// stay zero. Loading the default settings turns it off again, so it is sent
 /// after that too.
 func sendEnableIMU(_ device: IOHIDDevice) {
-    sendSCFeature(device, [0x87, 0x03, 0x30, 0x18, 0x00], label: "raw gyro and accelerometer")
+    sendSCFeature(device, SteamController2015Commands.enableIMU, label: "raw gyro and accelerometer")
 }
 
 /// Turn lizard mode back on, with Valve's commands as SDL sends them:
 ///   0x85 ID_SET_DEFAULT_DIGITAL_MAPPINGS, 0x8E ID_LOAD_DEFAULT_SETTINGS.
 func sendEnableLizardMode(_ device: IOHIDDevice) {
-    sendSCFeature(device, [0x85], label: "default digital mappings")
-    sendSCFeature(device, [0x8E], label: "default settings")
+    sendSCFeature(device, SteamController2015Commands.defaultDigitalMappings, label: "default digital mappings")
+    sendSCFeature(device, SteamController2015Commands.defaultSettings, label: "default settings")
     sendEnableIMU(device)
 }
 
@@ -370,7 +366,7 @@ func openSteamController(_ device: IOHIDDevice) {
     sendEnableIMU(device)
     // A dongle whose controller was already on says so only when asked
     // (Valve's ID_DONGLE_GET_WIRELESS_STATE), with a 0x03 event.
-    if pid == scDonglePID { sendSCFeature(device, [0xB4], label: "wireless state") }
+    if pid == scDonglePID { sendSCFeature(device, SteamController2015Commands.wirelessState, label: "wireless state") }
 
     let kind = pid == scWiredPID ? "wired" : "dongle"
     log("[SteamControllerHelper] opened Steam Controller (\(kind), pid=\(String(format: "%04x", pid)))")

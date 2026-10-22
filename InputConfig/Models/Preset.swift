@@ -182,6 +182,10 @@ struct BindingModel: Identifiable, Codable, Hashable {
     // outputs; a single tap fires `outputs` once the window lapses.
     var doubleTapOutputs: [OutputAction]?
     var doubleTapWindowMs: Int?
+    // Triple-tap: three presses, each inside doubleTapWindowMs of the one
+    // before, fire these; two fire doubleTapOutputs (or the single action
+    // twice when there is none) once the window lapses after the second.
+    var tripleTapOutputs: [OutputAction]?
 
     /// Stick gesture rows: how far out a flick has to go (0.5 to 1, default
     /// 0.8), the most time between one flick and the next (default 600 ms),
@@ -287,6 +291,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
          holdThresholdMs: Int? = nil,
          doubleTapOutputs: [OutputAction]? = nil,
          doubleTapWindowMs: Int? = nil,
+         tripleTapOutputs: [OutputAction]? = nil,
          modifierInput: InputEvent? = nil,
          extraModifierInputs: [InputEvent]? = nil,
          note: String? = nil,
@@ -320,6 +325,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.holdThresholdMs = holdThresholdMs
         self.doubleTapOutputs = doubleTapOutputs
         self.doubleTapWindowMs = doubleTapWindowMs
+        self.tripleTapOutputs = tripleTapOutputs
         self.modifierInput = modifierInput
         self.extraModifierInputs = extraModifierInputs
         self.note = note
@@ -622,7 +628,7 @@ extension JoystickMapping {
             return .object(o)
         }
         if dict["id"] == nil { dict["id"] = .string(UUID().uuidString); changed = true }
-        for key in ["outputs", "holdOutputs", "doubleTapOutputs", "macroSteps"] {
+        for key in ["outputs", "holdOutputs", "doubleTapOutputs", "tripleTapOutputs", "macroSteps"] {
             if case .array(let list)? = dict[key] { dict[key] = .array(list.map(withID)) }
         }
         return changed ? .object(dict) : nil
@@ -1097,6 +1103,11 @@ struct Preset: Identifiable, Codable, Hashable {
     var lightBarRainbowSpeed: Double?
     /// The speed slider's range, which a file's value is held to.
     static let lightBarRainbowSpeedRange: ClosedRange<Double> = 0.25...6.0
+    /// The DualSense's adaptive triggers while the preset runs, L2 and R2
+    /// each: nil or 0 leaves one alone, 1 light, 2 medium, 3 firm
+    /// resistance across the pull.
+    var triggerFeelLeft: Int?
+    var triggerFeelRight: Int?
 
     /// Per-preset automation: cursor confine + recenter, hide cursor,
     /// auto-open an application on activate. Lives on the preset (not
@@ -1155,6 +1166,7 @@ struct Preset: Identifiable, Codable, Hashable {
         case buttonFamily
         case familyBeforeModel
         case lightBarRainbow, lightBarRainbowSpeed
+        case triggerResistance, triggerFeelLeft, triggerFeelRight
     }
 
     /// The on-disk format this file was written in. Absent means 1. Read
@@ -1247,6 +1259,11 @@ struct Preset: Identifiable, Codable, Hashable {
         self.lightBarBrightness = (try? c.decodeIfPresent(Int.self, forKey: .lightBarBrightness)) ?? nil
         self.lightBarRainbow = (try? c.decodeIfPresent(Bool.self, forKey: .lightBarRainbow)) ?? nil
         self.lightBarRainbowSpeed = (try? c.decodeIfPresent(Double.self, forKey: .lightBarRainbowSpeed)) ?? nil
+        // triggerResistance was one value for both triggers for a few days
+        // of 1.8 development; it reads into both.
+        let both = (try? c.decodeIfPresent(Int.self, forKey: .triggerResistance)) ?? nil
+        self.triggerFeelLeft = ((try? c.decodeIfPresent(Int.self, forKey: .triggerFeelLeft)) ?? nil) ?? both
+        self.triggerFeelRight = ((try? c.decodeIfPresent(Int.self, forKey: .triggerFeelRight)) ?? nil) ?? both
         self.automation = ((try? c.decodeIfPresent(PresetAutomation.self, forKey: .automation)) ?? nil)
             ?? PresetAutomation()
         self.driveConfig = (try? c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)) ?? nil
@@ -1328,6 +1345,8 @@ struct Preset: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(lightBarBrightness, forKey: .lightBarBrightness)
         try c.encodeIfPresent(lightBarRainbow, forKey: .lightBarRainbow)
         try c.encodeIfPresent(lightBarRainbowSpeed, forKey: .lightBarRainbowSpeed)
+        try c.encodeIfPresent(triggerFeelLeft, forKey: .triggerFeelLeft)
+        try c.encodeIfPresent(triggerFeelRight, forKey: .triggerFeelRight)
         try c.encode(automation, forKey: .automation)
         try c.encodeIfPresent(driveConfig, forKey: .driveConfig)
         try c.encodeIfPresent(sortOrder, forKey: .sortOrder)
@@ -1618,6 +1637,7 @@ extension Preset {
                 out += row.outputs
                 out += row.holdOutputs ?? []
                 out += row.doubleTapOutputs ?? []
+                out += row.tripleTapOutputs ?? []
                 for step in row.macroSteps ?? [] { out.append(step.action) }
             }
         }
@@ -1670,7 +1690,8 @@ extension Preset {
         joysticks.contains { g in
             g.bindings.contains { r in
                 SpotlightChord.inOutputs(r.outputs, spotlightKey: k) || SpotlightChord.inOutputs(r.holdOutputs ?? [], spotlightKey: k)
-                    || SpotlightChord.inOutputs(r.doubleTapOutputs ?? [], spotlightKey: k) || SpotlightChord.inMacro(r.macroSteps ?? [], spotlightKey: k)
+                    || SpotlightChord.inOutputs(r.doubleTapOutputs ?? [], spotlightKey: k) || SpotlightChord.inOutputs(r.tripleTapOutputs ?? [], spotlightKey: k)
+                    || SpotlightChord.inMacro(r.macroSteps ?? [], spotlightKey: k)
             }
         }
     }
@@ -1743,6 +1764,7 @@ extension Preset {
                 row.outputs = row.outputs.map(capped)
                 row.holdOutputs = row.holdOutputs?.map(capped)
                 row.doubleTapOutputs = row.doubleTapOutputs?.map(capped)
+                row.tripleTapOutputs = row.tripleTapOutputs?.map(capped)
                 row.macroSteps = row.macroSteps?.map { var s = $0; s.action = capped(s.action); return s }
                 p.joysticks[g].bindings[r] = row
             }
@@ -1796,6 +1818,7 @@ extension Preset {
                     row.outputs = noSpotlight(row.outputs.filter { !$0.opensSomething })
                     row.holdOutputs = row.holdOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
                     row.doubleTapOutputs = row.doubleTapOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
+                    row.tripleTapOutputs = row.tripleTapOutputs.map { noSpotlight($0.filter { !$0.opensSomething }) }
                     // A macro that opens Spotlight and types goes whole,
                     // checked before its Spotlight key step is taken out.
                     if let steps = row.macroSteps, SpotlightChord.inMacro(steps) { row.macroSteps = nil }
@@ -2198,6 +2221,7 @@ extension Preset {
             b.outputs = b.outputs.map { $0.clampedValues() }
             b.holdOutputs = b.holdOutputs?.map { $0.clampedValues() }
             b.doubleTapOutputs = b.doubleTapOutputs?.map { $0.clampedValues() }
+            b.tripleTapOutputs = b.tripleTapOutputs?.map { $0.clampedValues() }
             b.macroSteps = b.macroSteps?.map { step in
                 var s = step
                 s.action = s.action.clampedValues()

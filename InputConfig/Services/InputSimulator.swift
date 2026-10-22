@@ -1641,6 +1641,30 @@ final class EmergencyStopService: @unchecked Sendable {
             ? String(localized: " (socket 7 alone on an Access Controller, Minus or Plus alone on a single Joy-Con, Start alone on a controller with no Back button)") : ""
     }
 
+    /// The same note cut to the controllers connected now, for the menu bar,
+    /// where all three cases at once ran to four lines. Empty when none of
+    /// those controllers is connected.
+    @MainActor func connectedHoldNote(service: GameControllerService?) -> String {
+        guard cachedButton == Self.defaultControllerButton, let service else { return "" }
+        let noBack: Set<ControllerModelID> = [.gameCubeAdapter, .gameCubeSwitch2, .nsoN64, .nsoGenesis]
+        var notes: [String] = []
+        for slot in service.controllerDetails.keys.sorted() {
+            let layout = ControllerLayoutResolver.cachedMatch(service: service, slot: slot)?.id
+            let note: String?
+            if layout == .psAccess {
+                note = String(localized: "socket 7 alone on the Access Controller")
+            } else if layout == .joyConLeft || layout == .joyConRight {
+                note = String(localized: "Minus or Plus alone on the Joy-Con")
+            } else if let model = ControllerLayoutResolver.cachedMatchIncludingHidden(service: service, slot: slot), noBack.contains(model) {
+                note = String(localized: "Start alone on a controller with no Back button")
+            } else {
+                note = nil
+            }
+            if let note, !notes.contains(note) { notes.append(note) }
+        }
+        return notes.isEmpty ? "" : " (" + LocalizedList.or(notes) + ")"
+    }
+
     /// VoiceOver keeps Control Option chords for itself; Control Option
     /// Tab passes the next keystroke through to the app.
     var voiceOverChordNote: String {
@@ -2657,12 +2681,157 @@ enum HIDWrite {
     static func setReport(_ device: IOHIDDevice, _ type: IOHIDReportType, _ id: CFIndex,
                           _ report: UnsafePointer<UInt8>, _ length: CFIndex) -> IOReturn {
         #if DEBUG
-        // Silent: a test that reads the capture log counts only its own effects.
-        if TestCapture.blocksDevices { return kIOReturnSuccess }
-        #endif
+        if blocked {
+            // Recorded, not sent: the bench and a replay read the ring instead.
+            let bytes = Array(UnsafeBufferPointer(start: report, count: max(0, Int(length))))
+            record(device, type, id, bytes)
+            HIDCapture.traffic(device, "set", type, id, bytes, kIOReturnSuccess)
+            return kIOReturnSuccess
+        }
+        let kr = IOHIDDeviceSetReport(device, type, id, report, length)
+        if HIDCapture.target != nil {
+            HIDCapture.traffic(device, "set", type, id, Array(UnsafeBufferPointer(start: report, count: max(0, Int(length)))), kr)
+        }
+        return kr
+        #else
         return IOHIDDeviceSetReport(device, type, id, report, length)
+        #endif
+    }
+
+    #if DEBUG
+    typealias Record = (deviceDescription: String, type: UInt32, id: Int, bytes: [UInt8])
+    static let ringCapacity = 256
+    private static let recordLock = NSLock()
+    nonisolated(unsafe) private static var ring: [Record] = []
+
+    /// A test run or a replay session: nothing reaches a device.
+    static var blocked: Bool { TestCapture.blocksDevices || RawHIDGamepadService.debugReplayActive }
+
+    /// The last 256 reports that were swallowed, oldest first. A read that
+    /// was swallowed is recorded too, with "get " before the description.
+    static var recorded: [Record] {
+        recordLock.lock(); defer { recordLock.unlock() }
+        return ring
+    }
+
+    static func clearRecorded() {
+        recordLock.lock(); ring.removeAll(); recordLock.unlock()
+    }
+
+    static func record(_ device: IOHIDDevice, _ type: IOHIDReportType, _ id: CFIndex, _ bytes: [UInt8],
+                       prefix: String = "") {
+        let entry: Record = (prefix + describe(device), type.rawValue, Int(id), bytes)
+        recordLock.lock()
+        ring.append(entry)
+        if ring.count > ringCapacity { ring.removeFirst(ring.count - ringCapacity) }
+        recordLock.unlock()
+    }
+
+    static func property(_ device: IOHIDDevice, _ key: String) -> Int32? {
+        (IOHIDDeviceGetProperty(device, key as CFString) as? NSNumber)?.int32Value
+    }
+
+    static func describe(_ device: IOHIDDevice) -> String {
+        let name = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? "?"
+        let vid = property(device, kIOHIDVendorIDKey) ?? 0
+        let pid = property(device, kIOHIDProductIDKey) ?? 0
+        return String(format: "%04x:%04x %@", vid, pid, name)
+    }
+    #endif
+}
+
+/// The read twin of `HIDWrite`: every feature or input GetReport goes
+/// through here so a replay or a test never asks a real device anything.
+enum HIDRead {
+    @discardableResult
+    static func getReport(_ device: IOHIDDevice, _ type: IOHIDReportType, _ id: CFIndex,
+                          _ buffer: UnsafeMutablePointer<UInt8>, _ length: inout CFIndex) -> IOReturn {
+        #if DEBUG
+        if HIDWrite.blocked {
+            HIDWrite.record(device, type, id, [], prefix: "get ")
+            HIDCapture.traffic(device, "get", type, id, [], kIOReturnNotResponding)
+            return kIOReturnNotResponding
+        }
+        let kr = IOHIDDeviceGetReport(device, type, id, buffer, &length)
+        let got = kr == kIOReturnSuccess ? Array(UnsafeBufferPointer(start: buffer, count: max(0, Int(length)))) : []
+        HIDCapture.traffic(device, "get", type, id, got, kr)
+        return kr
+        #else
+        return IOHIDDeviceGetReport(device, type, id, buffer, &length)
+        #endif
     }
 }
+
+#if DEBUG
+/// `post inputconfig.debug.hidcapture "<vid:pid|all> [seconds]"`: while a
+/// target is set, HIDWrite and HIDRead append their traffic to the
+/// container's tmp/hidcapture.txt as "<t_ms> <set|get> <type> <id> <hex> <kr>"
+/// lines; the raw service and the device readers append input reports the
+/// same way through `log`. Never compiled into Release.
+enum HIDCapture {
+    typealias Target = (vendorID: Int32?, productID: Int32?, until: Date)
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _target: Target?
+    nonisolated(unsafe) private static var startedAt = Date()
+    static var url: URL { URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("hidcapture.txt") }
+
+    static var target: Target? {
+        get { lock.lock(); defer { lock.unlock() }; return _target }
+        set { lock.lock(); _target = newValue; startedAt = Date(); lock.unlock() }
+    }
+
+    /// Milliseconds since the target was set, for the line prefix.
+    static var elapsedMs: Int {
+        lock.lock(); defer { lock.unlock() }
+        return Int(Date().timeIntervalSince(startedAt) * 1000)
+    }
+
+    /// True while the target covers this device and has not expired.
+    static func matches(vendorID: Int32?, productID: Int32?) -> Bool {
+        guard let t = target else { return false }
+        if Date() > t.until { return false }
+        if let v = t.vendorID, v != vendorID { return false }
+        if let p = t.productID, p != productID { return false }
+        return true
+    }
+
+    static func hex(_ bytes: [UInt8]) -> String {
+        bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Appends one line (a newline is added) to tmp/hidcapture.txt.
+    static func log(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    /// Starts a capture: truncates the file, writes the header, sets the target.
+    static func start(vendorID: Int32?, productID: Int32?, seconds: Double) {
+        let until = Date().addingTimeInterval(seconds)
+        target = (vendorID, productID, until)
+        lock.lock(); try? Data().write(to: url); lock.unlock()
+        let who = vendorID.map { String(format: "%04x:%04x", $0, productID ?? 0) } ?? "all"
+        log("# hidcapture target=\(who) seconds=\(Int(seconds)) started=\(ISO8601DateFormatter().string(from: Date()))")
+        log("# line: <t_ms> <set|get|in> <type> <id hex> <bytes hex> [kr]")
+    }
+
+    static func traffic(_ device: IOHIDDevice, _ kind: String, _ type: IOHIDReportType, _ id: CFIndex,
+                        _ bytes: [UInt8], _ kr: IOReturn) {
+        guard target != nil else { return }
+        let vid = HIDWrite.property(device, kIOHIDVendorIDKey)
+        let pid = HIDWrite.property(device, kIOHIDProductIDKey)
+        guard matches(vendorID: vid, productID: pid) else { return }
+        log(String(format: "%ld %@ %u %02lx %@ kr=%08x", elapsedMs, kind, type.rawValue, Int(id), hex(bytes), UInt32(bitPattern: kr)))
+    }
+}
+#endif
 
 #if DEBUG
 /// Tests only: while `active`, every output that would reach the Mac outside

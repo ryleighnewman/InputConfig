@@ -47,7 +47,7 @@ extension ControllerLayout {
         // DualSense, and a raw read without the name falls back to the
         // DualShock 4 brand.
         matchPriority: 20,
-        readability: .partial("Reads the DualSense functions the active profile sends, not which socket, port or stick sent them. The Profile button never reaches the Mac"),
+        readability: .partial("Every socket and button, the stick and the expansion ports are read on their own, whatever the active profile maps them to; over USB the controller's stored profiles are read too, so each control also carries the function its profile gives it"),
         approximate: true,
         sources: [
             "playstation.com support: How to connect an Access controller (base profile: Options socket 7, Circle socket 5, Cross center button, left stick; sockets numbered counterclockwise from the one nearest the stick)",
@@ -96,67 +96,56 @@ extension ControllerLayout {
         .close,
     ]
 
-    static let psAccessSocketNote = "The controller reports the function, not the socket; it lights when its assigned function fires."
+    static let psAccessSocketNote = "Read on its own, by its number, whatever the profile maps it to; it also lights when its assigned function fires."
 
     static let psAccessControls: [PlacedControl] = [
         // Stick dome, left. The stick has no click: L3 and R3 are functions
         // a socket or port can be given.
         PlacedControl(id: "stick", kind: .stick, center: CGPoint(x: 0.1414, y: 0.5), size: 0.17,
-                      inputs: .stick(x: 0, y: 1, press: nil),
-                      readable: .conditional("The left stick in the base profile; a profile can make it the right stick (axi 2 and 3)"),
-                      note: "Takes the swappable stick caps; no click", callout: .above),
+                      inputs: .stick(x: 0, y: 1, press: 49),
+                      readable: .conditional("The left stick in the base profile; a profile can make it the right stick (axi 2 and 3); its press is read on its own"),
+                      note: "Takes the swappable stick caps; pressing it is read on its own", callout: .above),
         // PS logo button on the dome's left wall.
         PlacedControl(id: "ps", kind: .homeButton, center: CGPoint(x: 0.0245, y: 0.5), size: 0.042,
-                      inputs: .button(10),
-                      readable: .notReported("macOS keeps the Access controller's PS button; it never reaches an app"),
+                      inputs: ControlInputs(buttons: [10, 50]),
                       callout: .below, name: "PS button"),
         // PROFILE on the dome's front right wall, the profile dots beside it.
         PlacedControl(id: "profile", kind: .menuButton, center: CGPoint(x: 0.236, y: 0.645), size: 0.052, height: 0.024,
-                      shape: .capsule(angleDegrees: -40), printed: "P",
-                      readable: .notReported("The controller switches among its three profiles itself; the press never reaches the Mac"),
-                      note: "Profile button; the dots beside it show the active profile", callout: .below, name: "Profile button"),
+                      shape: .capsule(angleDegrees: -40), printed: "P", inputs: .button(51),
+                      note: "Profile button, read on its own; the dots beside it show the active profile", callout: .below, name: "Profile button"),
 
         // Round body: the center button inside the light ring.
         PlacedControl(id: "center", kind: .faceButton, center: CGPoint(x: 0.6309, y: 0.5), size: 0.33,
-                      symbol: "xmark", inputs: .button(0),
-                      readable: .conditional("Cross in the base profile; another profile can give it any function"),
-                      note: "Center button. The controller reports the function, not the button; it lights when its assigned function fires. Takes no caps",
+                      symbol: "xmark", inputs: ControlInputs(buttons: [48, 0]),
+                      note: "Center button, read on its own; Cross in the base profile. Takes no caps",
                       callout: .below, name: "Center button"),
 
         // The eight sockets, numbered counterclockwise from the one nearest
         // the stick (the numbers are printed on the ring beside each). Each
         // is drawn as its cap lying along the ring.
         PlacedControl(id: "socket1", kind: .faceButton, center: CGPoint(x: 0.3429, y: 0.5), size: 0.126, height: 0.188,
-                      shape: .capsule(angleDegrees: 0), printed: "1",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 1 empty"),
+                      shape: .capsule(angleDegrees: 0), printed: "1", inputs: .button(40),
                       note: psAccessSocketNote, callout: .below, name: "Socket 1"),
         PlacedControl(id: "socket2", kind: .faceButton, center: CGPoint(x: 0.4273, y: 0.7758), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: 45), printed: "2",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 2 empty"),
+                      shape: .capsule(angleDegrees: 45), printed: "2", inputs: .button(41),
                       note: psAccessSocketNote, callout: .below, name: "Socket 2"),
         PlacedControl(id: "socket3", kind: .faceButton, center: CGPoint(x: 0.6309, y: 0.8901), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: 0), printed: "3",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 3 empty"),
+                      shape: .capsule(angleDegrees: 0), printed: "3", inputs: .button(42),
                       note: psAccessSocketNote, callout: .below, name: "Socket 3"),
         PlacedControl(id: "socket4", kind: .faceButton, center: CGPoint(x: 0.8345, y: 0.7758), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: -45), printed: "4",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 4 empty"),
+                      shape: .capsule(angleDegrees: -45), printed: "4", inputs: .button(43),
                       note: psAccessSocketNote, callout: .below, name: "Socket 4"),
         PlacedControl(id: "socket5", kind: .faceButton, center: CGPoint(x: 0.9188, y: 0.5), size: 0.126, height: 0.188,
-                      shape: .capsule(angleDegrees: 0), symbol: "circle", inputs: .button(1),
-                      readable: .conditional("Circle in the base profile; another profile can give socket 5 any function"),
+                      shape: .capsule(angleDegrees: 0), symbol: "circle", inputs: ControlInputs(buttons: [44, 1]),
                       note: psAccessSocketNote, callout: .below, name: "Socket 5"),
         PlacedControl(id: "socket6", kind: .faceButton, center: CGPoint(x: 0.8345, y: 0.2242), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: 45), printed: "6",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 6 empty"),
+                      shape: .capsule(angleDegrees: 45), printed: "6", inputs: .button(45),
                       note: psAccessSocketNote, callout: .above, name: "Socket 6"),
         PlacedControl(id: "socket7", kind: .faceButton, center: CGPoint(x: 0.6309, y: 0.1099), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: 0), symbol: "line.3.horizontal", inputs: .button(9),
-                      readable: .conditional("Options in the base profile; another profile can give socket 7 any function"),
+                      shape: .capsule(angleDegrees: 0), symbol: "line.3.horizontal", inputs: ControlInputs(buttons: [46, 9]),
                       note: psAccessSocketNote, callout: .above, name: "Socket 7"),
         PlacedControl(id: "socket8", kind: .faceButton, center: CGPoint(x: 0.4273, y: 0.2242), size: 0.188, height: 0.126,
-                      shape: .capsule(angleDegrees: -45), printed: "8",
-                      readable: .conditional("Assigned on the controller: the base profile leaves socket 8 empty"),
+                      shape: .capsule(angleDegrees: -45), printed: "8", inputs: .button(47),
                       note: psAccessSocketNote, callout: .above, name: "Socket 8"),
 
         // Top strip: the port side opposite the stick, head on. E1 is
@@ -185,6 +174,80 @@ extension ControllerLayout {
                       readable: .conditional("Assigned on the controller: a 3.5 mm button, trigger or stick device sends the function its profile gives this port"),
                       note: "Expansion port E4. The controller reports the function, not the port"),
     ]
+
+    /// The Access controller with what is plugged into each expansion port
+    /// drawn in the port's place on the strip: a stick as a stick reading
+    /// the port's own axes, a trigger or pedal as a trigger, a switch as a
+    /// button. An empty port keeps its plain mark.
+    static func psAccess(ports: [Int: AccessControllerPortService.PortDevice],
+                         profile: AccessControllerPortService.Profile? = nil) -> ControllerLayout {
+        guard !ports.isEmpty || profile != nil else { return psAccess }
+        typealias Service = AccessControllerPortService
+        var layout = psAccess
+        layout.controls = layout.controls.map { c in
+            var out = c
+            // A socket or the center button: its own bit, plus the function
+            // the active profile gives it, so a row on either lights it.
+            if let profile {
+                let slot: Int? = c.id.hasPrefix("socket") ? Int(c.id.dropFirst(6)) : (c.id == "center" ? 9 : nil)
+                if let slot {
+                    let code = profile.buttonActions[slot]
+                    let mapped = code.flatMap(Service.Profile.buttonIndex(ofAction:))
+                    out.inputs = ControlInputs(buttons: [Service.buttonBase + slot - 1] + (mapped.map { [$0] } ?? []))
+                    // The cap shows the function the profile gives the socket,
+                    // the way the controller's own caps are printed; a socket
+                    // with nothing keeps its number.
+                    if c.id != "center" {
+                        let glyph: [Int: String] = [1: "circle", 2: "xmark", 3: "triangle", 4: "square",
+                                                    5: "arrowtriangle.up.fill", 6: "arrowtriangle.down.fill",
+                                                    7: "arrowtriangle.left.fill", 8: "arrowtriangle.right.fill",
+                                                    15: "line.3.horizontal", 17: "playstation.logo", 18: "hand.tap"]
+                        let word: [Int: String] = [9: "L1", 10: "R1", 11: "L2", 12: "R2", 13: "L3", 14: "R3", 16: "Create"]
+                        if let code, let sym = glyph[code] {
+                            out.symbol = sym; out.printed = nil
+                        } else if let code, let text = word[code] {
+                            out.symbol = nil; out.printed = text
+                        } else {
+                            out.symbol = nil; out.printed = String(slot)
+                        }
+                    }
+                }
+            }
+            guard c.face == .top, c.id.count == 2, c.id.hasPrefix("e"),
+                  let port = Int(c.id.dropFirst()), let device = ports[port] else { return out }
+            let x = 8 + (port - 1) * 2
+            out.readable = .read
+            out.printed = "E\(port)"
+            switch device {
+            case .stick:
+                out.kind = .stick
+                out.size = 0.085; out.height = nil; out.shape = .circle
+                out.inputs = .stick(x: x, y: x + 1, press: nil)
+                out.name = "E\(port) stick"
+                out.note = "A stick plugged into expansion port E\(port), read as its own stick"
+            case .trigger:
+                out.kind = .trigger(.analog)
+                out.size = 0.045; out.height = 0.08; out.shape = .roundedRect(corner: 0.3)
+                out.inputs = .trigger(axis: x, digital: nil)
+                out.name = "E\(port) trigger"
+                out.note = "A trigger or pedal plugged into expansion port E\(port), read as its own axis"
+            case .button:
+                out.kind = .faceButton
+                out.size = 0.055; out.height = nil; out.shape = .circle
+                let mapped = profile?.portActions[port].flatMap(Service.Profile.buttonIndex(ofAction:))
+                out.inputs = ControlInputs(buttons: [Service.portButtonBase + port - 1] + (mapped.map { [$0] } ?? []))
+                out.name = "E\(port) button"
+                out.note = "A switch or button plugged into expansion port E\(port), read as its own button"
+            case .invalidPlug:
+                out.readable = .notReported("The controller does not recognize what is plugged into E\(port). Reseat the plug, or check that it is a 3.5 mm accessory made for the Access controller.")
+                out.printed = "E\(port)!"
+                out.name = "E\(port) plug"
+                out.note = "Something is plugged into E\(port) that the controller does not recognize"
+            }
+            return out
+        }
+        return layout
+    }
 
     /// The DualSense functions a profile can put on any socket, the center
     /// button, the stick or an expansion port. They have no fixed place.

@@ -63,6 +63,36 @@
       "productID" : "com.inputconfig.app.tip.generous",
       "referenceName" : "Generous Tip",
       "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "24.99",
+      "familyShareable" : false,
+      "internalID" : "3206CCD1-B583-4B02-8E1A-5724B634A3D0",
+      "localizations" : [
+        {
+          "description" : "A huge tip. Thank you so much!",
+          "displayName" : "Huge Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.huge",
+      "referenceName" : "Huge Tip",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "99.99",
+      "familyShareable" : false,
+      "internalID" : "DFB56671-4762-4684-8559-4548867CBA0A",
+      "localizations" : [
+        {
+          "description" : "A patron-sized tip. You keep InputConfig going. Thank you!",
+          "displayName" : "Patron Tip",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.inputconfig.app.tip.patron",
+      "referenceName" : "Patron Tip",
+      "type" : "Consumable"
     }
   ],
   "settings" : {

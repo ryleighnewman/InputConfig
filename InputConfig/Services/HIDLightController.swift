@@ -402,10 +402,62 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// (writeLocked is serial), so reuse is race-free. Every write rewrites
     /// the same byte positions, and the zero padding between fields is never
     /// touched, so a reused buffer stays byte-identical to a fresh one.
-    private var bufDualSenseUSB = [UInt8](repeating: 0, count: 48)
-    private var bufDualSenseBT = [UInt8](repeating: 0, count: 78)
-    private var bufDS4USB = [UInt8](repeating: 0, count: 32)
-    private var bufDS4BT = [UInt8](repeating: 0, count: 78)
+    /// The DualSense output report, USB 0x02 (48 bytes) or Bluetooth 0x31
+    /// (78 bytes: [1] sequence << 4, [2] 0x10, the USB payload from [3],
+    /// CRC seed 0xA2 at 74), exactly as writeLocked sends it: flag0 claims
+    /// the motors (0x03 with haptics select, 0x02 without), flag1 0x04 the
+    /// light bar, flag2 0x02 the light setup on the first write and 0x04 the
+    /// improved rumble path; brightness at 43 (USB), RGB at 45 to 47.
+    static func dualSenseLightReport(bluetooth: Bool, sequence: UInt8, touchLight: Bool, rgb: (r: UInt8, g: UInt8, b: UInt8),
+                                     brightness: UInt8, setup: Bool, touchMotors: Bool, weak: UInt8, strong: UInt8,
+                                     hapticsSelect: Bool, motorMask: Int, improvedRumble: Bool) -> [UInt8] {
+        let flag0: UInt8 = touchMotors ? (hapticsSelect ? 0x03 : 0x02) : 0x00
+        let flag1: UInt8 = touchLight ? 0x04 : 0x00
+        let flag2: UInt8 = (setup ? 0x02 : 0x00) | (touchMotors && improvedRumble ? 0x04 : 0x00)
+        let weakOut: UInt8 = touchMotors && motorMask != 1 ? weak : 0
+        let strongOut: UInt8 = touchMotors && motorMask != 2 ? strong : 0
+        if !bluetooth {
+            var r = [UInt8](repeating: 0, count: 48)
+            r[0] = 0x02; r[1] = flag0; r[2] = flag1; r[3] = weakOut; r[4] = strongOut
+            r[39] = flag2; r[42] = setup ? 0x02 : 0x00
+            r[43] = touchLight ? brightness : 0
+            r[45] = touchLight ? rgb.r : 0; r[46] = touchLight ? rgb.g : 0; r[47] = touchLight ? rgb.b : 0
+            return r
+        }
+        var r = [UInt8](repeating: 0, count: 78)
+        r[0] = 0x31; r[1] = (sequence & 0x0F) << 4; r[2] = 0x10
+        r[3] = flag0; r[4] = flag1; r[5] = weakOut; r[6] = strongOut
+        r[41] = flag2; r[44] = setup ? 0x02 : 0x00
+        r[45] = touchLight ? brightness : 0
+        r[47] = touchLight ? rgb.r : 0; r[48] = touchLight ? rgb.g : 0; r[49] = touchLight ? rgb.b : 0
+        let crc = crc32(prefix: [0xA2], buffer: r, range: 0..<74)
+        r[74] = UInt8(crc & 0xFF); r[75] = UInt8((crc >> 8) & 0xFF); r[76] = UInt8((crc >> 16) & 0xFF); r[77] = UInt8(crc >> 24)
+        return r
+    }
+
+    /// The DualShock 4 output report, USB 0x05 (32 bytes: flags at 1, motors
+    /// at 4 and 5, RGB at 6 to 8) or Bluetooth 0x11 (78 bytes: hw_control
+    /// 0xC4 at 1, flags at 3, motors at 6 and 7, RGB at 8 to 10, CRC seed
+    /// 0xA2 at 74), as writeLocked sends it.
+    static func dualShock4LightReport(bluetooth: Bool, touchLight: Bool, rgb: (r: UInt8, g: UInt8, b: UInt8),
+                                      touchMotors: Bool, weak: UInt8, strong: UInt8) -> [UInt8] {
+        if !bluetooth {
+            var r = [UInt8](repeating: 0, count: 32)
+            r[0] = 0x05
+            r[1] = (touchLight ? 0x06 : 0x00) | (touchMotors ? 0x01 : 0x00)
+            r[4] = touchMotors ? weak : 0; r[5] = touchMotors ? strong : 0
+            r[6] = touchLight ? rgb.r : 0; r[7] = touchLight ? rgb.g : 0; r[8] = touchLight ? rgb.b : 0
+            return r
+        }
+        var r = [UInt8](repeating: 0, count: 78)
+        r[0] = 0x11; r[1] = 0xC4
+        r[3] = (touchLight ? 0x02 : 0x00) | (touchMotors ? 0x01 : 0x00)
+        r[6] = touchMotors ? weak : 0; r[7] = touchMotors ? strong : 0
+        r[8] = touchLight ? rgb.r : 0; r[9] = touchLight ? rgb.g : 0; r[10] = touchLight ? rgb.b : 0
+        let crc = crc32(prefix: [0xA2], buffer: r, range: 0..<74)
+        r[74] = UInt8(crc & 0xFF); r[75] = UInt8((crc >> 8) & 0xFF); r[76] = UInt8((crc >> 16) & 0xFF); r[77] = UInt8(crc >> 24)
+        return r
+    }
 
     private static let sonyVID: Int32 = 0x054C
     private static let dualSensePIDs: Set<Int32> = [0x0CE6, 0x0DF2]
@@ -430,6 +482,47 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// Write an LED color to the target pad, or to every opened controller
     /// when `target` is nil or matches none. RGB + brightness byte match the
     /// DualSense and DualShock 4 output report layout. Cheap enough to call at 60 Hz.
+    /// The DualSense output report that sets both adaptive triggers to one
+    /// feel: 0 lets them go (mode 0x05, off), 1 to 3 is resistance across
+    /// the pull (mode 0x01: start position, force). USB: report 0x02, flag
+    /// bits 2 and 3 claim the right and left trigger blocks at 11 and 22.
+    /// Bluetooth: report 0x31, the same payload from byte 3, CRC at the end.
+    static func triggerEffectReport(left: Int, right: Int, bluetooth: Bool, sequence: UInt8 = 0) -> [UInt8] {
+        func block(_ level: Int) -> (mode: UInt8, start: UInt8, force: UInt8) {
+            let clamped = max(0, min(3, level))
+            return clamped == 0 ? (0x05, 0, 0) : (0x01, 0x20, UInt8(min(255, clamped * 85)))
+        }
+        let l = block(left), r = block(right)
+        var usb = [UInt8](repeating: 0, count: 48)
+        usb[0] = 0x02
+        usb[1] = 0x0C
+        usb[11] = r.mode; usb[12] = r.start; usb[13] = r.force
+        usb[22] = l.mode; usb[23] = l.start; usb[24] = l.force
+        guard bluetooth else { return usb }
+        var bt = [UInt8](repeating: 0, count: 78)
+        bt[0] = 0x31
+        bt[1] = (sequence & 0x0F) << 4
+        bt[2] = 0x10
+        for i in 1..<48 { bt[i + 2] = usb[i] }
+        let crc = crc32(prefix: [0xA2], buffer: bt, range: 0..<74)
+        bt[74] = UInt8(crc & 0xFF); bt[75] = UInt8((crc >> 8) & 0xFF)
+        bt[76] = UInt8((crc >> 16) & 0xFF); bt[77] = UInt8((crc >> 24) & 0xFF)
+        return bt
+    }
+
+    /// Sets both adaptive triggers on every DualSense and DualSense Edge to
+    /// one feel, once; the pad keeps it until the next trigger report.
+    func setTriggerResistance(left: Int, right: Int) {
+        queue.async { [weak self] in
+            guard let self = self, self.ensureDevicesLocked() else { return }
+            for d in self.devices where Self.dualSensePIDs.contains(d.pid) {
+                if d.isBT { self.sequenceTag = (self.sequenceTag &+ 1) & 0x0F }
+                let report = Self.triggerEffectReport(left: left, right: right, bluetooth: d.isBT, sequence: self.sequenceTag)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, d.isBT ? 0x31 : 0x02, report, report.count)
+            }
+        }
+    }
+
     func write(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8 = 2,
                target: SonyPadIdentity? = nil) {
         queue.async { [weak self] in
@@ -699,88 +792,21 @@ final class InProcessLightWriter: @unchecked Sendable {
             let isDS = Self.dualSensePIDs.contains(d.pid)
             let setup = isDS && touchLight && !lightSetupSent.contains(d.key)
             if setup { lightSetupSent.insert(d.key) }
-            if isDS && !d.isBT {
-                bufDualSenseUSB[0] = 0x02
-                bufDualSenseUSB[2] = touchLight ? 0x04 : 0x00   // valid_flag1: light bar
-                // valid_flag2: light setup, plus the newer vibration path only
-                // when this report is actually carrying motor values. Claiming
-                // vibration on every light write cancels the buzz the system
-                // is in the middle of playing.
-                bufDualSenseUSB[39] = (setup ? 0x02 : 0x00) | (touchMotors && improvedRumble(pid: d.pid) ? 0x04 : 0x00)
-                bufDualSenseUSB[42] = setup ? 0x02 : 0x00
-                // valid_flag0: bit 0 claims the two motor bytes that follow,
-                // and bit 1 is haptics select, which switches the pad out of
-                // audio haptics and back onto the classic motors. Without
-                // that second bit the motor values are accepted and ignored:
-                // measured on a DualSense, the same report buzzes with it and
-                // does nothing without it.
-                bufDualSenseUSB[1] = touchMotors ? (vibrationMode == 2 ? 0x02 : 0x03) : 0x00
-                bufDualSenseUSB[3] = touchMotors && motorMask != 1 ? weak : 0
-                bufDualSenseUSB[4] = touchMotors && motorMask != 2 ? strong : 0
-                bufDualSenseUSB[43] = touchLight ? brightness : 0
-                bufDualSenseUSB[45] = touchLight ? red : 0
-                bufDualSenseUSB[46] = touchLight ? green : 0
-                bufDualSenseUSB[47] = touchLight ? blue : 0
-                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x02, bufDualSenseUSB, bufDualSenseUSB.count)
-            } else if isDS && d.isBT {
-                // 78-byte BT report: [0]=0x31, [1]=sequence<<4, [2]=0x10 tag,
-                // then the SAME payload as USB starting at [3]. The old code
-                // omitted the 0x10 tag byte, which shifted every field by one
-                // and put the CRC at the wrong offset - the controller
-                // silently discarded every packet, which is why the light
-                // never changed over Bluetooth. Layout verified live: this
-                // exact report turned the user's Edge blue.
-                bufDualSenseBT[0] = 0x31
-                sequenceTag = (sequenceTag &+ 1) & 0x0F
-                bufDualSenseBT[1] = sequenceTag << 4
-                bufDualSenseBT[2] = 0x10
-                bufDualSenseBT[3] = touchMotors ? (vibrationMode == 2 ? 0x02 : 0x03) : 0x00  // valid_flag0: vibration + haptics select
-                bufDualSenseBT[5] = touchMotors && motorMask != 1 ? weak : 0     // motor right (weak)
-                bufDualSenseBT[6] = touchMotors && motorMask != 2 ? strong : 0   // motor left (strong)
-                bufDualSenseBT[4] = touchLight ? 0x04 : 0x00   // valid_flag1: lightbar control
-                // valid_flag2: lightbar setup (the first light write after
-                // connect only), plus the newer vibration path when this
-                // report carries motor values.
-                bufDualSenseBT[41] = (setup ? 0x02 : 0x00) | (touchMotors && improvedRumble(pid: d.pid) ? 0x04 : 0x00)
-                bufDualSenseBT[44] = setup ? 0x02 : 0x00  // lightbar_setup: fade out the connect light
-                bufDualSenseBT[45] = touchLight ? brightness : 0
-                bufDualSenseBT[47] = touchLight ? red : 0
-                bufDualSenseBT[48] = touchLight ? green : 0
-                bufDualSenseBT[49] = touchLight ? blue : 0
-                let crc = Self.crc32(prefix: [0xA2], buffer: bufDualSenseBT, range: 0..<74)
-                bufDualSenseBT[74] = UInt8(crc & 0xFF); bufDualSenseBT[75] = UInt8((crc >> 8) & 0xFF)
-                bufDualSenseBT[76] = UInt8((crc >> 16) & 0xFF); bufDualSenseBT[77] = UInt8((crc >> 24) & 0xFF)
-                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x31, bufDualSenseBT, bufDualSenseBT.count)
-            } else if Self.ds4PIDs.contains(d.pid) && !d.isBT {
-                bufDS4USB[0] = 0x05
-                // Bit 0 rumble, bit 1 LED color, bit 2 LED blink: claim
-                // only the fields this write carries. Claiming rumble on
-                // every light frame canceled any buzz within a frame.
-                bufDS4USB[1] = (touchLight ? 0x06 : 0x00) | (touchMotors ? 0x01 : 0x00)
-                bufDS4USB[6] = touchLight ? red : 0
-                bufDS4USB[7] = touchLight ? green : 0
-                bufDS4USB[8] = touchLight ? blue : 0
-                bufDS4USB[4] = touchMotors ? weak : 0
-                bufDS4USB[5] = touchMotors ? strong : 0
-                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x05, bufDS4USB, bufDS4USB.count)
-            } else if Self.ds4PIDs.contains(d.pid) && d.isBT {
-                // 78-byte DS4 BT report as SDL_hidapi_ps4.c sends it:
-                // [0]=0x11, [1]=0xC0 (HID + CRC), [3] the effects this write
-                // carries (bit 0 rumble, bit 1 light), motors at [6..7], RGB
-                // at [8..10], CRC over [0..73] at [74..77]. Nothing else is
-                // claimed: the volume flags this used to set wrote zero to
-                // the headset and speaker volume on every write.
-                bufDS4BT[0] = 0x11; bufDS4BT[1] = 0xC0; bufDS4BT[2] = 0x00; bufDS4BT[4] = 0x00
-                bufDS4BT[6] = touchMotors ? weak : 0
-                bufDS4BT[7] = touchMotors ? strong : 0
-                bufDS4BT[3] = (touchLight ? 0x02 : 0x00) | (touchMotors ? 0x01 : 0x00)
-                bufDS4BT[8] = touchLight ? red : 0
-                bufDS4BT[9] = touchLight ? green : 0
-                bufDS4BT[10] = touchLight ? blue : 0
-                let crc = Self.crc32(prefix: [0xA2], buffer: bufDS4BT, range: 0..<74)
-                bufDS4BT[74] = UInt8(crc & 0xFF); bufDS4BT[75] = UInt8((crc >> 8) & 0xFF)
-                bufDS4BT[76] = UInt8((crc >> 16) & 0xFF); bufDS4BT[77] = UInt8((crc >> 24) & 0xFF)
-                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, 0x11, bufDS4BT, bufDS4BT.count)
+            if isDS {
+                if d.isBT { sequenceTag = (sequenceTag &+ 1) & 0x0F }
+                // Layout verified live (2026-08-17, 09-17): the Bluetooth
+                // frame carries [1] sequence << 4, [2] 0x10, the USB payload
+                // from [3] and the 0xA2 CRC; the pad drops anything else.
+                let report = Self.dualSenseLightReport(bluetooth: d.isBT, sequence: sequenceTag, touchLight: touchLight,
+                                                       rgb: (red, green, blue), brightness: brightness, setup: setup,
+                                                       touchMotors: touchMotors, weak: weak, strong: strong,
+                                                       hapticsSelect: vibrationMode != 2, motorMask: motorMask,
+                                                       improvedRumble: improvedRumble(pid: d.pid))
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, d.isBT ? 0x31 : 0x02, report, report.count)
+            } else if Self.ds4PIDs.contains(d.pid) {
+                let report = Self.dualShock4LightReport(bluetooth: d.isBT, touchLight: touchLight, rgb: (red, green, blue),
+                                                        touchMotors: touchMotors, weak: weak, strong: strong)
+                HIDWrite.setReport(d.dev, kIOHIDReportTypeOutput, d.isBT ? 0x11 : 0x05, report, report.count)
             }
         }
     }

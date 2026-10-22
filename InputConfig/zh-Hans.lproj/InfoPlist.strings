@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig 仅在你要求断开无线控制器时使用蓝牙。";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig 会在你要求或于设置中开启时，使用蓝牙读取 Switch 2 控制器，以及连接和断开无线控制器。";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig 仅在你要求断开无线控制器时使用蓝牙。";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig 会在你要求或于设置中开启时，使用蓝牙读取 Switch 2 控制器，以及连接和断开无线控制器。";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "版权所有 © 2026 Ryleigh Newman。保留所有权利。";

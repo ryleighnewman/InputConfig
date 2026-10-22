@@ -57,11 +57,13 @@ extension ControllerLayout {
                          reason: "Raw SDL read only: report bit b9, which the row does not name, put on an extra slot. On 8BitDo's DInput report it is usually the digital RT bit, so it may press with the right trigger (not confirmed on this pad)", copy: true),
         ],
         // Raw IDs only: the pad never reaches GameController. 0x301B is the
-        // Bluetooth identity and 0x301D the other identity the SDL rows name;
-        // 0x310A is the 2C in X mode. The plain Ultimate and Ultimate C use
-        // other product IDs (0x3011 to 0x3017, and 0x3106 in X mode).
+        // Bluetooth identity and 0x301D the other identity the SDL rows name.
+        // In X mode (0x310A) the pad is an Xbox 360 class USB device (xpad.c
+        // XTYPE_XBOX360), which macOS never exposes as HID, so it has no
+        // match here. The plain Ultimate and Ultimate C use other product
+        // IDs (0x3011 to 0x3017).
         match: [
-            [.vidPid(vendor: 0x2DC8, products: [0x301B, 0x301D, 0x310A])],
+            [.vidPid(vendor: 0x2DC8, products: [0x301B, 0x301D])],
         ],
         matchPriority: 30,
         approximate: true,
@@ -114,13 +116,13 @@ extension ControllerLayout {
         PlacedControl(id: "l4", kind: .shoulder, face: .top, center: CGPoint(x: 0.285, y: 0.36), size: 0.075, height: 0.045,
                       shape: .roundedRect(corner: 0.4), printed: "L4", inputs: .button(16),
                       pathInputs: [.rawProfile: .none],
-                      readable: .conditional("Read over Bluetooth through the bundled SDL row (2DC8:301B, 301D); the XInput profile for 2DC8:310A has no bit for it"),
+                      readable: .conditional("Read in D mode through the bundled SDL row (2DC8:301B, 301D); X mode (2DC8:310A) is an Xbox 360 class USB device macOS does not read"),
                       note: "Sends its own button until it is assigned on the pad (hold L4 and a button, then press the mapping button); then the Mac gets that button",
                       callout: .below),
         PlacedControl(id: "r4", kind: .shoulder, face: .top, center: CGPoint(x: 0.715, y: 0.36), size: 0.075, height: 0.045,
                       shape: .roundedRect(corner: 0.4), printed: "R4", inputs: .button(17),
                       pathInputs: [.rawProfile: .none],
-                      readable: .conditional("Read over Bluetooth through the bundled SDL row (2DC8:301B, 301D); the XInput profile for 2DC8:310A has no bit for it"),
+                      readable: .conditional("Read in D mode through the bundled SDL row (2DC8:301B, 301D); X mode (2DC8:310A) is an Xbox 360 class USB device macOS does not read"),
                       note: "Sends its own button until it is assigned on the pad (hold R4 and a button, then press the mapping button); then the Mac gets that button",
                       callout: .below),
         PlacedControl(id: "pair", kind: .other, face: .top, center: CGPoint(x: 0.441, y: 0.3), size: 0.022,

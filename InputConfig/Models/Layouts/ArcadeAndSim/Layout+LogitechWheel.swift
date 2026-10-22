@@ -46,7 +46,10 @@ extension ControllerLayout {
         // The G27, G25, Driving Force GT and Driving Force Pro are set to 900
         // degrees when they open (LogitechWheel.rangeCommands); the older
         // wheels have one fixed range.
-        variantSteeringDegrees: ["g27": 900, "g25": 900, "dfgt": 900, "dfp": 900, "df": 270, "momo": 240, "momof": 240, "fv": 240]
+        // 900 where the app sets it, else the wheel's fixed range (hid-lg4ff.c
+        // lg4ff_devices: MOMO 270, Formula 180); the Formula Vibration's is not
+        // in any source on disk, 240 is a guess.
+        variantSteeringDegrees: ["g27": 900, "g25": 900, "dfgt": 900, "dfp": 900, "df": 270, "momo": 270, "momof": 270, "fv": 240, "formula": 180]
     )
 
     /// Each model: its button count, and whether it has a clutch and a D-pad.
@@ -67,8 +70,6 @@ extension ControllerLayout {
         func with(_ test: ((id: String, name: String, buttons: Int, clutch: Bool, hat: Bool)) -> Bool) -> Set<String> {
             Set(models.filter(test).map(\.id))
         }
-        // The models whose pedals share one axis (LogitechWheel.combinedPedalProducts).
-        let combined: Set<String> = ["momo", "momof", "fv", "formula"]
         var list: [PlacedControl] = [
             PlacedControl(id: "rim", kind: .wheel, center: CGPoint(x: 0.5, y: 0.36), size: 0.56, shape: .circle,
                           printed: "Wheel", inputs: ControlInputs(axes: [.x(0)]),
@@ -80,15 +81,10 @@ extension ControllerLayout {
                           note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { $0.clutch }),
             PlacedControl(id: "brake", kind: .pedal, center: CGPoint(x: 0.5, y: 0.87), size: 0.09, height: 0.15,
                           shape: .roundedRect(corner: 0.18), printed: "Brake", inputs: ControlInputs(axes: [.analog(4)]),
-                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { !combined.contains($0.id) }),
+                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
             PlacedControl(id: "gas", kind: .pedal, center: CGPoint(x: 0.62, y: 0.87), size: 0.09, height: 0.15,
                           shape: .roundedRect(corner: 0.18), printed: "Gas", inputs: ControlInputs(axes: [.analog(5)]),
-                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below, variants: with { !combined.contains($0.id) }),
-            // The older wheels send both pedals on one centered axis.
-            PlacedControl(id: "pedals", kind: .dial, center: CGPoint(x: 0.56, y: 0.87), size: 0.24, height: 0.05,
-                          shape: .capsule(angleDegrees: 0), printed: "Pedals", inputs: ControlInputs(axes: [.x(1)]),
-                          note: "Both pedals on one axis: gas one way, brake the other", callout: .below,
-                          variants: with { combined.contains($0.id) }),
+                          note: "Reads 0 released and 1 floored, like a trigger", callout: .below),
         ]
         // The buttons in report order, odd numbers down the left edge and
         // even down the right, so each has its own level line in the key

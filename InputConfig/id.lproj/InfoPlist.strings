@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig menggunakan Bluetooth hanya untuk memutuskan koneksi pengontrol nirkabel saat Anda memintanya.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig menggunakan Bluetooth untuk membaca kontroler Switch 2, serta menyambung dan memutus kontroler nirkabel, saat Anda memintanya atau mengaktifkannya di Pengaturan.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig menggunakan Bluetooth hanya untuk memutuskan koneksi pengontrol nirkabel saat Anda memintanya.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig menggunakan Bluetooth untuk membaca kontroler Switch 2, serta menyambung dan memutus kontroler nirkabel, saat Anda memintanya atau mengaktifkannya di Pengaturan.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Hak Cipta © 2026 Ryleigh Newman. Semua hak dilindungi undang-undang.";

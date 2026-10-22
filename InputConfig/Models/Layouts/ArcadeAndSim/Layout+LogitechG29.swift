@@ -70,7 +70,7 @@ extension ControllerLayout {
         // logitechXboxWheel below.
         match: [[.vidPid(vendor: 0x046D, products: [0xC24F, 0xC266])]],
         matchPriority: 20,
-        readability: .partial("Read with the switch on the wheel set to PS3: InputConfig switches it out of compatibility mode when it connects. Set to PS4 (046D:C260) it is not read. The shift lights and force feedback are not used"),
+        readability: .partial("Read with the switch on the wheel set to PS3: InputConfig switches it out of compatibility mode when it connects. A G923 left on PS (046D:C267) is switched to its own mode too. A G29 set to PS4 (046D:C260) is not read. The shift lights and force feedback are not used"),
         approximate: true,
         sources: [
             "logitechg.com Driving Force G29 product page: front product photo (hub positions measured from it) and specifications (wheel 260 x 270 x 278 mm, pedals 428.5 x 311 x 167 mm)",
@@ -85,7 +85,7 @@ extension ControllerLayout {
         // The G29 is set to 900 degrees when it opens (LogitechWheel
         // .rangeCommands); the G923 is sent no range command, so it is
         // drawn as how far toward full lock.
-        variantSteeringDegrees: ["g29": 900]
+        variantSteeringDegrees: ["g29": 900, "g923": 900]
     )
 
     /// The wheel's outline (rim, the opening above the hub, the two lower

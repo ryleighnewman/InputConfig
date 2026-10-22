@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.8
+
+- Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth
+- Access profiles: a Profile chip in the Live Visualizer lists the three stored profiles over USB-C, switches them, and edits one beside the drawing with the PS5's own settings
+- Controller Profile, a new output: a row switches an Access controller to the next, previous, or a numbered profile
+- DualSense Edge: its four stored profiles are read over USB-C and listed with what each one remaps
+- Trigger feel: click L2 or R2 in the Live Visualizer of a DualSense or DualSense Edge for light, medium or firm resistance
+- DualSense over Bluetooth reports its PS button before anything wakes it; DualShock 4 is polled at the system rate; DualShock 3 reads its pressure levels and accelerometer
+- Xbox pads over Bluetooth: Share works on every firmware, Elite Series 2 paddles and profiles are read, and the Devices menu names the pads macOS does not read over USB
+- Stream Deck +, + XL, Studio and Module 15: dials and touch strip are read; Elgato models the app cannot read yet are listed, not offered
+- Logitech wheels: a G923 for PlayStation or a G29 left in another mode is switched to its own, and MOMO, Formula and Driving Force pedals are read separately
+- Thrustmaster wheels use the same axes as Logitech wheels, so a preset carries between them
+- Switch 2 Pro and GameCube controllers read their stick and trigger calibration and their motion sensors from the controller
+- Switch 2 controllers over Bluetooth: with the new Devices setting on, a paired Switch 2 Pro, GameCube or Joy-Con 2 controller is read wirelessly; Joy-Con 2 are read over USB in the grip too
+- GP2040-CE boards and sticks in Switch or PS4 mode read every button and stick
+- Pen tablets: pressure, tilt, pen buttons, eraser and in range are inputs of their own
+- Contour ShuttlePRO and 3Dconnexion SpaceMouse are read, jog, shuttle and all six axes included
+- Mouse side buttons held for a hold row stay held, trackpad scrolls count their distance, Eject works, and keyboard rows say when a password field has the keyboard
+- Row editor: Add another output is a labeled button under the outputs, Notes sit under Options, and a closed Options line says what it holds
+- Triple tap: a row can do something else on three quick taps, beside its hold and double tap actions
+- Wireless controllers: optionally disconnect a controller after it sits unused for 5 to 60 minutes, and try to reconnect paired controllers when the app opens, the Mac wakes or a preset starts
+- Hide built-in presets, in Settings, Advanced, Data & storage, takes the shipped folders out of the sidebar, its search and the menu bar
+- Menu bar: the pop-up lists the presets started last, with a search, in place of the New Preset, Smart Preset and Statistics tiles and the What's New button
+
 ## 1.7
 
 - InputConfig is translated into 26 languages: Arabic, Chinese (Simplified and Traditional), Czech, Danish, Dutch, Finnish, French, German, Hebrew, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Russian, Slovak, Spanish, Swedish, Thai, Turkish, Ukrainian, and Vietnamese

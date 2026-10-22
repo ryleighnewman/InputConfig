@@ -97,6 +97,21 @@ struct ControllerProfile: Equatable {
         /// tools outside the app's scope).
         case dualShock3
 
+        /// Sony DualShock 4 layout: USB report 0x01 (64 bytes) or Bluetooth
+        /// 0x11 (78 bytes with the CRC), used for third party PS4 class
+        /// pads and sticks that answer the capability report with 0x27.
+        case dualShock4
+
+        /// Third party PS5 class pads (SDL's PS5StatePacketAlt_t): report
+        /// 0x01 with the DualSense button bytes at 8 to 10.
+        case dualSenseAlt
+
+        /// Xbox One, Series and Elite Series 2 over Bluetooth, the raw
+        /// fallback when GameController does not list the pad
+        /// (XboxBluetoothLayout): `share` for a Series pad whose record bit
+        /// is Share rather than a second View.
+        case xboxBluetooth(share: Bool)
+
         /// Switch 2 Pro Controller over USB, once `Switch2USBEnabler` has
         /// started it: input report 0x09, buttons in three bytes, sticks as
         /// 12-bit values packed three bytes to a stick, which the descriptor
@@ -108,6 +123,13 @@ struct ControllerProfile: Equatable {
         /// Switch 2 Pro Controller; the decoder reads it with those offsets
         /// and gives the buttons their GameCube roles.
         case switch2GameCube
+
+        /// Joy-Con 2 (L) and (R) for Switch 2, each read on its own, over
+        /// USB in the charging grip (started by `Switch2USBEnabler`) or
+        /// over Bluetooth LE (`Switch2BluetoothService`): report 0x05 with
+        /// SDL's solo (sideways) layout, the stick turned with the pad.
+        case switch2JoyConLeft
+        case switch2JoyConRight
 
         /// Valve's 2026 Steam Controller, wired, over Bluetooth, or through
         /// its Steam Controller Puck: input reports 0x42, 0x45 and 0x47 with

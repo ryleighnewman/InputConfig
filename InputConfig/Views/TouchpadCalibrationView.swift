@@ -165,6 +165,10 @@ struct TouchpadCalibrationView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text(RegionEditorHint.purpose(.touchpad))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 regionsList
                 VStack(alignment: .leading, spacing: 2) {
                     Text("In region")

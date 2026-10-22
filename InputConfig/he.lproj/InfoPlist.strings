@@ -5,10 +5,10 @@
 "CFBundleName" = "InputConfig";
 
 /* Privacy - Bluetooth Always Usage Description */
-"NSBluetoothAlwaysUsageDescription" = "InputConfig משתמש ב-Bluetooth רק כדי לנתק שלט אלחוטי כשמבקשים ממנו.";
+"NSBluetoothAlwaysUsageDescription" = "InputConfig משתמש ב-Bluetooth כדי לקרוא בקרי Switch 2, וכדי לחבר ולנתק בקרים אלחוטיים, כשמבקשים או כשמפעילים זאת בהגדרות.";
 
 /* Privacy - Bluetooth Peripheral Usage Description */
-"NSBluetoothPeripheralUsageDescription" = "InputConfig משתמש ב-Bluetooth רק כדי לנתק שלט אלחוטי כשמבקשים ממנו.";
+"NSBluetoothPeripheralUsageDescription" = "InputConfig משתמש ב-Bluetooth כדי לקרוא בקרי Switch 2, וכדי לחבר ולנתק בקרים אלחוטיים, כשמבקשים או כשמפעילים זאת בהגדרות.";
 
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. כל הזכויות שמורות.";

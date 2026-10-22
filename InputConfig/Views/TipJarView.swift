@@ -235,6 +235,12 @@ struct TipJarView: View {
         } else if productID.contains(".large") {
             Image(systemName: "fork.knife")
                 .iconTint(.purple)
+        } else if productID.contains(".huge") {
+            Image(systemName: "star.fill")
+                .iconTint(.yellow)
+        } else if productID.contains(".patron") {
+            Image(systemName: "crown.fill")
+                .iconTint(.orange)
         } else {
             Image(systemName: "gift.fill")
                 .iconTint(.pink)
@@ -409,19 +415,24 @@ final class TipJarWindowController {
             return
         }
         let hosting = NSHostingController(rootView: TipJarView()
+            .ignoresSafeArea()
             .windowBackdrop()
             .reduceMotionFriendly()
             .appAccessibility())
+        hosting.view.wantsLayer = true
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = String(localized: "Donate to InputConfig")
         newWindow.setContentSize(NSSize(width: 520, height: 640))
-        // A standard, opaque title bar, like every other window in the app.
-        // The transparent-title-bar arrangement relied on the content's
-        // blur extending up under the bar, and SwiftUI stops its content at
-        // the safe area, so the bar showed the desktop straight through it
-        // with the window's top highlight line floating over that.
-        newWindow.styleMask = [.titled, .closable, .miniaturizable]
-        newWindow.titlebarAppearsTransparent = false
+        // A panel with no title bar furniture: the content runs to the top
+        // edge and its own Close button closes it. The traffic lights stayed
+        // visible over the clear bar before, which read as a stray.
+        newWindow.styleMask = [.titled, .closable, .fullSizeContentView]
+        newWindow.titlebarAppearsTransparent = true
+        newWindow.titleVisibility = .hidden
+        newWindow.isMovableByWindowBackground = true
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            newWindow.standardWindowButton(kind)?.isHidden = true
+        }
         newWindow.center()
         newWindow.isReleasedWhenClosed = false
         window = newWindow

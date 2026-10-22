@@ -24,6 +24,39 @@ enum HelpLocalizer {
 
     static var isTranslated: Bool { !table.isEmpty }
 
+    /// The website's folder for the app's language: its questions and
+    /// guides are translated under /de/, /fr/ and so on. Help and preset
+    /// pages, and the section indexes, are English only.
+    private static let siteLanguage: String? = siteFolder(for: Bundle.main.preferredLocalizations.first ?? "en")
+
+    /// The website's folder for an app language; nil for English.
+    static func siteFolder(for lang: String) -> String? {
+        switch lang {
+        case "en": return nil
+        case "pt-BR": return "pt"
+        case "zh-Hans": return "zh"
+        case "zh-Hant": return "zh-tw"
+        default: return lang
+        }
+    }
+
+    /// Pages the website has in English only.
+    private static let englishOnlyPages: Set<String> = ["mac-games-with-controller-support"]
+
+    /// An inputconfig.com question or guide in the app's language; any
+    /// other address is returned as it is.
+    static func siteURL(_ url: URL) -> URL { siteURL(url, folder: siteLanguage) }
+
+    static func siteURL(_ url: URL, folder: String?) -> URL {
+        guard let lang = folder, url.host == "inputconfig.com" else { return url }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count == 2, ["questions", "guides"].contains(parts[0]),
+              !englishOnlyPages.contains(parts[1]),
+              var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        c.path = "/\(lang)/\(parts[0])/\(parts[1])"
+        return c.url ?? url
+    }
+
     static func localized(_ g: HelpGuide) -> HelpGuide {
         guard isTranslated else { return g }
         return HelpGuide(id: g.id, title: t(g.title), category: g.category, url: g.url, intro: t(g.intro),

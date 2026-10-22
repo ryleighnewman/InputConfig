@@ -131,12 +131,11 @@ enum HelpGuideLibrary {
             ]),
             HelpSection(heading: "The short version", blocks: [
                 .list([
-                    "**Install and connect.** InputConfig from the Mac App Store, then a controller by cable or Bluetooth.",
-                    "**Activate Desktop Navigation.** Allow Accessibility once when macOS asks.",
-                    "**Stop any time.** Click Deactivate, or hold Back and Start together for three seconds.",
-                    "**Then make it yours.** Change one row at a time, or start a layout for a game with the [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker)."
+                    "**Connect.** Cable, or PS and the profile button for Bluetooth.",
+                    "**Activate Access Controller.** The stick and the base profile's sockets work at once.",
+                    "**More controls.** Scan any socket, the PS button, the stick press or anything in a port."
                 ], ordered: false),
-                .paragraph("Five minutes of setup, and the controller runs the whole Mac.")
+                .paragraph("Everything on the controller reaches the Mac by its own name.")
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
@@ -223,7 +222,7 @@ enum HelpGuideLibrary {
             ]),
             HelpSection(heading: "Questions", blocks: [
                 .questions([
-                    HelpQuestion(question: "Which controllers work?", answer: "DualSense and DualSense Edge, DualShock 4, Xbox One and Series, Switch Pro and Joy-Cons, Stadia, 8BitDo, the Steam Controller, Logitech F-series pads, the Logitech G29 and G923 wheels, and any MFi or HID gamepad. Other controllers, joysticks and wheels are read as well, shown in a generic drawing. MIDI devices and the Mac's own keyboard, mouse, and trackpad are inputs too."),
+                    HelpQuestion(question: "Which controllers work?", answer: "DualSense and DualSense Edge, DualShock 3 and 4, the PlayStation Access controller, Xbox One and Series, Elite and Adaptive, Switch Pro and Joy-Cons, Switch 2 Pro and GameCube, Stadia, 8BitDo, the Steam Controller, Logitech F-series pads, the Logitech G29 and G923 wheels, Thrustmaster wheels, every Stream Deck, the Contour ShuttlePRO and 3Dconnexion SpaceMouse, GP2040-CE boards, and any MFi or HID gamepad. Other controllers, joysticks and wheels are read as well, shown in a generic drawing. MIDI devices, pen tablets and the Mac's own keyboard, mouse, and trackpad are inputs too."),
                     HelpQuestion(question: "Does the DualSense work over Bluetooth with everything?", answer: "Everything works over Bluetooth: light bar, rumble, touchpad, gyroscope, and on the Edge the paddles and FN buttons. Some Bluetooth pairings drop motion; a USB cable always has it.")
                 ])
             ]),
@@ -235,6 +234,14 @@ enum HelpGuideLibrary {
             HelpLink(title: "8BitDo", url: "https://inputconfig.com/help/8bitdo-controllers"),
             HelpLink(title: "Other Controllers", url: "https://inputconfig.com/help/other-controllers"),
             HelpLink(title: "How to connect a controller to a Mac or MacBook", url: "https://inputconfig.com/questions/how-to-connect-a-controller-to-a-mac"),
+            HelpLink(title: "Xbox Elite Series 2 on a Mac", url: "https://inputconfig.com/questions/xbox-elite-controller-on-mac"),
+            HelpLink(title: "Third-party Xbox controllers on a Mac", url: "https://inputconfig.com/questions/third-party-xbox-controllers-on-mac"),
+            HelpLink(title: "Switch 2 Pro Controller on a Mac", url: "https://inputconfig.com/questions/switch-2-pro-controller-on-a-mac"),
+            HelpLink(title: "GameCube controller on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-gamecube-controller-on-a-mac"),
+            HelpLink(title: "Racing wheels on a Mac", url: "https://inputconfig.com/questions/how-to-use-a-racing-wheel-on-a-mac"),
+            HelpLink(title: "Thrustmaster wheel on a Mac", url: "https://inputconfig.com/questions/thrustmaster-wheel-on-mac"),
+            HelpLink(title: "Stream Deck without Elgato software", url: "https://inputconfig.com/questions/stream-deck-without-elgato-software-on-mac"),
+            HelpLink(title: "Fight sticks on a Mac", url: "https://inputconfig.com/questions/how-to-use-an-arcade-stick-on-a-mac"),
             HelpLink(title: "Controller connected but not working on a Mac", url: "https://inputconfig.com/questions/controller-connected-but-not-working-on-mac"),
             HelpLink(title: "PS5 controller will not connect to a Mac", url: "https://inputconfig.com/questions/ps5-controller-wont-connect-to-mac"),
             HelpLink(title: "How to turn off or disconnect a controller on a Mac", url: "https://inputconfig.com/questions/how-to-turn-off-a-controller-connected-to-a-mac"),
@@ -405,6 +412,9 @@ enum HelpGuideLibrary {
         sections: [
             HelpSection(heading: "Organize the sidebar", blocks: [
                 .list([
+                    "**Search.** Search presets, at the top of the sidebar, finds a preset by its name, tag or folder, among yours and the built-in ones.",
+                    "**Sort.** The arrows beside the search field sort by name, A to Z or Z to A, by Recently Edited or Recently Created, or Manual, the order you set.",
+                    "**Hide the built-ins.** Settings, Advanced, Data & storage, Hide built-in presets takes the Built-in Presets folders out of the sidebar, its search and the menu bar. Turn it off to see them again.",
                     "**Reorder.** Drag a preset up or down and drop it where you want it. The order you set is kept.",
                     "**Folders.** Drop a preset on a folder header to move it in. New Group in a preset's menu makes a folder, and folders nest. A preset's menu also has Move to Group and Remove from Group.",
                     "**Folder menu.** A folder's menu renames it, gives it a color, adds a subfolder, or moves it under another.",
@@ -426,7 +436,7 @@ enum HelpGuideLibrary {
             ]),
             HelpSection(heading: "Switch between presets", blocks: [
                 .list([
-                    "**A key per preset.** Set in the Key field at the top of the editor. Press it anywhere to switch.",
+                    "**A key per preset.** In the editor, Key, Add a shortcut gives the preset a system-wide key; click the field to record your own. Press it anywhere to switch to the preset, and again to stop it.",
                     "**A global shortcut.** Settings, General has one that toggles the most recent preset.",
                     "**The menu bar.** The [menu bar](https://inputconfig.com/help/menu-bar) icon lists every preset.",
                     "**By app.** A preset can activate itself when one of its apps comes to the front. See [auto-switch](https://inputconfig.com/help/per-app-auto-switch)."
@@ -600,7 +610,8 @@ enum HelpGuideLibrary {
                     "**InputConfig:** Binds the row to that key and shows the key's name. Shift, Control, Option and Command are read on each side separately, and Caps Lock and fn too.",
                     "**Check:** Press the key with the preset running and the output fires, while the key still does what it always did."
                 ], ordered: false),
-                .paragraph("The top row's brightness, keyboard light, media, mute and volume keys are inputs from any app. Mission Control, Launchpad, Spotlight, Dictation and Focus are not: macOS keeps those five keys to itself and never hands them to an app. With fn held they are plain F3 to F6, which do work. Every keyboard reports to InputConfig as one keyboard, with one synthetic device id, so the same key on two keyboards is the same input. A preset with only keyboard rows runs on its own, with no controller connected.")
+                .paragraph("The top row's brightness, keyboard light, media, mute and volume keys are inputs from any app. Mission Control, Launchpad, Spotlight, Dictation and Focus are not: macOS keeps those five keys to itself and never hands them to an app. With fn held they are plain F3 to F6, which do work. Every keyboard reports to InputConfig as one keyboard, with one synthetic device id, so the same key on two keyboards is the same input. A preset with only keyboard rows runs on its own, with no controller connected."),
+                .paragraph("The Globe key is two inputs: Globe Key (Emoji), under Special Keys, is a tap on its own, and fn / Globe (hold), under Modifier Keys, is the key held down. Scan reads a quick tap as the first and a hold as the second. As an output, fn / Globe (hold) adds Globe to another key, for shortcuts such as Globe E, and Globe Key (Emoji) presses it alone.")
             ]),
             HelpSection(heading: "Pick keys that type nothing", blocks: [
                 .paragraph("A key keeps doing what it did; the app listens alongside macOS and cannot take the key away. That is why the built-in presets use keys nothing needs: F13 to F19 are free on a full-size keyboard (see [which keyboards have F13 to F19](https://inputconfig.com/questions/f13-to-f19-keys-on-mac), and what to use on a MacBook)."),
@@ -628,11 +639,12 @@ enum HelpGuideLibrary {
                     "**InputConfig:** Binds the row to that F key, which no real keyboard key clashes with.",
                     "**Check:** The row shows F13 or whichever key you set, and pressing it types nothing. Skip F21 to F24, which macOS does not pass to apps."
                 ], ordered: false),
+                .paragraph("If Logi Options+, Razer Synapse or another remapper also gives a button a job, both apps act on each press. Give each button to one app only: clear it in the other app, or have that app send F13 to F20 and bind the F key here."),
                 .paragraph("The activity log notes the first press of a key with no name, and of any mouse button above Button 5, so a saved report shows exactly what your device sends. F13 to F20 turn any keypad into keys that only InputConfig uses.")
             ]),
             HelpSection(heading: "Use pen tablets, eye trackers and head trackers", blocks: [
                 .list([
-                    "**Pen tablets.** The pen works as a mouse, and its tip and side buttons bind as Mouse inputs. Express keys work when the tablet's own software sets them to send keystrokes; give them F13 to F20 and Scan them.",
+                    "**Pen tablets.** The pen moves the pointer like a mouse, and its tip, side buttons and eraser end bind as Pen inputs; Pen pressure and Pen tilt are axes, so a row can press harder to run or lean the pen to steer, and a pen within range of the tablet is a control of its own. Express keys work when the tablet's own software sets them to send keystrokes; give them F13 to F20 and Scan them.",
                     "**Eye and head trackers.** Tobii eye trackers and head trackers work when their software moves the pointer, which screen regions and Mouse rows then read."
                 ], ordered: false),
                 .paragraph("Anything that moves the pointer can drive screen regions.")
@@ -686,6 +698,18 @@ enum HelpGuideLibrary {
         related: [
             HelpLink(title: "Custom hot corners on a Mac that run any shortcut or app", url: "https://inputconfig.com/questions/hot-corners-alternative-for-mac"),
             HelpLink(title: "How to use mouse side buttons on a Mac", url: "https://inputconfig.com/questions/how-to-use-mouse-side-buttons-on-mac"),
+            HelpLink(title: "How to remap mouse buttons on a Mac", url: "https://inputconfig.com/questions/how-to-remap-mouse-buttons-on-mac"),
+            HelpLink(title: "How to map extra mouse buttons on a Mac", url: "https://inputconfig.com/questions/how-to-map-extra-mouse-buttons-on-mac"),
+            HelpLink(title: "How to put a macro on a mouse button on a Mac", url: "https://inputconfig.com/questions/mouse-macros-on-mac"),
+            HelpLink(title: "How to give one mouse button three jobs on a Mac", url: "https://inputconfig.com/questions/mouse-button-double-click-and-hold-actions-on-mac"),
+            HelpLink(title: "How to give a mouse different button actions in each app on a Mac", url: "https://inputconfig.com/questions/different-mouse-button-actions-per-app-on-mac"),
+            HelpLink(title: "How do I use an MMO mouse with a thumb grid on a Mac?", url: "https://inputconfig.com/questions/mmo-mouse-on-mac"),
+            HelpLink(title: "How do you use a cheap USB macro keypad on a Mac?", url: "https://inputconfig.com/questions/usb-macro-keypad-on-mac"),
+            HelpLink(title: "Is there an alternative to Logi Options+ on a Mac?", url: "https://inputconfig.com/questions/logi-options-alternative-for-mac"),
+            HelpLink(title: "Does a Razer mouse work on a Mac?", url: "https://inputconfig.com/questions/razer-mouse-on-mac"),
+            HelpLink(title: "Does a gaming mouse work on a Mac?", url: "https://inputconfig.com/questions/gaming-mouse-on-mac"),
+            HelpLink(title: "How do I set up a Logitech MX Master on a Mac?", url: "https://inputconfig.com/questions/logitech-mx-master-on-mac"),
+            HelpLink(title: "Does the Razer Naga work on a Mac, and can I use the thumb grid?", url: "https://inputconfig.com/questions/razer-naga-on-mac"),
             HelpLink(title: "Scan", url: "https://inputconfig.com/help/scan-to-bind"),
             HelpLink(title: "Emergency Stop", url: "https://inputconfig.com/help/emergency-stop"),
             HelpLink(title: "Auto-Switch", url: "https://inputconfig.com/help/per-app-auto-switch"),
@@ -2029,7 +2053,7 @@ enum HelpGuideLibrary {
         title: "DualSense Edge",
         category: "Controllers",
         url: "https://inputconfig.com/help/dualsense-edge",
-        intro: "The DualSense Edge works on a Mac, over Bluetooth or USB-C, on macOS 13.3 or later according to Sony. It pairs like a standard DualSense, by holding Create and PS until the light bar blinks, and games see it as one. The catch is the extras: most Mac games ignore the back paddles and FN buttons, and Sony makes no Edge app for the Mac. InputConfig reads them from the controller's own data stream, over Bluetooth and USB, so they bind like any other button.",
+        intro: "The DualSense Edge works on a Mac, over Bluetooth or USB-C, on macOS 13.3 or later according to Sony. It pairs like a standard DualSense, by holding Create and PS until the light bar blinks, and games see it as one. The catch is the extras: most Mac games ignore the back paddles and FN buttons, and Sony makes no Edge app for the Mac. InputConfig reads them from the controller's own data stream, over Bluetooth and USB, so they bind like any other button. Over USB-C the app reads the four profiles stored on the pad, FN + Triangle, Square, Cross and Circle, and lists them with their names and what each one remaps.",
         sections: [
             HelpSection(heading: "Bind a paddle or FN button", blocks: [
                 .list([
@@ -2119,11 +2143,20 @@ enum HelpGuideLibrary {
             ]),
             HelpSection(heading: "Give a preset its own color", blocks: [
                 .list([
-                    "**You:** Select the preset in the sidebar and click the light bar strip above the controller drawing in the Live Visualizer, which reads Not set until you pick one.",
+                    "**You:** Select the preset in the sidebar and click the Light bar chip between L2 and R2 on the Live Visualizer's drawing. It reads Not set until you pick one.",
                     "**InputConfig:** Opens Light bar for this preset, with the same swatches, Custom and Brightness. Rainbow is there too, with its own speed, and runs only while the preset does.",
                     "**Check:** The color applies when the preset activates, and changes at once if the preset is already running. Controller's color clears it, so the preset leaves the light alone."
                 ], ordered: false),
                 .paragraph("While the preset runs, every connected PlayStation controller shows its color, including one that connects later. When it stops, each controller goes back to its own color, and a Rainbow that was running starts again. The [Smart Preset Maker](https://inputconfig.com/help/smart-preset-maker) asks for a light bar color when it builds a layout for a PlayStation pad, and several built-in presets carry one: Minecraft is green, FPS (PS5 DualSense) is PlayStation blue, Haptic Feedback is orange, and Anki is blue. A color per preset tells you at a glance which layout is running.")
+            ]),
+            HelpSection(heading: "Change the color with a button", blocks: [
+                .paragraph("Any input can change the light while a preset runs. Add a row, pick Controller, Light Bar Color as its output, choose a color, then one of three modes:"),
+                .list([
+                    "**While held.** The color shows while the input is held, then the light goes back to what it was showing.",
+                    "**Set and keep.** The color stays until another light row changes it or the preset stops.",
+                    "**Rainbow on / off.** Each press starts or stops the rainbow."
+                ], ordered: false),
+                .paragraph("A double or triple tap offers Set and keep and Rainbow on / off.")
             ]),
             HelpSection(heading: "Change the PS5 light color from a Mac", blocks: [
                 .paragraph("The PS5 itself does not let you choose: the console and games pick the color. From a Mac you can, and InputConfig sets the light bar on the DualSense, DualSense Edge and DualShock 4 to any color, over Bluetooth or USB, with no PC and nothing else installed. Some macOS versions also show a light color option on the controller's page in System Settings, Game Controllers. What InputConfig adds is a color per preset, Dim and Off, and Rainbow.")
@@ -2140,7 +2173,7 @@ enum HelpGuideLibrary {
             HelpSection(heading: "The short version", blocks: [
                 .list([
                     "**For the controller.** Click its entry in the sidebar and pick a swatch.",
-                    "**For a preset.** Click the strip above the drawing in the Live Visualizer.",
+                    "**For a preset.** Click the Light bar chip between L2 and R2 in the Live Visualizer.",
                     "**For the dark.** Brightness Off, in either place."
                 ], ordered: false),
                 .paragraph("Put the color in a preset and it comes back every time.")
@@ -2156,7 +2189,9 @@ enum HelpGuideLibrary {
             ]),
         ],
         related: [
+            HelpLink(title: "How to change the PS5 controller light color on a Mac", url: "https://inputconfig.com/questions/how-to-change-ps5-controller-light-color-on-mac"),
             HelpLink(title: "How to turn off the PS5 controller light on a Mac", url: "https://inputconfig.com/questions/how-to-turn-off-the-ps5-controller-light-on-mac"),
+            HelpLink(title: "Control stage lights with a game controller", url: "https://inputconfig.com/guides/game-controller-lighting-control"),
             HelpLink(title: "Connecting a Controller", url: "https://inputconfig.com/help/connecting-controllers"),
             HelpLink(title: "DualSense Edge", url: "https://inputconfig.com/help/dualsense-edge"),
             HelpLink(title: "Vibration", url: "https://inputconfig.com/help/haptic-feedback"),
@@ -2543,25 +2578,30 @@ enum HelpGuideLibrary {
                 .paragraph("By cable, plug it in. By Bluetooth, hold the PS button and the profile button together until the light flashes, then connect it in System Settings, Bluetooth. A second Access Controller gets its own slot. Cable or Bluetooth, it needs no driver.")
             ]),
             HelpSection(heading: "Know what the Mac sees", blocks: [
-                .paragraph("Each button sends whatever the current on-device profile assigns it. Out of the box, Sony's base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick as the left stick; the other sockets send nothing until a profile made on a PS5 gives them buttons. macOS reports it in the DualSense family, so the controller's entry in the sidebar says DualSense, which is only a name. With the base profile, only the center button, socket 5 and socket 7 send anything.")
+                .paragraph("InputConfig reads the controller itself, not only what its profile sends. Every socket, the center button, the stick and its press, the PS button and the Profile button arrive under their own names, Socket 1 to Socket 8, Center button, Stick press, PS button and Profile button, whatever the active profile assigns them. The functions the profile sends arrive too, so a row made for Cross still works. Over USB-C the app also reads the three profiles stored on the controller, and the sidebar names the active one."),
+                .paragraph("The expansion ports E1 to E4 are read the same way. A stick, switch, button, trigger or pedal is recognized the moment it is plugged in: the Live Visualizer draws it on the port strip as what it is, the rows offer it as E1 stick, E1 button or E1 trigger, and Scan hears it. A stick in a port is E1 X and E1 Y, a trigger or pedal is E1 X from 0 to 1, a switch is E1 button.")
+            ]),
+            HelpSection(heading: "Its three profiles", blocks: [
+                .paragraph("The controller stores three profiles and applies the active one itself, on a PS5 and on the Mac. In the Live Visualizer, the Profile chip above the drawing names the active one. Over USB-C it lists all three: Use makes one active, the same as the controller's Profile button, and Edit opens the profile beside the drawing, in the PS5's own terms: Button Assignments with Assign Button, Assign Simultaneous Press and Button Toggle for every socket, the center button and the stick press; Controller Orientation and which stick the stick acts as; and each expansion port's device and assignment. Click a row to ring its socket or port on the drawing, or click a control on the drawing to go to its row. Save to Controller stores it on the controller, which reads it back to check. Over Bluetooth the controller does not open its profiles to a computer, so the chip shows the active profile and the Profile button switches; that is how the controller works, not a limit of the app."),
+                .paragraph("A row can switch profiles too: the Controller Profile output, under Controller in the output menu, goes to the next or previous profile or straight to 1, 2 or 3. Over USB-C only, for the same reason.")
             ]),
             HelpSection(heading: "Use the built-in preset", blocks: [
                 .paragraph("Access Controller, in Desktop & Productivity, runs the whole desktop from one hand."),
                 .list([
                     "**With the base profile.** The stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight.",
-                    "**With a PS5 profile.** Give the other sockets Square, Triangle, L1, R1, L2, R2 and Create, and the preset's other rows come alive: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control.",
-                    "**The PS button.** It stays with macOS and never reaches an app, so nothing is bound to it."
-                ], ordered: false),
-                .paragraph("If your profile assigns the sockets differently, Scan a row and press the socket you mean. Scan the socket you want, and the preset follows your profile instead of Sony's.")
+                    "**Every other socket.** Scan a row and press the socket you mean: it is bound by its number, and keeps working whichever profile is active.",
+                    "**The ports.** Plug a stick, switch or trigger into E1 to E4 and Scan it, or pick E1 stick, E1 button or E1 trigger from the input menu.",
+                    "**The PS and Profile buttons.** Both are read on their own and can carry a row."
+                ], ordered: false)
             ]),
-            HelpSection(heading: "If a socket sends nothing", blocks: [
-                .paragraph("The controller stores three profiles, and a profile made on a PS5 can leave sockets unassigned. Climb this ladder, smallest step first:"),
+            HelpSection(heading: "If something sends nothing", blocks: [
+                .paragraph("Sockets, the stick and the ports no longer depend on the profile. Climb this ladder, smallest step first:"),
                 .list([
-                    "**Check the lit profile.** The lit profile light is the current one.",
-                    "**Cycle the profiles.** Press the profile button and try Scan after each.",
-                    "**Fix it on a PS5.** If no profile sends input, connect the controller to a PS5 and assign the sockets, or restore the default profile."
+                    "**Check the connection.** Over USB-C, try the cable; over Bluetooth, the Mac must list the controller as connected.",
+                    "**Check the plug.** A stick or trigger in a port needs a four-contact 3.5 mm plug pushed all the way in; the port strip in the Live Visualizer shows what the controller sees there.",
+                    "**Check the row.** A row made for a profile function, such as Circle, fires only when the profile sends it; a row made for the socket itself always fires."
                 ], ordered: true),
-                .paragraph("A silent socket is a profile setting, not a broken controller.")
+                .paragraph("A silent control is a connection or a row, not a profile setting.")
             ]),
             HelpSection(heading: "The short version", blocks: [
                 .list([
@@ -2983,10 +3023,10 @@ enum HelpGuideLibrary {
                     "**Start and Stop.** Starts or stops the selected preset.",
                     "**Presets.** Every preset, in sidebar order. With the favorites filter on, only your starred presets.",
                     "**Controller.** The connected controller by name, with its battery level; with more than one, a menu of them.",
-                    "**New Preset, Smart Preset and Statistics.** Shortcuts to the same sheets as in the window.",
+                    "**Recent and search.** The last five presets you started. Type to search every preset by name, tag or folder; click one to start or stop it, or press Return for the first match.",
                     "**Emergency Stop.** With its keyboard shortcut beside it.",
                     "**Engine status.** With CPU and memory use.",
-                    "**The bottom row.** Quit, the tip jar, What's New (the sparkles button), the main window and Settings. See [what changed in each version](https://inputconfig.com/help/whats-new)."
+                    "**The bottom row.** Quit, the tip jar, Devices, the main window and Settings."
                 ], ordered: false),
                 .paragraph("The Emergency Stop is always one click away here.")
             ]),

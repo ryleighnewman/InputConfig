@@ -95,7 +95,7 @@ enum PresetSearch {
             add("stick gesture", "flick", "double flick", "snap", "stick swipe")
         }
         // Outputs people name differently from the menu wording.
-        for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) {
+        for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) + (binding.tripleTapOutputs ?? []) {
             switch o.type {
             case .mouseButton:
                 add("click", "mouse")
@@ -118,13 +118,14 @@ enum PresetSearch {
             case .midiNote, .midiCC, .midiPitchBend, .midiProgramChange, .midiTransport: add("midi")
             case .absoluteVolume: add("volume")
             case .lightBar: add("light bar", "rgb", "color", "led", "rainbow")
+            case .controllerProfile: add("controller profile", "profile", "access controller")
             }
         }
         // What the row shows in full, not its short previews: a macro's
         // steps, the whole text a Type Text output types, a system action's
         // parameter, and the preset an Activate Preset output starts.
         for step in binding.macroSteps ?? [] { add(OutputAction.names(step.pressedActions).joined(separator: " ")) }
-        for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) {
+        for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) + (binding.tripleTapOutputs ?? []) {
             if let text = o.text, !text.isEmpty { add(text) }
             if let target = o.targetPresetID, let name = presetName?(target) { add(name) }
         }
@@ -154,6 +155,10 @@ enum PresetSearch {
                 if let dbl = b.doubleTapOutputs, !dbl.isEmpty {
                     let names = OutputAction.names(dbl).joined(separator: " + ")
                     parts.append(String(localized: "double tap: \(names)"))
+                }
+                if let tpl = b.tripleTapOutputs, !tpl.isEmpty {
+                    let names = OutputAction.names(tpl).joined(separator: " + ")
+                    parts.append(String(localized: "triple tap: \(names)"))
                 }
                 if let steps = b.macroSteps, !steps.isEmpty { parts.append((steps.count == 1 ? String(localized: "macro, 1 step") : String(localized: "macro, \(steps.count) steps"))) }
                 if !b.modifiers.isEmpty {

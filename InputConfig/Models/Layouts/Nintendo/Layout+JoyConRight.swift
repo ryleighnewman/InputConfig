@@ -35,9 +35,11 @@ extension ControllerLayout {
         maker: .nintendo,
         family: .nintendo,
         modelNames: ButtonNames.ModelNames(
-            renamed: [0: "A", 1: "B", 2: "X", 3: "Y", 4: "SL", 5: "SR"],
+            renamed: [0: "A", 1: "B", 2: "X", 3: "Y", 4: "SL", 5: "SR", 6: "R", 7: "ZR", 12: "R3", 15: "C", 17: "GR"],
             short: [4: "SL", 5: "SR"],
-            absent: [6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
+            // 6, 7, 12, 15 and 17 (R, ZR, the stick press, C, GR) arrive only
+            // from a Joy-Con 2 read directly.
+            absent: [8, 11, 13, 14, 16, 18, 19]),
         aspect: 102.0 / 35.9,
         topStrip: 0.14,
         backStrip: 0.27,
@@ -48,9 +50,13 @@ extension ControllerLayout {
         // "Joy-Con 2", so neither contains "Joy-Con (R)".
         match: [
             [.brand(.joyConRight), .gcProductCategoryContains("Joy-Con (R)")],
+            // A Joy-Con 2 (R) read directly (USB grip or Bluetooth LE)
+            // takes this drawing with the same numbering.
+            [.rawProfileLayout("switch2JoyConRight")],
+            [.vidPid(vendor: 0x057E, products: [0x2067])],
         ],
         matchPriority: 10,
-        readability: .partial("R, ZR and the stick press never reach the Mac on a single Joy-Con (R); motion is read when macOS reports it"),
+        readability: .partial("On a first Joy-Con (R) R, ZR and the stick press never reach the Mac; a Joy-Con 2 is read directly (USB grip or Bluetooth LE) with R, ZR, C, GR and its motion sensors, not yet checked on one"),
         approximate: true,
         sources: [
             "nintendo.com Joy-Con specifications (102 x 35.9 x 28.4 mm)",
@@ -148,8 +154,8 @@ extension ControllerLayout {
         // Front, right end: R sits on the end of the body (the top end when
         // upright), toward the outer shell.
         PlacedControl(id: "r", kind: .shoulder, center: CGPoint(x: 0.976, y: 0.45), size: 0.022, height: 0.13,
-                      shape: .capsule(angleDegrees: 0), printed: "R",
-                      readable: .notReported("GameController does not expose R on a single Joy-Con, and the raw HID read is switched off for it")),
+                      shape: .capsule(angleDegrees: 0), printed: "R", inputs: .button(6),
+                      note: "Reaches the Mac only on a Joy-Con 2 read directly; GameController does not expose it on a first Joy-Con"),
 
         // Motion sensors inside the body, read when macOS reports them.
         PlacedControl(id: "gyro", kind: .other, center: CGPoint(x: 0.2, y: 0.72), size: 0.075, height: 0.028,
@@ -158,7 +164,7 @@ extension ControllerLayout {
 
         // Back, as held: ZR behind R at the right end, toward the outer shell.
         PlacedControl(id: "zr", kind: .trigger(.digital), face: .back, center: CGPoint(x: 0.92, y: 0.55), size: 0.085, height: 0.14,
-                      shape: .roundedRect(corner: 0.35), printed: "ZR",
-                      readable: .notReported("GameController does not expose ZR on a single Joy-Con, and the raw HID read is switched off for it")),
+                      shape: .roundedRect(corner: 0.35), printed: "ZR", inputs: .button(7),
+                      note: "Reaches the Mac only on a Joy-Con 2 read directly; GameController does not expose it on a first Joy-Con"),
     ]
 }

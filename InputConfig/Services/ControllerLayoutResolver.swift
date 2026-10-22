@@ -65,8 +65,13 @@ enum ControllerLayoutResolver {
                let pad = service.rawHIDGamepadSlots[slot], case .generic? = pad.profile?.layout {
                 return ResolvedLayout(layout: generatedGrid(for: pad), readPath: path, source: .connected, note: nil)
             }
-            guard let layout = matched ?? (path == .gameController ? ControllerLayoutCatalog.layout(.genericGamepad) : chosenLayout)
+            guard let base = matched ?? (path == .gameController ? ControllerLayoutCatalog.layout(.genericGamepad) : chosenLayout)
             else { return nil }
+            // The Access controller is drawn with what is in each of its
+            // expansion ports right now.
+            let layout = base.id == .psAccess
+                ? ControllerLayout.psAccess(ports: service.accessPortDevices(forSlot: slot), profile: service.accessProfile(forSlot: slot).profile)
+                : base
             var note: String? = matched == nil ? String(localized: "Model not recognized; showing a standard gamepad.") : nil
             if matched == nil, path != .gameController, let chosenLayout {
                 note = String(localized: "Model not recognized; showing the \(chosenLayout.shownName), the controller this group is set to.")
@@ -250,8 +255,13 @@ enum ControllerLayoutResolver {
             switch layout {
             case .xinput: return "xinput"
             case .dualShock3: return "dualShock3"
+            case .dualShock4: return "dualShock4"
+            case .dualSenseAlt: return "dualSenseAlt"
+            case .xboxBluetooth: return "xboxBluetooth"
             case .switch2Pro: return "switch2Pro"
             case .switch2GameCube: return "switch2GameCube"
+            case .switch2JoyConLeft: return "switch2JoyConLeft"
+            case .switch2JoyConRight: return "switch2JoyConRight"
             case .steamController2026: return "steamController2026"
             case .streamDeck: return "streamDeck"
             case .generic: return "generic"
