@@ -187,7 +187,7 @@ struct SonyPadIdentity: Equatable, Sendable {
 /// serialized on a private queue, so call `open`/`write`/`close` from any
 /// thread. `write` lazily opens if needed, so a bare `write` also works.
 final class InProcessLightWriter: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = InProcessLightWriter()
+    static let shared = InProcessLightWriter()
 
     private let queue = DispatchQueue(label: "com.inputconfig.inproclight")
     /// Every opened Sony pad. `key` is the pad's IOHIDDevice registry entry
@@ -211,6 +211,31 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// SDL and the kernel send it once per connection, not on every color
     /// write. Touched only on `queue`.
     private var lightSetupSent = Set<UInt64>()
+    /// Whether this writer touches the light bar at all. Off, every report
+    /// leaves the light fields unclaimed (the flag bits stay clear), so
+    /// rumble still goes out and macOS, Steam or any other app keeps the
+    /// color it set. Touched only on `queue`; the Settings switch.
+    /// Starts from Settings: with the light bar left to macOS at launch,
+    /// a rumble write before anything else changed the switch claimed the
+    /// light fields and blanked a DualSense's color.
+    private var lightControl = !UserDefaults.standard.bool(forKey: GameControllerService.leaveLightBarKey)
+
+    /// The Settings switch: on, the app sets and holds light bar colors;
+    /// off, it never writes the light and drops any color it was holding.
+    func setLightControl(_ on: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.lightControl != on else { return }
+            self.lightControl = on
+            if !on {
+                self.holdColor = nil
+                self.deviceHold.removeAll()
+                if self.rumbles.isEmpty && self.rumbleNeedsStop.isEmpty {
+                    self.holdTimer?.cancel()
+                    self.holdTimer = nil
+                }
+            }
+        }
+    }
     /// Current solid color to re-assert and the high-rate timer that does it.
     /// Both are touched only on `queue`. `holdColor` applies to every pad
     /// that has no color of its own in `deviceHold`; a write aimed at one
@@ -339,9 +364,7 @@ final class InProcessLightWriter: @unchecked Sendable {
         let seconds = Double(max(40, min(2000, durationMs))) / 1000
         Self.debugLastVibrate = "intensity=\(intensity) level=\(level) ms=\(durationMs) at=\(Date())"
         queue.async { [weak self] in
-            guard let self = self else { return }
-            if self.devices.isEmpty { self.reopenLocked() }
-            guard !self.devices.isEmpty else { return }
+            guard let self = self, self.ensureDevicesLocked() else { return }
             let only = self.resolveLocked(target)
             let until = CFAbsoluteTimeGetCurrent() + seconds
             for d in self.devices where only == nil || only!.contains(d.key) {
@@ -526,8 +549,7 @@ final class InProcessLightWriter: @unchecked Sendable {
     func write(red: UInt8, green: UInt8, blue: UInt8, brightness: UInt8 = 2,
                target: SonyPadIdentity? = nil) {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            if self.devices.isEmpty { self.reopenLocked() }
+            guard let self = self, self.lightControl, self.ensureDevicesLocked() else { return }
             let only = self.resolveLocked(target)
             // If a hold loop is re-asserting a color at 200 Hz, a bare write
             // would be repainted within milliseconds. Update the held color so
@@ -558,7 +580,7 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// `target` holds the color on one slot's pad only; nil holds it on all.
     func startHold(red: UInt8, green: UInt8, blue: UInt8, target: SonyPadIdentity? = nil) {
         queue.async { [weak self] in
-            guard let self = self, self.ensureDevicesLocked() else { return }
+            guard let self = self, self.lightControl, self.ensureDevicesLocked() else { return }
             let only = self.resolveLocked(target)
             self.setHoldLocked((red, green, blue), only: only)
             self.writeLocked(only: only)  // immediate
@@ -578,7 +600,7 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// lost-rumble pattern the heartbeat exists to avoid.
     func setHeldColor(red: UInt8, green: UInt8, blue: UInt8, target: SonyPadIdentity? = nil) {
         queue.async { [weak self] in
-            guard let self = self, self.ensureDevicesLocked() else { return }
+            guard let self = self, self.lightControl, self.ensureDevicesLocked() else { return }
             let only = self.resolveLocked(target)
             self.setHoldLocked((red, green, blue), only: only)
             self.writeLocked(only: only)
@@ -591,13 +613,23 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// nothing to find: with no Sony pad connected, every light change
     /// re-enumerated the registry. The full-rate activity (no App Nap) is
     /// taken only while a pad is actually being held.
+    /// Pads whose open was refused at the last scan, and the ones already said.
+    private var refused: Set<UInt64> = []
+    private var refusedLogged: Set<UInt64> = []
     private var lastEmptyScan: CFAbsoluteTime = 0
     private func ensureDevicesLocked() -> Bool {
-        if devices.isEmpty {
+        // Also while a pad was refused beside one that opened, so a release
+        // by the other app is picked up within seconds.
+        if devices.isEmpty || !refused.isEmpty {
             let now = CFAbsoluteTimeGetCurrent()
-            guard now - lastEmptyScan > 5 else { return false }
-            reopenLocked()
-            if devices.isEmpty { lastEmptyScan = now; return false }
+            if devices.isEmpty || now - lastEmptyScan > 5 {
+                guard now - lastEmptyScan > 5 else { return false }
+                // With a pad open only the others are tried: closing it
+                // every five seconds cut whatever buzz it was playing.
+                reopenLocked(keepingOpen: !devices.isEmpty)
+                lastEmptyScan = now
+                if devices.isEmpty { return false }
+            }
         }
         // Full rate (no App Nap) only for a few seconds after a change, or
         // while changes keep coming (a cycle, a rumble); the 1 Hz heartbeat
@@ -640,8 +672,10 @@ final class InProcessLightWriter: @unchecked Sendable {
 
     // MARK: - queue-only internals
 
-    private func reopenLocked() {
-        closeLocked()
+    private func reopenLocked(keepingOpen: Bool = false) {
+        refused.removeAll()
+        if !keepingOpen { closeLocked() }
+        let wasOpen = Set(devices.map(\.key))
         let matching = IOServiceMatching(kIOHIDDeviceKey) as NSMutableDictionary
         matching[kIOHIDVendorIDKey as String] = Self.sonyVID
         var iterator: io_iterator_t = 0
@@ -658,10 +692,24 @@ final class InProcessLightWriter: @unchecked Sendable {
             // transport key just below.
             guard let pid = (pidRef.takeRetainedValue() as? NSNumber)?.int32Value else { continue }
             guard Self.dualSensePIDs.contains(pid) || Self.ds4PIDs.contains(pid) else { continue }
-            guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) else { continue }
             let identity = SonyPadIdentity.of(entry: entry)
+            guard !wasOpen.contains(identity.nodeID) else { continue }
+            guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) else { continue }
             // Shared (non-exclusive) open: coexists with gamecontrolleragentd.
-            guard IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else { continue }
+            // Refused (another process holds the pad exclusively): said once
+            // per pad, and tried again on the next scan.
+            let opened = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+            guard opened == kIOReturnSuccess else {
+                refused.insert(identity.nodeID)
+                if refusedLogged.insert(identity.nodeID).inserted {
+                    let code = String(format: "0x%x", opened)
+                    DispatchQueue.main.async {
+                        ActivityLog.shared.warning("Controllers", "A PlayStation controller could not be opened for its light, vibration and trigger outputs (\(code), another app may hold it); they are left off until it can be")
+                    }
+                }
+                continue
+            }
+            refusedLogged.remove(identity.nodeID)
             var isBT = false
             if let tRef = IORegistryEntryCreateCFProperty(entry, kIOHIDTransportKey as CFString, kCFAllocatorDefault, 0) {
                 isBT = ((tRef.takeRetainedValue() as? String) ?? "").lowercased().contains("bluetooth")
@@ -677,8 +725,20 @@ final class InProcessLightWriter: @unchecked Sendable {
         rumbles = rumbles.filter { live.contains($0.key) }
         rumbleNeedsStop.formIntersection(live)
         // A pad can arrive already buzzing, left that way by a crash or by a
-        // previous run that let go mid-pulse. Silence it on the way in.
-        if !devices.isEmpty { stopMotorsLocked() }
+        // previous run that let go mid-pulse. Silence it on the way in; the
+        // ones kept open go on with what they play.
+        if keepingOpen {
+            let added = live.subtracting(wasOpen)
+            guard !added.isEmpty else { return }
+            let saved = quietUntil
+            quietUntil = 0
+            rumbleNeedsStop.formUnion(added)
+            writeLocked(touchLight: false)
+            rumbleNeedsStop.subtract(added)
+            quietUntil = saved
+        } else if !devices.isEmpty {
+            stopMotorsLocked()
+        }
     }
 
     /// Force the motors to zero right now. A DualSense holds the last motor
@@ -778,7 +838,9 @@ final class InProcessLightWriter: @unchecked Sendable {
             // This pad's color. With nothing held anywhere the report carries
             // an unlit color, as it always has; a pad with no color of its own
             // while another pad holds one is left alone instead of blanked.
-            var touchLight = touchLight
+            // With light control off in Settings the light fields are never
+            // claimed, whatever the write was for.
+            var touchLight = touchLight && lightControl
             var red: UInt8 = 0, green: UInt8 = 0, blue: UInt8 = 0, brightness: UInt8 = 0
             if let b = bare {
                 red = b.r; green = b.g; blue = b.b; brightness = b.br

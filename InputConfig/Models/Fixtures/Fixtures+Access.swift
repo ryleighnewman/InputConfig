@@ -3,7 +3,7 @@ import Foundation
 /// PlayStation Access controller (054C:0E5F): input reports (0x01 USB 64
 /// bytes, 0x31 Bluetooth 78 bytes), the 956 byte stored profiles and the
 /// feature report commands. Byte values come from accessports.log
-/// (2026-10-18 and 10-19 on Ryleigh's unit) and the layouts in titania,
+/// (2026-10-18 and 10-19 on a real controller) and the layouts in titania,
 /// jfedor/ps-access and nsfm/dualsense-ts; no whole report was ever logged,
 /// so every input fixture is reconstructed until the hidcapture hook
 /// replaces it. Bluetooth CRCs: seed 0xA1 over bytes 0 to 73, little
@@ -24,6 +24,54 @@ extension HIDFixtureCorpus {
     // Byte 17 (USB) = sockets, 18 = center, stick press, PS, Profile.
     // Expected stick values use centered(v) = (v - 128) / 127.5.
     static let access: [HIDFixture] = [
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.socket5triangle",
+            """
+            01 80 80 80 80 00 00 00 88 00 00 00 00 00 00 00 10 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("buttons=44"), .custom("mapped=3"), .custom("hat=0,0")],
+            "socket 5 on a profile giving it Triangle: byte 8 0x88, byte 16 0x10; GameController reported Button B", status: .verified),
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.socket4circle",
+            """
+            01 80 80 80 80 00 00 00 48 00 00 00 00 00 00 00 08 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("buttons=43"), .custom("mapped=1")],
+            "socket 4 on Circle: byte 8 0x48, byte 16 0x08; GameController reported nothing", status: .verified),
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.socket6square",
+            """
+            01 80 80 80 80 00 00 00 18 00 00 00 00 00 00 00 20 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("buttons=45"), .custom("mapped=2")],
+            "socket 6 on Square: byte 8 0x18, byte 16 0x20; GameController reported nothing", status: .verified),
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.socket1l3",
+            """
+            01 80 80 80 80 00 00 00 08 40 00 00 00 00 00 00 01 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("buttons=40"), .custom("mapped=11")],
+            "socket 1 on L3: byte 9 0x40, byte 16 0x01", status: .verified),
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.rest",
+            """
+            01 80 80 80 80 00 00 00 08 00 00 00 00 00 00 00 00 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("mapped="), .custom("hat=0,0")],
+            "rest: byte 8 0x08 (D-pad centered), 9 and 10 zero", status: .verified),
+        // Measured 2026-11-07 on a real controller, USB, profile 1 (raw probe).
+        accessInput("access.usb.mapped.dpadup",
+            """
+            01 80 80 80 80 00 00 00 00 00 00 00 00 00 00 00 00 00 82 81 7f 80 00 00 00 00 00 00 00 00 00 00
+            00 00 00 00 00 12 00 00 01 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+            """,
+            [.custom("mapped="), .custom("hat=0,1")],
+            "a socket on Up: D-pad nibble 0", status: .verified),
         // F1: rest with a stick in E1, profile 1, charging 25 percent.
         accessInput("access.usb.rest.e1stick",
             """

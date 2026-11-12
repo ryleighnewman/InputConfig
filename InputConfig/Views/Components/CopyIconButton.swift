@@ -22,6 +22,10 @@ struct CopyIconButton: View {
     var announcement: String? = String(localized: "Copied")
 
     @State private var justCopied: Bool = false
+    /// Which click the pending reset belongs to: a second click inside the
+    /// first's second kept the checkmark its full time instead of ending
+    /// early.
+    @State private var clickGeneration = 0
 
     var body: some View {
         Button {
@@ -30,7 +34,10 @@ struct CopyIconButton: View {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.6)) {
                 justCopied = true
             }
+            clickGeneration += 1
+            let generation = clickGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                guard generation == clickGeneration else { return }
                 withAnimation(.easeOut(duration: 0.3)) {
                     justCopied = false
                 }

@@ -10,10 +10,9 @@ import QuartzCore
 /// PowerA/Hori/MadCatz Xbox-compatibles, Logitech F310/F710, etc.
 ///
 /// The instance owns the underlying `IOHIDDevice` for the duration of
-/// its lifetime. `state` is lock-protected: the input report callback is
-/// serviced on the main runloop (where the IOHIDManager is scheduled), the
-/// same context the mapping engine reads from, and the lock keeps it safe if
-/// the device is ever scheduled on a background queue instead.
+/// its lifetime. `state` is lock-protected: the input report callback runs
+/// on the raw HID report thread (`RawHIDReportThread`, where the devices
+/// are scheduled) and the mapping engine reads on the main thread.
 final class RawHIDGamepad: Identifiable, @unchecked Sendable {
 
     /// The device's IORegistry entry ID. In-memory only: it changes on every
@@ -26,6 +25,18 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     let manufacturer: String?
     let transport: String           // "USB", "Bluetooth", etc.
     let profile: ControllerProfile?
+    /// A descriptor pad's relative axes (a knob's turns), from its profile.
+    /// Worked out once: each report rebuilt the list (a flatMap, a filter,
+    /// a Set and a sort, about six allocations) up to 1000 times a second,
+    /// unchanged reports included.
+    let relativeAxes: [Int]
+
+    /// The relative axis slots of a profile's descriptor plan; none for a
+    /// hand-coded layout of another kind.
+    static func relativeAxisSlots(of profile: ControllerProfile?) -> [Int] {
+        guard case .generic(let generic)? = profile?.layout else { return [] }
+        return HIDExtendedLayoutRegistry.extended(for: generic).relativeAxisSlots
+    }
 
     /// Underlying HID device. Held strongly so it isn't released while
     /// the input report callback is registered. nil for a synthetic pad
@@ -54,6 +65,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         self.manufacturer = manufacturer
         self.transport = transport
         self.profile = profile
+        self.relativeAxes = Self.relativeAxisSlots(of: profile)
     }
 
     /// A pad with no device behind it, fed reports by the bench or the
@@ -68,6 +80,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         self.manufacturer = nil
         self.transport = transport
         self.profile = testProfile
+        self.relativeAxes = Self.relativeAxisSlots(of: testProfile)
     }
 
     /// Atomic snapshot of the latest decoded controller state. Safe to
@@ -92,6 +105,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         _state = ControllerState()
         counters = [:]
         pulses = [:]
+        axisResetPending = []
         pulseGeneration &+= 1
         lock.unlock()
         imu.dropTurn()
@@ -122,7 +136,10 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         // are not read as a stalled link's.
         if !newValue.motion.isEmpty { imu.markReport() }
         ControllerPowerService.shared.noteRaw(key: id, state: newValue)
+        let source = ObjectIdentifier(self)
+        let watched = DirectPadActivity.shared.watches(source)
         lock.lock()
+        let moved = watched && Self.movesControls(newValue, over: _state)
         _state.buttons.merge(newValue.buttons) { _, new in new }
         _state.axes.merge(newValue.axes) { _, new in new }
         _state.hats.merge(newValue.hats) { _, new in new }
@@ -131,6 +148,16 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         _state.motionCorrection.merge(newValue.motionCorrection) { _, new in new }
         _state.motionAbsolute.merge(newValue.motionAbsolute) { _, new in new }
         lock.unlock()
+        if moved { DirectPadActivity.shared.noteChange(source) }
+    }
+
+    /// Whether a decoded report moves a button, axis or hat off the value
+    /// it holds. Motion is left out: an IMU pad reports a new sample every
+    /// time, and a pad lying still lets the engine's poll rest.
+    nonisolated static func movesControls(_ new: ControllerState, over old: ControllerState) -> Bool {
+        new.buttons.contains { old.buttons[$0.key] != $0.value }
+            || new.axes.contains { old.axes[$0.key] != $0.value }
+            || new.hats.contains { key, hat in old.hats[key].map { $0.x != hat.x || $0.y != hat.y } ?? true }
     }
 
     // MARK: Short presses (Stream Deck + turns and touch strip)
@@ -153,8 +180,8 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     /// Press each button briefly, for a control that sends one event and
     /// no release (a dial turn, a touch strip tap). A pulse on a button
     /// still pressed from the last one waits its turn, so a binding sees
-    /// each as its own press instead of one long hold. Call on the main
-    /// thread, where the HID report callback runs.
+    /// each as its own press instead of one long hold. Any thread: the
+    /// state is under the lock and the release is queued on the main queue.
     func pulse(_ indices: [Int]) {
         for index in indices {
             lock.lock()
@@ -169,6 +196,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
             _state.buttons[index] = 1
             let generation = pulseGeneration
             lock.unlock()
+            DirectPadActivity.shared.noteChange(ObjectIdentifier(self))
             schedulePulseRelease(index, generation: generation)
         }
     }
@@ -184,8 +212,22 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         if !fired.isEmpty { pulse(fired) }
     }
 
-    /// Per relative axis, bumped on each push so only the latest release acts.
-    private var axisPulseGeneration: [Int: Int] = [:]
+    /// Per relative axis, when it was last pushed, and whether its return
+    /// to rest is already scheduled: one main-queue block per axis rather
+    /// than one per report, which a trackpad or mouse sends hundreds of
+    /// times a second while it moves.
+    private var axisLastPush: [Int: TimeInterval] = [:]
+    private var axisResetPending: Set<Int> = []
+
+    /// A mouse, trackpad or other pointer, by its primary usage: it moves
+    /// the pointer by itself, so the visualizer does not redraw for its
+    /// motion (the pointer moving to a click kept the panel redrawing).
+    lazy var isPointingDevice: Bool = {
+        guard let device else { return false }
+        let page = (IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsagePageKey as CFString) as? NSNumber)?.intValue ?? 0
+        let usage = (IOHIDDeviceGetProperty(device, kIOHIDPrimaryUsageKey as CFString) as? NSNumber)?.intValue ?? 0
+        return (page == 0x01 && (usage == 0x01 || usage == 0x02)) || (page == 0x0D && usage == 0x05)
+    }()
 
     /// Merge a decoded report whose `axes` are relative (a knob's turns).
     /// A report that turns one pushes it to full tilt for a moment, then it
@@ -198,21 +240,36 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
             if abs(value) > 0.5 {
                 lock.lock()
                 _state.axes[axis] = value
-                axisPulseGeneration[axis, default: 0] += 1
-                let generation = axisPulseGeneration[axis] ?? 0
+                axisLastPush[axis] = CACurrentMediaTime()
+                let schedule = axisResetPending.insert(axis).inserted
                 let resetGeneration = pulseGeneration
                 lock.unlock()
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.pulseHold) { [weak self] in
-                    guard let self else { return }
-                    self.lock.lock()
-                    defer { self.lock.unlock() }
-                    guard self.pulseGeneration == resetGeneration,
-                          self.axisPulseGeneration[axis] == generation else { return }
-                    self._state.axes[axis] = 0
-                }
+                DirectPadActivity.shared.noteChange(ObjectIdentifier(self))
+                if schedule { scheduleAxisReset(axis, after: Self.pulseHold, generation: resetGeneration) }
             }
         }
         updateState(decoded)
+    }
+
+    /// Back to rest once the axis has had no push for `pulseHold`; a push
+    /// meanwhile moves the reset on rather than queuing another block.
+    private func scheduleAxisReset(_ axis: Int, after delay: TimeInterval, generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            // Reset since (resetState clears the pending set): a new push
+            // has its own block.
+            guard self.pulseGeneration == generation else { self.lock.unlock(); return }
+            let since = CACurrentMediaTime() - (self.axisLastPush[axis] ?? 0)
+            if since < Self.pulseHold {
+                self.lock.unlock()
+                self.scheduleAxisReset(axis, after: Self.pulseHold - since, generation: generation)
+                return
+            }
+            self._state.axes[axis] = 0
+            self.axisResetPending.remove(axis)
+            self.lock.unlock()
+        }
     }
 
     private func schedulePulseRelease(_ index: Int, generation: Int) {
@@ -521,5 +578,91 @@ final class DirectIMU: @unchecked Sendable {
         gyroJitter.removeAll(keepingCapacity: true)
         yawTotal = 0
         lock.unlock()
+    }
+}
+
+/// Changes on the pads GameController does not report (raw HID pads, the
+/// Steam Controller, racing wheels), for the engine's idle poll. A
+/// GameController pad wakes the resting poll through its change handler;
+/// these had no such path, so a preset reading one never rested. Their
+/// reports land on whatever thread reads them (main today, a reader thread
+/// if the HID manager moves), so the time of the last change and the wake
+/// are kept under one lock here, and the wake always reaches the engine
+/// through the main queue, never from inside a report callback. Only the
+/// sources the running preset reads count.
+final class DirectPadActivity: @unchecked Sendable {
+    static let shared = DirectPadActivity()
+
+    /// How a wake gets to the main thread; the bench holds it to count.
+    private let post: @Sendable (@escaping @Sendable () -> Void) -> Void
+
+    init(post: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) }) {
+        self.post = post
+    }
+
+    private let lock = NSLock()
+    /// The pads, the Steam Controller service and the wheels the running
+    /// preset reads, by object. Under `lock`.
+    private var watched: Set<ObjectIdentifier> = []
+    /// When a watched source last moved, on CACurrentMediaTime. Under `lock`.
+    private var lastChange: CFTimeInterval = 0
+    /// The engine's poll is resting, so a change wakes it. Under `lock`.
+    private var resting = false
+    /// A wake is on its way to main; changes meanwhile only stamp the time.
+    /// Under `lock`.
+    private var wakePending = false
+    /// The engine's wake, run on main. Under `lock`.
+    private var wake: (@MainActor () -> Void)?
+
+    func setWake(_ handler: (@MainActor () -> Void)?) {
+        lock.lock(); wake = handler; lock.unlock()
+    }
+
+    func watch(_ sources: Set<ObjectIdentifier>) {
+        lock.lock(); watched = sources; lock.unlock()
+    }
+
+    func setResting(_ on: Bool) {
+        lock.lock(); resting = on; lock.unlock()
+    }
+
+    /// Back to nothing watched, no wake: the engine stopped.
+    func reset() {
+        lock.lock()
+        watched = []
+        wake = nil
+        resting = false
+        wakePending = false
+        lastChange = 0
+        lock.unlock()
+    }
+
+    func watches(_ source: ObjectIdentifier) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return watched.contains(source)
+    }
+
+    var lastChangeTime: CFTimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return lastChange
+    }
+
+    /// A source moved a control. Any thread.
+    func noteChange(_ source: ObjectIdentifier) {
+        lock.lock()
+        guard watched.contains(source) else { lock.unlock(); return }
+        lastChange = CACurrentMediaTime()
+        let send = resting && !wakePending && wake != nil
+        if send { wakePending = true }
+        lock.unlock()
+        guard send else { return }
+        post { [self] in
+            lock.lock()
+            wakePending = false
+            // Read again on arrival: the poll may have woken by itself.
+            let handler = resting ? wake : nil
+            lock.unlock()
+            MainActor.assumeIsolated { handler?() }
+        }
     }
 }

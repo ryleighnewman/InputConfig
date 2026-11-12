@@ -138,6 +138,13 @@ final class Switch2USBEnabler: @unchecked Sendable {
                 self.lock.unlock()
                 if again { self.enableConnectedControllers() }
             }
+            // Until a pad not started before has been, or the tries run out:
+            // a second pad's vendor interface comes late, and the first pad
+            // answering ended the pass, so the second read nothing until it
+            // was plugged in again.
+            let known = self.startedInterfaces
+            var started: Set<UInt64> = []
+            defer { if !started.isEmpty { self.startedInterfaces = started } }
             for attempt in 0..<4 {
                 if attempt > 0 { Thread.sleep(forTimeInterval: 0.5) }
                 let services = self.vendorInterfaces()
@@ -145,20 +152,26 @@ final class Switch2USBEnabler: @unchecked Sendable {
                 var anyStarted = false
                 for service in services {
                     defer { IOObjectRelease(service) }
+                    var id: UInt64 = 0
+                    IORegistryEntryGetRegistryEntryID(service, &id)
+                    guard !started.contains(id) else { continue }
                     do {
                         try self.sendStartSequence(to: service)
+                        started.insert(id)
                         anyStarted = true
                     } catch {
                         ActivityLog.shared.warning("Devices", "Switch 2 controller: could not start it over USB (\(error.localizedDescription))")
                     }
                 }
-                if anyStarted {
-                    ActivityLog.shared.info("Devices", "Switch 2 controller started over USB")
-                    return
-                }
+                if anyStarted { ActivityLog.shared.info("Devices", "Switch 2 controller started over USB") }
+                if !started.subtracting(known).isEmpty { return }
             }
         }
     }
+
+    /// The interfaces the last pass started. Touched on `queue` only, one
+    /// pass at a time.
+    private var startedInterfaces: Set<UInt64> = []
 
     /// The vendor interface of each connected Switch 2 controller this
     /// enabler starts. Matched on its properties with IOPropertyMatch, which
@@ -229,13 +242,30 @@ final class Switch2USBEnabler: @unchecked Sendable {
             var sent: UInt = 0
             guard (try? outPipe.__sendIORequest(with: data, bytesTransferred: &sent, completionTimeout: 0.5)) != nil,
                   let reply = NSMutableData(length: Switch2Calibration.replyLength) else { continue }
-            var got: UInt = 0
-            guard (try? inPipe.__sendIORequest(with: reply, bytesTransferred: &got, completionTimeout: 0.3)) != nil,
-                  got >= UInt(Switch2Calibration.replyLength) else {
+            // A reply to something else (the header or the echoed address
+            // differ) is not this block: it is a leftover from an earlier
+            // command, so the pipe is read again, up to three times, before
+            // the block is given up on. The first rejected reply's head is
+            // logged so a wrong offset is visible.
+            var matched: [UInt8]?
+            var rejected: [UInt8]?
+            for _ in 0..<3 {
+                var got: UInt = 0
+                guard (try? inPipe.__sendIORequest(with: reply, bytesTransferred: &got, completionTimeout: 0.3)) != nil,
+                      got >= UInt(Switch2Calibration.replyLength) else { break }
+                let bytes = Array(UnsafeBufferPointer(start: reply.bytes.assumingMemoryBound(to: UInt8.self), count: Int(got)))
+                if Switch2Calibration.isReply(bytes, toReadOf: address) { matched = bytes; break }
+                if rejected == nil { rejected = bytes }
+            }
+            if let rejected {
+                let head = rejected.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                ActivityLog.shared.info("Devices", String(format: "Switch 2 flash 0x%06X: reply to something else: ", address) + head)
+            }
+            guard let matched else {
                 ActivityLog.shared.info("Devices", String(format: "Switch 2 flash 0x%06X: no reply", address))
                 continue
             }
-            replies[address] = Array(UnsafeBufferPointer(start: reply.bytes.assumingMemoryBound(to: UInt8.self), count: Int(got)))
+            replies[address] = matched
             Thread.sleep(forTimeInterval: 0.02)
         }
         let cal = Switch2Calibration.from(replies: replies)

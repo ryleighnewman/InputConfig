@@ -17,7 +17,7 @@ import CoreMIDI
 ///   - Variable axes get scaled to the appropriate 0..127 or 0..16383 range
 ///     by the MappingEngine before it calls into this service.
 final class MIDIService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = MIDIService()
+    static let shared = MIDIService()
 
     private let queue = DispatchQueue(label: "com.inputconfig.midi")
     private var client: MIDIClientRef = 0
@@ -94,7 +94,36 @@ final class MIDIService: @unchecked Sendable {
             UserDefaults.standard.set(Int(generated), forKey: uniqueIDKey)
             uniqueID = generated
         }
-        MIDIObjectSetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, uniqueID)
+        // CoreMIDI refuses an id another endpoint already holds (often
+        // another copy of this app still running, or an endpoint that is
+        // about to go away). Then a fresh one is used for this session
+        // only; the saved id is asked for again on the next launch, and
+        // replaced only once it was refused on three launches in a row,
+        // so one clash did not cost a DAW its saved connection for good.
+        let refusalsKey = "InputConfig.midiSourceUniqueIDRefusals"
+        let idStatus = MIDIObjectSetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, uniqueID)
+        if idStatus == noErr {
+            UserDefaults.standard.removeObject(forKey: refusalsKey)
+        } else {
+            let refusals = UserDefaults.standard.integer(forKey: refusalsKey) + 1
+            UserDefaults.standard.set(refusals, forKey: refusalsKey)
+            let retry = Int32.random(in: 1...Int32.max)
+            let retryStatus = MIDIObjectSetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, retry)
+            let inUse: Int32
+            if retryStatus == noErr {
+                inUse = retry
+                ActivityLog.shared.warning("MIDI", "The saved MIDI source id \(uniqueID) was refused (status \(idStatus)); using \(retry). Apps that saved InputConfig as a source may need to pick it again.")
+            } else {
+                var assigned: Int32 = 0
+                MIDIObjectGetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, &assigned)
+                inUse = assigned
+                ActivityLog.shared.warning("MIDI", "Could not set the MIDI source id (status \(idStatus), retry \(retryStatus)); CoreMIDI assigned \(assigned). Apps that saved InputConfig as a source may need to pick it again.")
+            }
+            if refusals >= 3, inUse != 0 {
+                UserDefaults.standard.set(Int(inUse), forKey: uniqueIDKey)
+                UserDefaults.standard.removeObject(forKey: refusalsKey)
+            }
+        }
 
         isSetup = true
     }
@@ -310,17 +339,6 @@ final class MIDIService: @unchecked Sendable {
         }
     }
 
-    /// Send a single MIDI Timing Clock tick (0xF8). Twenty-four of these per
-    /// quarter note are required to sync hardware sequencers and similar.
-    /// Most users will not call this directly; included for completeness so
-    /// future features can drive clock from a configurable rate.
-    func sendClockTick() {
-        guard isSetup else { return }
-        queue.async { [self] in
-            send(bytes: [0xF8])
-        }
-    }
-
     // MARK: - Internal Sending
 
     private func send(bytes: [UInt8]) {
@@ -444,7 +462,7 @@ final class MIDIService: @unchecked Sendable {
 ///     main actor (see DualSenseSupplementService / SteamControllerService).
 final class MIDIInputService: @unchecked Sendable {
 
-    nonisolated(unsafe) static let shared = MIDIInputService()
+    static let shared = MIDIInputService()
 
     /// Identifies one connected MIDI source.
     struct Device: Identifiable, Hashable {
@@ -520,7 +538,16 @@ final class MIDIInputService: @unchecked Sendable {
     private var pendingBankToken: UInt64 = 0
     /// When each note last went down, so a tap whose Note Off came before
     /// the next poll still reads as pressed for one frame.
-    private var noteOnAt: [String: TimeInterval] = [:]
+    private var noteOnAt: [NoteKey: TimeInterval] = [:]
+    /// How long after its note on a tap still counts as down (isNoteDown).
+    private static let noteTapWindow: TimeInterval = 0.05
+    /// One held note, as `noteOnAt` keys it. A struct, not a joined string:
+    /// the engine's 120 Hz poll split every entry's string per row.
+    private struct NoteKey: Hashable {
+        let deviceID: String
+        let channel: Int
+        let note: Int
+    }
     /// The last CC number and when it came, per device and channel, to tell
     /// the low half of a 14-bit pair (sent right after its high half).
     private var lastCCAt: [String: (cc: Int, at: TimeInterval)] = [:]
@@ -555,19 +582,61 @@ final class MIDIInputService: @unchecked Sendable {
     /// deviceID -> note -> velocity of the CURRENT press (removed on
     /// release). Drives velocity-shaded keys in the visualizer.
     private var noteVel: [String: [Int: Int]] = [:]
+    /// The velocity each note was last struck with, kept after release:
+    /// a MIDI Note output set to As played reads it, and a tap shorter
+    /// than a poll frame is already released by the time the row fires.
+    /// Each note's last strike and when it came (an arrival count), so As
+    /// played takes the press that fired the row: the hardest strike ever,
+    /// on any channel, was used, which an MPE controller hits on every note.
+    private var lastNoteVel: [NoteKey: (vel: Int, stamp: UInt64)] = [:]
+    private var noteArrivals: UInt64 = 0
     /// deviceID -> channel -> event stamp of the channel's last message.
     private var channelStamps: [String: [Int: UInt64]] = [:]
     /// Per-device rolling event log for the visualizer (newest first).
-    private var recentEvents: [String: [String]] = [:]
+    /// Raw values only: the line is worded in `activitySnapshot`, not on
+    /// the CoreMIDI thread under `lock`.
+    private var recentEvents: [String: [RingEvent]] = [:]
     /// Last CC value the ring logged, per stream, so a knob sweep logs a
     /// handful of lines instead of a hundred.
     private var lastLoggedCC: [String: Int] = [:]
 
-    /// Append one line to a device's event ring (newest first, capped).
+    /// One entry of a device's event ring.
+    private enum RingEvent {
+        case noteOn(note: Int, velocity: Int, channel: Int)
+        case noteOff(note: Int, channel: Int)
+        case allNotesOff(channel: Int)
+        case cc(number: Int, value: Int, channel: Int)
+        case program(number: Int, channel: Int)
+        case transport(status: UInt8)
+
+        /// The line the visualizer shows for this entry.
+        var text: String {
+            switch self {
+            case let .noteOn(note, velocity, channel):
+                return String(localized: "\(MIDIService.noteName(note)) on, vel \(velocity), ch \(channel)")
+            case let .noteOff(note, channel):
+                return String(localized: "\(MIDIService.noteName(note)) off, ch \(channel)")
+            case let .allNotesOff(channel):
+                return String(localized: "All notes off, ch \(channel)")
+            case let .cc(number, value, channel):
+                return String(localized: "CC \(number) = \(value), ch \(channel)")
+            case let .program(number, channel):
+                return String(localized: "Program \(number), ch \(channel)")
+            case let .transport(status):
+                switch status {
+                case 0xFA: return String(localized: "Transport start")
+                case 0xFB: return String(localized: "Transport continue")
+                default:   return String(localized: "Transport stop")
+                }
+            }
+        }
+    }
+
+    /// Append one entry to a device's event ring (newest first, capped).
     /// Caller must hold `lock`.
-    private func pushEvent(_ deviceID: String, _ text: String) {
+    private func pushEvent(_ deviceID: String, _ event: RingEvent) {
         var ring = recentEvents[deviceID] ?? []
-        ring.insert(text, at: 0)
+        ring.insert(event, at: 0)
         if ring.count > 8 { ring.removeLast(ring.count - 8) }
         recentEvents[deviceID] = ring
     }
@@ -625,9 +694,11 @@ final class MIDIInputService: @unchecked Sendable {
             // srcConnRefCon is the source's CoreMIDI unique ID, packed at
             // connect time, so we know which keyboard sent this without a
             // property lookup per message.
+            // Offset by one at connect time: a unique ID of 0 packed as a
+            // null pointer and its traffic read as "any".
             let deviceID: String
             if let refCon = srcConnRefCon {
-                deviceID = String(Int32(truncatingIfNeeded: Int(bitPattern: refCon)))
+                deviceID = String(Int32(bitPattern: UInt32(truncatingIfNeeded: UInt(bitPattern: refCon) &- 1)))
             } else {
                 deviceID = "any"
             }
@@ -700,6 +771,7 @@ final class MIDIInputService: @unchecked Sendable {
             ccLastAt.removeAll()
             ccNetTravel.removeAll()
             consumerTravelMark.removeAll()
+            stateGeneration &+= 1
             lock.unlock()
         }
 
@@ -712,8 +784,11 @@ final class MIDIInputService: @unchecked Sendable {
             // Never connect to our own virtual source, or MIDI we send
             // would loop straight back in as input. Compare the endpoint
             // itself, not its name, so a real device called "InputConfig"
-            // still works.
+            // still works. Another running copy's virtual source is
+            // skipped too: its output is this app's own, from a second
+            // process, and fed back it fired the rows bound to it.
             if ownSource != 0 && src == ownSource { continue }
+            if Self.isOtherInputConfigSource(src) { continue }
             let name = Self.endpointName(src)
 
             var uid: Int32 = 0
@@ -732,7 +807,9 @@ final class MIDIInputService: @unchecked Sendable {
             // Pass the endpoint's unique ID as the connection refCon so
             // the read block knows which device a packet came from
             // without another property lookup per message.
-            let refCon = UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: Int(uid)))
+            // The ID's bit pattern plus one, so a unique ID of 0 is not a
+            // null pointer; the read block takes the one off again.
+            let refCon = UnsafeMutableRawPointer(bitPattern: UInt(UInt32(bitPattern: uid)) + 1)
             let status = MIDIPortConnectSource(port, src, refCon)
             if status == noErr {
                 connectedSources[src] = uid
@@ -747,7 +824,10 @@ final class MIDIInputService: @unchecked Sendable {
         }
 
         lock.lock()
+        let changed = devices.map(\.id) != found.map(\.id)
         devices = found
+        // Next turn: this runs under the lock.
+        if changed { DispatchQueue.main.async { NotificationCenter.default.post(name: Self.devicesChangedNotification, object: nil) } }
         // Drop remembered values for devices that are gone, so a
         // disconnected keyboard's last knob positions can never shadow
         // a live device on any-device bindings.
@@ -777,6 +857,26 @@ final class MIDIInputService: @unchecked Sendable {
             consumerTravelMark = consumerTravelMark.filter { !$0.key.contains("|" + prefix) }
         }
         lock.unlock()
+    }
+
+    /// A virtual source another copy of this app made: it has no entity
+    /// (a real device's endpoint always does), and its name or driver
+    /// owner is this app's. A hardware port named "InputConfig" keeps
+    /// its entity and still connects.
+    private static func isOtherInputConfigSource(_ endpoint: MIDIEndpointRef) -> Bool {
+        var entity: MIDIEntityRef = 0
+        if MIDIEndpointGetEntity(endpoint, &entity) == noErr, entity != 0 { return false }
+        var cf: Unmanaged<CFString>?
+        if MIDIObjectGetStringProperty(endpoint, kMIDIPropertyDriverOwner, &cf) == noErr,
+           let owner = cf?.takeRetainedValue() as String?, owner == MIDIService.portName {
+            return true
+        }
+        cf = nil
+        if MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &cf) == noErr,
+           let name = cf?.takeRetainedValue() as String?, name == MIDIService.portName {
+            return true
+        }
+        return false
     }
 
     private static func endpointName(_ endpoint: MIDIEndpointRef) -> String {
@@ -881,13 +981,7 @@ final class MIDIInputService: @unchecked Sendable {
         eventCounter &+= 1
         noteActivityLocked()
         transportHits[deviceID, default: []].insert(status)
-        let label: String
-        switch status {
-        case 0xFA: label = String(localized: "Transport start")
-        case 0xFB: label = String(localized: "Transport continue")
-        default:   label = String(localized: "Transport stop")
-        }
-        pushEvent(deviceID, label)
+        pushEvent(deviceID, .transport(status: status))
         let handler = scanHandler
         lock.unlock()
         // Scan picks it up like any other message, so a sequencer's Start
@@ -921,10 +1015,14 @@ final class MIDIInputService: @unchecked Sendable {
         case 0x9 where data2 > 0:   // note on with velocity
             notesDown[deviceID, default: [:]][channel, default: []].insert(data1)
             let onAt = ProcessInfo.processInfo.systemUptime
-            noteOnAt["\(deviceID)|\(channel)|\(data1)"] = onAt
-            if noteOnAt.count > 256 { noteOnAt = noteOnAt.filter { onAt - $0.value < 1 } }
+            // Entries past the tap window (isNoteDown) are of no use: the
+            // map holds the notes of the last 40 ms, not 256 stale ones.
+            noteOnAt = noteOnAt.filter { onAt - $0.value < Self.noteTapWindow }
+            noteOnAt[NoteKey(deviceID: deviceID, channel: channel, note: data1)] = onAt
             noteVel[deviceID, default: [:]][data1] = data2
-            pushEvent(deviceID, String(localized: "\(MIDIService.noteName(data1)) on, vel \(data2), ch \(channel)"))
+            noteArrivals &+= 1
+            lastNoteVel[NoteKey(deviceID: deviceID, channel: channel, note: data1)] = (data2, noteArrivals)
+            pushEvent(deviceID, .noteOn(note: data1, velocity: data2, channel: channel))
             scanEvent = .midi(.note, number: data1, channel: channel, deviceID: deviceID)
         case 0x8, 0x9:              // note off (or note on, velocity 0)
             notesDown[deviceID, default: [:]][channel, default: []].remove(data1)
@@ -944,7 +1042,7 @@ final class MIDIInputService: @unchecked Sendable {
             }
             noteVel[deviceID]?.removeValue(forKey: data1)
             polyPressure[deviceID]?[channel]?.removeValue(forKey: data1)
-            pushEvent(deviceID, String(localized: "\(MIDIService.noteName(data1)) off, ch \(channel)"))
+            pushEvent(deviceID, .noteOff(note: data1, channel: channel))
         case 0xB where data1 == 120 || data1 == 123:   // All Sound Off, All Notes Off
             // A panic button or a DAW stopping a clip ends its notes with
             // the channel-mode message instead of a Note Off each; stored as
@@ -952,9 +1050,9 @@ final class MIDIInputService: @unchecked Sendable {
             for note in notesDown[deviceID]?[channel] ?? [] { noteVel[deviceID]?.removeValue(forKey: note) }
             notesDown[deviceID]?[channel]?.removeAll()
             polyPressure[deviceID]?[channel]?.removeAll()
-            noteOnAt = noteOnAt.filter { !$0.key.hasPrefix("\(deviceID)|\(channel)|") }
+            noteOnAt = noteOnAt.filter { !($0.key.deviceID == deviceID && $0.key.channel == channel) }
             if data1 == 120 { aftertouch[deviceID]?[channel] = 0 }
-            pushEvent(deviceID, String(localized: "All notes off, ch \(channel)"))
+            pushEvent(deviceID, .allNotesOff(channel: channel))
         case 0xB:                   // control change
             // Relative-mode travel accumulation. Delta against the last
             // raw value for this exact (device, channel, cc) stream; the
@@ -976,7 +1074,7 @@ final class MIDIInputService: @unchecked Sendable {
             if data2 == 0 || data2 == 127
                 || abs(data2 - (lastLoggedCC[logKey] ?? -100)) >= 16 {
                 lastLoggedCC[logKey] = data2
-                pushEvent(deviceID, String(localized: "CC \(data1) = \(data2), ch \(channel)"))
+                pushEvent(deviceID, .cc(number: data1, value: data2, channel: channel))
             }
             arrivalCounter &+= 1
             ccStamps[deviceID, default: [:]][channel, default: [:]][data1] = arrivalCounter
@@ -1058,7 +1156,7 @@ final class MIDIInputService: @unchecked Sendable {
             if pendingBankScan?.key == "\(deviceID)|\(channel)" { pendingBankScan = nil }
             programHits[deviceID, default: [:]][channel, default: []].insert(data1)
             lastProgram[deviceID] = (channel, data1)
-            pushEvent(deviceID, String(localized: "Program \(data1), ch \(channel)"))
+            pushEvent(deviceID, .program(number: data1, channel: channel))
             scanEvent = .midi(.programChange, number: data1, channel: channel, deviceID: deviceID)
         default:
             break
@@ -1152,18 +1250,47 @@ final class MIDIInputService: @unchecked Sendable {
                                   lastProgram: prog,
                                   velocities: noteVel[dev] ?? [:],
                                   channelStamps: channelStamps[dev] ?? [:],
-                                  recent: recentEvents[dev] ?? [],
+                                  recent: (recentEvents[dev] ?? []).map(\.text),
                                   eventCount: eventCounter)
         }
     }
 
+    /// Posted when the list of MIDI sources changed.
+    static let devicesChangedNotification = Notification.Name("InputConfig.MIDIDevicesChanged")
+
     /// Monotonic count of recognized incoming messages, for idle gating.
     func activityCounter() -> UInt64 {
         lock.lock(); defer { lock.unlock() }
-        return eventCounter
+        return eventCounter &+ stateGeneration
     }
 
+    /// Bumped when held notes and knob values are cleared without a message
+    /// (Reconnect, a preset stop), so the panel redraws them let go. Kept
+    /// apart from eventCounter, whose total the panel shows as a count.
+    private var stateGeneration: UInt64 = 0
+
     // MARK: Queries used by MappingEngine
+
+    #if DEBUG
+    /// Tests only: the bench's note leaves no velocity behind.
+    func debugForgetVelocity(deviceID: String) {
+        lastNoteVel = lastNoteVel.filter { $0.key.deviceID != deviceID }
+    }
+    #endif
+
+    /// How hard the note was last struck (1 to 127) on the matching device
+    /// and channel, or nil if it has not been played. Of several matches,
+    /// the hardest, as a chord's loudest note is what the ear follows.
+    func noteVelocity(_ note: Int, channel: Int?, deviceID: String?) -> Int? {
+        lock.lock(); defer { lock.unlock() }
+        var best: (vel: Int, stamp: UInt64)?
+        for (key, entry) in lastNoteVel where key.note == note {
+            if let deviceID, key.deviceID != deviceID { continue }
+            if let channel, key.channel != channel { continue }
+            if entry.stamp >= (best?.stamp ?? 0) { best = entry }
+        }
+        return best?.vel
+    }
 
     /// True while the given note is held. `channel`/`device` nil = any.
     func isNoteDown(_ note: Int, channel: Int?, deviceID: String?) -> Bool {
@@ -1173,13 +1300,14 @@ final class MIDIInputService: @unchecked Sendable {
                 if notes.contains(note) { return true }
             }
         }
-        // A tap shorter than a poll frame still counts once.
+        // A tap shorter than a poll frame still counts once. The window
+        // covers the idle poll period (about 34 ms): a fast tap that woke
+        // the engine from idle was gone by the time it looked at 25 ms.
         let now = ProcessInfo.processInfo.systemUptime
-        for (key, at) in noteOnAt where now - at < 0.025 {
-            let parts = key.split(separator: "|")
-            guard parts.count == 3, Int(parts[2]) == note else { continue }
-            if let deviceID, String(parts[0]) != deviceID { continue }
-            if let channel, Int(parts[1]) != channel { continue }
+        for (key, at) in noteOnAt where now - at < Self.noteTapWindow {
+            guard key.note == note else { continue }
+            if let deviceID, key.deviceID != deviceID { continue }
+            if let channel, key.channel != channel { continue }
             return true
         }
         return false
@@ -1396,6 +1524,7 @@ final class MIDIInputService: @unchecked Sendable {
         ccNetTravel.removeAll()
         consumerTravelMark.removeAll()
         relativePhase.removeAll()
+        stateGeneration &+= 1
         lock.unlock()
     }
 }

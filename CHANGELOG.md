@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.9
+
+- Macro recorder: click Record steps, use any app, and your keys, clicks, drags, scrolling and timing become steps
+- Macro steps can type text, scroll, run a system action, wait, move the pointer, or wait for a color or words on screen
+- Macro playback: Play once tries a macro from the editor, and a macro can set its speed, add random timing, or run until pressed again
+- Macro text: read, edit, copy and paste any macro as plain lines such as cmd c, wait 300, type "hello"
+- Voice phrase, a new input: say a phrase and its row fires, through the microphone you choose, with a Voice Commands preset ready to try
+- Screen color and Screen text, new inputs: a row fires from the color at a spot on screen, or from words as they appear
+- Button sequence and Key sequence, new inputs: a row fires when buttons or keys come in a set order, such as Down, Down, A
+- Block the key's own action: W mapped to Up Arrow no longer also types W
+- Keyboard and mouse rows can wait for a second control, such as Left Command with a middle click
+- New pointer outputs: Mouse Motion Step, Precision While Held, Save Pointer Spot, Return Pointer to Spot and Pointer to Next Screen
+- Utilities, set per preset: the speed and direction of your mouse, trackpad and wheel, smooth scrolling, steadying for a shaky hand, the light bar, and controller disconnect and reconnect
+- Only work in these apps: a preset that lists apps holds its outputs back while any other app is in front
+- Activate with controller: a preset starts when a controller it lists connects, and steps aside when it leaves
+- Access controller: fit your own caps and tags, and the visualizer draws them for each profile
+- 25 more controllers drawn in the Live Visualizer, including the 8BitDo Pro 3, Switch 2 Pro, Joy-Con 2, Backbone One, Razer Kishi V2, flight sticks and racing wheels
+- Simple View in the View menu: big buttons for your favorite presets
+- Much lighter on your Mac: a running preset uses less than half the CPU, and switching presets is nearly twice as fast
+- Tap the Mac is no longer offered on macOS 27 in the App Store version
+- Fixed crashes from damaged preset files and from unplugging a controller
+- Keys and mouse buttons no longer stay held down if the app freezes
+- Idle disconnect no longer drops a pad a game is using, and a pad that reconnects keeps its slot
+- Fixed presets not opening from the sidebar on some Macs, and a hang at logout
+
 ## 1.8
 
 - Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth

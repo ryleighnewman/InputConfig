@@ -115,9 +115,65 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "9.99",
+          "displayPrice" : "99.99",
           "familyShareable" : false,
           "groupNumber" : 1,
+          "internalID" : "1C9A334B-D9C0-456E-946F-644DD123F2E1",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "A patron-sized tip every month. You keep InputConfig going. Thank you!",
+              "displayName" : "Patron Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.patron.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Patron Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "24.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6A09B559-D2C9-4D28-A4CA-18246996FD9A",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "A huge tip every month. Thank you so much!",
+              "displayName" : "Huge Monthly Tip",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.inputconfig.app.tip.huge.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Huge Monthly Tip",
+          "subscriptionGroupID" : "111E7EAA-A74F-469A-9DA0-4CAC728972E0",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
           "internalID" : "60754E05-BCCC-4B04-A28C-E5EFF95D02D8",
           "introductoryOffer" : null,
           "localizations" : [
@@ -145,7 +201,7 @@
           ],
           "displayPrice" : "4.99",
           "familyShareable" : false,
-          "groupNumber" : 2,
+          "groupNumber" : 4,
           "internalID" : "3C3513D8-35ED-4805-8E13-FFF9E2FBF3C0",
           "introductoryOffer" : null,
           "localizations" : [
@@ -173,7 +229,7 @@
           ],
           "displayPrice" : "2.99",
           "familyShareable" : false,
-          "groupNumber" : 3,
+          "groupNumber" : 5,
           "internalID" : "B81A30E4-9173-42AF-941D-743718911199",
           "introductoryOffer" : null,
           "localizations" : [
@@ -201,7 +257,7 @@
           ],
           "displayPrice" : "0.99",
           "familyShareable" : false,
-          "groupNumber" : 4,
+          "groupNumber" : 6,
           "internalID" : "7523FE72-3B68-4FD9-8F29-3ECEE9C6ED02",
           "introductoryOffer" : null,
           "localizations" : [

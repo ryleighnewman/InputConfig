@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "版權所有 © 2026 Ryleigh Newman。保留一切權利。";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig 只在預設執行或其「語音語句」面板打開時聆聽該預設的語音語句。不會錄製或保留任何內容。";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig 在語言支援時於本機辨識預設中的語音語句。不會錄製或保留任何內容。";

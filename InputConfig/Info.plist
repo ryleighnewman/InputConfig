@@ -73,6 +73,10 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>InputConfig uses Bluetooth to read Switch 2 controllers, and to connect and disconnect wireless controllers, when you ask it to or turn that on in Settings.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>InputConfig listens for the voice phrases in a preset, only while that preset runs or its Voice Phrases sheet is open. Nothing is recorded or kept.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>InputConfig recognizes the voice phrases in a preset, on this Mac when the language allows it. Nothing is recorded or kept.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>InputConfig uses Bluetooth to read Switch 2 controllers, and to connect and disconnect wireless controllers, when you ask it to or turn that on in Settings.</string>
 	<key>NSHighResolutionCapable</key>

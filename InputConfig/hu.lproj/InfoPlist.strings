@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Minden jog fenntartva.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "Az InputConfig csak addig figyel egy beállításkészlet hangkifejezéseire, amíg az a beállításkészlet fut vagy a Hangkifejezések panelje nyitva van. Semmi nem kerül rögzítésre vagy megtartásra.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "Az InputConfig egy beállításkészlet hangkifejezéseit ezen a Macen ismeri fel, ha a nyelv engedi. Semmi nem kerül rögzítésre vagy megtartásra.";

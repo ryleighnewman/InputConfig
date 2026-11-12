@@ -38,6 +38,18 @@ enum EightBitDoMode: String {
     case notSeenByGameController = "a non-Apple"
     case unknown = "Unknown"
 
+    /// The mode as the banner shows it; the raw value is an English key.
+    var shownName: String {
+        switch self {
+        case .apple: String(localized: "Apple/MFi")
+        case .nintendoSwitch: String(localized: "Switch")
+        case .xinput: "XInput"
+        case .dinput: "DInput"
+        case .android: "Android"
+        case .notSeenByGameController, .unknown: ""
+        }
+    }
+
     var supportedByMacOS: Bool {
         switch self {
         case .apple, .nintendoSwitch: return true

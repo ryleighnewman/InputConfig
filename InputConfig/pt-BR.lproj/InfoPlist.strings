@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Todos os direitos reservados.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "O InputConfig escuta as frases de voz de uma predefinição, só enquanto essa predefinição está em execução ou seu painel Frases de voz está aberto. Nada é gravado nem guardado.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "O InputConfig reconhece as frases de voz de uma predefinição, neste Mac quando o idioma permite. Nada é gravado nem guardado.";

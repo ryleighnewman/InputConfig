@@ -109,6 +109,9 @@ final class SystemStatsService: ObservableObject {
         var batteryState: String?
         /// Minutes to full / minutes to empty when known.
         var minutesRemaining: Int?
+        /// True when minutesRemaining is the time until full (charging), not
+        /// the time left on battery.
+        var minutesAreUntilFull = false
         /// % delta since the service started, capturing drain rate.
         /// Positive = lost charge, negative = gained charge.
         var batteryDeltaPercent: Double = 0
@@ -141,6 +144,8 @@ final class SystemStatsService: ObservableObject {
     private var sessionStartedAt: Date = Date()
     /// Number of samples taken this session - used to compute running mean.
     private var sampleCount: UInt64 = 0
+    /// Seconds the samples so far cover, the weight of the CPU average.
+    private var sampledSeconds: Double = 0
     /// Plain (non-published) controller-poll counter. The 120 Hz poll hook
     /// bumps this; sample() folds it into the published `cumulative` at 1 Hz
     /// so the Session Stats panel is not re-rendered at the input poll rate.
@@ -243,6 +248,10 @@ final class SystemStatsService: ObservableObject {
             cumulative.controllerPollsCounted = pollCounter
         }
         let now = Date()
+        // The gap since the last sample: the timer is nominally 1 Hz, but
+        // a busy main thread or a sleep stretches it, and the energy and
+        // average below are per second of real time.
+        let elapsed = lastSampleWallClock.map { max(0, now.timeIntervalSince1970 - $0) } ?? 1.0
         let cpu = readCPUPercent(now: now.timeIntervalSince1970)
         let memInfo = readMemory()
         let threads = readThreadCount()
@@ -280,18 +289,23 @@ final class SystemStatsService: ObservableObject {
         c.sessionUptime = now.timeIntervalSince(sessionStartedAt)
         c.peakCpuPercent = max(c.peakCpuPercent, cpu)
         c.peakMemoryMB = max(c.peakMemoryMB, memMB)
-        // Running mean via incremental update: mean_n = mean_{n-1}
-        // + (x_n - mean_{n-1}) / n. Stays bounded; no overflow.
-        let n = Double(sampleCount)
-        c.averageCpuPercent += (cpu - c.averageCpuPercent) / n
-        // Energy ≈ (CPU% / 100) * dt * watts. dt is 1.0 s here because
-        // the timer fires once per second. cpu is in Activity Monitor
-        // convention (100 = one core), so dividing by cores*100 yields the
-        // fractional whole-package load. (With the old machine-normalized
-        // cpu this line divided by cores twice and undercounted energy.)
+        // Running mean weighted by each sample's real duration, so a
+        // sample that covers three seconds counts for three: mean +=
+        // (x - mean) * dt / total. Stays bounded; no overflow. The weight
+        // is capped at 10 s: the gap across a sleep is hours of wall clock
+        // the process did not run through, and uncapped it swamped the
+        // mean with one idle reading. Energy below keeps the real gap.
+        let meanWeight = min(elapsed, 10)
+        sampledSeconds += meanWeight
+        if sampledSeconds > 0 { c.averageCpuPercent += (cpu - c.averageCpuPercent) * meanWeight / sampledSeconds }
+        // Energy ≈ (CPU% / 100) * dt * watts, with dt the measured gap
+        // since the last sample. cpu is in Activity Monitor convention
+        // (100 = one core), so dividing by cores*100 yields the fractional
+        // whole-package load. (With the old machine-normalized cpu this
+        // line divided by cores twice and undercounted energy.)
         let cores = Double(ProcessInfo.processInfo.activeProcessorCount)
         let frac = min(1.0, max(0.0, cpu / (cores * 100.0)))
-        c.estimatedEnergyJoules += frac * 1.0 * estimatedPackageWatts
+        c.estimatedEnergyJoules += frac * elapsed * estimatedPackageWatts
         cumulative = c
 
         // Power info refreshes at 0.2 Hz. IOPS calls walk an IOKit
@@ -341,6 +355,7 @@ final class SystemStatsService: ObservableObject {
         // Cleared first: when the system stops giving an estimate (just
         // plugged in, calculating) the old one stayed on screen.
         next.minutesRemaining = nil
+        next.minutesAreUntilFull = false
         for src in sources {
             guard let info = IOPSGetPowerSourceDescription(blob, src)?
                 .takeUnretainedValue() as? [String: Any] else { continue }
@@ -366,6 +381,7 @@ final class SystemStatsService: ObservableObject {
                 next.minutesRemaining = mins
             } else if let mins = info[kIOPSTimeToFullChargeKey as String] as? Int, mins > 0 {
                 next.minutesRemaining = mins
+                next.minutesAreUntilFull = true
             }
         }
         power = next
@@ -387,9 +403,15 @@ final class SystemStatsService: ObservableObject {
     func resetSessionStats() {
         sessionStartedAt = Date()
         sampleCount = 0
+        sampledSeconds = 0
         cumulative = Cumulative()
         pollCounter = 0
-        power = PowerInfo()  // forces re-baseline of battery delta
+        // Only the battery delta starts over: blanking the whole reading
+        // dropped the power source, and the running preset's poll rate
+        // flipped as if the Mac had been plugged in or unplugged.
+        power.initialBatteryPercent = power.batteryPercent
+        power.batteryDeltaPercent = 0
+        power.startedAt = Date()
         lastPowerSampleAt = 0
     }
 

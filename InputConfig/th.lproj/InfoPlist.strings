@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "ลิขสิทธิ์ © 2026 Ryleigh Newman สงวนลิขสิทธิ์";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig ฟังวลีเสียงในค่าที่ตั้งไว้เฉพาะตอนที่ค่าที่ตั้งไว้นั้นทำงานอยู่หรือแผ่นวลีเสียงของมันเปิดอยู่ ไม่มีการบันทึกหรือเก็บอะไรไว้";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig จดจำวลีเสียงในค่าที่ตั้งไว้บน Mac เครื่องนี้เมื่อภาษารองรับ ไม่มีการบันทึกหรือเก็บอะไรไว้";

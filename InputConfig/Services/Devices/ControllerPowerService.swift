@@ -30,6 +30,13 @@ final class ControllerPowerService: @unchecked Sendable {
     /// Last real input per GameController pad and per raw pad key.
     private var lastGC: [ObjectIdentifier: Date] = [:]
     private var lastRaw: [UInt64: Date] = [:]
+    /// When a raw pad's changed report was last decoded for the idle count
+    /// while nothing else decoded it (noteRawReport).
+    private var lastRawProbe: [UInt64: Date] = [:]
+    /// Whether that last probe showed a real use. A probe that found none
+    /// does not start a second of silence: a tap just before the budget
+    /// ran out was otherwise seen only through its release report.
+    private var lastRawProbeUsed: Set<UInt64> = []
     /// Pads that cannot be disconnected by an app (a cable), skipped until
     /// they connect again.
     private var cannot: Set<ObjectIdentifier> = []
@@ -42,6 +49,8 @@ final class ControllerPowerService: @unchecked Sendable {
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private let reconnector = Reconnector()
+    /// The idle rule the last check used, under `lock`.
+    private var lastRule: String?
 
     private init() {}
 
@@ -104,11 +113,13 @@ final class ControllerPowerService: @unchecked Sendable {
 
     /// The Access controller's own report showed a press or the stick
     /// moved (its sockets may be mapped to nothing GameController shows).
-    func noteAccessActivity() {
+    func noteAccessActivity(identity: SonyPadIdentity) {
         let now = Date()
-        let ids = GCController.controllers()
-            .filter { ControllerTypeDetector.detect($0) == .accessController }
-            .map(ObjectIdentifier.init)
+        let access = GCController.controllers().filter { ControllerTypeDetector.detect($0) == .accessController }
+        // Only the one that reported: a press on one kept a second, unused
+        // Access controller from ever idling off. One alone is that one.
+        let mine = access.filter { SonyPadIdentity.of(controller: $0)?.matches(identity) == true }
+        let ids = (mine.isEmpty && access.count == 1 ? access : mine).map(ObjectIdentifier.init)
         guard !ids.isEmpty else { return }
         lock.lock(); for id in ids { lastGC[id] = now }; lock.unlock()
     }
@@ -117,6 +128,32 @@ final class ControllerPowerService: @unchecked Sendable {
     func noteRaw(key: UInt64, state: ControllerState) {
         guard Self.isRealUse(state) else { return }
         lock.lock(); lastRaw[key] = Date(); lock.unlock()
+    }
+
+    /// A raw pad's report changed while nothing in the app decodes it (a
+    /// game reading the pad with InputConfig idle): decoded here when a
+    /// second has passed since a probe that showed a use, or whenever the
+    /// last probe showed none, so a report whose bytes always move (an
+    /// IMU, a counter) still counts only when it shows a real use, and a
+    /// short tap is not missed for its release report.
+    func noteRawReport(key: UInt64, decode: () -> ControllerState) {
+        // Off, nothing reads the answer, and an idle pad's IMU decoded on
+        // main with every report.
+        guard idleDisconnectOn else { return }
+        let now = Date()
+        lock.lock()
+        let since = now.timeIntervalSince(lastRawProbe[key] ?? .distantPast)
+        // An unused probe looks again soon, which still catches a tap, but
+        // not on every report.
+        let probe = since >= 1 || (!lastRawProbeUsed.contains(key) && since >= 0.075)
+        lock.unlock()
+        guard probe else { return }
+        let state = decode()
+        let used = Self.isRealUse(state)
+        lock.lock()
+        lastRawProbe[key] = now
+        if used { lastRawProbeUsed.insert(key); lastRaw[key] = now } else { lastRawProbeUsed.remove(key) }
+        lock.unlock()
     }
 
     static func isRealUse(_ element: GCControllerElement) -> Bool {
@@ -164,18 +201,37 @@ final class ControllerPowerService: @unchecked Sendable {
         for id in live where lastGC[id] == nil { lastGC[id] = now }
         let liveRaw = Set(raws.map(\.id))
         lastRaw = lastRaw.filter { liveRaw.contains($0.key) }
+        lastRawProbe = lastRawProbe.filter { liveRaw.contains($0.key) }
+        lastRawProbeUsed = lastRawProbeUsed.intersection(liveRaw)
         rawCannot = rawCannot.intersection(liveRaw)
         for id in liveRaw where lastRaw[id] == nil { lastRaw[id] = now }
         lock.unlock()
 
-        guard idleDisconnectOn else { return }
         let running = MappingEngine.current?.isRunning == true
-        if running && !disconnectWhileRunning {
-            // In use with a preset: the count starts again when it stops.
-            resetAll()
-            return
+        // A running preset's own choice (Utilities, Disconnect when unused)
+        // stands in for Settings while it runs: 0 keeps every controller.
+        let presetMinutes = running ? MappingEngine.current?.activePreset?.automation.idleDisconnectMinutes : nil
+        // The rule changed (a preset with its own choice started or stopped,
+        // or the choice was edited): the count starts again, so idle time
+        // from before never disconnects a pad the moment a preset starts.
+        let rule = presetMinutes.map { "preset \($0)" } ?? "settings \(running)"
+        lock.lock()
+        let ruleChanged = lastRule != nil && lastRule != rule
+        lastRule = rule
+        lock.unlock()
+        if ruleChanged { resetAll(); return }
+        if let presetMinutes {
+            guard presetMinutes > 0 else { resetAll(); return }
+        } else {
+            guard idleDisconnectOn else { return }
+            if running && !disconnectWhileRunning {
+                // In use with a preset: the count starts again when it stops.
+                resetAll()
+                return
+            }
         }
-        let minutes = idleMinutes
+        let minutes = presetMinutes ?? idleMinutes
+        let whileRunning = presetMinutes != nil || disconnectWhileRunning
         for pad in pads {
             let id = ObjectIdentifier(pad)
             lock.lock()
@@ -183,15 +239,20 @@ final class ControllerPowerService: @unchecked Sendable {
             let skip = cannot.contains(id)
             lock.unlock()
             guard !skip, Self.shouldDisconnect(idle: now.timeIntervalSince(last), minutes: minutes,
-                                               presetRunning: running, whileRunning: disconnectWhileRunning) else { continue }
+                                               presetRunning: running, whileRunning: whileRunning) else { continue }
             let name = pad.vendorName ?? String(localized: "The controller")
-            switch RawHIDGamepadService.shared.disconnect(gameController: pad) {
+            let result = RawHIDGamepadService.shared.disconnectForIdle(gameController: pad)
+            switch result.outcome {
             case .disconnected:
-                announce(name, minutes: minutes)
-            case .cannot:
+                announce(name, address: result.address, minutes: minutes)
+            case .cannot(let why):
                 // A cable, or macOS refused: not tried again until it
-                // connects anew.
-                lock.lock(); cannot.insert(id); lock.unlock()
+                // connects anew. Why is logged once, except for the cable,
+                // which is never disconnected and needs no word.
+                lock.lock(); let first = cannot.insert(id).inserted; lock.unlock()
+                if first, why != String(localized: "\(name) is connected by cable. Unplug it to disconnect it.") {
+                    ActivityLog.shared.warning("Devices", why)
+                }
             }
         }
         for pad in raws {
@@ -201,28 +262,31 @@ final class ControllerPowerService: @unchecked Sendable {
             let skip = rawCannot.contains(pad.id)
             lock.unlock()
             guard bluetooth, !skip, Self.shouldDisconnect(idle: now.timeIntervalSince(last), minutes: minutes,
-                                                          presetRunning: running, whileRunning: disconnectWhileRunning) else { continue }
+                                                          presetRunning: running, whileRunning: whileRunning) else { continue }
             if pad.transport == "Bluetooth LE", pad.id >> 48 == RawHIDGamepadService.externalKeyBase >> 48 {
                 Switch2BluetoothService.shared.disconnect(key: pad.id)
-                announce(pad.displayName, minutes: minutes)
+                announce(pad.displayName, address: nil, minutes: minutes)
                 continue
             }
-            switch RawHIDGamepadService.shared.disconnect(gamepad: pad) {
-            case .disconnected: announce(pad.displayName, minutes: minutes)
-            case .cannot: lock.lock(); rawCannot.insert(pad.id); lock.unlock()
+            let result = RawHIDGamepadService.shared.disconnectForIdle(gamepad: pad)
+            switch result.outcome {
+            case .disconnected: announce(pad.displayName, address: result.address, minutes: minutes)
+            case .cannot(let why):
+                lock.lock(); let first = rawCannot.insert(pad.id).inserted; lock.unlock()
+                if first { ActivityLog.shared.warning("Devices", why) }
             }
         }
     }
 
-    @MainActor private func announce(_ name: String, minutes: Int) {
+    /// `address` is the Bluetooth address the disconnect closed, if it
+    /// closed one; a Switch 2 controller over Bluetooth LE has none.
+    @MainActor private func announce(_ name: String, address: String?, minutes: Int) {
         let line = String(localized: "\(name) was disconnected after \(minutes) minutes unused, to save its battery")
         ActivityLog.shared.info("Devices", line)
         NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                              userInfo: [.announcement: line, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
         // Its address, so a reconnect attempt now does not undo this.
-        let wanted = name.lowercased()
-        let paired = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
-        if let match = paired.first(where: { ($0.name ?? "").lowercased() == wanted }), let address = match.addressString {
+        if let address {
             lock.lock(); idledAt[address] = Date(); lock.unlock()
         }
     }
@@ -243,10 +307,12 @@ final class ControllerPowerService: @unchecked Sendable {
     /// Asks every paired controller that is not connected to connect. A
     /// pad switched off does not answer, which costs nothing but a few
     /// seconds of the radio.
-    @MainActor func attemptReconnect(reason: String) {
-        guard autoReconnectOn else { return }
+    @MainActor func attemptReconnect(reason: String, asked byPreset: Bool = false) {
+        guard autoReconnectOn || byPreset else { return }
         let paired = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
         let now = Date()
+        var asked = false
+        defer { if asked { ControllerConnectWatcher.shared.reconnectsRequested() } }
         for device in paired where !device.isConnected() {
             guard Self.looksLikeController(major: device.deviceClassMajor, minor: device.deviceClassMinor, name: device.name ?? ""),
                   let address = device.addressString else { continue }
@@ -258,14 +324,17 @@ final class ControllerPowerService: @unchecked Sendable {
             // Just put to sleep for idleness, or tried a moment ago: left be.
             guard !idled, !recent else { continue }
             _ = device.openConnection(reconnector)
+            asked = true
         }
         if reason == "preset" { Switch2BluetoothService.shared.startIfEnabled() }
     }
 
     /// A preset started: a paired controller that is waiting may connect.
     @MainActor func presetStarted() {
-        guard autoReconnectOn, GCController.controllers().isEmpty else { return }
-        attemptReconnect(reason: "preset")
+        // The preset's own choice (Utilities, Reconnect controllers) first.
+        let mine = MappingEngine.current?.activePreset?.automation.reconnectOnStart
+        guard mine ?? autoReconnectOn, GCController.controllers().isEmpty else { return }
+        attemptReconnect(reason: "preset", asked: mine == true)
     }
 
     /// IOBluetooth's connection callback; only a success is worth a line.

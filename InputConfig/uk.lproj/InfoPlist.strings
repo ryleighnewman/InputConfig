@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Усі права захищено.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig слухає голосові фрази пресету лише поки цей пресет запущено або відкрито його вікно «Голосові фрази». Нічого не записується й не зберігається.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig розпізнає голосові фрази пресету на цьому Mac, коли мова це дозволяє. Нічого не записується й не зберігається.";

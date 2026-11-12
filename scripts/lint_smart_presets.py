@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lint the Smart Preset catalog embedded in ExamplePresets.swift.
+"""Lint the Smart Preset catalog, InputConfig/Resources/SmartPresetLibrary.json.
 
 Reports:
   - groups of profiles whose rows (inputs, outputs, and notes) are identical,
@@ -17,15 +17,11 @@ import json
 import sys
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parent.parent / "InputConfig/Resources/ExamplePresets.swift"
+SOURCE = Path(__file__).resolve().parent.parent / "InputConfig/Resources/SmartPresetLibrary.json"
 
 
 def load_profiles():
-    text = SOURCE.read_text()
-    marker = 'static let libraryJSON = """'
-    start = text.index(marker) + len(marker)
-    end = text.index('"""', start)
-    return json.loads(text[start:end])
+    return json.loads(SOURCE.read_text())
 
 
 def main():

@@ -38,6 +38,26 @@ enum DualSenseEdgeProfiles {
         0x0C: "L2", 0x0D: "L3", 0x0E: "Left paddle", 0x0F: "Right paddle", 0x10: "Options", 0x11: "Touchpad",
     ]
 
+    /// A button's name in the app's language (R1 and the like read the same
+    /// in every language).
+    static func shownButtonName(_ code: Int) -> String? {
+        switch code {
+        case 0x00: return String(localized: "Up")
+        case 0x01: return String(localized: "Left")
+        case 0x02: return String(localized: "Down")
+        case 0x03: return String(localized: "Right")
+        case 0x04: return String(localized: "Circle")
+        case 0x05: return String(localized: "Cross")
+        case 0x06: return String(localized: "Square")
+        case 0x07: return String(localized: "Triangle")
+        case 0x0E: return String(localized: "Left paddle")
+        case 0x0F: return String(localized: "Right paddle")
+        case 0x10: return String(localized: "Options")
+        case 0x11: return String(localized: "Touchpad")
+        default: return buttonNames[code]
+        }
+    }
+
     static let stickCurveNames: [Int: String] = [
         0: "Default", 1: "Quick", 2: "Precise", 3: "Steady", 4: "Digital", 5: "Dynamic",
     ]
@@ -71,6 +91,16 @@ enum DualSenseEdgeProfiles {
                 return "\(from) sends \(to)"
             }
         }
+
+        /// The same in the app's language, for the Stored profiles card; the
+        /// log keeps the English.
+        var shownRemaps: [String] {
+            buttonMap.enumerated().compactMap { index, code in
+                guard code != index, code != 0xFF, let from = DualSenseEdgeProfiles.shownButtonName(index),
+                      let to = DualSenseEdgeProfiles.shownButtonName(code) else { return nil }
+                return String(localized: "\(from) sends \(to)", comment: "A DualSense Edge profile: one button sends another")
+            }
+        }
     }
 
     /// Reads every profile the pad answers for. USB only: the reports are
@@ -93,7 +123,7 @@ enum DualSenseEdgeProfiles {
                 continue
             }
             out.append(profile)
-            log.notice("\(slot.name, privacy: .public): \(profile.assigned ? "\"\(profile.name)\"" : "unassigned", privacy: .public) \(profile.remaps.joined(separator: ", "), privacy: .public) triggers L \(profile.leftTrigger.min, privacy: .public)...\(profile.leftTrigger.max, privacy: .public) R \(profile.rightTrigger.min, privacy: .public)...\(profile.rightTrigger.max, privacy: .public) sticks \(stickCurveNames[profile.leftStickCurve] ?? "?", privacy: .public)/\(stickCurveNames[profile.rightStickCurve] ?? "?", privacy: .public)")
+            log.notice("\(slot.name, privacy: .public): \(profile.assigned ? "\"\(profile.name)\"" : "unassigned", privacy: .private) \(profile.remaps.joined(separator: ", "), privacy: .public) triggers L \(profile.leftTrigger.min, privacy: .public)...\(profile.leftTrigger.max, privacy: .public) R \(profile.rightTrigger.min, privacy: .public)...\(profile.rightTrigger.max, privacy: .public) sticks \(stickCurveNames[profile.leftStickCurve] ?? "?", privacy: .public)/\(stickCurveNames[profile.rightStickCurve] ?? "?", privacy: .public)")
         }
         return out
     }

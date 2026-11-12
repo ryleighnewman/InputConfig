@@ -28,7 +28,7 @@ extension HIDFixtureCorpus {
         xusb("xusb.header.start.a.rt", x20([0x10, 0x10, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x80]),
              [.button(9, 1), .button(0, 1), .axis(5, 1, tolerance: 0.001), .button(7, 1), .axis(4, 0, tolerance: 0.001), .buttonAbsent(6),
               .axis(0, 0, tolerance: 0.001), .axis(1, 1, tolerance: 0.001), .hat(0, x: 0, y: 0)], "F11a: Start, A, RT full, LY pushed down"),
-        xusb("xusb.headerless14", [0x10, 0x04, 0xFF, 0x00, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        xusb("xusb.headerless14", [0x00, 0x14, 0xFF, 0x00, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
              [.button(0, 1), .button(10, 1), .axis(4, 1, tolerance: 0.001), .axis(5, 0, tolerance: 0.001), .axis(0, 1, tolerance: 0.001)],
              "the compact 8BitDo form; no capture shows a real device sends it", status: .unverified),
         xusb("xusb.nonstate3", [0x01, 0x03, 0x06], [.ignored], "a 3 byte LED or rumble echo"),
@@ -43,7 +43,7 @@ extension HIDFixtureCorpus {
     static let xboxReference: [HIDFixture] = [
         HIDFixture(id: "xusb.8bitdo.xmode.reference", device: "8BitDo Ultimate (X mode)", transport: .usb,
                    route: .rawHID(vendorID: 0x2DC8, productID: 0x3106, transport: "USB"), reportID: 0x00,
-                   hex: HIDFixture.hex([0x10, 0x04, 0xFF, 0x00, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                   hex: HIDFixture.hex([0x00, 0x14, 0xFF, 0x00, 0xFF, 0x7F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
                    expect: [.button(0, 1), .button(10, 1), .axis(4, 1, tolerance: 0.001)], status: .unverified,
                    citation: HIDFixture.Citation(source: "xpad.c XTYPE_XBOX360 for 2DC8; no HID capture exists", locator: "unreachable on stock macOS", date: "2026-10-20")),
     ]

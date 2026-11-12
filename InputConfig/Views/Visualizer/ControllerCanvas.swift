@@ -54,6 +54,15 @@ struct ControllerCanvas: View {
     /// the drawing is looking at.
     var highlighted: Set<String> = []
     let inspect: (PlacedControl, AnyView) -> AnyView
+    /// Changes whenever anything the closures above give a control changes,
+    /// other than the live reading: the panel's rows, names, zones and
+    /// deadzones, the profile editor, edit mode. Set, each control redraws
+    /// only when its own reading or this changes (ControlCell); nil redraws
+    /// every control on every pass.
+    var cellToken: Int? = nil
+    /// The control whose inspector is open: it redraws on every pass, so
+    /// the open popover follows the rows as before.
+    var openControl: String? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     /// Pressed is green; with Differentiate Without Color it is also a
@@ -68,14 +77,26 @@ struct ControllerCanvas: View {
     /// kept on the fill and outline (a yellow Y read at about 1:1).
     private var moreContrast: Bool { colorSchemeContrast == .increased || appHighContrast }
     @Environment(\.visualizerSuspended) private var suspended
+    /// Read for the key's own layer, which redraws only when these or its
+    /// lines change (KeyLook).
+    @Environment(\.legibilityWeight) private var legibilityWeight
+    @Environment(\.displayScale) private var displayScale
 
     /// What VoiceOver calls a control.
     private func spoken(_ c: PlacedControl, _ fallback: String) -> String {
         ButtonNames.spokenGlyphs(name?(c) ?? c.name.map(LayoutText.t) ?? legend(c).text ?? fallback)
     }
 
-    private var hasTop: Bool { layout.hasTop(variant: variant) }
-    private var hasBack: Bool { layout.hasBack(variant: variant) }
+    private var hasTop: Bool { layout.hasTop(variant: variant) || (readsNothing && layout.topStrip > 0) }
+    private var hasBack: Bool { layout.hasBack(variant: variant) || (readsNothing && layout.backStrip > 0) }
+    /// A model the Mac reads nothing from (the Joy-Con 2 pair) is still
+    /// drawn whole, dimmed, rather than as an empty panel.
+    private var readsNothing: Bool {
+        layout.controls.allSatisfy { c in
+            if case .notReported = c.readable { return true }
+            return c.kind == .port || c.kind == .light
+        }
+    }
     private let gap: CGFloat = 0.03       // between bands, as a fraction of width
     private let pad: CGFloat = 0.018      // above and below a band's controls
     private let backLabel: CGFloat = 0.03 // the "Back, as you hold it" line
@@ -94,13 +115,7 @@ struct ControllerCanvas: View {
     /// What is drawn: every control but ports and controls that send
     /// nothing, which without the body around them read as noise.
     private func drawn(_ face: LayoutFace) -> [PlacedControl] {
-        // A model the Mac reads nothing from (the Joy-Con 2 pair) is still
-        // drawn whole, dimmed, rather than as an empty panel.
-        let readsNothing = layout.controls.allSatisfy { c in
-            if case .notReported = c.readable { return true }
-            return c.kind == .port || c.kind == .light
-        }
-        return layout.controls(on: face, variant: variant).filter { c in
+        layout.controls(on: face, variant: variant).filter { c in
             if case .notReported = c.readable { return readsNothing && c.kind != .port }
             return c.kind != .port
         }
@@ -224,21 +239,36 @@ struct ControllerCanvas: View {
         return Metrics(keyed: keyed, kf: kf, bands: bands, tops: laid.tops, total: total)
     }
 
+    /// The layer this pass looked up (see FrozenLayer), on the copy the
+    /// controls are drawn with, so they take their words from it; nil works
+    /// each out as before.
+    private var frozen: FrozenLayer? = nil
+
     // A drawing of real hardware: never mirrored for right-to-left languages.
     var body: some View { drawing.environment(\.layoutDirection, .leftToRight) }
 
     @ViewBuilder private var drawing: some View {
-        // Worked out once per drawing pass.
-        let m = metrics
+        // Looked up, not worked out again: a redraw for a press changes
+        // nothing the bands, the key or the words come from (FrozenLayer).
+        let layer = frozenLayer
+        let canvas = layer.map { withLayer($0) } ?? self
+        let m = layer?.metrics ?? metrics
         let keyed = m.keyed, kf = m.kf, bands = m.bands
         let laid = (tops: m.tops, total: m.total)
         let total = m.total
         GeometryReader { geo in
             let w = geo.size.width
-            let entries = keyed ? keyEntries(bands: bands, tops: laid.tops, width: w, height: geo.size.height, key: kf) : []
+            // The height the aspect ratio gives this width, as KeyLayoutTests
+            // passes, not geo's: a first layout with a stale height made a
+            // second cache key, and a miss, per visit.
+            let atSize = layer.map { sized($0, keyed: keyed, bands: bands, tops: laid.tops, width: w, height: w * total, key: kf) }
+            // From the layer a press only relights a line, as a hit in the
+            // key's own cache does.
+            let entries = atSize.map { relit($0.entries, layer: layer) }
+                ?? (keyed ? keyEntries(bands: bands, tops: laid.tops, width: w, height: w * total, key: kf) : [])
             ZStack(alignment: .topLeading) {
                 // Leader lines first, so the controls sit on top of them.
-                if !entries.isEmpty { leaderLines(entries, key: kf) }
+                if !entries.isEmpty { keyLines(entries, width: w, key: kf) }
                 ForEach(Array(bands.enumerated()), id: \.offset) { n, b in
                     if b.face == .back {
                         Text("Back, as you hold it")
@@ -247,12 +277,13 @@ struct ControllerCanvas: View {
                             .position(x: w / 2, y: (laid.tops[n] - backLabel / 2) * w)
                     }
                     ForEach(b.controls) { control in
-                        let frame = controlFrame(control, band: b, top: laid.tops[n], width: w)
-                        controlView(control, size: frame.size)
+                        let frame = atSize?.frames[control.id] ?? canvas.controlFrame(control, band: b, top: laid.tops[n], width: w)
+                        canvas.controlView(control, size: frame.size)
                             // What it does here, and its deadzone, for
                             // VoiceOver (the key entry is hidden from
                             // accessibility).
-                            .accessibilityHint([caption(control).map(HotKeySpec.spokenMarks), deadzone(control)?.help]
+                            .accessibilityHint([layer.map { $0.spokenCaptions[control.id] } ?? caption(control).map(HotKeySpec.spokenMarks),
+                                                deadzone(control)?.help]
                                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ". "))
                             .frame(width: frame.width, height: frame.height)
                             .overlay {
@@ -266,8 +297,8 @@ struct ControllerCanvas: View {
                             .position(x: frame.midX, y: frame.midY)
                     }
                 }
-                ForEach(entries) { e in keyLabel(e, width: w, key: kf) }
-                if let between, let mid = midpoint(between.first, between.second, bands: bands, tops: laid.tops, width: w) {
+                keyCaptions(entries, width: w, key: kf)
+                if let between, let mid = canvas.midpoint(between.first, between.second, bands: bands, tops: laid.tops, width: w) {
                     // Inside the gap between the two, at the captions' size,
                     // so it never runs over either control.
                     between.view
@@ -356,7 +387,7 @@ struct ControllerCanvas: View {
         return crowded
     }
 
-    nonisolated(unsafe) private static var crowdedCache: [String: Set<String>] = [:]
+    nonisolated(unsafe) private static var crowdedCache = OldestFirstCache<Set<String>>(cap: 256)
 
     /// What a control covers when drawn: a capsule set at an angle reaches
     /// past its frame, so its turned bounding box.
@@ -388,12 +419,18 @@ struct ControllerCanvas: View {
 
     /// The word a symbol button is drawn with, unless it has no room.
     private func pillWord(_ c: PlacedControl) -> String? {
-        guard let word = wordFor(c), !crowdedPills.contains(c.id) else { return nil }
+        guard let word = wordFor(c), !crowdedNow.contains(c.id) else { return nil }
         return word
     }
 
+    /// The crowded pills: the layer's when drawing from one, which skips
+    /// building the cache key from every control.
+    private var crowdedNow: Set<String> { frozen?.crowded ?? crowdedPills }
+
     /// The word a symbol button is written with, or nil to draw it as is.
     private func wordFor(_ c: PlacedControl) -> String? {
+        // Drawing from a layer: the word it was made with.
+        if let frozen { return frozen.words[c.id] }
         guard c.kind != .faceButton, let symbol = legend(c).symbol, !Self.keptSymbols.contains(symbol) else { return nil }
         switch symbol {
         case "plus": return "+"
@@ -442,12 +479,11 @@ struct ControllerCanvas: View {
         if let hit = Self.fractionCache[cacheKey] { return hit }
         let widest = texts.map { CaptionLayout.measure($0, fontSize: CaptionLayout.fontSize(forWidth: w)) }.max() ?? 0
         let fraction = min(maxKey, max(0.12, (widest + 10) / w))
-        if Self.fractionCache.count > 128 { Self.fractionCache.removeAll() }
         Self.fractionCache[cacheKey] = fraction
         return fraction
     }
 
-    nonisolated(unsafe) private static var fractionCache: [String: CGFloat] = [:]
+    nonisolated(unsafe) private static var fractionCache = OldestFirstCache<CGFloat>(cap: 256)
 
     /// The room above the drawing when there is a key: enough for a line
     /// to come down to the top edge, and, when many controls share the top
@@ -486,7 +522,7 @@ struct ControllerCanvas: View {
 
     /// One line of the key: the text, its side, where it sits, and the
     /// line to its control.
-    struct KeyEntry: Identifiable {
+    struct KeyEntry: Identifiable, Equatable {
         let id: String
         let text: String
         let left: Bool
@@ -529,8 +565,16 @@ struct ControllerCanvas: View {
         }
         // The layout is the same until the drawing, its size or its
         // captions change; a press only relights a line.
-        let cacheKey = "\(cacheSignature)|\(Int(w))x\(h < 100_000 ? Int(h) : -1)|\(anchors)|\(keyFraction)|"
+        var cacheKey = "\(cacheSignature)|\(Int(w))x\(h < 100_000 ? Int(h) : -1)|\(anchors)|\(keyFraction)|"
             + items.map { "\($0.c.id)=\($0.text)" }.joined(separator: "\u{1}")
+        #if DEBUG
+        // The routing worked out the old way keeps entries of its own, so
+        // the Test Bench can compare the two.
+        let reference = Self.fastRouteOff
+        if reference { cacheKey += "|reference" }
+        #else
+        let reference = false
+        #endif
         if let hit = Self.keyCache[cacheKey] {
             return hit.map { e in
                 var e = e
@@ -539,9 +583,13 @@ struct ControllerCanvas: View {
             }
         }
         let fs = CaptionLayout.fontSize(forWidth: w)
-        // A caption wider than its column takes two lines.
+        // A caption wider than its column takes two lines. A D-pad's has a
+        // line per direction, each of which can wrap the same way.
         let column = keyFraction * w - 4
-        for i in items.indices where CaptionLayout.measure(items[i].text, fontSize: fs) > column { items[i].lines = 2 }
+        for i in items.indices {
+            let parts = items[i].text.components(separatedBy: "\n")
+            items[i].lines = parts.count + parts.filter { CaptionLayout.measure($0, fontSize: fs) > column }.count
+        }
         // Routes and obstacles, remembered across every layout tried below
         // (a caption tried in the other column, two traded in the order):
         // a route depends only on the control, its side and the height.
@@ -562,7 +610,7 @@ struct ControllerCanvas: View {
             let lineH = max(1, min(fs * 1.45, (span - 4) / CGFloat(lineCount)))
             let top = lineH / 2 + 2, bottom = span - lineH / 2 - 2
             // A two-line caption is nearly two lines tall.
-            func height(_ item: Item) -> CGFloat { item.lines == 2 ? lineH * 1.85 : lineH }
+            func height(_ item: Item) -> CGFloat { item.lines > 1 ? lineH * (CGFloat(item.lines) - 0.15) : lineH }
             let elbowX = side ? (keyFraction + keyGap * 0.5) * w : w - (keyFraction + keyGap * 0.5) * w
             func others(_ item: Item) -> [Obstacle] {
                 if let hit = blockMemo[item.c.id] { return hit }
@@ -576,21 +624,38 @@ struct ControllerCanvas: View {
             // Where a line from the column at height y may meet the control:
             // its outer edge (level when y is within its height), its middle,
             // its bottom, its top.
-            func candidates(_ item: Item, _ y: CGFloat) -> [CGPoint] {
+            // Tried in this order, each worked out only when the ones
+            // before it do not serve: the first that `serves` is returned.
+            func firstCandidate(_ item: Item, _ y: CGFloat, where serves: (CGPoint) -> Bool) -> CGPoint? {
                 let r = item.bounds
-                var list = [edgePoint(item.c, r, towardY: y, left: side, axis: item.shape?.axis),
-                            edgePoint(item.c, r, towardY: r.midY, left: side, axis: item.shape?.axis)]
+                let level = edgePoint(item.c, r, towardY: y, left: side, axis: item.shape?.axis)
+                if serves(level) { return level }
+                let middle = edgePoint(item.c, r, towardY: r.midY, left: side, axis: item.shape?.axis)
+                if serves(middle) { return middle }
                 if Self.isRound(item.c) {
                     // On the rim, aimed at the elbow, then turned a little
                     // each way, so a line can come in between neighbors.
                     let base = atan2(y - r.midY, elbowX - r.midX)
                     for turn in [0.0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05] {
                         let t = base + turn
-                        list.append(CGPoint(x: r.midX + (r.width / 2 + 1) * cos(t), y: r.midY + (r.height / 2 + 1) * sin(t)))
+                        let rim = CGPoint(x: r.midX + (r.width / 2 + 1) * cos(t), y: r.midY + (r.height / 2 + 1) * sin(t))
+                        if serves(rim) { return rim }
                     }
                 }
-                list += [bottomPoint(item), topPoint(item)]
+                let bottom = bottomPoint(item)
+                if serves(bottom) { return bottom }
+                let top = topPoint(item)
+                if serves(top) { return top }
+                return nil
+            }
+            func candidates(_ item: Item, _ y: CGFloat) -> [CGPoint] {
+                var list: [CGPoint] = []
+                _ = firstCandidate(item, y) { list.append($0); return false }
                 return list
+            }
+            /// The first candidate: the outer edge, level with y.
+            func levelPoint(_ item: Item, _ y: CGFloat) -> CGPoint {
+                edgePoint(item.c, item.bounds, towardY: y, left: side, axis: item.shape?.axis)
             }
             // A control's lowest and highest drawn points: on a turned
             // capsule, the ends of its axis, not the corners of its box.
@@ -606,8 +671,15 @@ struct ControllerCanvas: View {
             }
             func clearAnchor(_ item: Item, _ y: CGFloat, _ block: [Obstacle]) -> (anchor: CGPoint, bends: [CGPoint])? {
                 let elbow = CGPoint(x: elbowX, y: y)
-                func clear(_ a: CGPoint, _ b: CGPoint) -> Bool { !block.contains { Self.segment(a, b, hits: $0, margin: 2) } }
-                if let a = candidates(item, y).first(where: { clear(elbow, $0) }) { return (a, []) }
+                func clear(_ a: CGPoint, _ b: CGPoint) -> Bool {
+                    // The reference: every obstacle tested in full.
+                    if reference { return !block.contains { Self.segment(a, b, hits: $0, margin: 2, quick: false) } }
+                    for o in block where Self.segment(a, b, hits: o, margin: 2) { return false }
+                    return true
+                }
+                if reference {
+                    if let a = candidates(item, y).first(where: { clear(elbow, $0) }) { return (a, []) }
+                } else if let a = firstCandidate(item, y, where: { clear(elbow, $0) }) { return (a, []) }
                 // An elbow: level to directly above or below the control,
                 // then straight down or up to it.
                 let r = item.bounds
@@ -719,7 +791,7 @@ struct ControllerCanvas: View {
                 zip(order, ys).map { item, y in
                     let start = CGPoint(x: side ? keyFraction * w - 1 : w - keyFraction * w + 1, y: y)
                     let found = anchors ? route(item, y) : nil
-                    return [start, CGPoint(x: elbowX, y: y)] + (found?.bends ?? []) + [found?.anchor ?? candidates(item, y)[0]]
+                    return [start, CGPoint(x: elbowX, y: y)] + (found?.bends ?? []) + [found?.anchor ?? levelPoint(item, y)]
                 }
             }
             func crossings(_ ps: [[CGPoint]]) -> [(Int, Int)] {
@@ -820,7 +892,7 @@ struct ControllerCanvas: View {
                 let found = route(item, y)
                 if found == nil { failed.insert(item.c.id) }
                 out.append(KeyEntry(id: item.c.id, text: item.text, left: side, y: y,
-                                    anchor: found?.anchor ?? candidates(item, y)[0], bends: found?.bends ?? [],
+                                    anchor: found?.anchor ?? levelPoint(item, y), bends: found?.bends ?? [],
                                     active: keyActive(item.c), lines: item.lines))
             }
         }
@@ -866,12 +938,11 @@ struct ControllerCanvas: View {
                 if !better { break }
             }
         }
-        if Self.keyCache.count > 64 { Self.keyCache.removeAll() }
         Self.keyCache[cacheKey] = out
         return out
     }
 
-    nonisolated(unsafe) private static var keyCache: [String: [KeyEntry]] = [:]
+    nonisolated(unsafe) private static var keyCache = OldestFirstCache<[KeyEntry]>(cap: 256)
 
     /// The key lines that cross or touch, as pairs of control ids: each line
     /// runs from its caption, level to the elbow, then on to its control.
@@ -902,7 +973,22 @@ struct ControllerCanvas: View {
         let round: Bool
         /// A capsule set at an angle, as its axis and radius: its box would
         /// close the gaps beside it.
-        var axis: (CGPoint, CGPoint, CGFloat)? = nil
+        let axis: (CGPoint, CGPoint, CGFloat)?
+        /// All the obstacle covers before the margin: the rect, or a turned
+        /// capsule's axis grown by its radius. A line whose ends both lie
+        /// past one side of it, by more than the margin, cannot touch it.
+        let box: CGRect
+
+        init(rect: CGRect, round: Bool, axis: (CGPoint, CGPoint, CGFloat)? = nil) {
+            self.rect = rect
+            self.round = round
+            self.axis = axis
+            if let (p, q, r) = axis {
+                box = CGRect(x: min(p.x, q.x) - r, y: min(p.y, q.y) - r, width: abs(p.x - q.x) + 2 * r, height: abs(p.y - q.y) + 2 * r)
+            } else {
+                box = rect.standardized
+            }
+        }
     }
 
     /// A control as an obstacle at its drawn frame.
@@ -942,7 +1028,19 @@ struct ControllerCanvas: View {
     }
 
     /// Whether the line from a to b comes within `margin` of the obstacle.
-    static func segment(_ a: CGPoint, _ b: CGPoint, hits o: Obstacle, margin: CGFloat) -> Bool {
+    /// `quick` first turns away a line that lies wholly to one side of the
+    /// obstacle's box, by the margin and a point more: the full tests below
+    /// say no for every such line, so the answer is the same. Routing a key
+    /// asks this about every obstacle for every height of the column, and
+    /// most lines pass far from most controls.
+    static func segment(_ a: CGPoint, _ b: CGPoint, hits o: Obstacle, margin: CGFloat, quick: Bool = true) -> Bool {
+        if quick {
+            let slack = margin + 1, box = o.box
+            if a.x < box.minX - slack && b.x < box.minX - slack { return false }
+            if a.x > box.maxX + slack && b.x > box.maxX + slack { return false }
+            if a.y < box.minY - slack && b.y < box.minY - slack { return false }
+            if a.y > box.maxY + slack && b.y > box.maxY + slack { return false }
+        }
         if let (p, q, r) = o.axis { return distance(a, b, p, q) < r + margin }
         guard o.round else { return segment(a, b, hits: o.rect.insetBy(dx: -margin, dy: -margin)) }
         // In the ellipse's own space it is a unit circle grown by the margin.
@@ -1032,7 +1130,7 @@ struct ControllerCanvas: View {
     /// views draw it, and whether that is readable (7.5 pt or more, and as
     /// wide as the text).
     private func legendFits(_ c: PlacedControl, size: CGSize) -> Bool {
-        if wordFor(c) != nil, !crowdedPills.contains(c.id) { return true }
+        if wordFor(c) != nil, !crowdedNow.contains(c.id) { return true }
         let lg = shownLegend(c)
         switch c.kind {
         case .trigger:
@@ -1062,25 +1160,28 @@ struct ControllerCanvas: View {
         return min(size.width, size.height) * 0.42
     }
 
-    private func leaderLines(_ entries: [KeyEntry], key keyFraction: CGFloat) -> some View {
-        Canvas { ctx, size in
-            let k = keyFraction * size.width
-            for e in entries {
-                let start = CGPoint(x: e.left ? k - 1 : size.width - k + 1, y: e.y)
-                let elbow = CGPoint(x: e.left ? k + keyGap * size.width * 0.5 : size.width - k - keyGap * size.width * 0.5, y: e.y)
-                var path = Path()
-                path.move(to: start)
-                path.addLine(to: elbow)
-                for bend in e.bends { path.addLine(to: bend) }
-                path.addLine(to: e.anchor)
-                let tint = e.active ? Color.green.opacity(0.9) : Color.primary.opacity(0.28)
-                ctx.stroke(path, with: .color(tint), lineWidth: e.active ? 1.2 : 0.75)
-                ctx.fill(Path(ellipseIn: CGRect(x: e.anchor.x - 1.6, y: e.anchor.y - 1.6, width: 3.2, height: 3.2)),
-                         with: .color(tint))
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+    /// What the key's layers redraw for besides their lines: the
+    /// appearance their colors and text resolve against.
+    private var keyLook: KeyLook {
+        KeyLook(scheme: colorScheme, contrast: colorSchemeContrast, bold: legibilityWeight == .bold, scale: displayScale)
+    }
+
+    /// The leader lines, in a layer that redraws only when a line or the
+    /// look changes, not on every pass.
+    @ViewBuilder private func keyLines(_ entries: [KeyEntry], width w: CGFloat, key kf: CGFloat) -> some View {
+        let lines = KeyLines(entries: entries, width: w, keyFraction: kf, keyGap: keyGap, look: keyLook)
+        #if DEBUG
+        if Self.keyCanvasOff { lines } else { lines.equatable() }
+        #else
+        lines.equatable()
+        #endif
+    }
+
+    /// The key's captions, each a Text view. Not drawn in a Canvas: text there
+    /// loses the window's vibrancy and smoothing, and the lit green came out
+    /// darker and thinner.
+    @ViewBuilder private func keyCaptions(_ entries: [KeyEntry], width w: CGFloat, key kf: CGFloat) -> some View {
+        ForEach(entries) { e in keyLabel(e, width: w, key: kf) }
     }
 
     private func keyLabel(_ e: KeyEntry, width w: CGFloat, key keyFraction: CGFloat) -> some View {
@@ -1114,7 +1215,15 @@ struct ControllerCanvas: View {
 
     // MARK: - Controls
 
+    /// A control in a cell SwiftUI compares before drawing it again: a
+    /// stick moving redraws that stick, not every control on the drawing.
     private func controlView(_ c: PlacedControl, size: CGSize) -> some View {
+        ControlCell(canvas: self, control: c, size: size, live: cellToken.map { live(c, token: $0, look: cellLook) })
+            .equatable()
+    }
+
+    /// The control as drawn now.
+    fileprivate func controlContent(_ c: PlacedControl, size: CGSize) -> some View {
         let content: AnyView
         if case .notReported(let why) = c.readable {
             content = AnyView(notReported(c, size: size).help(LayoutText.t(why)))
@@ -1196,6 +1305,21 @@ struct ControllerCanvas: View {
             return Path(ellipseIn: r)
         case .capsule(let angle):
             let p = Path(roundedRect: r, cornerRadius: min(size.width, size.height) / 2)
+            guard angle != 0 else { return p }
+            return p.applying(CGAffineTransform(translationX: -r.midX, y: -r.midY)
+                .concatenating(CGAffineTransform(rotationAngle: angle * .pi / 180))
+                .concatenating(CGAffineTransform(translationX: r.midX, y: r.midY)))
+        case .curve(let angle):
+            // A band bowed up, thicker in the middle, its ends rounded by
+            // the curve; then turned about the middle.
+            let w = size.width, h = size.height
+            var p = Path()
+            p.move(to: CGPoint(x: 0.02 * w, y: 0.68 * h))
+            p.addQuadCurve(to: CGPoint(x: 0.98 * w, y: 0.68 * h), control: CGPoint(x: 0.5 * w, y: 0.02 * h))
+            p.addQuadCurve(to: CGPoint(x: 0.88 * w, y: 0.86 * h), control: CGPoint(x: 0.99 * w, y: 0.8 * h))
+            p.addQuadCurve(to: CGPoint(x: 0.12 * w, y: 0.86 * h), control: CGPoint(x: 0.5 * w, y: 0.36 * h))
+            p.addQuadCurve(to: CGPoint(x: 0.02 * w, y: 0.68 * h), control: CGPoint(x: 0.01 * w, y: 0.8 * h))
+            p.closeSubpath()
             guard angle != 0 else { return p }
             return p.applying(CGAffineTransform(translationX: -r.midX, y: -r.midY)
                 .concatenating(CGAffineTransform(rotationAngle: angle * .pi / 180))
@@ -1806,7 +1930,10 @@ struct ControllerCanvas: View {
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken(c, String(localized: "Slider")))
-        .accessibilityValue(String(localized: "\(Int(level * 100)) percent"))
+        // Quarter steps, as every other live control: a 1% value changed on
+        // nearly every frame and VoiceOver kept announcing it.
+        .accessibilityValue(reading == nil ? String(localized: "No controller connected")
+                            : unipolar ? SpokenLive.trigger(Float(level)) : SpokenLive.axis(Float(v)))
     }
 
     private func port(_ c: PlacedControl, size: CGSize) -> some View {
@@ -1882,6 +2009,423 @@ extension ControllerCanvas {
     }
 }
 
+extension ControllerCanvas {
+    /// What a frozen layer is looked up by: the model, its variant, whether
+    /// captions show, and for every control its place, size, shape, kind
+    /// and readability (the Access controller's ports change these) and what
+    /// the panel's closures give it (legend, word, name, caption). That is
+    /// every input the bands, the key column, the pill words and the key's
+    /// lines are worked out from, so a hit draws what a miss would.
+    private struct FrozenKey: Hashable {
+        struct Part: Hashable {
+            let id: String
+            let face: LayoutFace
+            let kind: Int
+            let shape: Int
+            let shapeValue: Double
+            let x: CGFloat, y: CGFloat, size: CGFloat, height: CGFloat?
+            let readable: Int
+            let printed: String?
+            let ownName: String?
+            let variants: Set<String>?
+            let callout: CalloutSide
+            let keySide: CalloutSide?
+            let text: String?, symbol: String?
+            let word: String?
+            let name: String?
+            let caption: String?
+        }
+        let layout: String
+        let variant: String?
+        let captions: Bool
+        let aspect: CGFloat, topStrip: CGFloat, backStrip: CGFloat
+        let parts: [Part]
+    }
+
+    /// The part of a drawing that a live tick does not change: the bands
+    /// and where they sit, the key column, every control's word and spoken
+    /// caption, and at each size every control's frame and the key's lines.
+    /// Worked out on a model's first draw and kept, oldest dropped first,
+    /// so a press, a stick moving and a return visit look it up instead of
+    /// laying the drawing out again (the bands were worked out four times a
+    /// frame, every caption about five).
+    private final class FrozenLayer {
+        let metrics: Metrics
+        let words: [String: String]
+        let crowded: Set<String>
+        /// Each caption as VoiceOver reads it (spokenMarks), by control.
+        let spokenCaptions: [String: String]
+        /// The drawn controls by id, to relight the key's lines.
+        let controls: [String: PlacedControl]
+        var sized: [SizeKey: Sized] = [:]
+        var sizeOrder: [SizeKey] = []
+
+        init(metrics: Metrics, words: [String: String], crowded: Set<String>, spokenCaptions: [String: String]) {
+            self.metrics = metrics
+            self.words = words
+            self.crowded = crowded
+            self.spokenCaptions = spokenCaptions
+            var controls: [String: PlacedControl] = [:]
+            for b in metrics.bands { for c in b.controls where controls[c.id] == nil { controls[c.id] = c } }
+            self.controls = controls
+        }
+    }
+
+    /// A drawing size: the width, and the height the key is laid out for.
+    private struct SizeKey: Hashable { let width: CGFloat; let height: CGFloat }
+
+    /// One size of a layer: every drawn control's frame and the key's
+    /// lines, as worked out at that size (`active` as when made).
+    private struct Sized {
+        let frames: [String: CGRect]
+        let entries: [KeyEntry]
+    }
+
+    nonisolated(unsafe) private static var frozenLayers: [FrozenKey: FrozenLayer] = [:]
+    nonisolated(unsafe) private static var frozenOrder: [FrozenKey] = []
+    /// A model, variant and set of captions each; the presets with a drawn
+    /// pad, twice over. A layer keeps its last few sizes (a window resized).
+    private static let frozenCap = 128
+    private static let sizesKept = 4
+
+    /// This drawing's layer: looked up, else worked out the way a drawing
+    /// pass works it out, and kept. Nil when two controls share an id, which
+    /// the by-id tables could not tell apart: drawn as before.
+    private var frozenLayer: FrozenLayer? {
+        #if DEBUG
+        if Self.freezeOff { return nil }
+        #endif
+        var ids = Set<String>()
+        var parts: [FrozenKey.Part] = []
+        parts.reserveCapacity(layout.controls.count)
+        for c in layout.controls {
+            guard ids.insert(c.id).inserted else { return nil }
+            // A port is never drawn: nothing to ask the panel about it.
+            let words = c.kind != .port
+            let lg = words ? legend(c) : (text: nil, symbol: nil)
+            let shape = Self.shapeTag(c.shape)
+            parts.append(FrozenKey.Part(
+                id: c.id, face: c.face, kind: Self.kindTag(c.kind), shape: shape.tag, shapeValue: shape.value,
+                x: c.center.x, y: c.center.y, size: c.size, height: c.height, readable: Self.readableTag(c.readable),
+                printed: c.printed, ownName: c.name, variants: c.variants, callout: c.callout, keySide: c.keySide,
+                text: lg.text, symbol: lg.symbol, word: words ? wordFor(c) : nil,
+                name: words ? name?(c) : nil, caption: words ? caption(c) : nil))
+        }
+        let key = FrozenKey(layout: layout.id.rawValue, variant: variant, captions: showCaptions,
+                            aspect: layout.aspect, topStrip: layout.topStrip, backStrip: layout.backStrip, parts: parts)
+        if let hit = Self.frozenLayers[key] { return hit }
+        #if DEBUG
+        Self.frozenMisses &+= 1
+        #endif
+        var words: [String: String] = [:], spoken: [String: String] = [:]
+        for p in parts {
+            if let w = p.word { words[p.id] = w }
+            if let t = p.caption { spoken[p.id] = HotKeySpec.spokenMarks(in: t) }
+        }
+        let layer = FrozenLayer(metrics: metrics, words: words, crowded: crowdedPills, spokenCaptions: spoken)
+        if Self.frozenOrder.count >= Self.frozenCap { Self.frozenLayers[Self.frozenOrder.removeFirst()] = nil }
+        Self.frozenLayers[key] = layer
+        Self.frozenOrder.append(key)
+        return layer
+    }
+
+    /// This canvas, drawing from a layer.
+    private func withLayer(_ layer: FrozenLayer) -> ControllerCanvas {
+        var copy = self
+        copy.frozen = layer
+        return copy
+    }
+
+    /// The layer at one size: looked up, else worked out as the drawing
+    /// pass works it out (the frames, then the key), and kept.
+    private func sized(_ layer: FrozenLayer, keyed: Bool, bands: [Band], tops: [CGFloat],
+                       width w: CGFloat, height h: CGFloat, key kf: CGFloat) -> Sized {
+        let key = SizeKey(width: w, height: h)
+        if let hit = layer.sized[key] { return hit }
+        var frames: [String: CGRect] = [:]
+        for (n, b) in bands.enumerated() {
+            for c in b.controls { frames[c.id] = controlFrame(c, band: b, top: tops[n], width: w) }
+        }
+        let made = Sized(frames: frames, entries: keyed ? keyEntries(bands: bands, tops: tops, width: w, height: h, key: kf) : [])
+        if layer.sizeOrder.count >= Self.sizesKept { layer.sized[layer.sizeOrder.removeFirst()] = nil }
+        layer.sized[key] = made
+        layer.sizeOrder.append(key)
+        return made
+    }
+
+    /// The key's lines lit by what is in use now.
+    private func relit(_ entries: [KeyEntry], layer: FrozenLayer?) -> [KeyEntry] {
+        entries.map { e in
+            var e = e
+            if let c = layer?.controls[e.id] { e.active = keyActive(c) }
+            return e
+        }
+    }
+
+    private static func kindTag(_ k: ControlKind) -> Int {
+        switch k {
+        case .stick: return 0
+        case .trackpad: return 1
+        case .dpad: return 2
+        case .faceButton: return 3
+        case .menuButton: return 4
+        case .homeButton: return 5
+        case .shoulder: return 6
+        case .trigger(.analog): return 7
+        case .trigger(.digital): return 8
+        case .paddle: return 9
+        case .gripButton: return 10
+        case .light: return 11
+        case .slider: return 12
+        case .dial: return 13
+        case .key: return 14
+        case .pedal: return 15
+        case .wheel: return 16
+        case .hat: return 17
+        case .lever: return 18
+        case .port: return 19
+        case .other: return 20
+        }
+    }
+
+    private static func shapeTag(_ s: ControlShape) -> (tag: Int, value: Double) {
+        switch s {
+        case .circle: return (0, 0)
+        case .capsule(let angle): return (1, angle)
+        case .curve(let angle): return (10, angle)
+        case .roundedRect(let corner): return (2, corner)
+        case .squircle: return (3, 0)
+        case .trapezoid(let top): return (4, top)
+        case .crossPad: return (5, 0)
+        case .fourButtonPad: return (6, 0)
+        case .hybridDish: return (7, 0)
+        case .disc: return (8, 0)
+        case .octagonGate: return (9, 0)
+        }
+    }
+
+    private static func readableTag(_ r: Readability) -> Int {
+        switch r {
+        case .read: return 0
+        case .notReported: return 1
+        case .conditional: return 2
+        }
+    }
+
+    #if DEBUG
+    /// Layers worked out since launch, for the Test Bench.
+    nonisolated(unsafe) static var frozenMisses = 0
+    /// Draws without the layer, for the Test Bench to compare against.
+    nonisolated(unsafe) static var freezeOff = false
+    /// Routes the key's lines the old way, every obstacle tested in full
+    /// and every candidate worked out, for the Test Bench to compare against.
+    nonisolated(unsafe) static var fastRouteOff = false
+    /// Draws the key's captions as Text views and its lines on every pass,
+    /// as before KeyCaptions and KeyLines, for the Test Bench to compare
+    /// against.
+    nonisolated(unsafe) static var keyCanvasOff = false
+
+    /// A layout drawn as the Test Bench's drawing checks draw it: pressed
+    /// or at rest, every control captioned, the captions alternating short
+    /// and long (a long one takes two lines, or is shortened), each control
+    /// wrapped in a plain Button with a hint, as the panel's inspector does.
+    static func debugBenchCanvas(_ layout: ControllerLayout, pressed: Bool) -> ControllerCanvas {
+        var state = ControllerState()
+        if pressed {
+            for c in layout.controls {
+                for b in c.inputs.allButtons { state.buttons[b] = 1 }
+                for a in c.inputs.axes { state.axes[a.index] = a.role == .analog ? 0.7 : 0.5 }
+                if let h = c.inputs.hat { state.hats[h] = (1, 1) }
+            }
+        }
+        var index: [String: Int] = [:]
+        for (n, c) in layout.controls.enumerated() where index[c.id] == nil { index[c.id] = n }
+        return ControllerCanvas(
+            layout: layout, state: state,
+            legend: { CanvasLegend.legend(for: $0, in: layout, family: layout.family, model: layout.modelNames, choice: .automatic) },
+            caption: { c in
+                guard c.kind != .port, c.kind != .light else { return nil }
+                return (index[c.id] ?? 0) % 2 == 0 ? "Left click \(c.id)"
+                    : "Hold to scroll the front window down slowly, then switch to \(c.id)"
+            },
+            lightColor: .blue,
+            threshold: { _ in 0.25 },
+            inspect: { _, v in
+                AnyView(Button {} label: { v }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityHint("Inspects bindings for this input"))
+            })
+    }
+
+    /// A view to show bench drawings in (debugShow).
+    static func debugHost() -> NSView { NSHostingView(rootView: AnyView(EmptyView())) }
+
+    /// Shows a layout in a host from debugHost, 640 points wide, drawn as
+    /// debugBenchCanvas draws it, the key's captions as Text views or drawn.
+    static func debugShow(_ layout: ControllerLayout, pressed: Bool, keyCanvasOff off: Bool, in host: NSView) {
+        guard let host = host as? NSHostingView<AnyView> else { return }
+        keyCanvasOff = off
+        host.rootView = AnyView(debugBenchCanvas(layout, pressed: pressed)
+            .frame(width: 640)
+            .id("\(layout.id.rawValue) \(pressed) \(off)"))
+        host.layoutSubtreeIfNeeded()
+    }
+
+    /// Every complete layout drawn with the key's captions as Text views and
+    /// as KeyCaptions, at rest and pressed, at two widths and both pixel
+    /// densities, light, dark and Bold Text: the layouts and cases whose
+    /// pictures differ by more than 24 levels anywhere, and how many pairs
+    /// were compared. For the Test Bench.
+    static func debugKeyCanvasCheck() -> (compared: Int, differ: [String]) {
+        func pixels(_ view: some View, scale: CGFloat) -> [UInt8]? {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = scale
+            guard let image = renderer.cgImage else { return nil }
+            let w = image.width, h = image.height
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+                guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                          bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
+            return drawn ? bytes + [UInt8(w & 0xFF), UInt8(w >> 8), UInt8(h & 0xFF), UInt8(h >> 8)] : nil
+        }
+        func same(_ a: [UInt8]?, _ b: [UInt8]?) -> Bool {
+            guard let a, let b, a.count == b.count else { return false }
+            // Identical buffers first, compared in bulk: the level by level
+            // walk below is slow in a Debug build.
+            let equal = a.withUnsafeBytes { x in b.withUnsafeBytes { y in memcmp(x.baseAddress!, y.baseAddress!, a.count) == 0 } }
+            if equal { return true }
+            for i in a.indices where abs(Int(a[i]) - Int(b[i])) > 24 { return false }
+            return true
+        }
+        struct Case { let name: String; let pressed: Bool; let width: CGFloat; let scale: CGFloat; let dark: Bool; let bold: Bool }
+        let cases = [
+            Case(name: "rest 520 1x", pressed: false, width: 520, scale: 1, dark: false, bold: false),
+            Case(name: "pressed 520 1x dark", pressed: true, width: 520, scale: 1, dark: true, bold: false),
+            Case(name: "rest 640 1x bold", pressed: false, width: 640, scale: 1, dark: false, bold: true),
+            Case(name: "pressed 640 2x", pressed: true, width: 640, scale: 2, dark: false, bold: false),
+        ]
+        var differ: [String] = []
+        var compared = 0
+        defer { keyCanvasOff = false }
+        for layout in ControllerLayoutCatalog.all where layout.isComplete {
+            for k in cases {
+                let view = debugBenchCanvas(layout, pressed: k.pressed)
+                    .frame(width: k.width)
+                    .environment(\.colorScheme, k.dark ? .dark : .light)
+                    .environment(\.legibilityWeight, k.bold ? .bold : nil)
+                keyCanvasOff = true
+                let old = pixels(view, scale: k.scale)
+                keyCanvasOff = false
+                let new = pixels(view, scale: k.scale)
+                if old == nil || !same(old, new) { differ.append("\(layout.id.rawValue) \(k.name)") }
+                compared += 1
+            }
+        }
+        return (compared, differ)
+    }
+
+    /// Every complete layout, with a caption on every control, its key laid
+    /// out at three widths the old way and the quick way: the layouts and
+    /// widths where any line, anchor, bend, side or height differs, and how
+    /// many keys were compared. For the Test Bench.
+    static func debugQuickRouteCheck() -> (compared: Int, differ: [String]) {
+        var differ: [String] = []
+        var compared = 0
+        for layout in ControllerLayoutCatalog.all where layout.isComplete {
+            let canvas = ControllerCanvas(
+                layout: layout, state: ControllerState(),
+                legend: { CanvasLegend.legend(for: $0, in: layout, family: layout.family, model: layout.modelNames, choice: .automatic) },
+                caption: { c in c.kind == .port || c.kind == .light ? nil : "Left click \(c.id)" },
+                lightColor: .blue,
+                threshold: { _ in 0.25 },
+                inspect: { _, v in v })
+            let m = canvas.metrics
+            guard m.keyed else { continue }
+            // Widths no panel is likely to have been drawn at, so neither
+            // run is a hit in the key's cache.
+            for w in [437.0, 613.0, 771.0] as [CGFloat] {
+                fastRouteOff = true
+                let old = canvas.keyEntries(bands: m.bands, tops: m.tops, width: w, height: w * m.total, key: m.kf)
+                fastRouteOff = false
+                let quick = canvas.keyEntries(bands: m.bands, tops: m.tops, width: w, height: w * m.total, key: m.kf)
+                let same = old.count == quick.count && zip(old, quick).allSatisfy { a, b in
+                    a.id == b.id && a.text == b.text && a.left == b.left && a.y == b.y && a.anchor == b.anchor
+                        && a.bends == b.bends && a.active == b.active && a.lines == b.lines
+                }
+                if !same { differ.append("\(layout.id.rawValue)@\(Int(w))") }
+                compared += 1
+            }
+        }
+        return (compared, differ)
+    }
+
+    /// Every complete layout, pressed, with a caption on every control,
+    /// drawn with the layer off, then with it made, then looked up: the
+    /// layouts whose first and last pictures differ, and those whose look
+    /// up made a layer again. For the Test Bench.
+    static func debugFrozenLayerCheck() -> (drawn: Int, differ: [String], remade: [String]) {
+        // Drawn into one 8-bit sRGB buffer, so the compare does not depend
+        // on the renderer's own pixel format (16-bit on some layouts).
+        func pixels(_ view: some View) -> [UInt8]? {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            guard let image = renderer.cgImage else { return nil }
+            let w = image.width, h = image.height
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+                guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                          bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
+            return drawn ? bytes + [UInt8(w & 0xFF), UInt8(w >> 8)] : nil
+        }
+        // The layer's frames come out a rounding apart from the frames
+        // worked out each time: rotated shapes (the 2026 Steam Controller's
+        // back paddles) differ by a few levels along their soft edges. A
+        // missing legend, ring or control differs by far more.
+        func same(_ a: [UInt8]?, _ b: [UInt8]?) -> Bool {
+            guard let a, let b, a.count == b.count else { return false }
+            return zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 24 }
+        }
+        var differ: [String] = [], remade: [String] = []
+        var drawn = 0
+        for layout in ControllerLayoutCatalog.all where layout.isComplete {
+            var state = ControllerState()
+            for c in layout.controls {
+                for b in c.inputs.allButtons { state.buttons[b] = 1 }
+                for a in c.inputs.axes { state.axes[a.index] = a.role == .analog ? 0.7 : 0.5 }
+                if let h = c.inputs.hat { state.hats[h] = (1, 1) }
+            }
+            let canvas = ControllerCanvas(
+                layout: layout, state: state,
+                legend: { CanvasLegend.legend(for: $0, in: layout, family: layout.family, model: layout.modelNames, choice: .automatic) },
+                caption: { c in c.kind == .port || c.kind == .light ? nil : "Left click \(c.id)" },
+                lightColor: .blue,
+                threshold: { _ in 0.25 },
+                inspect: { _, v in v })
+                .frame(width: 600)
+            freezeOff = true
+            let worked = pixels(canvas)
+            freezeOff = false
+            _ = pixels(canvas)
+            let misses = frozenMisses
+            let looked = pixels(canvas)
+            if frozenMisses != misses { remade.append(layout.id.rawValue) }
+            if worked == nil || !same(worked, looked) { differ.append(layout.id.rawValue) }
+            drawn += 1
+        }
+        return (drawn, differ, remade)
+    }
+    #endif
+}
+
 /// The deadzones a Live Visualizer panel's rows set on one control, as
 /// fractions of full travel, for the drawing to mark the way the deadzone
 /// calibration sheet does.
@@ -1902,6 +2446,148 @@ struct CanvasDeadzone: Equatable {
 
     var hasOuter: Bool { min(outerRight, outerLeft, outerDown, outerUp) < 0.99 }
 }
+
+extension ControllerCanvas {
+    /// How every control draws a press and a pause now.
+    private var cellLook: CellLook {
+        CellLook(pressedOutline: pressedOutline, moreContrast: moreContrast, paused: suspended || livePaused, scheme: colorScheme)
+    }
+
+    /// What a control reads now: every input it draws from (the trackpad's
+    /// press, touch and position too), the fingers and lit zones on a touch
+    /// surface, and a light's color.
+    fileprivate func live(_ c: PlacedControl, token: Int, look: CellLook) -> ControlLive {
+        var live = ControlLive(token: token, open: openControl == c.id, look: look)
+        let spec = layout.surface(forControl: c.id)
+        var buttons = c.inputs.allButtons
+        if let p = spec?.pressIndex { buttons.append(p) }
+        if let t = spec?.touchIndex { buttons.append(t) }
+        live.buttons = buttons.map { state.buttons[$0] }
+        var axes = c.inputs.axes.map(\.index)
+        if let p = spec?.positionAxes { axes += [p.x, p.y] }
+        if let a = spec?.pressureAxis { axes.append(a) }
+        if let a = c.inputs.pressure { axes.append(a) }
+        // A stick's zones read its own pair (zonePoint).
+        if let key = Self.zoneStick(c) { axes += [key * 2, key * 2 + 1] }
+        live.axes = axes.map { state.axes[$0] }
+        if let h = c.inputs.hat, let v = state.hats[h] { live.hat = [v.x, v.y] }
+        if let s = spec?.surface {
+            live.fingers = touchPoints(s)
+            live.liveSurface = liveTouchSurfaces.contains(s)
+            if s <= 1 { live.zonesOn = zones.filter { ($0.surface == 1) == (s == 1) }.map { zoneOn($0.id) } }
+        }
+        if c.kind == .light { live.light = lightColor }
+        return live
+    }
+}
+
+/// How the drawing shows a press (Differentiate Without Color, more
+/// contrast), whether its live clocks are paused, and the appearance.
+fileprivate struct CellLook: Equatable {
+    var pressedOutline = false
+    var moreContrast = false
+    var paused = false
+    var scheme: ColorScheme = .light
+}
+
+/// What one drawn control shows that changes while the drawing does not:
+/// its readings, and the panel's token for everything else.
+fileprivate struct ControlLive: Equatable {
+    var token: Int
+    var open: Bool
+    var look: CellLook
+    var buttons: [Float?] = []
+    var axes: [Float?] = []
+    var hat: [Float] = []
+    var fingers: [CGPoint] = []
+    var liveSurface = false
+    var zonesOn: [Bool] = []
+    var light: Color? = nil
+}
+
+/// One control of the drawing, compared before its body runs: equal when
+/// its reading, its size and the panel's token are, so a tick redraws only
+/// the controls it changed. A control with its inspector open, or a canvas
+/// with no token, is never equal and draws on every pass, as before.
+private struct ControlCell: View, Equatable {
+    let canvas: ControllerCanvas
+    let control: PlacedControl
+    let size: CGSize
+    let live: ControlLive?
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        guard let l = a.live, let r = b.live, !l.open, !r.open else { return false }
+        return a.control.id == b.control.id && a.size == b.size && l == r
+    }
+
+    var body: some View {
+        #if DEBUG
+        let _ = ControllerCanvas.cellBodies &+= 1
+        #endif
+        canvas.controlContent(control, size: size)
+    }
+}
+
+/// The appearance the key's layers resolve their colors and text against.
+/// The layers are compared before they draw again, so what their drawing
+/// reads from the environment is compared too.
+private struct KeyLook: Equatable {
+    var scheme: ColorScheme
+    var contrast: ColorSchemeContrast
+    var bold: Bool
+    var scale: CGFloat
+}
+
+/// The key's leader lines: one Canvas under the controls, compared before
+/// it draws again, so a stick moving or a press that lights no line draws
+/// nothing (the Canvas drew on every pass before).
+private struct KeyLines: View, Equatable {
+    let entries: [ControllerCanvas.KeyEntry]
+    let width: CGFloat
+    let keyFraction: CGFloat
+    let keyGap: CGFloat
+    let look: KeyLook
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.width == b.width && a.keyFraction == b.keyFraction && a.keyGap == b.keyGap && a.look == b.look && a.entries == b.entries
+    }
+
+    var body: some View {
+        Canvas { ctx, size in
+            let k = keyFraction * size.width
+            for e in entries {
+                let start = CGPoint(x: e.left ? k - 1 : size.width - k + 1, y: e.y)
+                let elbow = CGPoint(x: e.left ? k + keyGap * size.width * 0.5 : size.width - k - keyGap * size.width * 0.5, y: e.y)
+                var path = Path()
+                path.move(to: start)
+                path.addLine(to: elbow)
+                for bend in e.bends { path.addLine(to: bend) }
+                path.addLine(to: e.anchor)
+                let tint = e.active ? Color.green.opacity(0.9) : Color.primary.opacity(0.28)
+                ctx.stroke(path, with: .color(tint), lineWidth: e.active ? 1.2 : 0.75)
+                ctx.fill(Path(ellipseIn: CGRect(x: e.anchor.x - 1.6, y: e.anchor.y - 1.6, width: 3.2, height: 3.2)),
+                         with: .color(tint))
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+#if DEBUG
+extension ControllerCanvas {
+    /// Control bodies run since launch, for counting what a tick redraws.
+    nonisolated(unsafe) static var cellBodies = 0
+
+    /// Whether a control's cell would redraw coming from `before`'s, for
+    /// the Test Bench.
+    func debugCellRedraws(_ c: PlacedControl, since before: ControllerCanvas) -> Bool {
+        let size = CGSize(width: 40, height: 40)
+        return ControlCell(canvas: self, control: c, size: size, live: cellToken.map { live(c, token: $0, look: CellLook()) })
+            != ControlCell(canvas: before, control: c, size: size, live: before.cellToken.map { before.live(c, token: $0, look: CellLook()) })
+    }
+}
+#endif
 
 extension ControlInputs {
     /// The serialized inputs a control's inspector lists.
@@ -1944,133 +2630,45 @@ extension EnvironmentValues {
     }
 }
 
+/// A cache that keeps its newest entries: past its cap, the entry put in
+/// first goes. The canvas caches were emptied whole at a count, and one lap
+/// over the presets passed it, so return visits missed again. Setting nil
+/// is ignored; nothing removes a single entry.
+struct OldestFirstCache<Value> {
+    let cap: Int
+    private var values: [String: Value] = [:]
+    /// Keys in the order they were first put in.
+    private var order: [String] = []
+
+    init(cap: Int) { self.cap = cap }
+
+    var count: Int { values.count }
+
+    subscript(key: String) -> Value? {
+        get { values[key] }
+        set {
+            guard let newValue else { return }
+            if values.updateValue(newValue, forKey: key) == nil {
+                order.append(key)
+                if order.count > cap { values.removeValue(forKey: order.removeFirst()) }
+            }
+        }
+    }
+}
+
 enum CaptionLayout {
     static func fontSize(forWidth w: CGFloat) -> CGFloat { max(8.5, min(10.5, w * 0.017)) }
 
-    nonisolated(unsafe) private static var widths: [String: CGFloat] = [:]
+    nonisolated(unsafe) private static var widths = OldestFirstCache<CGFloat>(cap: 2000)
     /// The text's drawn width at that size, remembered.
     static func measure(_ text: String, fontSize: CGFloat) -> CGFloat {
         let key = "\(fontSize)|\(text)"
         if let w = widths[key] { return w }
         let w = ceil((text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize)]).width) + 2
-        if widths.count > 2000 { widths.removeAll() }
         widths[key] = w
         return w
     }
 }
-
-#if DEBUG
-extension ControllerCanvas {
-    /// What is wrong with the key at a panel width, worked out as the view
-    /// lays it out: a line that runs under another control, captions closer
-    /// than a line apart, a caption cut short. Empty when the key is clean.
-    /// KeyLayoutTests runs it for every layout, variant and common width.
-    func keyProblems(width w: CGFloat) -> [String] {
-        let m = metrics
-        guard m.keyed else { return [] }
-        let kf = m.kf, bands = m.bands
-        let laid = (tops: m.tops, total: m.total)
-        let entries = keyEntries(bands: bands, tops: laid.tops, width: w, height: w * m.total, key: kf)
-        var all: [(id: String, bounds: CGRect, obstacle: Obstacle)] = []
-        for (n, b) in bands.enumerated() {
-            for c in b.controls {
-                let frame = controlFrame(c, band: b, top: laid.tops[n], width: w)
-                all.append((c.id, Self.drawnBounds(c, frame), Self.obstacle(c, frame: frame)))
-            }
-        }
-        let tag = "\(layout.id.rawValue)\(variant.map { ".\($0)" } ?? "") at \(Int(w)):"
-        let fs = CaptionLayout.fontSize(forWidth: w)
-        var out: [String] = []
-        for e in entries {
-            guard let ownEntry = all.first(where: { $0.id == e.id }) else { continue }
-            let own = ownEntry.bounds
-            // The line must end on the control's outline, not in space beside it.
-            let gap: CGFloat = {
-                let o = ownEntry.obstacle, a = e.anchor
-                if let (p, q, r) = o.axis { return Self.distance(a, a, p, q) - r }
-                if o.round {
-                    let rx = o.rect.width / 2, ry = o.rect.height / 2
-                    guard rx > 0, ry > 0 else { return 0 }
-                    let d = hypot((a.x - o.rect.midX) / rx, (a.y - o.rect.midY) / ry)
-                    return (d - 1) * min(rx, ry)
-                }
-                let dx = max(o.rect.minX - a.x, 0, a.x - o.rect.maxX), dy = max(o.rect.minY - a.y, 0, a.y - o.rect.maxY)
-                return hypot(dx, dy)
-            }()
-            if gap > 3 { out.append("\(tag) the line to \(e.id) ends \(Int(gap)) points short of it") }
-            let elbow = CGPoint(x: e.left ? (kf + keyGap * 0.5) * w : w - (kf + keyGap * 0.5) * w, y: e.y)
-            for other in all where other.id != e.id && !other.bounds.contains(own) && !own.contains(other.bounds) {
-                let o = other.obstacle
-                let points = [elbow] + e.bends + [e.anchor]
-                let crosses = zip(points, points.dropFirst()).contains { Self.segment($0.0, $0.1, hits: o, margin: -1) }
-                if crosses {
-                    out.append("\(tag) the line to \(e.id) runs under \(other.id)")
-                }
-            }
-            // Two lines hold about twice the column, less what wrapping at
-            // word breaks loses.
-            if CaptionLayout.measure(e.text, fontSize: fs) > (kf * w - 4) * (e.lines == 2 ? 1.8 : 1) {
-                out.append("\(tag) the caption for \(e.id) is cut short: \"\(e.text)\"")
-            }
-        }
-        // No two lines cross or touch.
-        for (a, b) in Self.crossingPairs(entries, width: w, key: kf, gap: keyGap) {
-            out.append("\(tag) the lines to \(a) and \(b) cross")
-        }
-        for side in [true, false] {
-            let column = entries.filter { $0.left == side }.sorted { $0.y < $1.y }
-            for (a, b) in zip(column, column.dropFirst()) where b.y - a.y < fs * 1.15 * CGFloat(a.lines + b.lines) / 2 {
-                out.append("\(tag) the captions for \(a.id) and \(b.id) overlap at \(Int(a.y)) and \(Int(b.y))")
-            }
-        }
-        // Every control stays between the key columns, clear of the captions.
-        for (n, b) in bands.enumerated() {
-            for c in b.controls {
-                let f = Self.drawnBounds(c, controlFrame(c, band: b, top: laid.tops[n], width: w))
-                let edge = (kf + keyGap * 0.5) * w + 2
-                if f.minX < edge || f.maxX > w - edge {
-                    out.append("\(tag) \(c.id) reaches into the key column")
-                }
-            }
-        }
-        // A pill as wide as its word must not run into any other control.
-        for (n, b) in bands.enumerated() {
-            for c in b.controls where pillWord(c) != nil {
-                let pill = controlFrame(c, band: b, top: laid.tops[n], width: w)
-                for other in all where other.id != c.id && !other.bounds.contains(pill) && !pill.contains(other.bounds) {
-                    if other.bounds.insetBy(dx: 0.5, dy: 0.5).intersects(pill) {
-                        out.append("\(tag) the \(c.id) pill runs into \(other.id)")
-                    }
-                }
-            }
-        }
-        return out
-    }
-}
-#endif
-
-#if DEBUG
-extension ControllerCanvas {
-    /// The key's geometry at a width, one line per entry, for debugging.
-    func keyDump(width w: CGFloat) -> String {
-        let m = metrics
-        guard m.keyed else { return "no key" }
-        let kf = m.kf, bands = m.bands
-        let laid = (tops: m.tops, total: m.total)
-        let total = m.total
-        let entries = keyEntries(bands: bands, tops: laid.tops, width: w, height: w * total, key: kf)
-        var lines = ["kf \(kf) height \(w * total)"]
-        for (n, b) in bands.enumerated() {
-            for c in b.controls {
-                let r = Self.drawnBounds(c, controlFrame(c, band: b, top: laid.tops[n], width: w))
-                lines.append("control \(c.id) \(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))")
-            }
-        }
-        for e in entries { lines.append("entry \(e.id) \(e.left ? "L" : "R") y \(Int(e.y)) anchor \(Int(e.anchor.x)),\(Int(e.anchor.y))") }
-        return lines.joined(separator: "\n")
-    }
-}
-#endif
 
 #if DEBUG
 extension ControllerCanvas {

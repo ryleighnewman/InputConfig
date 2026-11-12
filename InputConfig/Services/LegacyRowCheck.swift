@@ -28,6 +28,10 @@ final class LegacyRowCheck {
         case switchFaces, eightBitDoBack, rawPads, switchedWheel
         /// The presets still to offer for this kind, by id.
         var pendingKey: String { "InputConfig.legacyRowCheck.\(rawValue).pending" }
+        /// The presets already offered for this kind, by id. Pruned with the
+        /// pending list, so a preset gone for good and later restored from a
+        /// 1.5 backup is offered again rather than left on the wrong buttons.
+        var offeredKey: String { "InputConfig.legacyRowCheck.\(rawValue).offered" }
     }
 
     /// Adds presets made before 1.6 (on disk when 1.6 first ran, or
@@ -107,7 +111,7 @@ final class LegacyRowCheck {
         (UserDefaults.standard.dictionary(forKey: rowsKey) as? [String: [String]])?[id.uuidString].map(Set.init)
     }
 
-    private static func offeredKey(_ kind: Kind) -> String { "InputConfig.legacyRowCheck.\(kind.rawValue).offered" }
+    private static func offeredKey(_ kind: Kind) -> String { kind.offeredKey }
 
     private weak var store: PresetStore?
     private weak var service: GameControllerService?
@@ -418,6 +422,11 @@ final class LegacyRowCheck {
 
     private func ask(_ kind: Kind, _ list: [(preset: Preset, groups: [UUID])], preview: Bool = false) {
         defer { asking = false }
+        // The next kind waiting (a second pad of another sort) is asked once
+        // this alert closes, not at some unrelated later controller event.
+        defer {
+            if !preview { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.check() } } }
+        }
         let alert = NSAlert()
         let defaults = UserDefaults.standard
         let listed = Set(list.map(\.preset.id.uuidString))
@@ -430,7 +439,7 @@ final class LegacyRowCheck {
             // cannot be moved; the presets are named so they can be rescanned.
             let wheel = wheelName ?? String(localized: "This wheel")
             alert.messageText = String(localized: "Rescan wheel rows in older presets")
-            alert.informativeText = String(localized: "InputConfig 1.6 switches \(wheel) to its own mode, as Logitech's software does: the pedals read 0 to 1 on their own axes and the buttons have new numbers. Rows recorded on it before 1.6 need to be scanned again in:\n\n") + list.map(\.preset.shownName).joined(separator: "\n")
+            alert.informativeText = String(localized: "InputConfig 1.6 switches \(wheel) to its own mode, as Logitech's software does: the pedals read 0 to 1 on their own axes and the buttons have new numbers. Rows recorded on it before 1.6 need to be scanned again. These older presets may hold such rows:\n\n") + list.map(\.preset.shownName).joined(separator: "\n")
             alert.addButton(withTitle: String(localized: "OK"))
             alert.runModal()
             if preview { return }

@@ -7,6 +7,49 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C3E8B7F23B09E9CB37A314CF /* PointerSpeedShaper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44D996F9D6F6880FFED9C9AA /* PointerSpeedShaper.swift */; };
+		CB83FCD5375E823CFFC293D3 /* DirectMicInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DAB2EB63DA333C7EE4796E5 /* DirectMicInput.swift */; };
+		E8014681A4134E94D71F1C50 /* AudioInputDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84603C3012419249902525A5 /* AudioInputDevices.swift */; };
+		E36504D3E650EAE8BE6A4537 /* Layout+EightBitDoUltimate2Wireless.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45F1CAFA5818BD898A2B0728 /* Layout+EightBitDoUltimate2Wireless.swift */; };
+		397916DB886B3454F88A51D9 /* Fixtures+EightBitDo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1554BA79BE0067F42DACB29E /* Fixtures+EightBitDo.swift */; };
+		03AB3A965CCAB057E16B7B4B /* AccessCaps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C14B4E14740255C1841C8C1 /* AccessCaps.swift */; };
+		B1BB149B1AD2188C41CCC313 /* SimpleLauncherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AAA19D79007B1789CDB6255 /* SimpleLauncherView.swift */; };
+		96981774FF7B6BE5DF5E6450 /* PresetPrint.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF0BA5CEC1F77BB0E2B21D01 /* PresetPrint.swift */; };
+		78C6F22E538B6F92A9D8FB58 /* SmartPresetMakerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E92FC40EA0A65E8270213E /* SmartPresetMakerView.swift */; };
+		9585115D6A506995E844FBF3 /* ControllerChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C733BF78A58F490B03E374E1 /* ControllerChipView.swift */; };
+		124B5AE048D169B629A22611 /* VisualizerMaps.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9EE063DE9DD94BA5B566045 /* VisualizerMaps.swift */; };
+		48762D04B6AB1764D51FFD18 /* MIDIInstrumentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D6E2FF97159869EDE8D3C83 /* MIDIInstrumentView.swift */; };
+		76DB322ADB1DBA5E69826630 /* VisualizerWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9634D5B04EACE0FB1F92A017 /* VisualizerWidgets.swift */; };
+		731958AA858071A864536A8A /* PresetRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E21EF30A1C70C136B19B487 /* PresetRowView.swift */; };
+		A90C5DD8684015A3BC71F014 /* ContentView+Welcome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291BD0598E1F2FD7FB773B7B /* ContentView+Welcome.swift */; };
+		800C9EA56E7E469FF5BC1A2B /* BindingRowView+Macro.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA87A5C05E5F60019AB3BF7B /* BindingRowView+Macro.swift */; };
+		51898936282AEA0CFB04486B /* BindingRowView+Options.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA845BA83C21F2EED42E6AF /* BindingRowView+Options.swift */; };
+		755AAC8F3411434173876DCF /* BindingRowView+Outputs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4980943D262FA218B7A2B5A8 /* BindingRowView+Outputs.swift */; };
+		0B14CD342A7C0631304D6E1E /* DebugAutomationHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ABDFFB5D2EABA05077890CB /* DebugAutomationHooks.swift */; };
+		0719CA99889B464468B0092F /* BindingRowView+InputPickers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C4A8ABB156AB440F7C367B1 /* BindingRowView+InputPickers.swift */; };
+		E6F41DC5F559CD186C9A72A9 /* VirtualControllerView+Canvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE26BC97D53CE2AB56F51A3 /* VirtualControllerView+Canvas.swift */; };
+		2464F308C1DF73426083BBEB /* BindingRowView+Sequences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A636DA9792276AE97E0AB5C /* BindingRowView+Sequences.swift */; };
+		61367E0D1A75E3D423ADDE27 /* PresetDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADECC747CA0A800649701956 /* PresetDetailView.swift */; };
+		78D2ED9AB06A060A30B8D605 /* ContentView+Sidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6F923E1171E6EC300483B64 /* ContentView+Sidebar.swift */; };
+		B0D809382AC3FB74EF76C8F1 /* BindingRowView+Row.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F455E1EB853958620B36F74 /* BindingRowView+Row.swift */; };
+		1A13EF8F9CEC53162140232C /* SmartPresetLibrary.json in Resources */ = {isa = PBXBuildFile; fileRef = F0E7CEE48E97765CF1529A6D /* SmartPresetLibrary.json */; };
+		D12994C0CB30E5F60962B398 /* RecordingHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FFF03C9B6CDD8C0AE006FA3 /* RecordingHUD.swift */; };
+		85AAF6F757E1FC329FFBE183 /* MacroText.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B908B14837CEBBBA173A3E /* MacroText.swift */; };
+		77EF3501F8EAD2030E5D8175 /* KeySequenceRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4AAEC62234ED0704BE091CB /* KeySequenceRecorderView.swift */; };
+		6C0E91ABDC5E8ABBEB0D90BD /* ButtonSequenceRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 840DE7943B1880950EFF3592 /* ButtonSequenceRecorderView.swift */; };
+		965850B2ECD5DDB77165719F /* MacroRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E1E7D30266920B165C333C7 /* MacroRecorderView.swift */; };
+		73170938F2B15EE8FE682D8B /* MacroRecorderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F30A076A35D936796A9E5A /* MacroRecorderService.swift */; };
+		1263714FC35B54C0D3911A45 /* MacroRecording.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2535A89B6BA2CD8507FDE65D /* MacroRecording.swift */; };
+		B23E3769025E13A56C54094E /* AppShortcuts.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 6CA314CD53A532C900DF4A32 /* AppShortcuts.xcstrings */; };
+		F3FF7683E9FBD071923A4429 /* VoicePhrasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BE1884CB5CAE18026EA594 /* VoicePhrasesView.swift */; };
+		2C997F1D95F1D808921C37DC /* ScreenTextsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 559D0E4149946FE968CB8E09 /* ScreenTextsView.swift */; };
+		D410FB16CF99795A2E505FAE /* VoicePhraseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D012B3913F414706D1F3C71D /* VoicePhraseService.swift */; };
+		43F53902F70609AAC4E245C1 /* ScreenTextService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 655B9594B3FF779C1FE9D013 /* ScreenTextService.swift */; };
+		D7760C3A823FAC14E5067A0A /* ScreenTextWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DA902FFED300FE1E3BFCCD4 /* ScreenTextWatch.swift */; };
+		1BE9EDEF6DC2A7D1DCCA95E6 /* AppIntentsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBF22C6BB7192A828F14AD31 /* AppIntentsService.swift */; };
+		3251E8E7ABF1455415C3E909 /* ScreenPixelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB23D32FE848267A1A4A2DB8 /* ScreenPixelsView.swift */; };
+		4914C8DC2548290250A19367 /* ScreenPixelService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 478D650D808AA4EDA9B47807 /* ScreenPixelService.swift */; };
+		21AB13331C814174C5450A2E /* ScreenPixelWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DCA62B913A3EF4EAB7702E0 /* ScreenPixelWatch.swift */; };
 		F77BC1B9AD215983710BCCE0 /* ControllerPowerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */; };
 		13F153E07F8E10D6818A76E2 /* Switch2BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */; };
 		20800DC9D9838B7E4209FA89 /* SteamController2015Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515245B55E86BEACE66E5CF8 /* SteamController2015Commands.swift */; };
@@ -208,6 +251,49 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		44D996F9D6F6880FFED9C9AA /* PointerSpeedShaper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PointerSpeedShaper.swift"; sourceTree = "<group>"; };
+		1DAB2EB63DA333C7EE4796E5 /* DirectMicInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DirectMicInput.swift"; sourceTree = "<group>"; };
+		84603C3012419249902525A5 /* AudioInputDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AudioInputDevices.swift"; sourceTree = "<group>"; };
+		45F1CAFA5818BD898A2B0728 /* Layout+EightBitDoUltimate2Wireless.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Layout+EightBitDoUltimate2Wireless.swift"; sourceTree = "<group>"; };
+		1554BA79BE0067F42DACB29E /* Fixtures+EightBitDo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Fixtures+EightBitDo.swift"; sourceTree = "<group>"; };
+		0C14B4E14740255C1841C8C1 /* AccessCaps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AccessCaps.swift"; sourceTree = "<group>"; };
+		8AAA19D79007B1789CDB6255 /* SimpleLauncherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SimpleLauncherView.swift"; sourceTree = "<group>"; };
+		BF0BA5CEC1F77BB0E2B21D01 /* PresetPrint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PresetPrint.swift"; sourceTree = "<group>"; };
+		A2E92FC40EA0A65E8270213E /* SmartPresetMakerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SmartPresetMakerView.swift"; sourceTree = "<group>"; };
+		C733BF78A58F490B03E374E1 /* ControllerChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerChipView.swift"; sourceTree = "<group>"; };
+		B9EE063DE9DD94BA5B566045 /* VisualizerMaps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VisualizerMaps.swift"; sourceTree = "<group>"; };
+		5D6E2FF97159869EDE8D3C83 /* MIDIInstrumentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIInstrumentView.swift"; sourceTree = "<group>"; };
+		9634D5B04EACE0FB1F92A017 /* VisualizerWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VisualizerWidgets.swift"; sourceTree = "<group>"; };
+		8E21EF30A1C70C136B19B487 /* PresetRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PresetRowView.swift"; sourceTree = "<group>"; };
+		291BD0598E1F2FD7FB773B7B /* ContentView+Welcome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView+Welcome.swift"; sourceTree = "<group>"; };
+		FA87A5C05E5F60019AB3BF7B /* BindingRowView+Macro.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+Macro.swift"; sourceTree = "<group>"; };
+		5FA845BA83C21F2EED42E6AF /* BindingRowView+Options.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+Options.swift"; sourceTree = "<group>"; };
+		4980943D262FA218B7A2B5A8 /* BindingRowView+Outputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+Outputs.swift"; sourceTree = "<group>"; };
+		4ABDFFB5D2EABA05077890CB /* DebugAutomationHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DebugAutomationHooks.swift"; sourceTree = "<group>"; };
+		1C4A8ABB156AB440F7C367B1 /* BindingRowView+InputPickers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+InputPickers.swift"; sourceTree = "<group>"; };
+		1BE26BC97D53CE2AB56F51A3 /* VirtualControllerView+Canvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VirtualControllerView+Canvas.swift"; sourceTree = "<group>"; };
+		1A636DA9792276AE97E0AB5C /* BindingRowView+Sequences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+Sequences.swift"; sourceTree = "<group>"; };
+		ADECC747CA0A800649701956 /* PresetDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PresetDetailView.swift"; sourceTree = "<group>"; };
+		E6F923E1171E6EC300483B64 /* ContentView+Sidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView+Sidebar.swift"; sourceTree = "<group>"; };
+		6F455E1EB853958620B36F74 /* BindingRowView+Row.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BindingRowView+Row.swift"; sourceTree = "<group>"; };
+		F0E7CEE48E97765CF1529A6D /* SmartPresetLibrary.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "SmartPresetLibrary.json"; sourceTree = "<group>"; };
+		4FFF03C9B6CDD8C0AE006FA3 /* RecordingHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RecordingHUD.swift"; sourceTree = "<group>"; };
+		E4B908B14837CEBBBA173A3E /* MacroText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacroText.swift"; sourceTree = "<group>"; };
+		A4AAEC62234ED0704BE091CB /* KeySequenceRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeySequenceRecorderView.swift"; sourceTree = "<group>"; };
+		840DE7943B1880950EFF3592 /* ButtonSequenceRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ButtonSequenceRecorderView.swift"; sourceTree = "<group>"; };
+		3E1E7D30266920B165C333C7 /* MacroRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacroRecorderView.swift"; sourceTree = "<group>"; };
+		F3F30A076A35D936796A9E5A /* MacroRecorderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacroRecorderService.swift"; sourceTree = "<group>"; };
+		2535A89B6BA2CD8507FDE65D /* MacroRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacroRecording.swift"; sourceTree = "<group>"; };
+		6CA314CD53A532C900DF4A32 /* AppShortcuts.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = AppShortcuts.xcstrings; sourceTree = "<group>"; };
+		68BE1884CB5CAE18026EA594 /* VoicePhrasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VoicePhrasesView.swift"; sourceTree = "<group>"; };
+		559D0E4149946FE968CB8E09 /* ScreenTextsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenTextsView.swift"; sourceTree = "<group>"; };
+		D012B3913F414706D1F3C71D /* VoicePhraseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VoicePhraseService.swift"; sourceTree = "<group>"; };
+		655B9594B3FF779C1FE9D013 /* ScreenTextService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenTextService.swift"; sourceTree = "<group>"; };
+		6DA902FFED300FE1E3BFCCD4 /* ScreenTextWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenTextWatch.swift"; sourceTree = "<group>"; };
+		BBF22C6BB7192A828F14AD31 /* AppIntentsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppIntentsService.swift"; sourceTree = "<group>"; };
+		AB23D32FE848267A1A4A2DB8 /* ScreenPixelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenPixelsView.swift"; sourceTree = "<group>"; };
+		478D650D808AA4EDA9B47807 /* ScreenPixelService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenPixelService.swift"; sourceTree = "<group>"; };
+		0DCA62B913A3EF4EAB7702E0 /* ScreenPixelWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScreenPixelWatch.swift"; sourceTree = "<group>"; };
 		5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControllerPowerService.swift"; sourceTree = "<group>"; };
 		8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Switch2BluetoothService.swift"; sourceTree = "<group>"; };
 		515245B55E86BEACE66E5CF8 /* SteamController2015Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamController2015Commands.swift"; sourceTree = "<group>"; };
@@ -457,6 +543,7 @@
 			children = (
 				F5F37A9B969741FCE8A4F38A /* Assets.xcassets */,
 				FB20010100APPICONICONFILE1 /* AppIcon.icon */,
+				6CA314CD53A532C900DF4A32 /* AppShortcuts.xcstrings */,
 				EE1000000000000000000002 /* Localizable.xcstrings */,
 				EE1000000000000000000022 /* KeyNames.xcstrings */,
 				EE1000000000000000000012 /* HelpTranslations */,
@@ -480,6 +567,7 @@
 				A7C09CD2949942ED35CCDEE3 /* Fixtures+PlayStation.swift */,
 				CDEBCA748D600B4B19739EB9 /* Fixtures+Xbox.swift */,
 				33293AF2E163B9925E59E014 /* Fixtures+Nintendo.swift */,
+				1554BA79BE0067F42DACB29E /* Fixtures+EightBitDo.swift */,
 				DA74840E4CFC97B72387B571 /* Fixtures+Valve.swift */,
 				50012D2BE44E9428C01CED7B /* Fixtures+Elgato.swift */,
 				9EEC4BF6D9C53028684E5430 /* Fixtures+Logitech.swift */,
@@ -495,6 +583,10 @@
 		84CA7AFC808DE0FA4D590CA6 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				E4B908B14837CEBBBA173A3E /* MacroText.swift */,
+				2535A89B6BA2CD8507FDE65D /* MacroRecording.swift */,
+				6DA902FFED300FE1E3BFCCD4 /* ScreenTextWatch.swift */,
+				0DCA62B913A3EF4EAB7702E0 /* ScreenPixelWatch.swift */,
 				9953EE66C8AB92001E3C8F60 /* InputEvent.swift */,
 				D9AFC638DF7D9B649E63CD4D /* KeyCodeMap.swift */,
 				FB2001SCAFFOLD000001 /* ControllerScaffold.swift */,
@@ -513,6 +605,12 @@
 		8AF01C10AC20892908C67FFD /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				6F455E1EB853958620B36F74 /* BindingRowView+Row.swift */,
+				1A636DA9792276AE97E0AB5C /* BindingRowView+Sequences.swift */,
+				1C4A8ABB156AB440F7C367B1 /* BindingRowView+InputPickers.swift */,
+				4980943D262FA218B7A2B5A8 /* BindingRowView+Outputs.swift */,
+				5FA845BA83C21F2EED42E6AF /* BindingRowView+Options.swift */,
+				FA87A5C05E5F60019AB3BF7B /* BindingRowView+Macro.swift */,
 				D97FA28EE21F9D6A4DA2907A /* BindingRowView.swift */,
 				FB20010012COPYICONBUTN001 /* CopyIconButton.swift */,
 				FB20010005DEADZONECAL00001 /* DeadzoneCalibrationView.swift */,
@@ -542,8 +640,13 @@
 				F1008D4FE7819632F4C378FD /* HIDLightController.swift */,
 				1ADD0DB9D63A081D226051F7 /* InputSimulator.swift */,
 				FB2001000ELOGINITEM0000001 /* LoginItemService.swift */,
+				BF0BA5CEC1F77BB0E2B21D01 /* PresetPrint.swift */,
+				44D996F9D6F6880FFED9C9AA /* PointerSpeedShaper.swift */,
+				1DAB2EB63DA333C7EE4796E5 /* DirectMicInput.swift */,
+				84603C3012419249902525A5 /* AudioInputDevices.swift */,
 				2C5119FD097588A76BA1AD62 /* MappingEngine.swift */,
 				FB20010009MIDISERVICE00001 /* MIDIService.swift */,
+				BBF22C6BB7192A828F14AD31 /* AppIntentsService.swift */,
 				FB2001000FMENUBARCTRL00001 /* MenuBarController.swift */,
 				9677416244B3F38C8F3DEFB0 /* RawHIDReportApplier.swift */,
 				8BFD3EBF0F1360F887970050 /* RawHIDStartupCommands.swift */,
@@ -582,6 +685,10 @@
 				F14C5E09243904C20705E5D6 /* HelpLocalizer.swift */,
 				BE8981CECF9EBD9AEE039496 /* AppLanguage.swift */,
 				1B5C59B3128C92F5ACFD6A82 /* KeyboardLayoutService.swift */,
+				655B9594B3FF779C1FE9D013 /* ScreenTextService.swift */,
+				F3F30A076A35D936796A9E5A /* MacroRecorderService.swift */,
+				D012B3913F414706D1F3C71D /* VoicePhraseService.swift */,
+				478D650D808AA4EDA9B47807 /* ScreenPixelService.swift */,
 				FB20010104CURSORREGIONSVC /* CursorRegionService.swift */,
 			);
 			path = Services;
@@ -590,6 +697,7 @@
 		BCAF0E4B45D6C4B30929FA3E /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				F0E7CEE48E97765CF1529A6D /* SmartPresetLibrary.json */,
 				1A95E8B26BF8FC8349144B7B /* ExamplePresets.swift */,
 				FB20010002HELPGUIDES00001 /* HelpGuides.swift */,
 			);
@@ -620,14 +728,33 @@
 		E5C107AB0E6353D4741D9EA5 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				E6F923E1171E6EC300483B64 /* ContentView+Sidebar.swift */,
+				ADECC747CA0A800649701956 /* PresetDetailView.swift */,
+				4ABDFFB5D2EABA05077890CB /* DebugAutomationHooks.swift */,
+				291BD0598E1F2FD7FB773B7B /* ContentView+Welcome.swift */,
+				8E21EF30A1C70C136B19B487 /* PresetRowView.swift */,
+				C733BF78A58F490B03E374E1 /* ControllerChipView.swift */,
+				A2E92FC40EA0A65E8270213E /* SmartPresetMakerView.swift */,
+				8AAA19D79007B1789CDB6255 /* SimpleLauncherView.swift */,
 				4E2154449F218F9A156C2716 /* ContentView.swift */,
 				FB20010010FEATUREDEMO0001 /* FeatureDemoView.swift */,
 				FB2001TUTORIALVIEW000001 /* TutorialView.swift */,
 				FB20010011TOUCHPADCAL0001 /* TouchpadCalibrationView.swift */,
+				559D0E4149946FE968CB8E09 /* ScreenTextsView.swift */,
+				A4AAEC62234ED0704BE091CB /* KeySequenceRecorderView.swift */,
+				840DE7943B1880950EFF3592 /* ButtonSequenceRecorderView.swift */,
+				4FFF03C9B6CDD8C0AE006FA3 /* RecordingHUD.swift */,
+				3E1E7D30266920B165C333C7 /* MacroRecorderView.swift */,
+				68BE1884CB5CAE18026EA594 /* VoicePhrasesView.swift */,
+				AB23D32FE848267A1A4A2DB8 /* ScreenPixelsView.swift */,
 				FB20010105CURSORREGIONSVIEW /* CursorRegionsView.swift */,
 				FB20010017STICKREGVIEW0001 /* StickRegionsView.swift */,
 				FB20010017MOTIONCALVW0001 /* MotionCalibrationView.swift */,
 				FB2001TAPCALVIEW00001 /* TapCalibrationView.swift */,
+				1BE26BC97D53CE2AB56F51A3 /* VirtualControllerView+Canvas.swift */,
+				9634D5B04EACE0FB1F92A017 /* VisualizerWidgets.swift */,
+				5D6E2FF97159869EDE8D3C83 /* MIDIInstrumentView.swift */,
+				B9EE063DE9DD94BA5B566045 /* VisualizerMaps.swift */,
 				FB20010018VIRTUALCTRL0001 /* VirtualControllerView.swift */,
 				FB2VIZLEGEND0001 /* Visualizer/CanvasLegend.swift */,
 				FB2VIZCANVAS0001 /* Visualizer/ControllerCanvas.swift */,
@@ -685,6 +812,7 @@
 				FB2LY000015 /* Layout+DualSenseEdge.swift */,
 				FB2LY000017 /* Layout+DualShock4.swift */,
 				FB2LY000019 /* Layout+DualShock3.swift */,
+				0C14B4E14740255C1841C8C1 /* AccessCaps.swift */,
 				FB2LY000021 /* Layout+PsAccess.swift */,
 			);
 			path = Sony;
@@ -731,6 +859,7 @@
 			isa = PBXGroup;
 			children = (
 				FB2LY000055 /* Layout+EightBitDoUltimate.swift */,
+				45F1CAFA5818BD898A2B0728 /* Layout+EightBitDoUltimate2Wireless.swift */,
 				FB2LY000057 /* Layout+EightBitDoUltimate2C.swift */,
 				FB2LY000059 /* Layout+EightBitDoPro2.swift */,
 				FB2LY900001 /* Layout+EightBitDoPro3.swift */,
@@ -805,6 +934,7 @@
 			buildPhases = (
 				0B181C993C6692E901A0F565 /* Sources */,
 				573DA7520DCA5F52E036DE58 /* Resources */,
+				FBF5PACKTEXTRES00PHASE /* Pack Text Resources */,
 				F9384C09D1156887266DC160 /* Frameworks */,
 				FBF4BUILDHELPERS0PHASE /* Build Helpers */,
 				FBF2HELPERS00COPYPHASE /* Copy Helpers */,
@@ -880,6 +1010,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A13EF8F9CEC53162140232C /* SmartPresetLibrary.json in Resources */,
+				B23E3769025E13A56C54094E /* AppShortcuts.xcstrings in Resources */,
 				F6C48A5E5C669AC7A680582A /* Assets.xcassets in Resources */,
 				3F8BF536307CA29E002F279C /* InfoPlist.strings in Resources */,
 				FB10010100APPICONICONFILE1 /* AppIcon.icon in Resources */,
@@ -934,6 +1066,25 @@
 			shellPath = /bin/sh;
 			shellScript = "# Compile the helpers from source, universal, when a binary is missing,\n# older than its source, or not universal. They are not checked in, so a\n# fresh clone failed to build, and an archive shipped whatever binary was\n# left on disk.\nset -e\nbuild_helper() {\n  name=\"$1\"\n  src=\"${SRCROOT}/$name/main.swift\"\n  shared=\"${SRCROOT}/InputConfig/Services/Devices/SteamController2015Commands.swift\"\n  out=\"${SRCROOT}/$name/$name\"\n  archs=$(lipo -archs \"$out\" 2>/dev/null || true)\n  universal=0\n  case \"$archs\" in *arm64*) case \"$archs\" in *x86_64*) universal=1 ;; esac ;; esac\n  if [ ! -f \"$out\" ] || [ \"$src\" -nt \"$out\" ] || [ \"$shared\" -nt \"$out\" ] || [ \"$universal\" = 0 ]; then\n    echo \"Building $name (universal)\"\n    xcrun --sdk macosx swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" \"$shared\" -o \"$out.arm64\"\n    xcrun --sdk macosx swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit \"$src\" \"$shared\" -o \"$out.x86_64\"\n    lipo -create \"$out.arm64\" \"$out.x86_64\" -output \"$out\"\n    rm -f \"$out.arm64\" \"$out.x86_64\"\n  fi\n}\nbuild_helper SteamControllerHelper\n";
 		};
+		FBF5PACKTEXTRES00PHASE /* Pack Text Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Pack Text Resources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Pack the text resources. The help tables ship LZFSE packed and\n# HelpLocalizer.bundledTable unpacks them (31.6 MB to 9.4 MB); the compiled\n# Localizable and KeyNames tables ship as binary plists instead of UTF-16\n# XML (30.3 MB to 17.8 MB). Same strings either way. A file already packed\n# is skipped, so a build that copied nothing new changes nothing.\nset -e\nRES=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nfor f in \"$RES\"/HelpTranslations/*.json; do\n  [ -f \"$f\" ] || continue\n  /usr/bin/compression_tool -encode -a lzfse -i \"$f\" -o \"$f.lzfse\"\n  rm -f \"$f\"\ndone\nfor f in \"$RES\"/*.lproj/Localizable.strings \"$RES\"/*.lproj/KeyNames.strings; do\n  [ -f \"$f\" ] || continue\n  case \"$(head -c 6 \"$f\" | tr -d '\\000')\" in\n    bplist) ;;\n    *) /usr/bin/plutil -convert binary1 \"$f\" ;;\n  esac\ndone\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -941,20 +1092,48 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C3E8B7F23B09E9CB37A314CF /* PointerSpeedShaper.swift in Sources */,
+				CB83FCD5375E823CFFC293D3 /* DirectMicInput.swift in Sources */,
+				E8014681A4134E94D71F1C50 /* AudioInputDevices.swift in Sources */,
+				E36504D3E650EAE8BE6A4537 /* Layout+EightBitDoUltimate2Wireless.swift in Sources */,
+				397916DB886B3454F88A51D9 /* Fixtures+EightBitDo.swift in Sources */,
+				03AB3A965CCAB057E16B7B4B /* AccessCaps.swift in Sources */,
+				B1BB149B1AD2188C41CCC313 /* SimpleLauncherView.swift in Sources */,
+				D12994C0CB30E5F60962B398 /* RecordingHUD.swift in Sources */,
+				85AAF6F757E1FC329FFBE183 /* MacroText.swift in Sources */,
+				77EF3501F8EAD2030E5D8175 /* KeySequenceRecorderView.swift in Sources */,
+				6C0E91ABDC5E8ABBEB0D90BD /* ButtonSequenceRecorderView.swift in Sources */,
+				965850B2ECD5DDB77165719F /* MacroRecorderView.swift in Sources */,
+				78D2ED9AB06A060A30B8D605 /* ContentView+Sidebar.swift in Sources */,
+				73170938F2B15EE8FE682D8B /* MacroRecorderService.swift in Sources */,
+				1263714FC35B54C0D3911A45 /* MacroRecording.swift in Sources */,
+				F3FF7683E9FBD071923A4429 /* VoicePhrasesView.swift in Sources */,
+				2C997F1D95F1D808921C37DC /* ScreenTextsView.swift in Sources */,
+				D410FB16CF99795A2E505FAE /* VoicePhraseService.swift in Sources */,
+				43F53902F70609AAC4E245C1 /* ScreenTextService.swift in Sources */,
+				61367E0D1A75E3D423ADDE27 /* PresetDetailView.swift in Sources */,
+				D7760C3A823FAC14E5067A0A /* ScreenTextWatch.swift in Sources */,
+				1BE9EDEF6DC2A7D1DCCA95E6 /* AppIntentsService.swift in Sources */,
+				3251E8E7ABF1455415C3E909 /* ScreenPixelsView.swift in Sources */,
+				4914C8DC2548290250A19367 /* ScreenPixelService.swift in Sources */,
+				21AB13331C814174C5450A2E /* ScreenPixelWatch.swift in Sources */,
 				F77BC1B9AD215983710BCCE0 /* ControllerPowerService.swift in Sources */,
 				13F153E07F8E10D6818A76E2 /* Switch2BluetoothService.swift in Sources */,
 				20800DC9D9838B7E4209FA89 /* SteamController2015Commands.swift in Sources */,
 				652AF8BC526501941C360E6B /* MacroPadLayouts.swift in Sources */,
 				9FB0ACA14019F1B8A7899A71 /* PlayStationCapabilityProbe.swift in Sources */,
+				B0D809382AC3FB74EF76C8F1 /* BindingRowView+Row.swift in Sources */,
 				E1B908B981B372E43734D26D /* XboxBluetoothLayout.swift in Sources */,
 				A4FDB4637C5DC2201B3D46AD /* ThrustmasterWheel.swift in Sources */,
 				8C4CFC27416B4F2C3CB19854 /* Switch2Calibration.swift in Sources */,
+				2464F308C1DF73426083BBEB /* BindingRowView+Sequences.swift in Sources */,
 				C27F9057513CD478A2065742 /* SteamController2026Commands.swift in Sources */,
 				C75506A50AE04E8AE684517D /* HIDReportDecoder+Generic.swift in Sources */,
 				4E9173C8E01E79E7C83733C4 /* HIDReportDecoder+Elgato.swift in Sources */,
 				60F767369A9E468FB4E25373 /* HIDReportDecoder+Valve.swift in Sources */,
 				A4F39DFDAA625C8D560B97B7 /* HIDReportDecoder+Nintendo.swift in Sources */,
 				749E6A47052D67687CBED7A5 /* HIDReportDecoder+Sony.swift in Sources */,
+				E6F41DC5F559CD186C9A72A9 /* VirtualControllerView+Canvas.swift in Sources */,
 				9B0CA88B44A0CFD6A9C001C8 /* HIDReportDecoder+Xbox.swift in Sources */,
 				5210CCE941132CA94A665BFB /* SDLGameControllerDB+Consoles.swift in Sources */,
 				BCA1A5CE9EC1566BAE6D5B46 /* SonyBluetoothCRC.swift in Sources */,
@@ -964,6 +1143,7 @@
 				8D346FBCC6244EA477F77D10 /* Fixtures+ExternalInput.swift in Sources */,
 				4E7558AA40C5E28D3C95EAE2 /* Fixtures+MacroPads.swift in Sources */,
 				1ADC5DE284EC4830EF004ED9 /* Fixtures+Sim.swift in Sources */,
+				0719CA99889B464468B0092F /* BindingRowView+InputPickers.swift in Sources */,
 				9A0EBD24F64F587C10BBF3E0 /* Fixtures+Logitech.swift in Sources */,
 				B8DF6DF7BBA61EBB55EA50CE /* Fixtures+Elgato.swift in Sources */,
 				6C0F834AB3C3ACE3927BF9CF /* Fixtures+Valve.swift in Sources */,
@@ -991,6 +1171,7 @@
 				FB10010013STEAMCTRLSVC001 /* SteamControllerService.swift in Sources */,
 				FB10010014STATSSVC0000001 /* StatsService.swift in Sources */,
 				FB10010015STATSVIEW000001 /* StatsView.swift in Sources */,
+				0B14CD342A7C0631304D6E1E /* DebugAutomationHooks.swift in Sources */,
 				FB10010016MOTIONCALSVC001 /* MotionCalibrationService.swift in Sources */,
 				FB1001ACTIVITYLOG0001 /* ActivityLog.swift in Sources */,
 				FB1001MOUSEPUMP00001 /* MouseMotionPump.swift in Sources */,
@@ -1004,6 +1185,7 @@
 				FB1LY000010 /* Layout+SteamController2026.swift in Sources */,
 				FB1LY000012 /* Layout+SteamController2015.swift in Sources */,
 				FB1LY000014 /* Layout+DualSense.swift in Sources */,
+				755AAC8F3411434173876DCF /* BindingRowView+Outputs.swift in Sources */,
 				FB1LY000016 /* Layout+DualSenseEdge.swift in Sources */,
 				FB1LY000018 /* Layout+DualShock4.swift in Sources */,
 				FB1LY000020 /* Layout+DualShock3.swift in Sources */,
@@ -1013,6 +1195,7 @@
 				FB1LY000028 /* Layout+XboxElite2.swift in Sources */,
 				FB1LY000030 /* Layout+XboxAdaptive.swift in Sources */,
 				FB1LY000032 /* Layout+SwitchPro.swift in Sources */,
+				51898936282AEA0CFB04486B /* BindingRowView+Options.swift in Sources */,
 				FB1LY000034 /* Layout+Switch2Pro.swift in Sources */,
 				FB1LY000036 /* Layout+JoyConPair.swift in Sources */,
 				FB1LY000038 /* Layout+JoyConLeft.swift in Sources */,
@@ -1023,6 +1206,7 @@
 				FB1LY000048 /* Layout+NsoN64.swift in Sources */,
 				FB1LY000050 /* Layout+NsoSNES.swift in Sources */,
 				FB1LY000052 /* Layout+NsoGenesis.swift in Sources */,
+				800C9EA56E7E469FF5BC1A2B /* BindingRowView+Macro.swift in Sources */,
 				FB1LY000054 /* Layout+Stadia.swift in Sources */,
 				FB1LY000056 /* Layout+EightBitDoUltimate.swift in Sources */,
 				FB1LY000058 /* Layout+EightBitDoUltimate2C.swift in Sources */,
@@ -1036,6 +1220,7 @@
 				FB1LY000072 /* Layout+RazerKishiV2.swift in Sources */,
 				FB1LY000074 /* Layout+GameSirG8.swift in Sources */,
 				FB1LY000076 /* Layout+GenericGamepad.swift in Sources */,
+				A90C5DD8684015A3BC71F014 /* ContentView+Welcome.swift in Sources */,
 				FB1LY000078 /* Layout+GenericSNES.swift in Sources */,
 				FB1LY000080 /* Layout+ArcadeStick.swift in Sources */,
 				FB1LY000082 /* Layout+Leverless.swift in Sources */,
@@ -1045,6 +1230,7 @@
 				FB1001LOGIWHLLAY1 /* Layout+LogitechWheel.swift in Sources */,
 				FB1LY000090 /* Layout+ThrustmasterT300.swift in Sources */,
 				FB1LY000092 /* Layout+UnrecognizedHID.swift in Sources */,
+				731958AA858071A864536A8A /* PresetRowView.swift in Sources */,
 				FB1001REVIEWSVC00001 /* ReviewPromptService.swift in Sources */,
 				FB1001REVIEWVIEW0001 /* ReviewPromptView.swift in Sources */,
 				FB1001DEVICEMENU0001 /* DeviceCommands.swift in Sources */,
@@ -1066,6 +1252,7 @@
 				900FEE2FB264A318D065B39A /* KeyCodeMap.swift in Sources */,
 				B272CB5AC52088595142272D /* KeyCodePicker.swift in Sources */,
 				400237FA664F7DF515A5036A /* MappingEngine.swift in Sources */,
+				96981774FF7B6BE5DF5E6450 /* PresetPrint.swift in Sources */,
 				FB10010009MIDISERVICE00001 /* MIDIService.swift in Sources */,
 				FB1001000FMENUBARCTRL00001 /* MenuBarController.swift in Sources */,
 				FB10010010CTRLPROFILE00001 /* ControllerProfile.swift in Sources */,
@@ -1075,10 +1262,12 @@
 				FB10010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift in Sources */,
 				FB10010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift in Sources */,
 				FB10010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift in Sources */,
+				76DB322ADB1DBA5E69826630 /* VisualizerWidgets.swift in Sources */,
 				FB1LAYRESOLVE001 /* ControllerLayoutResolver.swift in Sources */,
 				FB1001CURSORTHROTTLE1 /* CursorSetThrottle.swift in Sources */,
 				FB1001LOGIWHEEL01 /* LogitechWheel.swift in Sources */,
 				FB1001LEGACYROWS1 /* LegacyRowCheck.swift in Sources */,
+				48762D04B6AB1764D51FFD18 /* MIDIInstrumentView.swift in Sources */,
 				FB10010101SDLGCDBDATA0001 /* SDLGameControllerDBData.swift in Sources */,
 				FB10010015HIDDESCPARSE0001 /* HIDDescriptorParser.swift in Sources */,
 				FB10010016STICKREGSVC00001 /* StickRegionService.swift in Sources */,
@@ -1088,6 +1277,7 @@
 				FB1001001ADSSUPPSVC0000001 /* DualSenseSupplementService.swift in Sources */,
 				FB1001001BCURSORGUARDSVC001 /* CursorGuardService.swift in Sources */,
 				FB1001001CGAMINGUTILPNL0001 /* GamingUtilitiesPanel.swift in Sources */,
+				124B5AE048D169B629A22611 /* VisualizerMaps.swift in Sources */,
 				FB1001001DPRESETAUTOSEC001 /* PresetAutomationSection.swift in Sources */,
 				FB1001001EIMPORTREVIEW001 /* ImportReviewSheet.swift in Sources */,
 				FB1001001FKBDIAGRAM0000001 /* KeyboardDiagramView.swift in Sources */,
@@ -1107,9 +1297,11 @@
 				FB10010007TIPJARVIEW000001 /* TipJarView.swift in Sources */,
 				FB10010100CRASHRECOVERY00 /* CrashRecoveryService.swift in Sources */,
 				FB10010101FREEZEWATCHDOG0 /* FreezeWatchdogService.swift in Sources */,
+				9585115D6A506995E844FBF3 /* ControllerChipView.swift in Sources */,
 				FB10010102EXTINPUTSVC000 /* ExternalInputDeviceService.swift in Sources */,
 				534E67FA5D7ECFB45E53E090 /* HelpLocalizer.swift in Sources */,
 				CEB0946910E0696BD78FF4B5 /* AppLanguage.swift in Sources */,
+				78C6F22E538B6F92A9D8FB58 /* SmartPresetMakerView.swift in Sources */,
 				F25E6B8B3DB7C04E33D7F163 /* KeyboardLayoutService.swift in Sources */,
 				FB10010104CURSORREGIONSVC /* CursorRegionService.swift in Sources */,
 				FB10010105CURSORREGIONSVIEW /* CursorRegionsView.swift in Sources */,
@@ -1164,7 +1356,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -1172,7 +1364,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;
@@ -1255,7 +1447,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 39;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1264,7 +1456,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;

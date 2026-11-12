@@ -18,8 +18,11 @@ enum CursorSetThrottle {
     /// Short, so a pointer changed some way other than `set` (a resize
     /// edge, a drag) is put right within a tenth of a second.
     private static let window: TimeInterval = 0.1
-    // Main thread only: AppKit sets cursors on the main thread.
-    nonisolated(unsafe) private static var last: (cursor: ObjectIdentifier, at: TimeInterval)?
+    // Main thread only: AppKit sets cursors on the main thread. The
+    // cursor itself is kept, not its address: a cursor freed within the
+    // window and a new one made at the same address compared equal, and
+    // the new one's first set was dropped.
+    nonisolated(unsafe) private static var last: (cursor: NSCursor, at: TimeInterval)?
     nonisolated(unsafe) private static var installed = false
 
     @MainActor static func install() {
@@ -42,9 +45,8 @@ enum CursorSetThrottle {
     /// True when this set can be dropped. Records the set otherwise.
     fileprivate static func shouldSkip(_ cursor: NSCursor) -> Bool {
         let now = ProcessInfo.processInfo.systemUptime
-        let id = ObjectIdentifier(cursor)
-        if let last, last.cursor == id, now - last.at < window { return true }
-        last = (id, now)
+        if let last, last.cursor === cursor, now - last.at < window { return true }
+        last = (cursor, now)
         return false
     }
 }

@@ -210,13 +210,23 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                     guard let self else { return }
                     if trusted {
                         self.applyMonitoring()
+                        // The key block the running preset asked for, made
+                        // now: before the grant installKeyTap could not, and
+                        // a revoke dropped it, so no key was held back.
+                        if !self.blockedKeys.isEmpty, self.keyTap == nil {
+                            self.installKeyTap()
+                        }
                     } else {
                         self.stopMouseMonitoring()
                         self.stopKeyboardMonitoring()
-                        // The blocking tap too: kept, it came back after a
-                        // re-grant possibly disabled, and nothing read the
-                        // middle and side buttons.
+                        // The blocking taps too: kept, they came back after
+                        // a re-grant possibly disabled, nothing read the
+                        // middle and side buttons, and with the key tap
+                        // still set the monitors dropped every key, so
+                        // keyboard rows stayed dead. blockedKeys is kept
+                        // for the re-grant.
                         self.destroyButtonTap()
+                        self.destroyKeyTap()
                     }
                 }
         }
@@ -261,8 +271,13 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     private func applyMonitoring() {
         // The tap's mask is fixed when it is made; a change in who reads
         // movement makes it again.
-        if eventTap != nil, tapHasMovement != !movementConsumers.isEmpty { stopMouseMonitoring() }
-        if mouseConsumers.isEmpty { stopMouseMonitoring() } else { startMouseMonitoring() }
+        if mouseConsumers.isEmpty {
+            stopMouseMonitoring()
+        } else if eventTap != nil, tapHasMovement != !movementConsumers.isEmpty {
+            restartMouseMonitoring()
+        } else {
+            startMouseMonitoring()
+        }
         if keyboardConsumers.isEmpty { stopKeyboardMonitoring() } else { startKeyboardMonitoring() }
         if mouseConsumers.isEmpty && keyboardConsumers.isEmpty {
             liveTimer?.invalidate(); liveTimer = nil
@@ -380,9 +395,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     }
 
     /// Keys read by asking macOS for their physical state each tick rather
-    /// than waiting for an event: the modifiers, which never arrive as
-    /// flagsChanged here (measured), and the top-row keys macOS keeps to
-    /// itself. `CGEventSource.keyState` answers for any key without Input
+    /// than waiting for an event: the modifiers, whose flagsChanged the
+    /// monitors can miss (reconciled here; an edge they did report is not
+    /// sent twice), and the top-row keys macOS keeps to itself. `CGEventSource.keyState` answers for any key without Input
     /// Monitoring. Virtual keycode to the HID code the app stores.
     private static let polledKeys: [(vk: CGKeyCode, hid: Int)] = [
         (56, 225), (60, 229),   // left / right Shift
@@ -447,6 +462,26 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// One modifier's edge from its flagsChanged event, read the way the
+    /// poll reads it (`isDown`) and recorded in the same held set, so the
+    /// next poll sees nothing new for it. Only the side-specific pairs;
+    /// a key the app itself holds is skipped, as in the poll.
+    private func noteModifierEdge(vk: CGKeyCode, flags: UInt, dev: String) {
+        guard !keyboardConsumers.isEmpty,
+              Self.modifierFamilyBits[Int(vk)] != nil,
+              let entry = Self.polledKeys.first(where: { $0.vk == vk }) else { return }
+        if InputSimulator.shared.isHolding(entry.hid) { return }
+        let own = InputSimulator.shared.ownDeviceModifierBits()
+        let down = Self.isDown(vk, flags: flags, own: own)
+        let was = polledDown.contains(entry.hid)
+        guard down != was else { return }
+        if down { polledDown.insert(entry.hid) } else { polledDown.remove(entry.hid) }
+        logRaw("flags \(down ? "keyDown" : "keyUp") vk=\(vk)")
+        let e: Event = down ? .keyDown(deviceID: dev, hidCode: entry.hid) : .keyUp(deviceID: dev, hidCode: entry.hid)
+        if down, !receivedAnyKeyboardEvent { receivedAnyKeyboardEvent = true }
+        noteLive(e); events.send(e)
+    }
+
     /// 30 Hz: read the polled keys, drop what has timed out, and publish
     /// only when the set changed.
     private func publishLive() {
@@ -455,9 +490,13 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         let secure = !keyboardConsumers.isEmpty && IsSecureEventInputEnabled()
         if secure != secureInputBlocking {
             secureInputBlocking = secure
-            ActivityLog.shared.info("Keyboard", secure
-                ? "A password field has the keyboard (Secure Input): keyboard rows pause until it is dismissed"
-                : "Secure Input ended: keyboard rows resume")
+            // "Ended" only when Secure Input itself went off while keyboard
+            // rows were read; with the readers gone there is nothing to resume.
+            if secure || !keyboardConsumers.isEmpty {
+                ActivityLog.shared.info("Keyboard", secure
+                    ? "A password field has the keyboard (Secure Input): keyboard rows pause until it is dismissed"
+                    : "Secure Input ended: keyboard rows resume")
+            }
         }
         let now = Date()
         for (k, until) in liveUntil where until <= now { liveUntil.removeValue(forKey: k) }
@@ -485,6 +524,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                         ? code - KeyCodeMap.unknownKeyBase : nil),
                !CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(vk)) {
                 let e: Event = .keyUp(deviceID: String(parts[2]), hidCode: code)
+                // The tap missed it too (Secure Input hides keys from it):
+                // the engine answers for the key until the tap sees it again.
+                locked { if tapKeysDown.remove(code) != nil { tapKeysSeen.remove(code) } }
                 noteLive(e); events.send(e)
             } else if parts.count == 5, parts[0] == "ems", parts[1] == "button", let b = Int(parts[2]),
                       // CGMouseButton defines left, right and center only
@@ -495,6 +537,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                       b <= 2, let button = CGMouseButton(rawValue: UInt32(b)),
                       !CGEventSource.buttonState(.combinedSessionState, button: button) {
                 let e: Event = .mouseButtonUp(deviceID: String(parts[4]), button: b)
+                locked { if tapButtonsDown.remove(b) != nil { tapButtonsSeen.remove(b) } }
                 noteLive(e); events.send(e)
             }
         }
@@ -506,7 +549,57 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         devices.first(where: { $0.id == id })?.productName
     }
 
-    func recentEventsFor(_ id: String) -> [LoggedEvent] { recentEvents[id] ?? [] }
+    // MARK: - The taps' own thread
+
+    /// The run loop every tap here runs on: the key and button blocking
+    /// taps, the listen tap and the media key tap. On the main run loop,
+    /// each keystroke on the Mac waited while a preset switch laid out the
+    /// page (95 to 140 ms), and a longer stall made macOS turn the block off,
+    /// so a blocked key did its own action. Started with the first tap and
+    /// kept, like the wheel shaper's thread; a port keeps it running with no
+    /// tap in it.
+    nonisolated(unsafe) private static let tapLoop: CFRunLoop = {
+        let box = TapLoopBox()
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            box.loop = CFRunLoopGetCurrent()
+            RunLoop.current.add(NSMachPort(), forMode: .default)
+            ready.signal()
+            CFRunLoopRun()
+        }
+        thread.name = "InputConfig.InputTaps"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        return box.loop!
+    }()
+    private final class TapLoopBox: @unchecked Sendable { var loop: CFRunLoop? }
+
+    /// A tap's source onto the taps' loop, woken so it listens at once.
+    private static func addToTapLoop(_ source: CFRunLoopSource?) {
+        CFRunLoopAddSource(tapLoop, source, .commonModes)
+        CFRunLoopWakeUp(tapLoop)
+    }
+
+    /// Guards what the tap callbacks read and write on the taps' thread.
+    /// The taps, the blocked keys and buttons with their chords and pause
+    /// lists, `selfInFront`, the engine's answers (`pointerPassing`,
+    /// `heldChordMembers`) and the teardown flags are written on main under
+    /// it, and main reads them without it, being their only writer. The
+    /// swallowed sets, the keys and buttons the taps saw held
+    /// (`tapKeysDown`, `tapButtonsDown`) and the timeout flags, which the
+    /// callbacks write, are read and written under it everywhere. Never taken twice on one path: NSLock is
+    /// not recursive.
+    private let tapLock = NSLock()
+    private func locked<T>(_ body: () -> T) -> T {
+        tapLock.lock()
+        defer { tapLock.unlock() }
+        return body()
+    }
+
+    /// A tap's event on its way to main: the event is the system's and
+    /// lives only for the callback, so main gets a copy.
+    fileprivate struct EventCopy: @unchecked Sendable { let event: CGEvent }
 
     // MARK: - Mouse input monitoring (Accessibility-gated)
 
@@ -518,6 +611,472 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// press is reported once, and cursor motion never waits on this app.
     private var buttonTap: CFMachPort?
     private var buttonTapSource: CFRunLoopSource?
+    /// Whether the activity log already has the line about the system
+    /// pausing the blocking tap, once per tap installed, not per event.
+    private var buttonTapTimeoutLogged = false
+
+    // MARK: - Blocking a key's own action
+
+    /// Keys (HID codes, never a modifier) whose own action is swallowed
+    /// while a preset binds them with "Block the key's own action": W
+    /// mapped to Up Arrow no longer also types W into the game's chat.
+    /// Through an active tap of its own, like the mouse buttons, on the
+    /// Accessibility permission the app's outputs already use.
+    private(set) var blockedKeys: Set<Int> = []
+    /// Virtual key codes whose press was swallowed and whose release has
+    /// not come yet; the release (and any auto repeat) is swallowed only
+    /// when its press was, so a key held across a preset switch lets go
+    /// in the app that saw it go down.
+    private var swallowedKeys: Set<Int> = []
+    private var keyTap: CFMachPort?
+    private var keyTapSource: CFRunLoopSource?
+    private var keyTapTeardownPending = false
+    private var keyTapTeardownToken = 0
+    /// Keys pressed as a registered shortcut, so their release also stays
+    /// out of the rows.
+    private var shortcutKeysDown: Set<Int> = []
+    private var keyTapTimeoutLogged = false
+
+    /// Per blocked key (HID code) and per blocked mouse button, the held
+    /// controls each blocking row waits for, from the engine. An empty list
+    /// blocks whenever the preset runs; a chord blocks only while it is
+    /// held, so J that fires only with Left Command held still types J.
+    private var keyBlockChords: [Int: [[InputEvent]]] = [:]
+    private var buttonBlockChords: [Int: [[InputEvent]]] = [:]
+    /// The chord members held now, of those the event's flags cannot tell
+    /// (a held key or mouse input; a modifier key comes from the flags
+    /// here). The engine writes it on main after each change to what it
+    /// holds, two main hops after the tap saw the change, so it answers
+    /// only what the taps did not see themselves (`tapHeld`). It was a
+    /// closure into the engine, which ran on main only.
+    private var heldChordMembers: Set<InputEvent> = []
+    /// Keys (input codes) the key tap saw go down and not yet up, and every
+    /// key it saw go down or up, since it was made or last turned back on.
+    /// Written by the tap under tapLock at the event, so a chord on A
+    /// blocking W sees A the moment A went down, however busy main is. A
+    /// key held since before the tap was made was never seen, and the
+    /// engine answers for it, as before. Cleared with the tap, and when
+    /// macOS turned it off (events passed it unseen meanwhile).
+    private var tapKeysDown: Set<Int> = []
+    private var tapKeysSeen: Set<Int> = []
+    /// The same for the mouse buttons the button tap sees (2 and up).
+    private var tapButtonsDown: Set<Int> = []
+    private var tapButtonsSeen: Set<Int> = []
+    /// The members of every chord list here that the engine answers for.
+    /// Main only.
+    private var chordMembersToWatch: [InputEvent] = []
+
+    func setBlockChords(keys: [Int: [[InputEvent]]], buttons: [Int: [[InputEvent]]]) {
+        locked {
+            keyBlockChords = keys
+            buttonBlockChords = buttons
+            rebuildChordWatch()
+        }
+    }
+
+    /// Main: the engine says which watched members are held. Free while no
+    /// blocking row's chord has a held key or mouse input in it.
+    func updateHeldChordMembers(_ isHeld: (InputEvent) -> Bool) {
+        guard !chordMembersToWatch.isEmpty else { return }
+        var held: Set<InputEvent> = []
+        for member in chordMembersToWatch where isHeld(member) { held.insert(member) }
+        locked { heldChordMembers = held }
+    }
+
+    /// Under tapLock, after a chord list changed. A member no longer listed
+    /// reads as up; a new one reads as up until the engine answers.
+    private func rebuildChordWatch() {
+        var members: Set<InputEvent> = []
+        for lists in [keyBlockChords, buttonBlockChords, keysRunningWhilePaused, buttonsRunningWhilePaused,
+                      pointerRowKeys, pointerRowButtonChords] {
+            for chords in lists.values {
+                for chord in chords { for m in chord where Self.engineAnswers(m) { members.insert(m) } }
+            }
+        }
+        chordMembersToWatch = Array(members)
+        heldChordMembers.formIntersection(members)
+    }
+
+    /// Under tapLock. A chord member as the key or button tap saw it, at
+    /// the event; nil when the taps cannot tell (a key or button not seen
+    /// since the tap was made, another kind of mouse input, another device).
+    private func tapHeld(_ input: InputEvent) -> Bool? {
+        switch input.type {
+        case .extKey:
+            guard input.extDeviceID == nil || input.extDeviceID == Self.builtInKeyboardID,
+                  tapKeysSeen.contains(input.index) else { return nil }
+            return tapKeysDown.contains(input.index)
+        case .extMouse:
+            guard (input.extMouseKind ?? .button) == .button,
+                  input.extDeviceID == nil || input.extDeviceID == Self.builtInMouseID,
+                  tapButtonsSeen.contains(input.index) else { return nil }
+            return tapButtonsDown.contains(input.index)
+        default:
+            return nil
+        }
+    }
+
+    /// A member blockArmed hands the engine: a key that is no modifier and
+    /// not fn (those it reads itself), or any mouse input. The engine
+    /// answered anything else as up.
+    private static func engineAnswers(_ m: InputEvent) -> Bool {
+        m.type == .extKey ? !(224...231).contains(m.index) && m.index != KeyCodeMap.globeFnCode : m.type == .extMouse
+    }
+
+    /// Modifier keys a chord can hold that make a press a shortcut.
+    private static let shortcutModifierCodes: Set<Int> = [224, 226, 227, 228, 230, 231]
+
+    /// Whether a blocked key or button is held back now: some blocking row
+    /// on it waits for nothing, or for a chord that is held. `shortcutChord`
+    /// says a held chord includes Control, Option or Command, the only case
+    /// a press with one of those is held back; `families` are those it
+    /// holds, so a press that adds another is the Mac's and passes.
+    /// Under tapLock.
+    private func blockArmed(_ chords: [[InputEvent]]?, flags: CGEventFlags) -> (armed: Bool, shortcutChord: Bool, families: CGEventFlags, waitsForGlobe: Bool) {
+        guard let chords, !chords.isEmpty else { return (true, false, [], false) }
+        let raw = UInt(flags.rawValue)
+        let own = InputSimulator.shared.ownModifierBitsSnapshot()
+        var armed = false
+        var shortcutChord = false
+        var families: CGEventFlags = []
+        var waitsForGlobe = false
+        for chord in chords {
+            let held = chord.allSatisfy { input in
+                if input.type == .extKey, (224...231).contains(input.index),
+                   let entry = Self.polledKeys.first(where: { $0.hid == input.index }) {
+                    return Self.isDown(entry.vk, flags: raw, own: own)
+                }
+                // fn read from the key itself, as the Globe pass reads it.
+                if input.type == .extKey, input.index == KeyCodeMap.globeFnCode { return Self.globeHeld() }
+                return tapHeld(input) ?? heldChordMembers.contains(input)
+            }
+            guard held else { continue }
+            armed = true
+            if chord.contains(where: { $0.type == .extKey && $0.index == KeyCodeMap.globeFnCode }) { waitsForGlobe = true }
+            for input in chord where input.type == .extKey && Self.shortcutModifierCodes.contains(input.index) {
+                shortcutChord = true
+                families.insert([224, 228].contains(input.index) ? .maskControl
+                                : [226, 230].contains(input.index) ? .maskAlternate : .maskCommand)
+            }
+        }
+        return (armed, shortcutChord, families, waitsForGlobe)
+    }
+
+    func setBlockedKeys(_ codes: Set<Int>) {
+        // Modifiers and anything without a virtual key never block: a lost
+        // Shift or Command would take the Mac's shortcuts with it.
+        let safe = codes.filter { !(224...231).contains($0) && KeyCodeMap.hidToVirtualKeyCode[$0] != nil }
+        guard safe != blockedKeys else { return }
+        // One step with the taps' view of what was swallowed: a release on
+        // the taps' thread in between found no teardown waiting for it.
+        let waitForRelease: Bool = locked {
+            blockedKeys = safe
+            guard safe.isEmpty else {
+                // A kept tap (its teardown was waiting on a held key) taken
+                // up again: what it recorded may hold a release Secure Input
+                // hid from it, so it starts over and the engine answers
+                // until each key is seen again.
+                if keyTapTeardownPending { tapKeysDown.removeAll(); tapKeysSeen.removeAll() }
+                keyTapTeardownPending = false
+                return false
+            }
+            // Held keys keep the tap until their release is swallowed too.
+            guard !swallowedKeys.isEmpty, keyTap != nil else { return false }
+            keyTapTeardownPending = true
+            return true
+        }
+        if safe.isEmpty {
+            if waitForRelease {
+                keyTapTeardownToken &+= 1
+                waitForSwallowedKeys(token: keyTapTeardownToken, tries: 0)
+            } else {
+                destroyKeyTap()
+            }
+            return
+        }
+        keyTapTeardownToken &+= 1
+        if keyTap == nil { installKeyTap() }
+        if keyTap != nil {
+            ActivityLog.shared.info("Keyboard", "Blocking the own action of key(s) \(blockedKeys.sorted().map { KeyCodeMap.name(for: $0) }.joined(separator: ", ")) while this preset runs")
+        }
+    }
+
+    /// Forces the teardown after 3 s, or once a swallowed key held longer
+    /// is let go (a minute at most): gone sooner, the rest of a held key's
+    /// repeats and its release reached the front app. A later start ends
+    /// the wait, so an old timer cannot cut a new teardown short.
+    private func waitForSwallowedKeys(token: Int, tries: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (tries == 0 ? 3 : 1)) { [weak self] in
+            guard let self, token == self.keyTapTeardownToken, self.keyTapTeardownPending else { return }
+            let swallowed = self.locked { self.swallowedKeys }
+            let held = swallowed.contains { CGEventSource.keyState(.hidSystemState, key: CGKeyCode($0)) }
+            if held, tries < 57 { self.waitForSwallowedKeys(token: token, tries: tries + 1) } else { self.finishKeyTapTeardown(force: true) }
+        }
+    }
+
+    private func installKeyTap() {
+        guard AXIsProcessTrusted() else { return }
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let service = Unmanaged<ExternalInputDeviceService>.fromOpaque(userInfo).takeUnretainedValue()
+            return service.handleKeyTapEvent(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
+        }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                          options: .defaultTap, eventsOfInterest: mask,
+                                          callback: callback,
+                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            ActivityLog.shared.warning("Keyboard", "Could not block keys; they still work but also do their own action")
+            locked { blockedKeys = [] }
+            return
+        }
+        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        // Known to the callback before its first event.
+        locked {
+            keyTap = tap
+            keyTapTimeoutLogged = false
+            tapKeysDown.removeAll()
+            tapKeysSeen.removeAll()
+        }
+        keyTapSource = src
+        Self.addToTapLoop(src)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    /// The key tap's callback: every key down and up on the Mac while a
+    /// key is blocked. The event is fed to the keyboard inputs here (the
+    /// NSEvent monitors leave keys to the tap meanwhile, so each press is
+    /// reported once) and swallowed when its key is blocked. True to
+    /// swallow. On the taps' thread: the decision under tapLock, the feed
+    /// on main in the tap's order. `live` is false only for the bench,
+    /// which makes the decision with no tap.
+    fileprivate func handleKeyTapEvent(type: CGEventType, event: CGEvent, live: Bool = true) -> Bool {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            let (tap, firstTimeout): (CFMachPort?, Bool) = locked {
+                // Keys went down and up unseen while it was off.
+                tapKeysDown.removeAll()
+                tapKeysSeen.removeAll()
+                guard let tap = keyTap else { return (nil, false) }
+                let first = type == .tapDisabledByTimeout && !keyTapTimeoutLogged
+                if first { keyTapTimeoutLogged = true }
+                return (tap, first)
+            }
+            if let tap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                if firstTimeout {
+                    ActivityLog.shared.warning("Keyboard", "macOS paused the key block for being slow; a blocked key may have done its own action once. Blocking is back on.")
+                }
+            }
+            return false
+        }
+        guard type == .keyDown || type == .keyUp else { return false }
+        // The app's own synthesized keys always pass: W to Up Arrow must
+        // not eat its own Up Arrow, and no output can loop back as input.
+        if event.getIntegerValueField(.eventSourceUserData) == InputSimulator.ownEventMarker { return false }
+        let vk = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        tapLock.lock()
+        defer { tapLock.unlock() }
+        // A tap removed on main while this event was on its way blocks
+        // nothing, as no tap would.
+        if live, keyTap == nil { return false }
+        // A registered shortcut, a Shift-only one too (the recorder accepts
+        // Shift F13, and the Emergency Stop may be it), passes and reaches
+        // no row: the hot key takes it, as it does with no tap up.
+        // On the press only: a repeat keeps the press's decision, or a held
+        // swallowed key was handed to the front app when the chord's
+        // modifiers went down after it.
+        if type == .keyDown, event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
+           HotKeyCenter.shared.isShortcut(virtualKey: vk, flags: event.flags) {
+            shortcutKeysDown.insert(vk)
+            swallowedKeys.remove(vk)
+            return false
+        }
+        if type == .keyUp, shortcutKeysDown.remove(vk) != nil { return false }
+        // What the engine is fed below, seen here at the event: a chord
+        // member on this key reads it at once (`tapHeld`). A repeat is no
+        // new press, as the engine has it.
+        let code = Self.inputCode(forVirtualKeyCode: vk)
+        if type == .keyUp {
+            tapKeysDown.remove(code)
+            tapKeysSeen.insert(code)
+        } else if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            tapKeysDown.insert(code)
+            tapKeysSeen.insert(code)
+        }
+        #if canImport(AppKit)
+        // Only while something reads the keyboard: the tap kept for a held
+        // key's release after a stop fed every key on the Mac into the live
+        // record with nothing to time them out, and the next start saw
+        // phantom key ups. Asked on main, where the feed runs.
+        if let copy = event.copy() {
+            let sent = EventCopy(event: copy)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.keyboardConsumers.isEmpty, let ev = NSEvent(cgEvent: sent.event) else { return }
+                self.handleKeyboardNSEvent(ev, fromTap: true)
+            }
+        }
+        #endif
+        if type == .keyDown {
+            let repeating = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if repeating { return swallowedKeys.contains(vk) }
+            // Paused for editing or suspended: the row sends nothing, so
+            // the key keeps its own action rather than doing nothing.
+            // Every press that passes forgets an earlier swallow of its key,
+            // so a release missed while it was held cannot swallow the
+            // release of this one and leave the key stuck in the front app.
+            // Held back, only the chords of rows that run keep the block: a
+            // plain W to Up Arrow passes while Shift W to Pause is swallowed.
+            let chords: [[InputEvent]]?
+            if blockingPaused {
+                let pointer = pointerPassing ? pointerRowKeys[code] ?? [] : []
+                let kept = (keysRunningWhilePaused[code] ?? []) + pointer
+                guard !kept.isEmpty else { swallowedKeys.remove(vk); return false }
+                chords = kept
+            } else {
+                chords = keyBlockChords[code]
+            }
+            guard !selfInFront, blockedKeys.contains(code) else { swallowedKeys.remove(vk); return false }
+            // A row with a Second control blocks only while it is held.
+            let arm = blockArmed(chords, flags: event.flags)
+            guard arm.armed else { swallowedKeys.remove(vk); return false }
+            // A press with Control, Option or Command is a shortcut (the
+            // emergency stop, the preset shortcuts, the Mac's own) and
+            // passes, unless the row itself waits for that modifier
+            // (Command + J as a chord). Never the app's own shortcuts: the
+            // tap runs ahead of their matching and would kill them silently.
+            let held = Self.personShortcutFlags(event.flags, own: InputSimulator.shared.ownModifierBitsSnapshot())
+            if !held.isEmpty {
+                // Beyond what the chord holds it is the Mac's: Command
+                // Option I with a row on Left Command and I.
+                guard arm.shortcutChord, held.subtracting(arm.families).isEmpty else { swallowedKeys.remove(vk); return false }
+            }
+            // Globe A, Globe E. Read from the key: the fn flag rides on
+            // every arrow and function key by itself. Typing keys only: fn
+            // is how a MacBook types F5 and Page Up, which keep their Block,
+            // and so does a row that waits for fn itself.
+            if Self.isTypingKey(code), !arm.waitsForGlobe, Self.globeHeld() { swallowedKeys.remove(vk); return false }
+            swallowedKeys.insert(vk)
+            return true
+        }
+        guard swallowedKeys.remove(vk) != nil else { return false }
+        if swallowedKeys.isEmpty && keyTapTeardownPending {
+            DispatchQueue.main.async { [weak self] in self?.finishKeyTapTeardown(force: false) }
+        }
+        return true
+    }
+
+    #if DEBUG
+    /// Tests only: one key event through the tap's decision, with the
+    /// blocks set here and no tap installed. True when it would be swallowed.
+    func debugKeyTap(down: Bool, virtualKey: Int, flags: CGEventFlags = [], autorepeat: Bool = false) -> Bool {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(virtualKey), keyDown: down) else { return false }
+        event.flags = flags
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: autorepeat ? 1 : 0)
+        return handleKeyTapEvent(type: down ? .keyDown : .keyUp, event: event, live: false)
+    }
+    /// Tests only: the same decision made on the taps' own thread while
+    /// main waits, as a real tap makes it. Nil when no answer came within a
+    /// second, which means the decision waited on main.
+    func debugKeyTapOnTapThread(down: Bool, virtualKey: Int, flags: CGEventFlags = [], autorepeat: Bool = false) -> (swallowed: Bool, onMain: Bool)? {
+        final class Answer: @unchecked Sendable { var value: (swallowed: Bool, onMain: Bool)? }
+        let answer = Answer()
+        let done = DispatchSemaphore(value: 0)
+        CFRunLoopPerformBlock(Self.tapLoop, CFRunLoopMode.commonModes.rawValue) { [self] in
+            answer.value = (debugKeyTap(down: down, virtualKey: virtualKey, flags: flags, autorepeat: autorepeat), Thread.isMainThread)
+            done.signal()
+        }
+        CFRunLoopWakeUp(Self.tapLoop)
+        guard done.wait(timeout: .now() + 1) == .success else { return nil }
+        return answer.value
+    }
+    /// Tests only: the blocked keys and chords, with no tap made. What was
+    /// swallowed is left as it is, so a case can see a release it forgets.
+    /// `held`: the chord members the engine answers as held.
+    func debugSetKeyBlocks(_ codes: Set<Int>, chords: [Int: [[InputEvent]]] = [:], paused: Bool = false, selfFront: Bool = false,
+                           running: [Int: [[InputEvent]]] = [:], pointer: [Int: [[InputEvent]]] = [:], held: Set<InputEvent> = []) {
+        locked {
+            keysRunningWhilePaused = running
+            pointerRowKeys = pointer
+            blockedKeys = codes
+            keyBlockChords = chords
+            blockingPaused = paused
+            selfInFront = selfFront
+            rebuildChordWatch()
+            heldChordMembers = held
+            // Nothing seen by the tap yet: `held` answers, as the engine
+            // does for a key held since before the tap was made.
+            tapKeysDown = []
+            tapKeysSeen = []
+        }
+    }
+    /// Tests only: the key tap's whole state, taken before the cases and put
+    /// back after, so a running preset keeps its block and its tap.
+    struct DebugKeyBlockState {
+        let running: [Int: [[InputEvent]]], blocked: Set<Int>, chords: [Int: [[InputEvent]]]
+        let paused: Bool, selfFront: Bool, swallowed: Set<Int>, shortcuts: Set<Int>
+        let pointer: [Int: [[InputEvent]]], passing: Bool, held: Set<InputEvent>
+        let tapDown: Set<Int>, tapSeen: Set<Int>
+    }
+    func debugKeyBlockState() -> DebugKeyBlockState {
+        locked {
+            DebugKeyBlockState(running: keysRunningWhilePaused, blocked: blockedKeys, chords: keyBlockChords, paused: blockingPaused,
+                               selfFront: selfInFront, swallowed: swallowedKeys, shortcuts: shortcutKeysDown,
+                               pointer: pointerRowKeys, passing: pointerPassing, held: heldChordMembers,
+                               tapDown: tapKeysDown, tapSeen: tapKeysSeen)
+        }
+    }
+    func debugRestoreKeyBlocks(_ state: DebugKeyBlockState) {
+        locked {
+            keysRunningWhilePaused = state.running
+            blockedKeys = state.blocked
+            keyBlockChords = state.chords
+            blockingPaused = state.paused
+            selfInFront = state.selfFront
+            swallowedKeys = state.swallowed
+            shortcutKeysDown = state.shortcuts
+            pointerRowKeys = state.pointer
+            pointerPassing = state.passing
+            rebuildChordWatch()
+            heldChordMembers = state.held
+            tapKeysDown = state.tapDown
+            tapKeysSeen = state.tapSeen
+        }
+    }
+    func debugClearSwallowed() {
+        locked {
+            swallowedKeys = []
+            shortcutKeysDown = []
+        }
+    }
+    #endif
+
+    private func finishKeyTapTeardown(force: Bool) {
+        let nothingHeld = locked { swallowedKeys.isEmpty }
+        guard keyTapTeardownPending, blockedKeys.isEmpty, force || nothingHeld else { return }
+        destroyKeyTap()
+    }
+
+    private func destroyKeyTap() {
+        // Out of the callback's sight first: an event already on its way
+        // then passes untouched instead of swallowing for a tap being removed.
+        let tap: CFMachPort? = locked {
+            let taken = keyTap
+            keyTap = nil
+            swallowedKeys.removeAll()
+            tapKeysDown.removeAll()
+            tapKeysSeen.removeAll()
+            // A shortcut's key let go after the tap is gone (the Emergency Stop
+            // on Shift F13 ends the block) never comes back here, and the next
+            // plain press's release was taken for it and never reached the row.
+            shortcutKeysDown.removeAll()
+            keyTapTeardownPending = false
+            return taken
+        }
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = keyTapSource { CFRunLoopRemoveSource(Self.tapLoop, src, .commonModes) }
+        if let tap { CFMachPortInvalidate(tap) }
+        keyTapSource = nil
+    }
 
     /// Mouse buttons (2 and up; main and secondary click never) whose own
     /// action is swallowed while a preset binds them with "Block the
@@ -532,6 +1091,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// The button tap outlives an empty blocked set until every swallowed
     /// press has had its release, or a few seconds pass.
     private var buttonTapTeardownPending = false
+    private var buttonTapTeardownToken = 0
 
     /// True while the engine's outputs are paused (the editor is open) or
     /// suspended: the row sends nothing then, so the button keeps its own
@@ -539,33 +1099,112 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// still sends it while pointer passthrough is on (in the editor, at
     /// the lock screen), so its button stays blocked then.
     private var blockingPaused = false
-    func setBlockingPaused(_ paused: Bool) { blockingPaused = paused }
+    /// Blocked keys whose rows run while outputs are held back (Pause or
+    /// Resume Outputs, Next Preset under Only in these apps), with the
+    /// chords of those rows: they stay blocked, or each press also did the
+    /// key's own action; a row on the same key that does not run passes.
+    private var keysRunningWhilePaused: [Int: [[InputEvent]]] = [:]
+    /// The same for buttons (a side button on Pause or Resume Outputs),
+    /// with the chords of those rows.
+    private var buttonsRunningWhilePaused: [Int: [[InputEvent]]] = [:]
+    /// Blocked keys and buttons whose rows send a click, pointer move or
+    /// scroll, with the chords of those rows: held back while pointer
+    /// outputs pass, and a row on the same key that sends nothing passes.
+    private var pointerRowKeys: [Int: [[InputEvent]]] = [:]
+    private var pointerRowButtonChords: [Int: [[InputEvent]]] = [:]
+    func setBlockingPaused(_ paused: Bool, keeping running: [Int: [[InputEvent]]] = [:], buttons: [Int: [[InputEvent]]] = [:],
+                           pointerKeys: [Int: [[InputEvent]]] = [:], pointerButtons: [Int: [[InputEvent]]] = [:]) {
+        locked {
+            blockingPaused = paused
+            keysRunningWhilePaused = running
+            buttonsRunningWhilePaused = buttons
+            pointerRowKeys = pointerKeys
+            pointerRowButtonChords = pointerButtons
+            rebuildChordWatch()
+        }
+    }
+
+    /// Control, Option and Command the person holds: a family whose only
+    /// side down is one this app posted (a row holding Left Control) is the
+    /// app's, so a blocked W under it is no shortcut. An event with no side
+    /// bits for a family counts it, unless the app holds that family.
+    nonisolated static func personShortcutFlags(_ flags: CGEventFlags, own: UInt) -> CGEventFlags {
+        let raw = UInt(flags.rawValue)
+        var held: CGEventFlags = []
+        for (mask, sides) in [(CGEventFlags.maskControl, UInt(0x2001)), (.maskAlternate, 0x60), (.maskCommand, 0x18)]
+        where flags.contains(mask) {
+            if raw & sides == 0 ? own & sides == 0 : (raw & ~own) & sides != 0 { held.insert(mask) }
+        }
+        return held
+    }
+
+    /// Letters, digits and punctuation, the keys Globe shortcuts sit on (HID
+    /// codes). Function and navigation keys are not: fn types those.
+    private static func isTypingKey(_ code: Int) -> Bool {
+        (4...39).contains(code) || (45...56).contains(code) || code == 100
+    }
+
+    private static func globeHeld() -> Bool {
+        #if DEBUG
+        if let fake = debugGlobeHeld { return fake }
+        #endif
+        return CGEventSource.keyState(.hidSystemState, key: CGKeyCode(kVK_Function))
+    }
+    #if DEBUG
+    nonisolated(unsafe) static var debugGlobeHeld: Bool?
+    #endif
+    /// True while one of InputConfig's own windows is in front: every key
+    /// and button keeps its own action there, so a WASD preset with Block
+    /// on can still type a W into a name or the search field. Set by the
+    /// engine with the wheel shaper's own flag; the taps read it under tapLock.
+    private var selfInFront = false
+    func setSelfInFront(_ front: Bool) { locked { selfInFront = front } }
     /// Blocked buttons whose rows send a click, pointer move or scroll.
     private var pointerRowButtons: Set<Int> = []
-    /// Asked on each blocked press: does the engine let pointer outputs through?
-    var pointerOutputsPassing: (() -> Bool)?
+    /// Read on each blocked press: does the engine let pointer outputs
+    /// through? Written by the engine on its pause edges and ticks. It was a
+    /// closure into the engine, which ran on main only.
+    private var pointerPassing = false
+    func setPointerOutputsPassing(_ passing: Bool) { locked { pointerPassing = passing } }
 
     func setBlockedMouseButtons(_ buttons: Set<Int>, pointerRows: Set<Int> = []) {
-        pointerRowButtons = pointerRows
+        locked { pointerRowButtons = pointerRows }
         let safe = buttons.filter { $0 >= 2 && $0 <= 31 }
         guard safe != blockedMouseButtons else { return }
         let tapsChange = safe.isEmpty != blockedMouseButtons.isEmpty
-        blockedMouseButtons = safe
-        if safe.isEmpty, !swallowedPresses.isEmpty, buttonTap != nil {
+        // One step with the taps' view of what was swallowed, as for keys.
+        let waitForRelease: Bool = locked {
+            blockedMouseButtons = safe
+            guard safe.isEmpty, !swallowedPresses.isEmpty, buttonTap != nil else { buttonTapTeardownPending = false; return false }
             buttonTapTeardownPending = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                self?.finishButtonTapTeardown(force: true)
+            return true
+        }
+        // A later start or stop owns the teardown: an old timer forced a
+        // newer one early, and a held button's release went Back.
+        buttonTapTeardownToken &+= 1
+        if waitForRelease {
+            let token = buttonTapTeardownToken
+            // The tap sees every release, so the tail ends with it; this is
+            // only the cap, as the key side's. At 3 s a button still held
+            // sent its release on as a bare up, which went Back.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+                guard let self, token == self.buttonTapTeardownToken else { return }
+                self.finishButtonTapTeardown(force: true)
             }
             return
         }
-        buttonTapTeardownPending = false
         // The listen tap's mask depends on whether the button tap exists.
+        // With no listen tap to rebuild (its make failed), a kept button
+        // tap with nothing to block goes here, or it outlived its owner.
         if tapsChange, eventTap != nil {
-            stopMouseMonitoring()
-            startMouseMonitoring()
+            restartMouseMonitoring()
+        } else if safe.isEmpty, buttonTap != nil {
+            destroyButtonTap()
         }
-        if !safe.isEmpty {
-            ActivityLog.shared.info("Mouse", "Blocking the own action of mouse button(s) \(safe.sorted().map { String($0 + 1) }.joined(separator: ", ")) while this preset runs")
+        // Read back rather than `safe`: a blocking tap the system refused
+        // cleared the set again and logged why.
+        if !blockedMouseButtons.isEmpty {
+            ActivityLog.shared.info("Mouse", "Blocking the own action of mouse button(s) \(blockedMouseButtons.sorted().map { String($0 + 1) }.joined(separator: ", ")) while this preset runs")
         }
     }
 
@@ -584,6 +1223,19 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             (1 << CGEventType.otherMouseDown.rawValue) |
             (1 << CGEventType.otherMouseUp.rawValue)
         let blocking = !blockedMouseButtons.isEmpty
+        // A button tap kept from the last preset (a blocked button still
+        // held while the preset switched) is reused, not leaked beside a
+        // second one: it is turned back on here, and one the system will
+        // not enable is dropped before the mask below counts on it.
+        if let bTap = buttonTap {
+            CGEvent.tapEnable(tap: bTap, enable: true)
+            if !CGEvent.tapIsEnabled(tap: bTap) { destroyButtonTap() }
+        }
+        // A button tap kept past the end of blocking (a swallowed press
+        // waiting for its release) still reports every middle and side
+        // button it sees, so the listen tap leaves them to it meanwhile;
+        // both taking them reported each press twice.
+        let otherButtonsTapped = blocking || buttonTap != nil
         let movement = !movementConsumers.isEmpty
         let moves: CGEventMask =
             (1 << CGEventType.mouseMoved.rawValue) |
@@ -598,7 +1250,7 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
             (1 << CGEventType.leftMouseUp.rawValue) |
             (1 << CGEventType.rightMouseDown.rawValue) |
             (1 << CGEventType.rightMouseUp.rawValue) |
-            (blocking ? 0 : otherButtons) |
+            (otherButtonsTapped ? 0 : otherButtons) |
             (movement ? moves : 0) |
             (1 << CGEventType.scrollWheel.rawValue)
 
@@ -627,28 +1279,27 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         }
 
         let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        eventTap = tap
+        locked { eventTap = tap }
         runLoopSource = src
+        Self.addToTapLoop(src)
+        CGEvent.tapEnable(tap: tap, enable: true)
         cgEventTapInstalled = true
         tapHasMovement = movement
 
         // Middle and side buttons through an active tap that can drop a
-        // bound button's press. It still reports every press it sees. One
-        // kept from the last preset (a blocked button still held while the
-        // preset switched) is reused, not leaked beside a second one.
-        // A kept tap is turned back on; one the system will not enable is
-        // rebuilt rather than left dead.
-        if let bTap = buttonTap {
-            CGEvent.tapEnable(tap: bTap, enable: true)
-            if !CGEvent.tapIsEnabled(tap: bTap) { destroyButtonTap() }
-        }
+        // bound button's press. It still reports every press it sees. A
+        // kept tap was checked above; one the system would not enable is
+        // rebuilt here rather than left dead.
         if blocking, buttonTap == nil {
             let buttonCallback: CGEventTapCallBack = { _, type, event, userInfo in
                 guard let userInfo else { return Unmanaged.passUnretained(event) }
                 let service = Unmanaged<ExternalInputDeviceService>.fromOpaque(userInfo).takeUnretainedValue()
-                service.handleMouseEvent(type: type, event: event)
+                // Reported only while something reads the mouse (asked on
+                // main, where the feed runs): the tap kept after a stop for a
+                // held button's release fed the live record with nothing to
+                // time it out, as the key tap did. A tap the system turned off
+                // is turned back on regardless.
+                service.handleMouseEvent(type: type, event: event, fromButtonTap: true)
                 return service.shouldBlock(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
             }
             if let bTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
@@ -656,20 +1307,27 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                                             callback: buttonCallback,
                                             userInfo: Unmanaged.passUnretained(self).toOpaque()) {
                 let bSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, bTap, 0)
-                CFRunLoopAddSource(CFRunLoopGetMain(), bSrc, .commonModes)
-                CGEvent.tapEnable(tap: bTap, enable: true)
-                buttonTap = bTap
+                locked {
+                    buttonTap = bTap
+                    buttonTapTimeoutLogged = false
+                    tapButtonsDown.removeAll()
+                    tapButtonsSeen.removeAll()
+                }
                 buttonTapSource = bSrc
+                Self.addToTapLoop(bSrc)
+                CGEvent.tapEnable(tap: bTap, enable: true)
             } else {
                 // No active tap: the listen tap takes the buttons back so
                 // they still bind; they just are not blocked.
                 ActivityLog.shared.warning("Mouse", "Could not block mouse buttons; they still work but also do their own action")
                 CGEvent.tapEnable(tap: tap, enable: false)
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+                CFRunLoopRemoveSource(Self.tapLoop, src, .commonModes)
                 CFMachPortInvalidate(tap)
-                eventTap = nil
+                locked {
+                    eventTap = nil
+                    blockedMouseButtons = []
+                }
                 runLoopSource = nil
-                blockedMouseButtons = []
                 startMouseMonitoring()
                 return
             }
@@ -740,6 +1398,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                 event = .scrollGesture(deviceID: parts[4], active: false)
             } else if parts.count == 5, parts[0] == "ems", parts[1] == "pressure" || parts[1] == "deepPress" {
                 event = .pressureChanged(deviceID: parts[4], value: 0, stage: 0)
+            } else if parts.count == 5, parts[0] == "ems", parts[1] == "penInRange" || parts[1] == "penPressure" {
+                // The engine clears the pen's pressure and buttons on it.
+                event = .tabletProximity(deviceID: parts[4], entering: false, eraser: false)
             } else {
                 event = nil
             }
@@ -747,28 +1408,55 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func stopMouseMonitoring() {
+    /// `forRestart`: the tap is made again at once with a new mask, and
+    /// the buttons still held keep their live entries and engine state. A
+    /// release was synthesized for each of them here, with no press to
+    /// follow, so a row held on a button let go in the middle of the hold
+    /// whenever movement or blocking changed; the new tap still sees the
+    /// real release.
+    private func stopMouseMonitoring(forRestart: Bool = false) {
         guard eventTap != nil else { return }
-        releaseHeldLive(prefix: "ems ")
-        if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: false) }
+        // Out of the callback's sight first, as destroyKeyTap does: a
+        // timeout event in flight on the taps' thread re-enabled the old tap
+        // and posted one more restart of the new one.
+        let tap = locked { () -> CFMachPort? in let t = eventTap; eventTap = nil; return t }
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let src = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+            CFRunLoopRemoveSource(Self.tapLoop, src, .commonModes)
         }
-        if let tap = eventTap { CFMachPortInvalidate(tap) }
+        if let tap { CFMachPortInvalidate(tap) }
         // A blocked button still down when blocking ended (the preset
         // stopped mid-press) keeps its tap until it is let go, or its bare
         // release reached the front app (finishButtonTapTeardown).
         // Kept too while blocking is still wanted: this is a restart for a
         // new mask, and a held blocked button's release must stay blocked.
-        if !(buttonTapTeardownPending && !swallowedPresses.isEmpty), blockedMouseButtons.isEmpty {
+        if !(buttonTapTeardownPending && !locked({ swallowedPresses.isEmpty })), blockedMouseButtons.isEmpty {
             destroyButtonTap()
         }
-        eventTap = nil
         runLoopSource = nil
         cgEventTapInstalled = false
+        // The device entry stays across a restart, so "System Mouse" is
+        // not published as gone and back for a new mask.
+        guard !forRestart else { return }
+        finishMouseTeardown()
+    }
+
+    /// The part of stopping that a restart skips: the device entry, the
+    /// held inputs and the scroll gesture state.
+    private func finishMouseTeardown() {
+        releaseHeldLive(prefix: "ems ")
         devices.removeAll { $0.id == Self.builtInMouseID }
         for k in liveUntil.keys where k.hasPrefix("ems ") { liveUntil.removeValue(forKey: k) }
         if scrollGesture != .none { scrollGesture = .none }
+    }
+
+    /// The tap made again with a new mask. When the new tap could not be
+    /// made (the permission went away), the stop is completed as a real
+    /// one, so no held input or device entry outlives the tap.
+    private func restartMouseMonitoring() {
+        stopMouseMonitoring(forRestart: true)
+        startMouseMonitoring()
+        if eventTap == nil { finishMouseTeardown() }
     }
 
     private func stopKeyboardMonitoring() {
@@ -778,9 +1466,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         #endif
         releaseHeldLive(prefix: "ekb ")
         if let tap = sysDefinedTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let src = sysDefinedSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
+        if let src = sysDefinedSource { CFRunLoopRemoveSource(Self.tapLoop, src, .commonModes) }
         if let tap = sysDefinedTap { CFMachPortInvalidate(tap) }
-        sysDefinedTap = nil
+        locked { sysDefinedTap = nil }
         sysDefinedSource = nil
         devices.removeAll { $0.id == Self.builtInKeyboardID }
         polledDown.removeAll()
@@ -791,24 +1479,47 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     func stopMonitoring() {
         mouseConsumers.removeAll()
         keyboardConsumers.removeAll()
+        locked { blockedKeys = [] }
+        destroyKeyTap()
         applyMonitoring()
     }
 
-    /// Tap callback body (runs on the main run loop). Translates a CGEvent
-    /// into our device-agnostic `Event` and publishes it. Skips events we
-    /// synthesized ourselves so a mouse OUTPUT can't loop back as INPUT.
-    fileprivate func handleMouseEvent(type: CGEventType, event: CGEvent) {
+    /// Tap callback body, on the taps' thread. Reads a CGEvent into what
+    /// main needs and hands it over; main makes our device-agnostic `Event`
+    /// and publishes it, in the taps' order. Skips events we synthesized
+    /// ourselves so a mouse OUTPUT can't loop back as INPUT.
+    fileprivate func handleMouseEvent(type: CGEventType, event: CGEvent, fromButtonTap: Bool = false) {
         // The system can disable a tap if it ever blocks; re-enable it.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
-            if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            let (listenTap, blockTap, firstTimeout): (CFMachPort?, CFMachPort?, Bool) = locked {
+                let first = buttonTap != nil && type == .tapDisabledByTimeout && !buttonTapTimeoutLogged
+                if first { buttonTapTimeoutLogged = true }
+                // Buttons went down and up unseen while it was off.
+                if fromButtonTap {
+                    tapButtonsDown.removeAll()
+                    tapButtonsSeen.removeAll()
+                }
+                return (eventTap, buttonTap, first)
+            }
+            if let tap = listenTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = blockTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                // While the tap was off, a blocked button did its own action
+                // once. Said once per tap, so a busy Mac does not fill the log.
+                if firstTimeout {
+                    ActivityLog.shared.warning("Mouse", "macOS paused the mouse button block for being slow; a blocked button may have done its own action once. Blocking is back on.")
+                }
+            }
             // A tap the system will not turn back on (the permission went
             // away) is rebuilt instead of staying dead.
-            if let tap = eventTap, !CGEvent.tapIsEnabled(tap: tap) {
+            if let tap = listenTap, !CGEvent.tapIsEnabled(tap: tap) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    self.stopMouseMonitoring()
-                    self.applyMonitoring()
+                    if self.mouseConsumers.isEmpty {
+                        self.stopMouseMonitoring()
+                    } else {
+                        self.restartMouseMonitoring()
+                    }
                 }
             }
             return
@@ -816,43 +1527,77 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         if event.getIntegerValueField(.eventSourceUserData) == InputSimulator.ownEventMarker {
             return
         }
-        let dev = Self.builtInMouseID
-        let out: Event?
-        var also: Event? = nil
+        guard let reading = Self.mouseReading(type: type, event: event) else { return }
+        DispatchQueue.main.async { [weak self] in
+            // A tap stopped meanwhile feeds nothing more (its stop let go of
+            // what it held); a restart's new tap is up again by now.
+            guard let self, fromButtonTap ? self.buttonTap != nil && !self.mouseConsumers.isEmpty
+                                          : self.eventTap != nil else { return }
+            self.feedMouse(reading)
+        }
+    }
+
+    /// What a tap reads off a mouse event on its thread, for main.
+    fileprivate enum MouseReading: Sendable {
+        case down(button: Int, double: Bool)
+        case up(button: Int)
+        case move(dx: Int, dy: Int)
+        case scroll(ScrollFields)
+        case tabletPoint(pressure: Float, tiltX: Float, tiltY: Float, buttons: Int)
+        case tabletProximity(entering: Bool, eraser: Bool)
+    }
+
+    fileprivate static func mouseReading(type: CGEventType, event: CGEvent) -> MouseReading? {
         switch type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            let button = Self.mouseButton(of: event, type: type)
+            // macOS counts clicks itself; the second of a pair is a double.
+            return .down(button: mouseButton(of: event, type: type),
+                         double: event.getIntegerValueField(.mouseEventClickState) == 2)
+        case .leftMouseUp:    return .up(button: 0)
+        case .rightMouseUp:   return .up(button: 1)
+        case .otherMouseUp:   return .up(button: mouseButton(of: event, type: type))
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            return .move(dx: Int(event.getIntegerValueField(.mouseEventDeltaX)),
+                         dy: Int(event.getIntegerValueField(.mouseEventDeltaY)))
+        case .scrollWheel:
+            return .scroll(ScrollFields(event))
+        case .tabletPointer:
+            let p = tabletPoint(of: event)
+            return .tabletPoint(pressure: p.pressure, tiltX: p.tiltX, tiltY: p.tiltY, buttons: p.buttons)
+        case .tabletProximity:
+            let p = tabletProximity(of: event)
+            return .tabletProximity(entering: p.entering, eraser: p.eraser)
+        default:
+            return nil
+        }
+    }
+
+    /// One reading fed on main, as the tap callback fed it there before.
+    private func feedMouse(_ reading: MouseReading) {
+        let dev = Self.builtInMouseID
+        let e: Event
+        var also: Event? = nil
+        switch reading {
+        case .down(let button, let double):
             if button >= 5 {
                 Self.noteUnfamiliar("Mouse", id: "button\(button)",
                     "Mouse button \(button + 1) pressed. It can be bound: Scan a mouse row and press it.")
             }
-            out = .mouseButtonDown(deviceID: dev, button: button)
-            // macOS counts clicks itself; the second of a pair is a double.
-            if event.getIntegerValueField(.mouseEventClickState) == 2 {
-                also = .mouseDoubleClick(deviceID: dev, button: button)
-            }
-        case .leftMouseUp:    out = .mouseButtonUp(deviceID: dev, button: 0)
-        case .rightMouseUp:   out = .mouseButtonUp(deviceID: dev, button: 1)
-        case .otherMouseUp:
-            out = .mouseButtonUp(deviceID: dev, button: Self.mouseButton(of: event, type: type))
-        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-            out = .mouseMove(deviceID: dev,
-                             dx: Int(event.getIntegerValueField(.mouseEventDeltaX)),
-                             dy: Int(event.getIntegerValueField(.mouseEventDeltaY)))
-        case .scrollWheel:
-            let delta = Self.scrollDeltas(of: event, carry: &scrollCarry)
-            out = .scroll(deviceID: dev, dx: delta.dx, dy: delta.dy)
-            also = scrollGestureTransition(event, dev: dev)
-        case .tabletPointer:
-            let p = Self.tabletPoint(of: event)
-            out = .tabletPoint(deviceID: Self.tabletID, pressure: p.pressure, tiltX: p.tiltX, tiltY: p.tiltY, buttons: p.buttons)
-        case .tabletProximity:
-            let p = Self.tabletProximity(of: event)
-            out = .tabletProximity(deviceID: Self.tabletID, entering: p.entering, eraser: p.eraser)
-        default:
-            out = nil
+            e = .mouseButtonDown(deviceID: dev, button: button)
+            if double { also = .mouseDoubleClick(deviceID: dev, button: button) }
+        case .up(let button):
+            e = .mouseButtonUp(deviceID: dev, button: button)
+        case .move(let dx, let dy):
+            e = .mouseMove(deviceID: dev, dx: dx, dy: dy)
+        case .scroll(let fields):
+            let delta = Self.scrollDeltas(of: fields, carry: &scrollCarry)
+            e = .scroll(deviceID: dev, dx: delta.dx, dy: delta.dy)
+            also = scrollGestureTransition(fields, dev: dev)
+        case .tabletPoint(let pressure, let tiltX, let tiltY, let buttons):
+            e = .tabletPoint(deviceID: Self.tabletID, pressure: pressure, tiltX: tiltX, tiltY: tiltY, buttons: buttons)
+        case .tabletProximity(let entering, let eraser):
+            e = .tabletProximity(deviceID: Self.tabletID, entering: entering, eraser: eraser)
         }
-        guard let e = out else { return }
         if !cgEventTapReceivedAnyEvent { cgEventTapReceivedAnyEvent = true }
         noteLive(e)
         events.send(e)
@@ -863,15 +1608,42 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     }
 
     /// True for a press or release of a blocked button that a person made
-    /// (the app's own synthesized clicks always pass through).
+    /// (the app's own synthesized clicks always pass through). On the
+    /// taps' thread, under tapLock.
     fileprivate func shouldBlock(type: CGEventType, event: CGEvent) -> Bool {
         guard type == .otherMouseDown || type == .otherMouseUp,
               event.getIntegerValueField(.eventSourceUserData) != InputSimulator.ownEventMarker else { return false }
         let button = Self.mouseButton(of: event, type: type)
+        tapLock.lock()
+        defer { tapLock.unlock() }
+        // A tap removed on main while this event was on its way blocks
+        // nothing, as no tap would.
+        guard buttonTap != nil else { return false }
+        // Seen at the event, for a chord that holds this button (`tapHeld`).
+        if type == .otherMouseDown { tapButtonsDown.insert(button) } else { tapButtonsDown.remove(button) }
+        tapButtonsSeen.insert(button)
         if type == .otherMouseDown {
-            let paused = blockingPaused
-                && !(pointerRowButtons.contains(button) && (pointerOutputsPassing?() ?? false))
-            guard !paused, blockedMouseButtons.contains(button) else { return false }
+            // Held back, only the chords of rows that run keep the block, as
+            // for keys: a plain side button to Up Arrow passes while Shift
+            // plus the button to Pause is swallowed.
+            let chords: [[InputEvent]]?
+            var paused = false
+            if blockingPaused {
+                let pointer = pointerPassing ? pointerRowButtonChords[button] ?? [] : []
+                let kept = (buttonsRunningWhilePaused[button] ?? []) + pointer
+                if kept.isEmpty { chords = nil; paused = true } else { chords = kept }
+            } else {
+                chords = buttonBlockChords[button]
+            }
+            // A row with a pointer output keeps its button blocked over
+            // InputConfig's windows too, so the click it sends is the only one.
+            let ownWindow = selfInFront && !pointerRowButtons.contains(button)
+            guard !paused, !ownWindow, blockedMouseButtons.contains(button),
+                  blockArmed(chords, flags: event.flags).armed else {
+                // As with keys: a passed press forgets an earlier swallow.
+                swallowedPresses.remove(button)
+                return false
+            }
             swallowedPresses.insert(button)
             return true
         }
@@ -886,12 +1658,12 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// Drop the button tap once blocking ended and the last swallowed
     /// press got its release (or, forced, after the wait ran out).
     private func finishButtonTapTeardown(force: Bool) {
+        let nothingHeld = locked { swallowedPresses.isEmpty }
         guard buttonTapTeardownPending, blockedMouseButtons.isEmpty,
-              force || swallowedPresses.isEmpty else { return }
-        buttonTapTeardownPending = false
+              force || nothingHeld else { return }
+        locked { buttonTapTeardownPending = false }
         if eventTap != nil {
-            stopMouseMonitoring()
-            startMouseMonitoring()
+            restartMouseMonitoring()
         } else {
             // Monitoring already stopped; only the kept button tap is left.
             destroyButtonTap()
@@ -899,12 +1671,19 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     }
 
     private func destroyButtonTap() {
-        if let tap = buttonTap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let src = buttonTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
-        if let tap = buttonTap { CFMachPortInvalidate(tap) }
-        swallowedPresses.removeAll()
-        buttonTapTeardownPending = false
-        buttonTap = nil
+        // Out of the callback's sight first, as the key tap's.
+        let tap: CFMachPort? = locked {
+            let taken = buttonTap
+            buttonTap = nil
+            swallowedPresses.removeAll()
+            tapButtonsDown.removeAll()
+            tapButtonsSeen.removeAll()
+            buttonTapTeardownPending = false
+            return taken
+        }
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let src = buttonTapSource { CFRunLoopRemoveSource(Self.tapLoop, src, .commonModes) }
+        if let tap { CFMachPortInvalidate(tap) }
         buttonTapSource = nil
     }
 
@@ -929,14 +1708,30 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// so points are added up and the remainder carried to the next event,
     /// or a 3 point nudge and a 60 point flick both counted as one step.
     static func scrollDeltas(of event: CGEvent, carry: inout (x: Double, y: Double)) -> (dx: Int, dy: Int) {
-        let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
-        let dx = scrollSteps(line: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
-                             point: Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),
-                             continuous: continuous, carry: &carry.x)
-        let dy = scrollSteps(line: Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1)),
-                             point: Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)),
-                             continuous: continuous, carry: &carry.y)
+        scrollDeltas(of: ScrollFields(event), carry: &carry)
+    }
+
+    static func scrollDeltas(of s: ScrollFields, carry: inout (x: Double, y: Double)) -> (dx: Int, dy: Int) {
+        let dx = scrollSteps(line: s.lineX, point: s.pointX, continuous: s.continuous, carry: &carry.x)
+        let dy = scrollSteps(line: s.lineY, point: s.pointY, continuous: s.continuous, carry: &carry.y)
         return (dx, dy)
+    }
+
+    /// A scroll event's fields, read on the taps' thread: the event itself
+    /// is gone by the time main feeds it.
+    struct ScrollFields: Sendable {
+        let continuous: Bool
+        let lineX: Int, pointX: Int, lineY: Int, pointY: Int
+        let phase: Int64, momentum: Int64
+        init(_ event: CGEvent) {
+            continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
+            lineX = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis2))
+            pointX = Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2))
+            lineY = Int(event.getIntegerValueField(.scrollWheelEventDeltaAxis1))
+            pointY = Int(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))
+            phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
+            momentum = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
+        }
     }
 
     /// Steps for one axis of one scroll event; `carry` keeps the fraction.
@@ -978,9 +1773,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// Cancels a delayed gesture end; see scrollGestureTransition.
     private var scrollEndToken = 0
 
-    private func scrollGestureTransition(_ event: CGEvent, dev: String) -> Event? {
-        let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
-        let momentum = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
+    private func scrollGestureTransition(_ fields: ScrollFields, dev: String) -> Event? {
+        let phase = fields.phase
+        let momentum = fields.momentum
         let next: ScrollGesture
         if phase == 1 || phase == 2 || phase == 128 { next = .fingers }
         else if momentum == 1 || momentum == 2 { next = .momentum }
@@ -1061,10 +1856,10 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
                                            callback: callback,
                                            userInfo: Unmanaged.passUnretained(self).toOpaque()) {
                 let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-                CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
-                CGEvent.tapEnable(tap: tap, enable: true)
-                sysDefinedTap = tap
+                locked { sysDefinedTap = tap }
                 sysDefinedSource = src
+                Self.addToTapLoop(src)
+                CGEvent.tapEnable(tap: tap, enable: true)
             }
         }
         if !devices.contains(where: { $0.id == Self.builtInKeyboardID }) {
@@ -1125,17 +1920,22 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         return (hid, state == 0x0A)
     }
 
-    /// The NX_SYSDEFINED tap's callback: re-enable if the system paused
-    /// the tap, then feed the event through the same decoder the NSEvent
-    /// monitors use.
+    /// The NX_SYSDEFINED tap's callback, on the taps' thread: re-enable if
+    /// the system paused the tap, then feed the event on main through the
+    /// same decoder the NSEvent monitors use.
     fileprivate func handleSysDefinedCGEvent(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = sysDefinedTap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap = locked({ sysDefinedTap }) { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
         #if canImport(AppKit)
-        guard let ev = NSEvent(cgEvent: event) else { return }
-        handleKeyboardNSEvent(ev, fromTap: true)
+        guard let copy = event.copy() else { return }
+        let sent = EventCopy(event: copy)
+        DispatchQueue.main.async { [weak self] in
+            // Stopped meanwhile: nothing reads it, and a key fed now stayed held.
+            guard let self, self.sysDefinedTap != nil, let ev = NSEvent(cgEvent: sent.event) else { return }
+            self.handleKeyboardNSEvent(ev, fromTap: true)
+        }
         #endif
     }
 
@@ -1156,6 +1956,9 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
            cg.getIntegerValueField(.eventSourceUserData) == InputSimulator.ownEventMarker {
             return
         }
+        // While the blocking tap is up it reports every key down and up
+        // itself (it sees them first); the monitors' copies would double.
+        if !fromTap, keyTap != nil, ev.type == .keyDown || ev.type == .keyUp { return }
         let dev = Self.builtInKeyboardID
         // Media / brightness keys arrive as NSSystemDefined with the key in
         // data1, not as a keyCode. While the tap is up it delivers them
@@ -1189,9 +1992,15 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         // with the key in keyCode and its state in the flags. Each side of
         // a pair has its own device bit, Caps Lock reports its toggle, and
         // fn reports the function flag.
-        // Modifiers are read by polling their key state (see pollKeys);
-        // flagsChanged is logged for the record and otherwise ignored.
-        if ev.type == .flagsChanged { return }
+        // A side-specific modifier's edge is taken from the event when it
+        // arrives, so Shift then A inside one poll tick reach the engine
+        // in that order; the poll (pollKeys) reconciles what the monitors
+        // missed and skips an edge already reported here. Caps Lock and
+        // fn stay with the poll.
+        if ev.type == .flagsChanged {
+            noteModifierEdge(vk: CGKeyCode(ev.keyCode), flags: UInt(ev.modifierFlags.rawValue), dev: dev)
+            return
+        }
         let vk = Int(ev.keyCode)
         KeyboardLayoutService.noteKeyEvent()
         let hid = Self.inputCode(forVirtualKeyCode: vk)

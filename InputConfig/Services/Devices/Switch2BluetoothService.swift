@@ -103,9 +103,16 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         let name: String
         var key: UInt64?
         var command: CBCharacteristic?
+        /// Which link of this controller it is: an attach hop still queued
+        /// from a closed link must not list a pad for the one after it.
+        let generation: Int
     }
     private var links: [UUID: Link] = [:]
+    private var linkGeneration = 0
     private var pending: [UUID: CBPeripheral] = [:]
+    /// Peripherals whose link closed before their pad was listed: the
+    /// attach hop still on its way to the main actor detaches at once.
+    private var closedBeforeAttach: Set<UUID> = []
 
     private override init() { super.init() }
 
@@ -114,10 +121,34 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         if UserDefaults.standard.bool(forKey: Self.enabledKey) { setEnabled(true) }
     }
 
-    /// The Settings toggle. On: a central is made and scans. Off: every
-    /// controller is dropped and the central released.
+    /// A preset made for a Switch 2 controller is running: the search runs
+    /// for as long as it does, without touching the Settings switch, so a
+    /// preset never turns it on for good.
+    private(set) var heldByPreset = false
+
+    func startForPreset() {
+        guard !heldByPreset else { return }
+        heldByPreset = true
+        if !UserDefaults.standard.bool(forKey: Self.enabledKey) { apply(true) }
+    }
+
+    /// The preset stopped: the search stops too, unless Settings has it on.
+    func stopForPreset() {
+        guard heldByPreset else { return }
+        heldByPreset = false
+        if !UserDefaults.standard.bool(forKey: Self.enabledKey) { apply(false) }
+    }
+
+    /// The Settings switch. On: a central is made and scans. Off: every
+    /// controller is dropped and the central released, unless a running
+    /// Switch 2 preset still holds the search.
     func setEnabled(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Self.enabledKey)
+        if !on && heldByPreset { return }
+        apply(on)
+    }
+
+    private func apply(_ on: Bool) {
         lock.lock()
         enabled = on
         if on, central == nil {
@@ -128,7 +159,7 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         }
         let c = central
         let open = links
-        if !on { central = nil; links = [:]; pending = [:] }
+        if !on { central = nil; links = [:]; pending = [:]; closedBeforeAttach = [] }
         lock.unlock()
         guard !on else { return }
         c?.stopScan()
@@ -145,26 +176,62 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         lock.lock()
         let peripheral = links.values.first { $0.key == key }?.peripheral
         let c = central
+        // The scan that follows the close must not take it straight back:
+        // the same two minutes the IOBluetooth path gives an idled pad.
+        if let peripheral { idledAt[peripheral.identifier] = Date(); idledSeenAt[peripheral.identifier] = Date() }
         lock.unlock()
         if let peripheral { c?.cancelPeripheralConnection(peripheral) }
+        // The two minutes are up: the scan goes back to its quiet form.
+        queue.asyncAfter(deadline: .now() + 121) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let c = self.central, on = self.enabled
+            self.lock.unlock()
+            if on, let c { self.scan(c) }
+        }
     }
+    private var idledAt: [UUID: Date] = [:]
+    /// When an idled pad last advertised. It keeps advertising for a while
+    /// after the close, which is no press; a break and then another
+    /// advertisement is the pad asleep and woken by the person, who should
+    /// not have to wait out the two minutes.
+    private var idledSeenAt: [UUID: Date] = [:]
 
     private func scan(_ central: CBCentralManager) {
         guard central.state == .poweredOn else { return }
+        // Every advertisement while an idled pad is watched, for its break.
+        lock.lock()
+        let now = Date()
+        idledAt = idledAt.filter { now.timeIntervalSince($0.value) < 120 }
+        idledSeenAt = idledSeenAt.filter { idledAt[$0.key] != nil }
+        let watching = !idledAt.isEmpty
+        lock.unlock()
         // The service is not in the advertisement, so every peripheral is
         // looked at and filtered by name and manufacturer data.
-        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: watching])
         Switch2BluetoothStatus.post(String(localized: "Looking for a Switch 2 controller…"))
     }
 
-    private func attach(productID: Int32, name: String, id: UUID) {
+    private func attach(productID: Int32, name: String, id: UUID, generation: Int) {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
+                // The link may have closed on the Bluetooth queue while this
+                // hop was queued: then there is nothing to list.
+                self.lock.lock()
+                let gone = self.closedBeforeAttach.remove(id) != nil || self.links[id]?.generation != generation
+                self.lock.unlock()
+                if gone { return }
                 let key = RawHIDGamepadService.shared.attachExternalPad(vendorID: Self.vendorID, productID: productID,
                                                                         transport: "Bluetooth LE", productName: name)
                 self.lock.lock()
-                self.links[id]?.key = key
+                let stillLinked = self.links[id]?.generation == generation
+                if stillLinked { self.links[id]?.key = key }
                 self.lock.unlock()
+                if !stillLinked {
+                    // Closed between the check and the listing.
+                    if let key { RawHIDGamepadService.shared.detachExternalPad(key: key) }
+                    return
+                }
                 if key == nil {
                     ActivityLog.shared.warning("Devices", "\(name): no profile for product \(String(format: "0x%04X", productID)) over Bluetooth LE")
                 } else {
@@ -172,6 +239,20 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Bluetooth went away. No per-link close is promised then: left in
+    /// place, a pad stayed listed with its last state, and its discovery
+    /// was refused when Bluetooth came back. A queued attach finds its
+    /// link gone.
+    private func dropLinks() {
+        lock.lock()
+        let keys = links.values.compactMap(\.key)
+        links.removeAll()
+        pending.removeAll()
+        closedBeforeAttach.removeAll()
+        lock.unlock()
+        for key in keys { detach(key) }
     }
 
     private func detach(_ key: UInt64) {
@@ -194,9 +275,13 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         case .poweredOn:
             scan(central)
         case .poweredOff:
+            dropLinks()
             Switch2BluetoothStatus.post(String(localized: "Bluetooth is off"))
         case .unauthorized:
+            dropLinks()
             Switch2BluetoothStatus.post(String(localized: "Bluetooth is not allowed for InputConfig; allow it in System Settings, Privacy & Security, Bluetooth"))
+        case .resetting:
+            dropLinks()
         default:
             break
         }
@@ -208,16 +293,33 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         guard let productID = Self.productID(name: name, manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data) else { return }
         lock.lock()
         guard enabled, links[peripheral.identifier] == nil, pending[peripheral.identifier] == nil else { lock.unlock(); return }
+        if let idled = idledAt[peripheral.identifier] {
+            let now = Date()
+            let woken = idledSeenAt[peripheral.identifier].map { now.timeIntervalSince($0) > 5 } ?? false
+            idledSeenAt[peripheral.identifier] = now
+            guard woken || now.timeIntervalSince(idled) >= 120 else { lock.unlock(); return }
+            idledAt[peripheral.identifier] = nil
+            idledSeenAt[peripheral.identifier] = nil
+        }
         pending[peripheral.identifier] = peripheral
+        // A fresh link: a tombstone left by an earlier link of the same
+        // controller must not swallow this one's attach.
+        closedBeforeAttach.remove(peripheral.identifier)
         let display = name ?? ControllerProfileDatabase.profile(forVendor: Self.vendorID, product: productID)?.displayName ?? "Switch 2 controller"
-        links[peripheral.identifier] = Link(peripheral: peripheral, productID: productID, name: display, key: nil, command: nil)
+        linkGeneration &+= 1
+        links[peripheral.identifier] = Link(peripheral: peripheral, productID: productID, name: display, key: nil, command: nil,
+                                            generation: linkGeneration)
         lock.unlock()
         peripheral.delegate = self
         central.connect(peripheral, options: nil)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        lock.lock(); pending.removeValue(forKey: peripheral.identifier); lock.unlock()
+        lock.lock()
+        pending.removeValue(forKey: peripheral.identifier)
+        lock.unlock()
+        // The scan keeps running while the feature is on, so a second
+        // controller is found without waiting for a link to close.
         peripheral.discoverServices([Self.nintendoService])
     }
 
@@ -225,13 +327,17 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         lock.lock()
         pending.removeValue(forKey: peripheral.identifier)
         links.removeValue(forKey: peripheral.identifier)
+        let on = enabled
         lock.unlock()
-        scan(central)
+        if on { scan(central) }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         lock.lock()
         let link = links.removeValue(forKey: peripheral.identifier)
+        // Closed before its pad was listed: the attach still on its way to
+        // the main actor must not list it.
+        if let link, link.key == nil { closedBeforeAttach.insert(peripheral.identifier) }
         let on = enabled
         lock.unlock()
         if let key = link?.key { detach(key) }
@@ -267,7 +373,7 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
                 peripheral.writeValue(Data(bytes), for: command, type: type)
             }
         }
-        if let link { attach(productID: link.productID, name: link.name, id: peripheral.identifier) }
+        if let link { attach(productID: link.productID, name: link.name, id: peripheral.identifier, generation: link.generation) }
         if anyOpen { Switch2BluetoothStatus.post(String(localized: "Connected")) }
     }
 

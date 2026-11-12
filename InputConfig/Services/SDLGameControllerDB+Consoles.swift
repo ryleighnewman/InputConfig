@@ -22,7 +22,7 @@ extension SDLGameControllerDB {
     /// Only buttons the device has and the row does not already use.
     static func completed(_ mapping: Mapping, buttonCount: Int) -> Mapping {
         var entries = mapping.entries
-        let used = Set(entries.values.compactMap { v -> Int? in
+        var used = Set(entries.values.compactMap { v -> Int? in
             var s = Substring(v)
             if let f = s.first, f == "+" || f == "-" { s = s.dropFirst() }
             if s.hasSuffix("~") { s = s.dropLast() }
@@ -32,6 +32,9 @@ extension SDLGameControllerDB {
         func add(_ target: String, _ button: Int) {
             guard entries[target] == nil, button < buttonCount, !used.contains(button) else { return }
             entries[target] = "b\(button)"
+            // Given out once: b13 went to both the touchpad and misc1, so one
+            // press fired two buttons.
+            used.insert(button)
         }
         let dualShockOrder = ["x": "b0", "a": "b1", "b": "b2", "y": "b3", "leftshoulder": "b4", "rightshoulder": "b5",
                               "back": "b8", "start": "b9"]
@@ -40,7 +43,12 @@ extension SDLGameControllerDB {
             add("rightstick", 11)
             // A PS3 model has 13 buttons and no touchpad; one with a b13 and
             // no PS3 in its name is a PS4 or PS5 class device.
-            if entries["guide"] == "b12", !mapping.name.uppercased().contains("PS3") {
+            // Not a pad in the Switch order (digital ZL and ZR on b6 and b7),
+            // whose b13 is Capture, unless its name says PlayStation.
+            let upper = mapping.name.uppercased()
+            let switchOrdered = entries["lefttrigger"] == "b6" && entries["righttrigger"] == "b7"
+            let playStation = ["PS4", "PS5", "DUALSHOCK", "DUALSENSE", "PLAYSTATION"].contains { upper.contains($0) }
+            if entries["guide"] == "b12", !upper.contains("PS3"), !switchOrdered || playStation {
                 add("touchpad", 13)
             }
         }

@@ -4,7 +4,7 @@ import GameController
 /// Which controller model the Live Visualizer draws for a slot, and why.
 struct ResolvedLayout {
     enum Source { case connected, groupChoice, inferred, familyDefault }
-    let layout: ControllerLayout
+    var layout: ControllerLayout
     /// The variant drawn (the group's choice, else the layout's default).
     var variant: String? = nil
     /// How the connected pad is read, for inputs that differ by path.
@@ -26,7 +26,17 @@ enum ControllerLayoutResolver {
         let chosenID = group?.controllerModel.map(ControllerModelID.init(rawValue:))
         if connected {
             let path = readPath(service: service, slot: slot)
-            let matched = match(service: service, slot: slot)
+            // Remembered per device: the Live Visualizer asks on every
+            // frame, and the uncached match reads the pad's facts each time.
+            var matched = cachedMatch(service: service, slot: slot)
+            // An Ultimate 2 Wireless kept on the descriptor numbering of
+            // earlier versions (its presets were made then): its drawing
+            // numbers the buttons the 1.9 way, so the grid from the
+            // descriptor is drawn instead.
+            if matched?.id == .eightBitDoUltimate2Wireless,
+               case .generic? = service.rawHIDGamepadSlots[slot]?.profile?.layout {
+                matched = nil
+            }
             // A pad no layout recognizes: a GameController pad is drawn as
             // the standard gamepad; a device read from its own report
             // descriptor keeps the drawing built from what it reports.
@@ -70,7 +80,9 @@ enum ControllerLayoutResolver {
             // The Access controller is drawn with what is in each of its
             // expansion ports right now.
             let layout = base.id == .psAccess
-                ? ControllerLayout.psAccess(ports: service.accessPortDevices(forSlot: slot), profile: service.accessProfile(forSlot: slot).profile)
+                ? ControllerLayout.applyingAccessCaps(AccessCapStore.shared.caps(for: service.accessCapsUnit(forSlot: slot)),
+                                                      to: ControllerLayout.psAccess(ports: service.accessPortDevices(forSlot: slot),
+                                                                                    profile: service.accessProfile(forSlot: slot).profile))
                 : base
             var note: String? = matched == nil ? String(localized: "Model not recognized; showing a standard gamepad.") : nil
             if matched == nil, path != .gameController, let chosenLayout {
@@ -122,20 +134,31 @@ enum ControllerLayoutResolver {
         return grid
     }
 
-    /// `match`, remembered per slot and device, for callers that ask often
-    /// (the editor's naming on every redraw).
-    private static var matchCache: [String: ControllerModelID?] = [:]
-    static func cachedMatch(service: GameControllerService, slot: Int) -> ControllerLayout? {
-        // The pad itself, not only its name: an Xbox One and a Series pad
-        // share one name.
-        let pad = slot < service.connectedControllers.count ? ObjectIdentifier(service.connectedControllers[slot]).hashValue : 0
-        let key = "\(slot)|\(service.controllerDetails[slot]?.name ?? "")|\(service.rawHIDGamepadSlots[slot]?.id ?? 0)|\(slot == service.steamControllerSlot)|\(pad)"
-        if let hit = matchCache[key] { return hit.flatMap(ControllerLayoutCatalog.layout) }
-        let found = match(service: service, slot: slot)
-        if matchCache.count > 64 { matchCache.removeAll() }
-        matchCache[key] = found?.id
-        return found
+    /// How many elements GameController shows for the pad in a slot. The
+    /// rules that tell an Elite 2 from a Series pad, or an Edge from a
+    /// DualSense, read elements that can arrive a moment after the pad
+    /// connects, so a remembered match goes stale when the shape changes.
+    private static func padShape(_ service: GameControllerService, _ slot: Int) -> Int {
+        slot < service.connectedControllers.count ? service.connectedControllers[slot].physicalInputProfile.elements.count : 0
     }
+
+    /// `match`, remembered per slot and device, for callers that ask often
+    /// (the editor's naming on every redraw): the remembered model, shown or
+    /// not, then whether it may be drawn now, as `match` decides.
+    /// It had a table of its own, written `matchCache[key] = found?.id`: for
+    /// a slot with no model (no pad, or one no layout knows) the optional
+    /// chain made that a removal, so the miss was never kept and every ask
+    /// ran the match rules again (the Live Visualizer asked several times a
+    /// pass, each through every layout's rules).
+    static func cachedMatch(service: GameControllerService, slot: Int) -> ControllerLayout? {
+        cachedMatchIncludingHidden(service: service, slot: slot).flatMap(ControllerLayoutCatalog.layout)
+    }
+
+    #if DEBUG
+    /// The match rules run for `cachedMatch` and `cachedMatchIncludingHidden`
+    /// since launch, for the Test Bench.
+    static var debugMatchRuns = 0
+    #endif
 
     /// `cachedMatch` with hidden experimental drawings included, for rules
     /// that depend on what the pad is rather than how it is drawn (the
@@ -143,12 +166,23 @@ enum ControllerLayoutResolver {
     /// in Release builds).
     private static var hiddenMatchCache: [String: ControllerModelID?] = [:]
     static func cachedMatchIncludingHidden(service: GameControllerService, slot: Int) -> ControllerModelID? {
-        let pad = slot < service.connectedControllers.count ? ObjectIdentifier(service.connectedControllers[slot]).hashValue : 0
-        let key = "\(slot)|\(service.controllerDetails[slot]?.name ?? "")|\(service.rawHIDGamepadSlots[slot]?.id ?? 0)|\(slot == service.steamControllerSlot)|\(pad)"
+        // The pad itself, not only its name: an Xbox One and a Series pad
+        // share one name. By its connection token, not its address, which
+        // a pad connecting after another left can get again.
+        let pad = service.occupantToken(forSlot: slot) ?? ""
+        let key = "\(slot)|\(service.controllerDetails[slot]?.name ?? "")|\(service.rawHIDGamepadSlots[slot]?.id ?? 0)|\(slot == service.steamControllerSlot)|\(pad)|\(padShape(service, slot))"
         if let hit = hiddenMatchCache[key] { return hit }
+        #if DEBUG
+        debugMatchRuns &+= 1
+        #endif
         let found = matchIncludingHidden(facts: Facts(service: service, slot: slot))?.id
         if hiddenMatchCache.count > 64 { hiddenMatchCache.removeAll() }
-        hiddenMatchCache[key] = found
+        // A miss is kept only for an empty slot (the no-pad case, asked
+        // several times a pass). For an occupied slot it is asked again: a
+        // pad's facts (its type, profile, vendor) can fill in after it
+        // connects without changing the key, and a kept miss left it on the
+        // generic drawing. A found model is kept either way.
+        if found != nil || pad.isEmpty { hiddenMatchCache[key] = .some(found) }
         return found
     }
 
@@ -176,11 +210,15 @@ enum ControllerLayoutResolver {
     /// The catalog model a device is, shown or not: for marking a device
     /// read by an experimental path.
     nonisolated static func matchIncludingHidden(facts: Facts) -> ControllerLayout? {
-        ControllerLayoutCatalog.all
-            .filter { !$0.match.isEmpty }
-            .sorted { $0.matchPriority > $1.matchPriority }
-            .first { layout in layout.match.contains { rules in rules.allSatisfy { facts.holds($0) } } }
+        matchers.first { layout in layout.match.contains { rules in rules.allSatisfy { facts.holds($0) } } }
     }
+
+    /// The layouts with match rules, highest priority first, sorted once:
+    /// the catalog never changes, and sorting it on every match was most of
+    /// the cost of recognizing a pad.
+    nonisolated private static let matchers: [ControllerLayout] = ControllerLayoutCatalog.all
+        .filter { !$0.match.isEmpty }
+        .sorted { $0.matchPriority > $1.matchPriority }
 
     /// Whether the device in a slot is read by a path not yet tested on
     /// hardware (its model is experimental).
@@ -263,6 +301,7 @@ enum ControllerLayoutResolver {
             case .switch2JoyConLeft: return "switch2JoyConLeft"
             case .switch2JoyConRight: return "switch2JoyConRight"
             case .steamController2026: return "steamController2026"
+            case .eightBitDo: return "eightBitDo"
             case .streamDeck: return "streamDeck"
             case .generic: return "generic"
             }

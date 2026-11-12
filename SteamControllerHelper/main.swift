@@ -301,11 +301,17 @@ func applyLizardMode(_ ctx: SCDeviceCtx) {
         sendDisableLizardMode(ctx.device)
         startHeartbeat(ctx)
         ctx.lizardOff = true
-    } else if !wantOff && ctx.lizardOff && ctx.active {
+    } else if !wantOff {
+        // The heartbeat stops with the want, whether or not the controller
+        // is still there to be given its mouse and keys back: a dongle's
+        // "W 0" arrives with active already false, and its heartbeat kept
+        // writing to a controller that was gone.
         ctx.heartbeat?.cancel()
         ctx.heartbeat = nil
-        sendEnableLizardMode(ctx.device)
-        ctx.lizardOff = false
+        if ctx.lizardOff && ctx.active {
+            sendEnableLizardMode(ctx.device)
+            ctx.lizardOff = false
+        }
     }
 }
 

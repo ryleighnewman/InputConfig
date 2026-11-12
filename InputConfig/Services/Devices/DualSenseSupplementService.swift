@@ -22,6 +22,9 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// Called, off the main thread, when a pad's supplement buttons change.
     /// Set once at startup by GameControllerService; read under `lock`.
     var onStateChange: (() -> Void)?
+    /// Called on the main thread once an Edge's stored profiles have been
+    /// read, so the editor's chip shows them without a reconnect.
+    var onEdgeProfilesChange: (@Sendable () -> Void)?
 
     /// Sony VID + the two DualSense PIDs we care about (base + Edge).
     /// The PlayStation Access controller (0x0E5F) is deliberately absent: its
@@ -50,6 +53,12 @@ final class DualSenseSupplementService: @unchecked Sendable {
         case leftFunction = 20
         case rightFunction = 21
     }
+    /// Every button number the supplement can publish: PS (10) and the
+    /// five above. A running preset wants the report stream only when it
+    /// reads one of these (see MappingEngine.updateSupplementWanted).
+    static let publishedButtons: Set<Int> = [10, SupplementButton.mute.rawValue,
+        SupplementButton.leftPaddle.rawValue, SupplementButton.rightPaddle.rawValue,
+        SupplementButton.leftFunction.rawValue, SupplementButton.rightFunction.rawValue]
 
     /// Toggle that controls whether we NSLog raw report bytes for
     /// debugging. Off in shipping builds. The byte offsets for the
@@ -59,6 +68,9 @@ final class DualSenseSupplementService: @unchecked Sendable {
     // MARK: - State (lock-guarded)
 
     private let lock = NSLock()
+    /// Feature report exchanges with one controller, one at a time, off the
+    /// main run loop (an Edge's profiles take twelve blocking reads).
+    private let profileQueue = DispatchQueue(label: "com.inputconfig.dualsenseprofiles", qos: .userInitiated)
     private var manager: IOHIDManager?
     private var liveDevices: [UInt64: IOHIDDevice] = [:]
     /// Location ID per device object, cached at attach. Removal resolves the
@@ -78,6 +90,10 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// comparing it. Cleared with the snapshot, so a cleared snapshot is
     /// rebuilt by the next report whatever its byte.
     private var lastButtons2: [UInt64: UInt8] = [:]
+    /// buttons[0] and buttons[1] of each pad's last full report: the face
+    /// buttons, D-pad, shoulders and menu buttons as the pad sent them,
+    /// kept only to check GameController against (`mainButtons`).
+    private var lastMain: [UInt64: (UInt8, UInt8)] = [:]
     private var lastLoggedByte11: [UInt64: UInt8] = [:]
     private var reportCounter: [UInt64: Int] = [:]
     /// Timestamp of the last streamed (callback-delivered) input report per
@@ -188,6 +204,8 @@ final class DualSenseSupplementService: @unchecked Sendable {
         lock.unlock()
         poll?.cancel()
 
+        // No profile read may still be using a device being closed.
+        drainProfileReads()
         for (_, device) in devices {
             IOHIDDeviceUnscheduleFromRunLoop(device,
                                              CFRunLoopGetMain(),
@@ -227,11 +245,24 @@ final class DualSenseSupplementService: @unchecked Sendable {
         let openResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
         guard openResult == kIOReturnSuccess else {
             NSLog("[DualSenseSupplement] open failed for location 0x%llX: %d", location, openResult)
+            // Another app may hold it. Matching fires once per device, so it
+            // is tried again every 5 s until it opens or leaves: refused once,
+            // its PS, mute, paddle and FN buttons were dead all session.
+            refusedDevices[location] = device
+            if refusedLogged.insert(location).inserted {
+                let code = Int(openResult)
+                DispatchQueue.main.async {
+                    ActivityLog.shared.warning("Devices", "A PlayStation controller could not be opened for its PS, mute, paddle and FN buttons (\(code)); another app may hold it. Trying again.")
+                }
+            }
+            scheduleRefusedRetry()
             // A stale device may have been torn down above; with nothing
             // left the poll must stop, not tick with no pad.
             stopPollingIfIdle()
             return
         }
+        refusedDevices.removeValue(forKey: location)
+        refusedLogged.remove(location)
 
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: reportBufferSize)
         buf.initialize(repeating: 0, count: reportBufferSize)
@@ -245,39 +276,43 @@ final class DualSenseSupplementService: @unchecked Sendable {
         reportBuffers[location] = buf
         supplementalState[location] = [:]
         lastButtons2.removeValue(forKey: location)
+        lastMain.removeValue(forKey: location)
         lock.unlock()
 
         // A DualSense Edge on USB answers for its four stored profiles.
         let transport = (IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String ?? "").uppercased()
+        // Read off the main run loop; kept only while this device is still
+        // the one at that location.
         if pid == 0x0DF2, transport.contains("USB") {
-            let profiles = DualSenseEdgeProfiles.read(device)
-            lock.lock()
-            edgeProfiles[location] = profiles
-            lock.unlock()
+            profileQueue.async { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                let device = self.liveDevices[location]
+                let stillEdge = self.productIDs[location] == 0x0DF2
+                self.lock.unlock()
+                guard let device, stillEdge else { return }
+                let profiles = DualSenseEdgeProfiles.read(device)
+                self.lock.lock()
+                let stillHere = self.liveDevices[location] === device
+                if stillHere {
+                    self.edgeProfiles[location] = profiles
+                }
+                let notify = stillHere ? self.onEdgeProfilesChange : nil
+                self.lock.unlock()
+                if let notify { DispatchQueue.main.async(execute: notify) }
+            }
         }
 
-        // Use the location ID directly as the callback context. Safe
-        // because the ID is just a UInt64 packed into the pointer
-        // bits; no object lifetime to manage.
-        let locationCookie = UnsafeMutableRawPointer(bitPattern: UInt(location))
-        IOHIDDeviceRegisterInputReportCallback(
-            device,
-            buf,
-            reportBufferSize,
-            dualSenseSupplementCallback,
-            locationCookie
-        )
         // The report stream (about 250 a second on USB) is taken only
-        // while something reads the pads; see setPollingWanted.
+        // while something reads the pads, by registering the input report
+        // callback; see setPollingWanted. The device itself stays on the
+        // manager's run loop: unscheduling it there dropped the removal
+        // callback.
         lock.lock()
         let takeStream = pollingWanted
         if takeStream { scheduledStreams.insert(location) }
         lock.unlock()
-        if takeStream {
-            IOHIDDeviceScheduleWithRunLoop(device,
-                                           CFRunLoopGetMain(),
-                                           CFRunLoopMode.commonModes.rawValue)
-        }
+        if takeStream { registerStream(device, buffer: buf, location: location) }
 
         let productName = (IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) as? String) ?? "?"
         NSLog("[DualSenseSupplement] attached %@ (loc=0x%llX)", productName, location)
@@ -292,7 +327,30 @@ final class DualSenseSupplementService: @unchecked Sendable {
         // future investigation.
     }
 
+    /// Pads whose open was refused, by location, tried again every 5 s.
+    /// Touched only on the main run loop, where matching and removal run.
+    private var refusedDevices: [UInt64: IOHIDDevice] = [:]
+    private var refusedLogged: Set<UInt64> = []
+    private var refusedRetry: Timer?
+
+    private func scheduleRefusedRetry() {
+        guard refusedRetry == nil else { return }
+        refusedRetry = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let waiting = self.refusedDevices
+            self.refusedDevices.removeAll()
+            for (_, device) in waiting { self.handleAttached(device) }
+            if self.refusedDevices.isEmpty { self.refusedRetry?.invalidate(); self.refusedRetry = nil }
+        }
+    }
+
     private func handleDetached(_ device: IOHIDDevice) {
+        // A refused pad that leaves is not tried again.
+        if let loc = refusedDevices.first(where: { CFEqual($0.value, device) })?.key {
+            refusedDevices.removeValue(forKey: loc)
+            refusedLogged.remove(loc)
+            if refusedDevices.isEmpty { refusedRetry?.invalidate(); refusedRetry = nil }
+        }
         // Resolve the location from the table cached at attach rather than
         // re-reading it from the departing device (that read often fails).
         lock.lock()
@@ -317,6 +375,16 @@ final class DualSenseSupplementService: @unchecked Sendable {
         NSLog("[DualSenseSupplement] detached (loc=0x%llX)", location)
     }
 
+    /// Waits for any profile read in flight to finish. Never call from
+    /// profileQueue itself (nothing does today; a sync hop from the queue
+    /// onto itself would deadlock). Safe from main and the IOKit callback
+    /// thread: the profile reads only take `lock` briefly and never wait
+    /// on the main run loop.
+    private func drainProfileReads() {
+        dispatchPrecondition(condition: .notOnQueue(profileQueue))
+        profileQueue.sync {}
+    }
+
     /// Close one location's device and drop all of its state, including the
     /// button snapshot, so a paddle held at the moment of removal does not
     /// stay pressed.
@@ -330,6 +398,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         supplementalState.removeValue(forKey: location)
         edgeProfiles.removeValue(forKey: location)
         lastButtons2.removeValue(forKey: location)
+        lastMain.removeValue(forKey: location)
         lastLoggedByte11.removeValue(forKey: location)
         lastSignificantBytes.removeValue(forKey: location)
         reportCounter.removeValue(forKey: location)
@@ -338,14 +407,29 @@ final class DualSenseSupplementService: @unchecked Sendable {
         lock.unlock()
 
         if let dev {
-            IOHIDDeviceUnscheduleFromRunLoop(dev,
-                                             CFRunLoopGetMain(),
-                                             CFRunLoopMode.commonModes.rawValue)
+            // The Edge's twelve profile reads run on profileQueue; one in
+            // flight while the device is closed under it was a crash.
+            drainProfileReads()
+            if let buf { unregisterStream(dev, buffer: buf) }
             IOHIDDeviceClose(dev, IOOptionBits(kIOHIDOptionsTypeNone))
         }
-        // Safe to free now: the device is unscheduled and closed, so no
-        // report callback can write into this buffer any more.
+        // Safe to free now: the callback is gone and the device closed, so
+        // no report callback can write into this buffer any more.
         if let buf { buf.deallocate() }
+    }
+
+    /// Takes a device's input reports. The location ID is the callback
+    /// context: a UInt64 packed into the pointer bits, no object lifetime
+    /// to manage.
+    private func registerStream(_ device: IOHIDDevice, buffer: UnsafeMutablePointer<UInt8>, location: UInt64) {
+        IOHIDDeviceRegisterInputReportCallback(device, buffer, reportBufferSize, dualSenseSupplementCallback,
+                                               UnsafeMutableRawPointer(bitPattern: UInt(location)))
+    }
+
+    /// Stops a device's input reports: a nil callback with length 0, the
+    /// way the Steam Controller helper lets go of its device.
+    private func unregisterStream(_ device: IOHIDDevice, buffer: UnsafeMutablePointer<UInt8>) {
+        IOHIDDeviceRegisterInputReportCallback(device, buffer, 0, nil, nil)
     }
 
     // MARK: - Report dispatch (called from C callback)
@@ -380,6 +464,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         let firstStream = (lastStreamAt[locationID] == nil)
         lastStreamAt[locationID] = CFAbsoluteTimeGetCurrent()
         let isDS4 = Self.dualShock4PIDs.contains(productIDs[locationID] ?? 0)
+        if let main = Self.mainButtons(reportPointer, length: length, isDS4: isDS4) { lastMain[locationID] = main }
         lock.unlock()
         if firstStream {
             NSLog("[DualSenseSupplement] stream ALIVE (loc=0x%llX) first report id=0x%02X len=%d",
@@ -485,6 +570,44 @@ final class DualSenseSupplementService: @unchecked Sendable {
         return nil
     }
 
+    /// buttons[0] and buttons[1] of one full input report, or nil for a
+    /// report that does not carry them in full. DualSense USB 0x01 at [8]
+    /// and [9], Bluetooth 0x31 at [9] and [10]; DualShock 4 USB 0x01 at [5]
+    /// and [6], Bluetooth 0x11 at [7] and [8] (SDL_hidapi_ps5.c and
+    /// SDL_hidapi_ps4.c state packets). The simple Bluetooth report a pad
+    /// sends before it is woken is left out.
+    static func mainButtons(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool) -> (UInt8, UInt8)? {
+        if isDS4 {
+            if r[0] == 0x01 && length >= 64 { return (r[5], r[6]) }
+            if r[0] == 0x11 && bluetoothReportIsWhole(r, length: length) { return (r[7], r[8]) }
+            return nil
+        }
+        if r[0] == 0x01 && length == 64 { return (r[8], r[9]) }
+        if r[0] == 0x31 && bluetoothReportIsWhole(r, length: length) { return (r[9], r[10]) }
+        return nil
+    }
+
+    /// The buttons a full report's buttons[0] and buttons[1] hold down, by
+    /// InputConfig's numbering: Cross 0, Circle 1, Square 2, Triangle 3,
+    /// L1 4, R1 5, Create or Share 8, Options 9, L3 11, R3 12.
+    static func pressedMain(_ b0: UInt8, _ b1: UInt8) -> Set<Int> {
+        var out = Set<Int>()
+        for (mask, button) in [(UInt8(0x10), 2), (0x20, 0), (0x40, 1), (0x80, 3)] where b0 & mask != 0 { out.insert(button) }
+        for (mask, button) in [(UInt8(0x01), 4), (0x02, 5), (0x10, 8), (0x20, 9), (0x40, 11), (0x80, 12)] where b1 & mask != 0 { out.insert(button) }
+        return out
+    }
+
+    /// The main buttons the pad itself last reported down, or nil when it
+    /// has sent no full report (or the pad cannot be told apart).
+    func mainButtonsDown(for identity: SonyPadIdentity?) -> Set<Int>? {
+        lock.lock(); defer { lock.unlock() }
+        guard let identity, let loc = identities.first(where: { $0.value.matches(identity) })?.key,
+              let main = lastMain[loc],
+              // A stream gone quiet is not the pad's state now.
+              let at = lastStreamAt[loc], CFAbsoluteTimeGetCurrent() - at < 0.25 else { return nil }
+        return Self.pressedMain(main.0, main.1)
+    }
+
     /// The same, from a copied report, for the test bench.
     static func buttons2(from bytes: [UInt8], isDS4: Bool) -> UInt8? {
         bytes.withUnsafeBufferPointer { p in
@@ -587,6 +710,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         if let identity { identities[location] = identity } else { identities.removeValue(forKey: location) }
         supplementalState[location] = [:]
         lastButtons2.removeValue(forKey: location)
+        lastMain.removeValue(forKey: location)
         lastStreamAt[location] = CFAbsoluteTimeGetCurrent()
         lock.unlock()
     }
@@ -598,27 +722,6 @@ final class DualSenseSupplementService: @unchecked Sendable {
             guard let base = p.baseAddress else { return }
             handleReport(locationID: location, reportPointer: base, length: p.count)
         }
-    }
-
-    /// Drops every synthetic location and its state; real pads are untouched.
-    func debugRemoveSynthetic() {
-        lock.lock()
-        let locations = syntheticLocations
-        syntheticLocations = []
-        var changed = false
-        for location in locations {
-            if !(supplementalState[location] ?? [:]).isEmpty { changed = true }
-            productIDs.removeValue(forKey: location)
-            identities.removeValue(forKey: location)
-            supplementalState.removeValue(forKey: location)
-            lastButtons2.removeValue(forKey: location)
-            lastStreamAt.removeValue(forKey: location)
-            reportCounter.removeValue(forKey: location)
-            lastSignificantBytes.removeValue(forKey: location)
-        }
-        let notify = changed ? onStateChange : nil
-        lock.unlock()
-        notify?()
     }
     #endif
 
@@ -660,28 +763,24 @@ final class DualSenseSupplementService: @unchecked Sendable {
             }
             lastButtons2.removeAll()
         }
-        var toSchedule: [IOHIDDevice] = []
-        var toUnschedule: [IOHIDDevice] = []
+        var toRegister: [(IOHIDDevice, UnsafeMutablePointer<UInt8>, UInt64)] = []
+        var toUnregister: [(IOHIDDevice, UnsafeMutablePointer<UInt8>)] = []
         for (loc, device) in liveDevices {
+            guard let buf = reportBuffers[loc] else { continue }
             if now, !scheduledStreams.contains(loc) {
-                scheduledStreams.insert(loc); toSchedule.append(device)
+                scheduledStreams.insert(loc); toRegister.append((device, buf, loc))
             } else if !now, scheduledStreams.contains(loc) {
-                scheduledStreams.remove(loc); toUnschedule.append(device)
+                scheduledStreams.remove(loc); toUnregister.append((device, buf))
             }
         }
         let notify = changed ? onStateChange : nil
         lock.unlock()
-        for device in toSchedule {
-            IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-        }
-        for device in toUnschedule {
-            IOHIDDeviceUnscheduleFromRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-        }
+        for (device, buf, loc) in toRegister { registerStream(device, buffer: buf, location: loc) }
+        for (device, buf) in toUnregister { unregisterStream(device, buffer: buf) }
         notify?()
         if now { startPollingIfNeeded() } else { stopPollingIfIdle() }
     }
-    /// Locations whose report stream is scheduled on the run loop. Read
-    /// under lock.
+    /// Locations whose report callback is registered. Read under lock.
     private var scheduledStreams: Set<UInt64> = []
     /// Live devices the poll should read. Call locked.
     private func pollableLocked() -> [UInt64: IOHIDDevice] {

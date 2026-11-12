@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. جميع الحقوق محفوظة.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "يستمع InputConfig إلى العبارات الصوتية في إعداد مسبق، فقط أثناء تشغيل ذلك الإعداد المسبق أو عندما تكون لوحة العبارات الصوتية الخاصة به مفتوحة. لا يُسجَّل شيء ولا يُحفظ.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "يتعرف InputConfig على العبارات الصوتية في إعداد مسبق، على هذا الـ Mac عندما تسمح اللغة بذلك. لا يُسجَّل شيء ولا يُحفظ.";

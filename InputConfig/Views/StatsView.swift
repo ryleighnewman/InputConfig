@@ -36,9 +36,10 @@ struct StatsView: View {
     @StateObject private var service: StatsServiceRef = StatsServiceRef()
     @Environment(\.dismiss) private var dismiss
     @State private var showResetConfirmation = false
-    /// Subscribed to live so the power tiles update once per second
-    /// while the dashboard is open.
-    @ObservedObject private var sysStats = SystemStatsService.shared
+    /// Kept sampling while the dashboard is open. Not observed here: its
+    /// 1 Hz publish re-ran the whole dashboard (tiles, both charts, every
+    /// card) for the one power row, which PowerSessionCard observes alone.
+    private let sysStats = SystemStatsService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,7 +67,7 @@ struct StatsView: View {
                         glassCard("Output mix") { outputsChart }
                     }
                     .fixedSize(horizontal: false, vertical: true)
-                    glassCard("This session", trailing: String(localized: "Energy is an estimate")) { powerSection }
+                    glassCard("This session", trailing: String(localized: "Energy is an estimate")) { PowerSessionCard() }
                 }
                 .padding(.horizontal, 22)
                 .padding(.top, 8)
@@ -138,11 +139,19 @@ struct StatsView: View {
         let alwaysShown: Bool
     }
 
+    /// The sheet is a fixed width, so the tiles are always four across.
+    private static let tileColumns = 4
+
     /// Tiles for the counters that have something to show. A counter still
-    /// at zero gets no tile at all, so there is never a wall of zeros.
+    /// at zero gets no tile, so there is never a wall of zeros, except the
+    /// few that finish the last row: the grid never looks one box short.
     private var tileGrid: some View {
-        let shown = tileSpecs.filter { $0.alwaysShown || $0.count > 0 }
-        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 10)], spacing: 10) {
+        let specs = tileSpecs
+        let live = specs.filter { $0.alwaysShown || $0.count > 0 }
+        let open = (Self.tileColumns - live.count % Self.tileColumns) % Self.tileColumns
+        let fillers = Set(specs.filter { !$0.alwaysShown && $0.count <= 0 }.prefix(open).map(\.detail.label))
+        let shown = specs.filter { $0.alwaysShown || $0.count > 0 || fillers.contains($0.detail.label) }
+        return EvenTileGrid(columns: Self.tileColumns, spacing: 10) {
             ForEach(shown, id: \.detail.label) { spec in
                 StatTileView(detail: spec.detail, subline: spec.subline)
             }
@@ -219,6 +228,15 @@ struct StatsView: View {
                 topPresets: topPresets),
                 subline: service.topPresets.first.map { String(localized: "Most often \(ShippedText.t($0.name))") } ?? "",
                 count: Double(s.presetActivationCount), alwaysShown: true),
+            TileSpec(detail: StatDetail(
+                icon: "square.stack.3d.up.fill", tint: .brown,
+                value: "\(s.presetActivationCountByName.count)",
+                label: String(localized: "Presets used"),
+                explanation: String(localized: "How many different presets you have turned on at least once."),
+                topPresets: topPresets),
+                subline: s.presetTimeByName.max { $0.value < $1.value }
+                    .map { String(localized: "Most time in \(ShippedText.t($0.key))") } ?? "",
+                count: Double(s.presetActivationCountByName.count), alwaysShown: false),
             TileSpec(detail: StatDetail(
                 icon: "keyboard.fill", tint: .indigo,
                 value: bigNumber(s.totalKeyPresses),
@@ -622,92 +640,6 @@ struct StatsView: View {
         Double(n).formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
     }
 
-    /// Live power and energy for this session, one compact row. The how of
-    /// each number lives in its tooltip.
-    private var powerSection: some View {
-        let c = sysStats.cumulative
-        let p = sysStats.power
-        return HStack(alignment: .top, spacing: 10) {
-            powerTile(label: "Uptime", value: timeShort(c.sessionUptime), icon: "clock",
-                      tint: .secondary, hint: String(localized: "Time the engine and stats panel have been polling."))
-            powerTile(label: "Energy", value: formatEnergy(c.estimatedEnergyJoules), icon: "bolt.fill",
-                      tint: .yellow, hint: String(localized: "Coarse estimate: CPU percent times time times a 5 W package."))
-            powerTile(label: "Avg CPU", value: String(format: "%.1f%%", locale: .current, c.averageCpuPercent), icon: "cpu",
-                      tint: cpuTint(for: c.averageCpuPercent), hint: String(localized: "Running mean since session start."))
-            powerTile(label: "Peak CPU", value: String(format: "%.1f%%", locale: .current, c.peakCpuPercent), icon: "speedometer",
-                      tint: cpuTint(for: c.peakCpuPercent), hint: String(localized: "Highest single sample this session."))
-            if let pct = p.batteryPercent {
-                powerTile(label: "Battery", value: "\(pct)%", icon: batteryIcon(for: pct),
-                          tint: batteryTint(for: pct),
-                          hint: [p.source.map(PowerText.source), p.batteryState.map(PowerText.state)].compactMap { $0 }.joined(separator: ", "))
-            } else if let source = p.source {
-                powerTile(label: "Power", value: PowerText.source(source), icon: "powerplug.fill",
-                          tint: .green, hint: String(localized: "Where this Mac is drawing power from."))
-            }
-            if abs(p.batteryDeltaPercent) >= 0.5 {
-                let delta = -p.batteryDeltaPercent
-                powerTile(label: "This session", value: String(format: "%+.0f%%", locale: .current, delta),
-                          icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
-                          tint: delta < 0 ? .orange : .green,
-                          hint: String(localized: "Battery change since the panel opened."))
-            }
-        }
-    }
-
-    private func powerTile(label: LocalizedStringKey, value: String, icon: String,
-                           tint: Color, hint: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                StatIconBadge(icon: icon, tint: tint, diameter: 18)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text(value)
-                .font(.title3.weight(.medium).monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .innerWell()
-        .help(hint)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint(hint)
-    }
-
-    private func formatEnergy(_ joules: Double) -> String {
-        // The unit in the app's language ("Дж" in Russian).
-        let m = Measurement(value: joules, unit: UnitEnergy.joules)
-        return joules < 1000
-            ? m.formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(0))))
-            : m.converted(to: .kilojoules).formatted(.measurement(width: .abbreviated, usage: .asProvided,
-                                                                  numberFormatStyle: .number.precision(.fractionLength(1))))
-    }
-
-    private func cpuTint(for v: Double) -> Color {
-        if v > 80 { return .red }
-        if v > 40 { return .orange }
-        return .green
-    }
-
-    private func batteryTint(for pct: Int) -> Color {
-        if pct <= 15 { return .red }
-        if pct <= 35 { return .orange }
-        return .green
-    }
-
-    private func batteryIcon(for pct: Int) -> String {
-        if pct >= 90 { return "battery.100" }
-        if pct >= 65 { return "battery.75" }
-        if pct >= 40 { return "battery.50" }
-        if pct >= 15 { return "battery.25" }
-        return "battery.0"
-    }
-
     private func timeShort(_ seconds: TimeInterval) -> String { DurationText.short(seconds) }
 
     private func emptyHint(_ text: LocalizedStringKey) -> some View {
@@ -723,13 +655,33 @@ struct StatsView: View {
         if key.hasPrefix("tpd") { return "hand.point.up.left.fill" }
         if key.hasPrefix("tpr") { return "rectangle.dashed" }
         if key.hasPrefix("mtn") { return "gyroscope" }
+        // Every other input kind by its own symbol, not a question mark.
+        let more: [(String, String)] = [("ekb", "keyboard"), ("ems", "computermouse"), ("mid", "pianokeys"),
+                                         ("crg", "rectangle.dashed"), ("srg", "rectangle.dashed"), ("spx", "eyedropper"),
+                                         ("stx", "text.viewfinder"), ("vph", "mic"), ("bsq", "list.number"),
+                                         ("ksq", "list.number"), ("tpg", "hand.draw"), ("cht", "gamecontroller"),
+                                         ("sgs", "arrow.triangle.turn.up.right.circle")]
+        if let hit = more.first(where: { key.hasPrefix($0.0) }) { return hit.1 }
         return "questionmark"
     }
 
     /// "Left stick up" rather than "Axis 1 -": the standard gamepad's own
     /// control names, then the input's generic name.
-    private func prettyInputLabel(_ key: String) -> String {
-        Self.friendlyNames[key] ?? InputEvent.parse(key)?.displayName ?? key
+    private func prettyInputLabel(_ key: String) -> String { Self.inputLabel(key) }
+
+    /// A stats key named for people: a chord row's key ("btn 0+btn 4") is
+    /// each control's name joined with " + ", not the raw text.
+    static func inputLabel(_ key: String) -> String {
+        let parts = key.components(separatedBy: "+").reduce(into: [String]()) { out, piece in
+            // A part's own text never holds "+xxx ", so a "+" before a
+            // three-letter prefix and a space starts the next control.
+            if let last = out.last, piece.range(of: "^[a-z]{3} ", options: .regularExpression) == nil {
+                out[out.count - 1] = last + "+" + piece
+            } else {
+                out.append(piece)
+            }
+        }
+        return parts.map { friendlyNames[$0] ?? InputEvent.parse($0)?.displayName ?? $0 }.joined(separator: " + ")
     }
 
     static let friendlyNames: [String: String] = {
@@ -793,6 +745,97 @@ final class StatsServiceRef: ObservableObject {
     }
 }
 
+/// The Statistics sheet's "This session" row: uptime, energy, CPU and
+/// battery, live once a second. Its own view so SystemStatsService's 1 Hz
+/// publish re-runs only this row; StatsView keeps the service sampling.
+private struct PowerSessionCard: View {
+    @ObservedObject private var sysStats = SystemStatsService.shared
+
+    var body: some View {
+        let c = sysStats.cumulative
+        let p = sysStats.power
+        return HStack(alignment: .top, spacing: 10) {
+            powerTile(label: "Uptime", value: DurationText.short(c.sessionUptime), icon: "clock",
+                      tint: .secondary, hint: String(localized: "Time since InputConfig began measuring, or since Reset."))
+            powerTile(label: "Energy", value: formatEnergy(c.estimatedEnergyJoules), icon: "bolt.fill",
+                      tint: .yellow, hint: String(localized: "Coarse estimate: CPU percent times time times a 5 W package."))
+            powerTile(label: "Avg CPU", value: String(format: "%.1f%%", locale: .current, c.averageCpuPercent), icon: "cpu",
+                      tint: cpuTint(for: c.averageCpuPercent), hint: String(localized: "Running mean since session start."))
+            powerTile(label: "Peak CPU", value: String(format: "%.1f%%", locale: .current, c.peakCpuPercent), icon: "speedometer",
+                      tint: cpuTint(for: c.peakCpuPercent), hint: String(localized: "Highest single sample this session."))
+            if let pct = p.batteryPercent {
+                powerTile(label: "Battery", value: "\(pct)%", icon: batteryIcon(for: pct),
+                          tint: batteryTint(for: pct),
+                          hint: [p.source.map(PowerText.source), p.batteryState.map(PowerText.state)].compactMap { $0 }.joined(separator: ", "))
+            } else if let source = p.source {
+                powerTile(label: "Power", value: PowerText.source(source), icon: "powerplug.fill",
+                          tint: .green, hint: String(localized: "Where this Mac is drawing power from."))
+            }
+            if abs(p.batteryDeltaPercent) >= 0.5 {
+                let delta = -p.batteryDeltaPercent
+                powerTile(label: "This session", value: String(format: "%+.0f%%", locale: .current, delta),
+                          icon: delta < 0 ? "arrow.down.circle" : "arrow.up.circle",
+                          tint: delta < 0 ? .orange : .green,
+                          hint: String(localized: "Battery change since InputConfig began measuring, or since Reset."))
+            }
+        }
+    }
+
+    private func powerTile(label: LocalizedStringKey, value: String, icon: String,
+                           tint: Color, hint: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                StatIconBadge(icon: icon, tint: tint, diameter: 18)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(value)
+                .font(.title3.weight(.medium).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .innerWell()
+        .help(hint)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(hint)
+    }
+
+    private func formatEnergy(_ joules: Double) -> String {
+        // The unit in the app's language ("Дж" in Russian).
+        let m = Measurement(value: joules, unit: UnitEnergy.joules)
+        return joules < 1000
+            ? m.formatted(.measurement(width: .abbreviated, usage: .asProvided, numberFormatStyle: .number.precision(.fractionLength(0))))
+            : m.converted(to: .kilojoules).formatted(.measurement(width: .abbreviated, usage: .asProvided,
+                                                                  numberFormatStyle: .number.precision(.fractionLength(1))))
+    }
+
+    private func cpuTint(for v: Double) -> Color {
+        if v > 80 { return .red }
+        if v > 40 { return .orange }
+        return .green
+    }
+
+    private func batteryTint(for pct: Int) -> Color {
+        if pct <= 15 { return .red }
+        if pct <= 35 { return .orange }
+        return .green
+    }
+
+    private func batteryIcon(for pct: Int) -> String {
+        if pct >= 90 { return "battery.100" }
+        if pct >= 65 { return "battery.75" }
+        if pct >= 40 { return "battery.50" }
+        if pct >= 15 { return "battery.25" }
+        return "battery.0"
+    }
+}
+
 /// A tinted icon on a soft disc of its own color: the one icon treatment
 /// for Statistics (tiles, leaderboards, controllers, power, popovers), so
 /// every icon reads as the same layered, translucent mark at any size.
@@ -820,6 +863,38 @@ struct StatIconBadge: View {
 /// One tile: a tinted icon badge, the number, its name, and a detail line.
 /// Glass like the rest of the page; hover lifts it with the tile's color and
 /// a click opens the detail popover anchored to the tile.
+/// Equal columns with every tile at the tallest tile's height, so a tile with
+/// no subline or a two-line label never comes out a different size.
+private struct EvenTileGrid: Layout {
+    let columns: Int
+    let spacing: CGFloat
+
+    private func tileWidth(_ width: CGFloat) -> CGFloat {
+        (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+    }
+
+    private func tileHeight(_ subviews: Subviews, width: CGFloat) -> CGFloat {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }.max() ?? 0
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.replacingUnspecifiedDimensions().width
+        let rows = (subviews.count + columns - 1) / columns
+        let height = tileHeight(subviews, width: tileWidth(width))
+        return CGSize(width: width, height: CGFloat(rows) * height + CGFloat(max(0, rows - 1)) * spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = tileWidth(bounds.width)
+        let height = tileHeight(subviews, width: width)
+        for (index, tile) in subviews.enumerated() {
+            let x = bounds.minX + CGFloat(index % columns) * (width + spacing)
+            let y = bounds.minY + CGFloat(index / columns) * (height + spacing)
+            tile.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: width, height: height))
+        }
+    }
+}
+
 struct StatTileView: View {
     let detail: StatDetail
     var subline: String = ""
@@ -870,8 +945,8 @@ struct StatTileView: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous),
                          tint: lit ? detail.tint.opacity(0.22) : nil)
             .overlay(
@@ -1077,9 +1152,7 @@ struct StatDetailPopover: View {
 
     private func timeStr(_ s: TimeInterval) -> String { DurationText.short(s) }
 
-    private func prettyInputLabel(_ key: String) -> String {
-        StatsView.friendlyNames[key] ?? InputEvent.parse(key)?.displayName ?? key
-    }
+    private func prettyInputLabel(_ key: String) -> String { StatsView.inputLabel(key) }
 }
 
 /// The popover keeps the system's own translucent surface (Liquid Glass on

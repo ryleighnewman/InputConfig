@@ -102,7 +102,9 @@ extension ControllerLayout {
         // Stick dome, left. The stick has no click: L3 and R3 are functions
         // a socket or port can be given.
         PlacedControl(id: "stick", kind: .stick, center: CGPoint(x: 0.1414, y: 0.5), size: 0.17,
-                      inputs: .stick(x: 0, y: 1, press: 49),
+                      // Its own raw pair (6, 7) too, which moves whatever the
+                      // profile does: a row on Stick X never lit the stick.
+                      inputs: ControlInputs(axes: [.x(0), .y(1), .x(6), .y(7)], press: 49),
                       readable: .conditional("The left stick in the base profile; a profile can make it the right stick (axi 2 and 3); its press is read on its own"),
                       note: "Takes the swappable stick caps; pressing it is read on its own", callout: .above),
         // PS logo button on the dome's left wall.
@@ -179,6 +181,31 @@ extension ControllerLayout {
     /// drawn in the port's place on the strip: a stick as a stick reading
     /// the port's own axes, a trigger or pedal as a trigger, a switch as a
     /// button. An empty port keeps its plain mark.
+    /// What a cap shows for an Access action code: the function's mark,
+    /// the way the controller's own tags are printed, or the socket's
+    /// number for a cap with nothing on it.
+    static func accessCapLabel(code: Int?, socket: Int) -> (symbol: String?, printed: String?) {
+        let glyph: [Int: String] = [1: "circle", 2: "xmark", 3: "triangle", 4: "square",
+                                    5: "arrowtriangle.up.fill", 6: "arrowtriangle.down.fill",
+                                    7: "arrowtriangle.left.fill", 8: "arrowtriangle.right.fill",
+                                    15: "line.3.horizontal", 17: "playstation.logo", 18: "hand.tap"]
+        let word: [Int: String] = [9: "L1", 10: "R1", 11: "L2", 12: "R2", 13: "L3", 14: "R3", 16: "Create"]
+        if let code, let sym = glyph[code] { return (sym, nil) }
+        if let code, let text = word[code] { return (nil, text) }
+        return (nil, String(socket))
+    }
+
+    /// The D-pad direction an Access profile action code sends (5 to 8).
+    static func accessHatDirection(_ code: Int?) -> HatDirection? {
+        switch code {
+        case 5?: return .up
+        case 6?: return .down
+        case 7?: return .left
+        case 8?: return .right
+        default: return nil
+        }
+    }
+
     static func psAccess(ports: [Int: AccessControllerPortService.PortDevice],
                          profile: AccessControllerPortService.Profile? = nil) -> ControllerLayout {
         guard !ports.isEmpty || profile != nil else { return psAccess }
@@ -186,6 +213,10 @@ extension ControllerLayout {
         var layout = psAccess
         layout.controls = layout.controls.map { c in
             var out = c
+            // A profile that makes the stick the right stick reads it as 2, 3.
+            if c.id == "stick", profile?.stickAssignments[0] == 2 {
+                out.inputs = ControlInputs(axes: [.x(2), .y(3), .x(6), .y(7)], press: 49)
+            }
             // A socket or the center button: its own bit, plus the function
             // the active profile gives it, so a row on either lights it.
             if let profile {
@@ -194,22 +225,15 @@ extension ControllerLayout {
                     let code = profile.buttonActions[slot]
                     let mapped = code.flatMap(Service.Profile.buttonIndex(ofAction:))
                     out.inputs = ControlInputs(buttons: [Service.buttonBase + slot - 1] + (mapped.map { [$0] } ?? []))
+                    // A D-pad direction the profile gives it: a row on that
+                    // direction was never shown on the socket.
+                    if let dir = Self.accessHatDirection(code) { out.inputs.hat = 0; out.inputs.hatDirection = dir }
                     // The cap shows the function the profile gives the socket,
                     // the way the controller's own caps are printed; a socket
                     // with nothing keeps its number.
                     if c.id != "center" {
-                        let glyph: [Int: String] = [1: "circle", 2: "xmark", 3: "triangle", 4: "square",
-                                                    5: "arrowtriangle.up.fill", 6: "arrowtriangle.down.fill",
-                                                    7: "arrowtriangle.left.fill", 8: "arrowtriangle.right.fill",
-                                                    15: "line.3.horizontal", 17: "playstation.logo", 18: "hand.tap"]
-                        let word: [Int: String] = [9: "L1", 10: "R1", 11: "L2", 12: "R2", 13: "L3", 14: "R3", 16: "Create"]
-                        if let code, let sym = glyph[code] {
-                            out.symbol = sym; out.printed = nil
-                        } else if let code, let text = word[code] {
-                            out.symbol = nil; out.printed = text
-                        } else {
-                            out.symbol = nil; out.printed = String(slot)
-                        }
+                        let label = Self.accessCapLabel(code: code, socket: slot)
+                        out.symbol = label.symbol; out.printed = label.printed
                     }
                 }
             }
@@ -236,6 +260,7 @@ extension ControllerLayout {
                 out.size = 0.055; out.height = nil; out.shape = .circle
                 let mapped = profile?.portActions[port].flatMap(Service.Profile.buttonIndex(ofAction:))
                 out.inputs = ControlInputs(buttons: [Service.portButtonBase + port - 1] + (mapped.map { [$0] } ?? []))
+                if let dir = Self.accessHatDirection(profile?.portActions[port]) { out.inputs.hat = 0; out.inputs.hatDirection = dir }
                 out.name = "E\(port) button"
                 out.note = "A switch or button plugged into expansion port E\(port), read as its own button"
             case .invalidPlug:

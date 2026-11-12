@@ -102,18 +102,21 @@ final class StickRegionService: ObservableObject {
     /// `axes` is the slot's snapshot from `ControllerState.axes`:
     ///   stick 0 reads axes[0] (X) and axes[1] (Y)
     ///   stick 1 reads axes[2] (X) and axes[3] (Y)
-    func isRegionPressed(_ id: UUID, axes: [Int: Float]) -> Bool {
+    func isRegionPressed(_ id: UUID, axes: [Int: Float], active: Bool = false) -> Bool {
         guard let (_, stickIndex) = self.region(with: id), !Self.isBandKey(stickIndex) else { return false }
         let xAxis = stickIndex == 1 ? 2 : 0
         let yAxis = stickIndex == 1 ? 3 : 1
-        return isRegionPressed(id, x: axes[xAxis] ?? 0, y: axes[yAxis] ?? 0)
+        return isRegionPressed(id, x: axes[xAxis] ?? 0, y: axes[yAxis] ?? 0, active: active)
     }
 
     /// Same hit test, taking the two already-corrected stick values directly.
     /// The MappingEngine calls this per poll frame; the dictionary overload
     /// above forced it to clone the slot's whole axes dict just to override
     /// the two entries for deadzone / invert correction.
-    func isRegionPressed(_ id: UUID, x: Float, y: Float) -> Bool {
+    /// `active` is true while the row already holds: the zone is then read
+    /// a little wider, so a stick resting on its edge does not press and
+    /// release every frame.
+    func isRegionPressed(_ id: UUID, x: Float, y: Float, active: Bool = false) -> Bool {
         guard let (region, key) = self.region(with: id), !Self.isBandKey(key) else { return false }
         guard region.ring != nil || (region.maxX > region.minX && region.maxY > region.minY) else { return false }
         // Map from stick coords (-1...1) to region coords (0...1).
@@ -123,7 +126,8 @@ final class StickRegionService: ObservableObject {
         // Far edges open, as on the touchpad: two zones sharing a border
         // (Upper left and Upper right with the stick straight up) are not
         // both pressed on it.
-        return region.contains(normalizedX: normX, y: normY)
+        guard active else { return region.contains(normalizedX: normX, y: normY) }
+        return region.widened(by: TouchpadRegion.holdMargin).contains(normalizedX: normX, y: normY)
     }
 
     // MARK: - Travel bands
@@ -172,11 +176,14 @@ final class StickRegionService: ObservableObject {
         }
     }
 
-    /// True while the axis reading is inside the band.
-    func isBandPressed(_ id: UUID, fraction: Double) -> Bool {
+    /// True while the axis reading is inside the band. `active` is true
+    /// while the row already holds: both edges then sit a little further
+    /// out, so a trigger resting on one does not chatter.
+    func isBandPressed(_ id: UUID, fraction: Double, active: Bool = false) -> Bool {
         guard let (region, key) = self.region(with: id), Self.isBandKey(key),
               region.maxY > region.minY else { return false }
-        return region.containsTravel(fraction)
+        guard active else { return region.containsTravel(fraction) }
+        return region.widened(by: TouchpadRegion.holdMargin).containsTravel(fraction)
     }
 
     // MARK: - Overlap with direction rows
@@ -226,7 +233,10 @@ final class StickRegionService: ObservableObject {
     func zoneRowsTakingOver(_ axisRow: BindingModel, in rows: [BindingModel]) -> [Int] {
         guard axisRow.input.type == .axis, let mine = rows.firstIndex(where: { $0.id == axisRow.id }) else { return [] }
         var out: [Int] = []
-        for (i, row) in rows.enumerated() where row.input.type == .stickRegion && row.zoneSharesStick == false {
+        // A direction row gated to a region fires inside it, so that
+        // region's takeover is not one it waits for.
+        for (i, row) in rows.enumerated() where row.input.type == .stickRegion && row.zoneSharesStick == false
+            && row.input.stickRegionID != axisRow.onlyInRegion {
             if directionRowsOverlapping(row, in: rows).contains(mine + 1) { out.append(i + 1) }
         }
         return out
@@ -351,9 +361,6 @@ final class StickRegionService: ObservableObject {
                     let x = Double(i) / 100 - 1
                     for j in ys {
                         let y = Double(j) / 100 - 1
-                        #if DEBUG
-                        debugOverlapSamples &+= 1
-                        #endif
                         if a.fires(x: x, y: y) && b.fires(x: x, y: y) { result = true; break outer }
                     }
                 }
@@ -363,13 +370,6 @@ final class StickRegionService: ObservableObject {
         overlapCache[cacheKey] = result
         return result
     }
-
-    #if DEBUG
-    /// Points sampled by `fireTogether` since the counter was last reset;
-    /// the tests count the work a zone grid costs.
-    static var debugOverlapSamples = 0
-    static func debugResetOverlapCache() { overlapCache.removeAll(); debugOverlapSamples = 0 }
-    #endif
 
     /// The sample indices (x = i / 100 - 1) inside both of two stick-space
     /// spans, or nil when the spans do not meet. A hundredth wider each way,

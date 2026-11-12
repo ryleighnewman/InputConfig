@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Bản quyền © 2026 Ryleigh Newman. Bảo lưu mọi quyền.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig nghe các cụm từ giọng nói trong một cài đặt sẵn, chỉ khi cài đặt sẵn đó chạy hoặc bảng Cụm từ giọng nói của nó đang mở. Không có gì được ghi hay giữ lại.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig nhận dạng các cụm từ giọng nói trong một cài đặt sẵn, trên máy Mac này khi ngôn ngữ cho phép. Không có gì được ghi hay giữ lại.";

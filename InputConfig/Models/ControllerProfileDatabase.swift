@@ -129,6 +129,21 @@ enum ControllerProfileDatabase {
             physicalButtonNames: switch2JoyConRightButtonNames
         ),
 
+        // MARK: 8BitDo
+
+        // The Ultimate 2 Wireless with its mode switch on BT (2DC8:6012),
+        // decoded as SDL's 8BitDo driver decodes it. SDL_GameControllerDB
+        // has no Mac row for it, so before this it was read by guessing
+        // from its descriptor. Its 2.4G adapter is an XInput pad.
+        ControllerProfile(
+            identifier: "8bitdo-ultimate-2-wireless-bt",
+            displayName: "8BitDo Ultimate 2 Wireless",
+            vendorID: 0x2DC8,
+            productMatches: [.exact(0x6012)],
+            layout: .eightBitDo,
+            physicalButtonNames: eightBitDoButtonNames
+        ),
+
         // MARK: Valve
 
         // The 2026 Steam Controller: 0x1302 on a USB cable, 0x1303 over
@@ -327,6 +342,18 @@ enum ControllerProfileDatabase {
     /// 13+ are reserved for extra buttons that controllers may expose
     /// (paddles on a pro controller, extra macro buttons on a fight
     /// stick, etc.).
+    /// An 8BitDo pad read from its own report, by InputConfig index: the
+    /// standard slots, then L4, R4, PL and PR at 16 to 19.
+    static let eightBitDoButtonNames: [String] = [
+        "A", "B", "X", "Y",
+        "LB", "RB",
+        "LT", "RT",
+        "View", "Menu", "Home",
+        "L3", "R3",
+        "", "", "",
+        "L4", "R4", "PL", "PR",
+    ]
+
     static let xinputButtonNames: [String] = [
         "A", "B", "X", "Y",
         "LB", "RB",

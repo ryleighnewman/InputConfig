@@ -52,6 +52,9 @@ enum CanvasLegend {
             // Measured and cut without a leading right-to-left mark, which
             // is a character of its own and would leave the button blank.
             let name = ButtonNames.label(b, family: family, model: model, choice: choice).withoutRTLMark
+            // A name with no short form ("Button 12") keeps its number;
+            // its first letter said "B" on every such button.
+            if name.count > 3, name == ButtonNames.fallbackLabel(b).withoutRTLMark { return (String(b), nil) }
             return (name.count <= 3 ? name : String(name.prefix(1)), nil)
         case .shoulder, .menuButton, .homeButton:
             guard let b = c.inputs.buttons.first else { return (nil, nil) }
@@ -214,7 +217,7 @@ enum LayoutSnapshots {
                 threshold: { _ in 0.25 },
                 inspect: { _, v in v })
             let view = VStack(alignment: .leading, spacing: 6) {
-                Text("\(layout.displayName)  \(layout.id.rawValue)  long captions").font(.system(size: 12, weight: .semibold))
+                Text(verbatim: "\(layout.displayName)  \(layout.id.rawValue)  long captions").font(.system(size: 12, weight: .semibold))
                 canvas.frame(width: 640)
             }
             .padding(18)

@@ -148,9 +148,6 @@ extension HIDFixtureCorpus {
                    expect: (0...13).map { .button($0, 1) } + [.button(15, 1), .hat(0, x: 1, y: 0), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001)],
                    status: .reconstructed,
                    citation: HIDFixture.Citation(source: "SDL_hidapi_ps5.c PS5StatePacketAlt_t", locator: "sticks 1 to 4, triggers 5 and 6, counter 7, buttons 8 to 10 (mute 0x04)", date: "2026-10-20")),
-        HIDFixture(id: "ps.capability.ps4.arcadestick", device: "PS4 class arcade stick", transport: .feature,
-                   route: .outputReport(builder: .accessRead(number: 1)), reportID: 0x03, hex: "", expect: [.custom("count=64")], status: .verified,
-                   citation: HIDFixture.Citation(source: "placeholder", locator: "see the probe parse checks in the bench", date: "2026-10-20")),
     ]
 
     static let playStationSequences: [HIDSequenceFixture] = []

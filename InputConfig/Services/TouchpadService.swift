@@ -1,4 +1,5 @@
 import Foundation
+import os
 import QuartzCore   // CACurrentMediaTime() for allocation-free monotonic clock
 
 /// Identifies which physical touchpad surface the calibration sheet is
@@ -110,10 +111,31 @@ struct DisplayKey: Codable, Hashable {
     static func == (a: DisplayKey, b: DisplayKey) -> Bool {
         if a.hasHardwareIdentity && b.hasHardwareIdentity {
             guard a.vendor == b.vendor && a.model == b.model && a.serial == b.serial else { return false }
-            if a.serial == 0, let ua = a.uuid, let ub = b.uuid { return ua == ub }
+            // Serial 0: macOS's ID tells the two apart, or the name, which
+            // a display keeps across the reconnects that give it a new ID.
+            // (Not transitive: keys sharing only an ID and keys sharing
+            // only a name are each equal to a third that has both.)
+            if a.serial == 0, let ua = a.uuid, let ub = b.uuid { return sameDisplay(ua, ub, a.name, b.name) }
             return true
         }
+        // No hardware identity: macOS's ID, which tells apart two displays
+        // sharing a name, or the name, which a display keeps across the
+        // reconnects that give it a new ID.
+        if let ua = a.uuid, let ub = b.uuid { return sameDisplay(ua, ub, a.name, b.name) }
         return a.name == b.name
+    }
+
+    /// The IDs of the displays attached now, kept by CursorRegionService.
+    private static let attachedIDs = OSAllocatedUnfairLock<Set<String>>(initialState: [])
+    static func noteAttached(_ ids: Set<String>) { attachedIDs.withLock { $0 = ids } }
+
+    /// By the ID, or the name for a display that came back with a new one.
+    /// Two IDs both attached right now are two monitors, whatever macOS
+    /// calls them: a region drawn on one fired on its twin.
+    private static func sameDisplay(_ ua: String, _ ub: String, _ na: String, _ nb: String) -> Bool {
+        if ua == ub { return true }
+        guard na == nb else { return false }
+        return !attachedIDs.withLock { $0.contains(ua) && $0.contains(ub) }
     }
     // Equality is by hardware when both keys have it and by name otherwise,
     // so two equal keys can differ in either; only a constant hash keeps
@@ -220,6 +242,38 @@ struct TouchpadRegion: Codable, Hashable, Identifiable {
         fraction >= minY && (fraction < maxY || maxY >= 1)
     }
 
+    /// How much wider a zone reads while its row already holds: 2 percent
+    /// of the surface, so a control resting on the edge does not chatter.
+    static let holdMargin = 0.02
+
+    /// The zone grown by `margin` on every side, within the surface: a
+    /// rectangle or band on each edge, a ring on its inner and outer radius
+    /// and, for a sector, at both ends by the same distance along its
+    /// outer edge (a full ring has no ends). `margin` is a fraction of the
+    /// 0...1 surface; a ring's radii live in the -1...1 stick space, where
+    /// the same distance is twice as long.
+    func widened(by margin: Double) -> TouchpadRegion {
+        var r = self
+        r.minX = max(0, minX - margin)
+        r.maxX = min(1, maxX + margin)
+        r.minY = max(0, minY - margin)
+        r.maxY = min(1, maxY + margin)
+        if var ring {
+            let span = ring.span
+            let radial = 2 * margin
+            let degrees = radial / max(0.05, ring.outer) * 180 / .pi
+            ring.inner = max(0, ring.inner - radial)
+            ring.outer = min(1, ring.outer + radial)
+            if span < 360 {
+                let grown = span + 2 * degrees
+                ring.start = RingSector.wrap(ring.start - degrees)
+                ring.end = grown >= 360 ? ring.start : RingSector.wrap(ring.start + grown)
+            }
+            r.ring = ring
+        }
+        return r
+    }
+
     /// A ring zone with its bounding box filled in.
     static func ring(name: String, _ ring: RingSector, colorIndex: Int) -> TouchpadRegion {
         let box = ring.boundingBox
@@ -311,7 +365,7 @@ struct RingSector: Codable, Hashable {
 /// each frame. The "consume" naming is deliberate: the call resets the
 /// accumulator so a slow caller cannot accidentally double-count motion.
 final class TouchpadService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = TouchpadService()
+    static let shared = TouchpadService()
 
     /// Per-finger normalized delta-since-last-consume. Values are in roughly
     /// [-1, 1] but can exceed it on a fast swipe; consumers clamp.
@@ -410,6 +464,14 @@ final class TouchpadService: @unchecked Sendable {
     /// and later, the minimum, and was removed).
     func retain() {
         lock.lock()
+        // Motion swiped while nobody read the pad is not this user's: kept,
+        // it went out as one pointer jump on the first frame of the preset.
+        // Contact and the last positions stay, so the next sample measures
+        // from where the finger is.
+        if retainCount == 0 {
+            finger0Delta.dx = 0; finger0Delta.dy = 0
+            finger1Delta.dx = 0; finger1Delta.dy = 0
+        }
         retainCount += 1
         lock.unlock()
     }
@@ -601,8 +663,6 @@ final class TouchpadService: @unchecked Sendable {
         f1Active: Bool, f1NormalizedX: Float, f1NormalizedY: Float,
         xMotionScale: Float = 1
     ) {
-        if !isFedByGameController && (f0Active || f1Active) { isFedByGameController = true }
-        gameControllerSampleCount &+= 1
         // GCDualSenseGamepad reports the touchpad as a direction pad:
         //   xAxis ∈ [-1, 1] with +1 at the RIGHT edge,
         //   yAxis ∈ [-1, 1] with +1 at the TOP.
@@ -623,12 +683,15 @@ final class TouchpadService: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+        if !isFedByGameController && (f0Active || f1Active) { isFedByGameController = true }
+        gameControllerSampleCount &+= 1
         motionScaleX = xMotionScale
 
-        // Use synthetic contact IDs so applyFinger's "same finger" delta
-        // accumulation works the same way it does for helper-sourced
-        // data. Bumping the ID on every lift-and-replace prevents huge
-        // delta spikes on re-touch.
+        // Synthetic contact IDs (0 and 1, one per finger slot) so
+        // applyFinger's "same finger" delta accumulation works the same
+        // way it does for helper-sourced data. A lift clears the slot's
+        // last position, so the next touch starts a fresh baseline rather
+        // than a delta spike; the ID itself never changes.
         if f0Active {
             let existingID = lastF0Pos?.id ?? 0
             applyFinger(active: true, id: existingID, x: f0X, y: f0Y,
@@ -650,11 +713,6 @@ final class TouchpadService: @unchecked Sendable {
     }
 
     // MARK: - Calibration
-
-    func currentCalibration() -> TouchpadCalibration {
-        lock.lock(); defer { lock.unlock() }
-        return calibration
-    }
 
     /// Persist a new calibration. Pass `.uncalibrated` to reset to defaults.
     /// Writes to BOTH `UserDefaults` and a JSON file in Application Support
@@ -730,11 +788,6 @@ final class TouchpadService: @unchecked Sendable {
         return TouchpadDevice(rawValue: raw) ?? .dualSense
     }
 
-    /// Remember the user's device pick for the next time the sheet opens.
-    func setActiveDevice(_ device: TouchpadDevice) {
-        UserDefaults.standard.set(device.rawValue, forKey: Self.activeDeviceKey)
-    }
-
     /// On-disk calibration location. Lives in the same Application Support
     /// directory as presets so it's covered by the Export Backup feature.
     private static let calibrationFileURL: URL = {
@@ -768,11 +821,22 @@ final class TouchpadService: @unchecked Sendable {
         return pressedRegions.filter { (regionPressExpiry[$0] ?? .infinity) > now }
     }
 
-    /// True when any finger is currently inside the region.
-    func isRegionPressed(_ id: UUID) -> Bool {
+    /// True when any finger is currently inside the region. While the
+    /// row already holds (`active`), a finger within `holdMargin` of the
+    /// zone still counts, so one resting on the edge does not chatter.
+    func isRegionPressed(_ id: UUID, active: Bool = false) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard pressedRegions.contains(id) else { return false }
-        return (regionPressExpiry[id] ?? .infinity) > ProcessInfo.processInfo.systemUptime
+        if pressedRegions.contains(id), (regionPressExpiry[id] ?? .infinity) > ProcessInfo.processInfo.systemUptime {
+            return true
+        }
+        guard active, let region = regions.first(where: { $0.id == id }),
+              (region.surface == 1) == (surface == 1) else { return false }
+        let r = region.widened(by: TouchpadRegion.holdMargin)
+        let w = Double(surfaceWidth), h = Double(surfaceHeight)
+        for finger in [currentF0, currentF1] {
+            if let finger, r.contains(normalizedX: Double(finger.x) / w, y: Double(finger.y) / h) { return true }
+        }
+        return false
     }
 
     /// Combined regions + pressed-set snapshot under a single lock

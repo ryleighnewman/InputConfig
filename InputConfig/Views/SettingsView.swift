@@ -39,6 +39,8 @@ struct SettingsView: View {
     @AppStorage(ControllerPowerService.idleDisconnectKey) private var idleDisconnect = false
     @AppStorage(ControllerPowerService.idleMinutesKey) private var idleMinutes = ControllerPowerService.defaultMinutes
     @AppStorage(ControllerPowerService.whileRunningKey) private var idleWhileRunning = false
+    @AppStorage(GameControllerService.leaveLightBarKey) private var leaveLightBar = false
+    @AppStorage(MenuBarController.tintsRunningKey) private var menuBarTintsRunning = true
     @AppStorage(ControllerPowerService.autoReconnectKey) private var autoReconnect = false
     @ObservedObject private var switch2BluetoothStatus = Switch2BluetoothStatus.shared
     /// Which letters the face buttons are shown with (Controllers tab).
@@ -61,6 +63,9 @@ struct SettingsView: View {
     @State private var pausedPresetID: UUID?
     /// Result of Export Backup or Restore from Backup, shown as an alert.
     @State private var backupMessage: (title: String, text: String)?
+    /// A backup read and checked, waiting for the person to confirm the
+    /// restore: it replaces every setting, so not on the file pick alone.
+    @State private var pendingRestore: [String: Any]?
 
     @AppStorage(FrontmostAppWatcher.enabledDefaultsKey) private var autoSwitchEnabled = false
 
@@ -83,6 +88,13 @@ struct SettingsView: View {
     @ObservedObject private var crashRecovery = CrashRecoveryService.shared
     @ObservedObject private var freezeWatchdog = FreezeWatchdogService.shared
     @ObservedObject private var accessibility = AccessibilityPermissionService.shared
+    /// Screen Recording (Screen color rows). macOS posts no change
+    /// notification, so it is re-read whenever the app comes forward.
+    @State private var screenRecordingAllowed = ScreenRecordingPermission.hasAccess
+    /// Allow was clicked: the grant counts only once the app is opened again.
+    @State private var screenRecordingRequested = false
+    /// Microphone and Speech Recognition (Voice phrase rows), re-read the same way.
+    @State private var voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed
     /// The live press log, observed here (not via the controller service) so
     /// its per-press updates re-render only this sheet, never the root window.
     @ObservedObject private var pressLog = PhysicalPressLogStore.shared
@@ -215,6 +227,96 @@ struct SettingsView: View {
                     }
                 }
 
+                section(title: "Screen Recording permission") {
+                    HStack(spacing: 8) {
+                        Image(systemName: screenRecordingAllowed ? "circle.fill" : "circle.dashed")
+                            .font(.system(size: 9))
+                            .foregroundStyle(screenRecordingAllowed ? .green : .secondary)
+                            .accessibilityHidden(true)
+                        Text(screenRecordingAllowed ? LocalizedStringKey("Screen Recording allowed") : LocalizedStringKey("Screen Recording not allowed"))
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                    }
+                    .onAppear { screenRecordingAllowed = ScreenRecordingPermission.hasAccess }
+                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                        screenRecordingAllowed = ScreenRecordingPermission.hasAccess
+                    }
+
+                    Text("Screen color and Screen text rows use it: a row that fires from the color a spot on the screen shows, or from the words an area of the screen shows. The app reads those points while such a preset runs and keeps nothing. Presets without such rows never need it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !screenRecordingAllowed {
+                        HStack(spacing: 8) {
+                            Button("Allow Screen Recording…") {
+                                // A false here means the prompt is up, not a refusal.
+                                if ScreenRecordingPermission.request() { screenRecordingAllowed = true } else { screenRecordingRequested = true }
+                            }
+                            .buttonStyle(.solidCompact)
+                            Button("Open Screen Recording Settings") { ScreenRecordingPermission.openSystemSettings() }
+                                .buttonStyle(.solidSecondaryCompact)
+                        }
+                        if screenRecordingRequested {
+                            Text("Quit and reopen InputConfig after allowing it.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+
+                section(title: "Microphone and Speech Recognition") {
+                    HStack(spacing: 8) {
+                        Image(systemName: voiceAllowed ? "circle.fill" : "circle.dashed")
+                            .font(.system(size: 9))
+                            .foregroundStyle(voiceAllowed ? .green : .secondary)
+                            .accessibilityHidden(true)
+                        Text(voiceAllowed ? LocalizedStringKey("Microphone and Speech Recognition allowed") : LocalizedStringKey("Microphone or Speech Recognition not allowed"))
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                    }
+                    .onAppear { voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed }
+                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                        voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed
+                    }
+
+                    Text("Only Voice phrase rows use them: a row that fires when you say its words. The microphone is open only while such a preset runs or its sheet is open, recognition happens on this Mac when the language allows it, and nothing is recorded or kept.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VoiceMicrophonePicker()
+
+                    if !voiceAllowed {
+                        HStack(spacing: 8) {
+                            Button("Allow Microphone and Speech…") {
+                                VoicePermission.request {
+                                    voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed
+                                    // A preset with voice rows that was waiting on the permission listens now.
+                                    if voiceAllowed { VoicePhraseService.shared.restartForLanguage() }
+                                }
+                            }
+                            .buttonStyle(.solidCompact)
+                            Button("Open Microphone Settings") { VoicePermission.openMicrophoneSettings() }
+                                .buttonStyle(.solidSecondaryCompact)
+                            Button("Open Speech Recognition Settings") { VoicePermission.openSpeechSettings() }
+                                .buttonStyle(.solidSecondaryCompact)
+                        }
+                    }
+                }
+
+                section(title: "Siri and Shortcuts") {
+                    Text("Presets can be started and stopped by voice and from the Shortcuts app. Say \"Start Easy Browse in InputConfig\", \"Stop InputConfig\", \"Pause InputConfig\" or \"Emergency stop InputConfig\" to Siri, or add the InputConfig actions to a shortcut, a Voice Control command, or a Spotlight search.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Shortcuts") {
+                        if let url = URL(string: "shortcuts://") { NSWorkspace.shared.open(url) }
+                    }
+                    .buttonStyle(.solidSecondaryCompact)
+                }
+
                 section(title: "Language") {
                     // Rebuilt after Reset Settings, which clears the choice.
                     LanguagePicker()
@@ -342,11 +444,23 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Menu bar icon")
                         MenuBarIconPicker()
-                        Text("Turns green while a preset runs.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                     .padding(.top, 4)
+                    // Its color while a preset runs: on by default, in the app
+                    // accent unless another color is picked (green before 1.9).
+                    Toggle("Color the menu bar icon while a preset runs", isOn: $menuBarTintsRunning)
+                        .onChange(of: menuBarTintsRunning) { _, _ in MenuBarController.shared.refreshMenuBarImage() }
+                    if menuBarTintsRunning {
+                        AccentColorPicker(choiceKey: MenuBarController.runningColorKey,
+                                          customKey: MenuBarController.runningColorCustomKey) {
+                            MenuBarController.shared.refreshMenuBarImage()
+                        }
+                        .padding(.leading, 20)
+                        Text("Automatic uses the app's accent color.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 20)
+                    }
                 }
 
                 section(title: "Keyboard shortcut") {
@@ -409,7 +523,7 @@ struct SettingsView: View {
                 section(title: "Automatic preset switching") {
                     Toggle("Switch presets when the front app changes",
                            isOn: $autoSwitchEnabled)
-                    Text("A preset that lists apps in its Automation panel turns on when one comes to the front; the previous one returns when you leave.")
+                    Text("A preset that lists apps or controllers in its Utilities panel turns on when one comes to the front or connects; the previous one returns when you leave or it disconnects.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -548,8 +662,9 @@ struct SettingsView: View {
                                 // Through the store too, so the sidebar and
                                 // menu bar stop showing the preset as running.
                                 pausedPresetID = mappingEngine.activePreset?.id
-                                mappingEngine.stop()
-                                presetStore.deactivateAll()
+                                // The one stop: it arms the controller hold for a
+                                // pointer preset, whose pointer is now dead.
+                                MenuBarController.deactivate(store: presetStore, engine: mappingEngine)
                             }
                             .buttonStyle(.solidSecondaryCompact)
                             .help("Stop the active preset. Change the rate, then click Resume to start it again.")
@@ -618,7 +733,7 @@ struct SettingsView: View {
 
                     HStack(spacing: 8) {
                         Button("Reveal Data Folder") {
-                            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                            guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
                             let dataDir = appSupport.appendingPathComponent("InputConfig", isDirectory: true)
                             NSWorkspace.shared.activateFileViewerSelecting([dataDir])
                         }
@@ -666,6 +781,18 @@ struct SettingsView: View {
                     } message: {
                         Text(backupMessage?.text ?? "")
                     }
+                    .alert("Restore This Backup?", isPresented: Binding(
+                        get: { pendingRestore != nil },
+                        set: { if !$0 { pendingRestore = nil } })) {
+                        Button("Restore") {
+                            guard let envelope = pendingRestore else { return }
+                            pendingRestore = nil
+                            restoreBackup(envelope)
+                        }
+                        Button("Cancel", role: .cancel) { pendingRestore = nil }
+                    } message: {
+                        Text("Your settings are replaced by the backup's. Presets and folders from the backup are added beside yours.")
+                    }
                 }
 
                 section(title: "Reset") {
@@ -688,6 +815,7 @@ struct SettingsView: View {
                             let cleared = presetStore.clearHotKeysClaimedByEmergencyStop()
                             EmergencyStopService.shared.refreshRegistration()
                             panicSpecRevision += 1
+                            panicChordRefusal = nil  // its refusal was for the chord replaced
                             // Presets are otherwise untouched, so a shortcut
                             // taken back by the stop is said out loud.
                             if !cleared.isEmpty {
@@ -761,15 +889,28 @@ struct SettingsView: View {
         panel.allowedContentTypes = [.json]
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            let envelope = makeBackupEnvelope()
-            do {
-                let data = try JSONSerialization.data(withJSONObject: envelope,
-                                                      options: [.prettyPrinted, .sortedKeys])
-                try data.write(to: url, options: .atomic)
-                ActivityLog.shared.info("Settings", "Backup saved to \(url.lastPathComponent)")
-            } catch {
-                ActivityLog.shared.error("Settings", "Backup could not be saved: \(error.localizedDescription)")
-                backupMessage = (String(localized: "Backup Not Saved"), error.localizedDescription)
+            // The store's values are taken here, on the main actor; the
+            // envelope is built and written off it, so a large library
+            // does not stall the window.
+            let snapshot = BackupService.snapshot(presetStore: presetStore)
+            Task {
+                let failure = await Task.detached(priority: .utility) { () -> String? in
+                    let envelope = BackupService.makeEnvelope(from: snapshot)
+                    do {
+                        let data = try JSONSerialization.data(withJSONObject: envelope,
+                                                              options: [.prettyPrinted, .sortedKeys])
+                        try data.write(to: url, options: .atomic)
+                        return nil
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }.value
+                if let failure {
+                    ActivityLog.shared.error("Settings", "Backup could not be saved: \(failure)")
+                    backupMessage = (String(localized: "Backup Not Saved"), failure)
+                } else {
+                    ActivityLog.shared.info("Settings", "Backup saved to \(url.lastPathComponent)")
+                }
             }
         }
     }
@@ -784,6 +925,15 @@ struct SettingsView: View {
         panel.canChooseDirectories = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
+            // Read and decoded on the main thread, so a cap: a far larger
+            // file is not a backup and would stall the app. Not the preset
+            // import's 5 MB, which a large library's own Export passes.
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size <= PresetStore.maxBackupBytes else {
+                backupMessage = (String(localized: "Not a Backup"),
+                                 String(localized: "This file is \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)), too large to be a backup."))
+                return
+            }
             guard let data = try? Data(contentsOf: url),
                   let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   envelope["presets"] != nil || envelope["userDefaults"] != nil else {
@@ -791,18 +941,20 @@ struct SettingsView: View {
                                  String(localized: "\(url.lastPathComponent) is not an InputConfig backup. To add a single preset, use Import Preset File."))
                 return
             }
-            restoreBackup(envelope)
+            // Checked and readable: asked about before anything changes.
+            pendingRestore = envelope
         }
-    }
-
-    private func makeBackupEnvelope() -> [String: Any] {
-        BackupService.makeEnvelope(presetStore: presetStore)
     }
 
     private func restoreBackup(_ envelope: [String: Any]) {
         let result = BackupService.restore(envelope, presetStore: presetStore, mappingEngine: mappingEngine)
-        backupMessage = (result.title, result.message)
         panicSpecRevision += 1
+        panicChordRefusal = nil  // its refusal was for the chord replaced
+        // On the next turn: asked for in the same transaction as the
+        // confirmation's dismissal, the result alert did not show.
+        Task { @MainActor in
+            backupMessage = (result.title, result.message)
+        }
     }
 
     // MARK: - Controllers
@@ -905,7 +1057,26 @@ struct SettingsView: View {
                 // to open from here worked on the shared working set and
                 // saved to nothing: every zone drawn was gone at the next
                 // launch, and a binding made against it dangled for good.
+                section(title: "PlayStation light bar") {
+                    Text("For when no preset says otherwise: a preset can set its own in Utilities.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Leave the light bar to macOS and other apps", isOn: $leaveLightBar)
+                        .onChange(of: leaveLightBar) { _, _ in controllerService.reloadLightBarControlFromDefaults() }
+                    Text(leaveLightBar
+                         ? "InputConfig never sets a DualSense or DualShock 4 light bar: slot colors, preset colors, Light Bar Color outputs and the rainbow do nothing, and Steam, System Settings or another app can own the color. Rumble is unchanged."
+                         : "InputConfig sets the light bar and holds its color (the controller's color in the sidebar, a preset's color, Light Bar Color outputs, the rainbow). Turn this on when another app should own the color.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 section(title: "Wireless controllers") {
+                    Text("For when no preset says otherwise: a preset can set its own in Utilities.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Toggle("Disconnect a wireless controller after it sits unused", isOn: $idleDisconnect)
                         .onChange(of: idleDisconnect) { _, _ in ControllerPowerService.shared.settingsChanged() }
                     if idleDisconnect {
@@ -938,9 +1109,11 @@ struct SettingsView: View {
                 }
 
                 section(title: "Switch 2 controllers over Bluetooth") {
+                    // A preset made for a Switch 2 controller also looks for one
+                    // while it runs, with this left off.
                     Toggle("Connect Switch 2 Pro, GameCube and Joy-Con 2 controllers over Bluetooth", isOn: $switch2Bluetooth)
                         .onChange(of: switch2Bluetooth) { _, on in Switch2BluetoothService.shared.setEnabled(on) }
-                    Text("macOS does not read these controllers on its own. Pair one with the Mac first (hold its sync button until the lights sweep); with this on, InputConfig looks for it while the app runs and reads it like the USB-C connection, motion sensors included. Experimental: not yet checked on a controller.")
+                    Text("macOS does not read these controllers on its own. Pair one with the Mac first (hold its sync button until the lights sweep). InputConfig looks for it while this is on, and while a preset made for a Switch 2 controller runs, and reads it like the USB-C connection, motion sensors included. Experimental: not yet checked on a controller.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let status = switch2BluetoothStatus.text {
@@ -951,7 +1124,7 @@ struct SettingsView: View {
                 }
 
                 section(title: "Screen and stick regions") {
-                    Text("Each preset has its own. Open it, choose Edit, and draw them from a row's Options.")
+                    Text("Each preset has its own. Open it, choose Edit, and draw them in a device's Regions card.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1042,7 +1215,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             tipRow(icon: "cable.connector",
                    title: "USB",
-                   body: "Plug the controller in with its USB cable. Wired DualSense, DualShock 4, Xbox, and 8BitDo show up immediately.")
+                   body: "Plug the controller in with its USB cable. Wired DualSense, DualShock 4 and 8BitDo pads show up immediately. Wired Xbox One and Series pads need macOS 15 or later; on macOS 14 use Bluetooth. Wired Xbox 360 pads cannot be read.")
             tipRow(icon: "wave.3.right",
                    title: "Bluetooth",
                    body: "Hold the controller's pair button until its light flashes, then add it from System Settings → Bluetooth.")
@@ -1234,7 +1407,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("InputConfig").font(.title2.weight(.semibold))
                 HStack(spacing: 8) {
-                    Text("Version \(bundleShortVersion) (\(bundleBuildNumber))")
+                    Text("Version \(bundleShortVersion)")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Button("View Changelog") { showChangelog = true }
                         .buttonStyle(.solidSecondaryCompact)
@@ -1273,6 +1446,7 @@ struct SettingsView: View {
             }
             .padding(16)
             .frame(width: 380, alignment: .leading)
+            .background(OverlayScrollers())
         }
         // Keys scroll it, with nothing focusable inside.
         .focusable()
@@ -1415,9 +1589,11 @@ struct SettingsView: View {
 /// per-preset region layouts, favorites, calibration, remembered devices,
 /// and window positions.
 enum AppSettingsReset {
-    static let prefixes = ["InputConfig.", "CursorGuard.", "suppressAccessibilityIntro"]
+    // macroShowsText too: an app-wide choice that Reset skipped and backups
+    // left out. Its persisted name stays.
+    static let prefixes = ["InputConfig.", "CursorGuard.", "suppressAccessibilityIntro", "macroShowsText"]
     private static let kept: Set<String> = [
-        "InputConfig.lastSeenVersion", "InputConfig.tipCount", "InputConfig.midiSourceUniqueID",
+        ContentView.lastSeenVersionKey, "InputConfig.tipCount", "InputConfig.midiSourceUniqueID",
         "InputConfig.lastExampleSeedBuild", "InputConfig.appliedDefaultGroupColors.v2",
         "InputConfig.groups.builtInFlagged", "InputConfig.trimmedAnkiNotes.v1",
         "InputConfig.shippedSectionsFilled.v1",
@@ -1448,6 +1624,9 @@ enum AppSettingsReset {
         // of this Mac's devices, not settings.
         "InputConfig.handDevicesBefore17", "InputConfig.learnedTiltSigns",
         "InputConfig.handDevicesBy17",
+        // The built-in updates declined per copy: a record about the
+        // library, not a setting, or a reset offered every one again.
+        BuiltInUpdate.declinedKey,
     ]
     private static let keptPrefixes = ["InputConfig.seededExample", "InputConfig.review.",
                                        // The presets still to offer the pre-1.6 row fix.
@@ -1479,6 +1658,9 @@ enum AppSettingsReset {
         "InputConfig.emergencyStopWarnedChord",
         // This Mac's library was emptied on purpose; not another Mac's.
         "InputConfig.libraryEmptiedOnPurpose",
+        // A tour's borrowed preset, from a backup made mid tour: restored
+        // later, the next launch undid what changed since.
+        "InputConfig.tourBorrowedPreset.v1",
     ]
 
     static func isRestorable(_ key: String) -> Bool {
@@ -1497,8 +1679,9 @@ enum AppSettingsReset {
         "InputConfig.driveThrottleSign16.v1", "InputConfig.eightBitDoBackButtons.v1", "InputConfig.nintendoFacePositions.v1",
         "InputConfig.presetButtonFamilies.v1", "InputConfig.presetButtonFamilies.v2", "InputConfig.presetButtonFamilies.v3",
         "InputConfig.retiredKeyboardDeck.v1", "InputConfig.sideButtonBlock.v1", "InputConfig.sideButtonBrackets.v1",
-        "InputConfig.lastSeenVersion", "InputConfig.lastExampleSeedBuild", "InputConfig.first16LaunchAt",
+        ContentView.lastSeenVersionKey, "InputConfig.lastExampleSeedBuild", "InputConfig.first16LaunchAt",
         "InputConfig.gameCursorGuards17.v1", "InputConfig.first17LaunchAt", "InputConfig.shippedNotes17.v1",
+        "InputConfig.shippedNotes17.v2", "InputConfig.shippedNotes17.v3", "InputConfig.tourBorrowedPreset.v1",
     ]
     static func isUpgradeRecord(_ key: String) -> Bool {
         upgradeRecords.contains(key) || key.hasPrefix("InputConfig.seededExample")
@@ -1514,7 +1697,7 @@ enum AppSettingsReset {
         // someone else turned the Emergency Stop off and auto-switch on.
         key == EmergencyStopService.enabledKey || key == EmergencyStopService.controllerKey
             || key == "InputConfig.autoSwitch.enabled"
-            || key == "InputConfig.lastSeenVersion" || key == "InputConfig.lastExampleSeedBuild"
+            || key == ContentView.lastSeenVersionKey || key == "InputConfig.lastExampleSeedBuild"
             || key.hasPrefix("InputConfig.seededExample")
             // This Mac's own upgrade records: another Mac's would switch off
             // a check still owed here, or offer presets this Mac lacks.
@@ -1542,6 +1725,17 @@ enum AppSettingsReset {
             guard let incoming = restored as? [String] else { return restored }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
+        case BuiltInUpdate.declinedKey:
+            // "update|preset id": the backup's declines beside this Mac's,
+            // with the preset ids a restore folded into this Mac's copies.
+            guard let incoming = restored as? [String] else { return restored }
+            let current = defaults.stringArray(forKey: key) ?? []
+            let mapped = incoming.map { entry -> String in
+                let parts = entry.split(separator: "|", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let id = UUID(uuidString: parts[1]), let new = idMap[id] else { return entry }
+                return parts[0] + "|" + new.uuidString
+            }
+            return current + mapped.filter { !current.contains($0) }
         case "InputConfig.ignoredInputDevices":
             // This Mac's switched-off pads stay off. The backup's per-unit
             // entries carry another Mac's salted serial and match only there.
@@ -1612,14 +1806,35 @@ enum AppSettingsReset {
             if let n = clean as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() {
                 let v = n.doubleValue
                 guard v.isFinite, range.contains(v) else { return nil }
+                return snapped(v, forKey: key) ?? n
             } else if let text = clean as? String {
                 guard let v = Double(text.trimmingCharacters(in: .whitespaces)), v.isFinite, range.contains(v) else { return nil }
-                return NSNumber(value: v)
+                return snapped(v, forKey: key) ?? NSNumber(value: v)
             } else {
                 return nil
             }
         }
         return clean
+    }
+
+    /// The keys a picker offers a fixed list for: a value between two
+    /// choices (a hand-edited backup, or an older build's list) showed as
+    /// an empty picker, so it moves to the nearest choice.
+    private static func snapped(_ v: Double, forKey key: String) -> NSNumber? {
+        switch key {
+        case "InputConfig.panicHoldSeconds":
+            let choices: [Double] = [1, 1.5, 2, 3, 4, 5]
+            return NSNumber(value: choices.min { abs($0 - v) < abs($1 - v) } ?? v)
+        case "InputConfig.pollHz", "InputConfig.pollHzOnAC", "InputConfig.pollHzOnBattery":
+            let choices = [60, 120, 180, 240]
+            return NSNumber(value: choices.min { abs(Double($0) - v) < abs(Double($1) - v) } ?? Int(v))
+        case "InputConfig.panicControllerButton":
+            // The standard slots the emergency stop's button picker lists.
+            let choices = ButtonNames.all(for: .automatic).map(\.index)
+            return NSNumber(value: choices.min { abs(Double($0) - v) < abs(Double($1) - v) } ?? Int(v))
+        default:
+            return nil
+        }
     }
 
     private static let numericRanges: [String: ClosedRange<Double>] = [
@@ -1687,6 +1902,10 @@ enum AppSettingsReset {
 @MainActor
 enum AppSettingsApply {
     static func applyAll(engine: MappingEngine?, store: PresetStore?) {
+        // The recorder's stop key is read once at launch: Reset and Restore
+        // left the old one working until the next launch.
+        let stopKey = (UserDefaults.standard.object(forKey: MacroRecorderService.stopKeyDefaultsKey) as? Int) ?? -1
+        if MacroRecorderService.shared.stopKeyCode != stopKey { MacroRecorderService.shared.stopKeyCode = stopKey }
         let d = UserDefaults.standard
         var dock = (d.object(forKey: "InputConfig.showDockIcon") as? Bool) ?? true
         let menu = (d.object(forKey: MenuBarController.defaultsKey) as? Bool) ?? true
@@ -1723,7 +1942,23 @@ enum AppSettingsApply {
         let rgb = (d.object(forKey: "InputConfig.rgbCycleSpeed") as? Double) ?? 1.0
         if let gc = engine?.controllerServiceForSettings, gc.rgbCycleSpeed != rgb { gc.rgbCycleSpeed = rgb }
         engine?.controllerServiceForSettings.reloadIgnoredDevicesFromDefaults()
+        engine?.controllerServiceForSettings.reloadLightBarControlFromDefaults()
+        // The Switch 2 Bluetooth search follows its stored switch, the
+        // voice rows listen in the stored language, and the idle timers
+        // start over under their stored minutes.
+        Switch2BluetoothService.shared.setEnabled(d.bool(forKey: Switch2BluetoothService.enabledKey))
+        // nil (never applied) restarts too, so the first restore that
+        // changes the language takes.
+        if voiceLocaleApplied == nil || VoicePhraseService.locale.identifier != voiceLocaleApplied {
+            voiceLocaleApplied = VoicePhraseService.locale.identifier
+            VoicePhraseService.shared.restartForLanguage()
+        }
+        ControllerPowerService.shared.settingsChanged()
     }
+
+    /// The voice language the listener was last started for, so a restore
+    /// that keeps it does not restart listening for nothing.
+    private static var voiceLocaleApplied: String? = nil
 }
 
 /// The voice that reads a binding's spoken phrase. Default is the Mac's own
@@ -1817,6 +2052,18 @@ struct LaunchAtLoginToggleView: View {
 }
 #endif
 
+/// A popover's scroll bar as an overlay: with Show scroll bars set to Always,
+/// macOS gave it a solid black track against the popover's glass.
+struct OverlayScrollers: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { [weak nsView] in
+            nsView?.enclosingScrollView?.scrollerStyle = .overlay
+        }
+    }
+}
+
 // MARK: - Changelog
 
 /// The in-app release notes: one entry per version, newest first. The About
@@ -1829,14 +2076,37 @@ enum Changelog {
         let points: [String]
     }
 
-    /// The running app's own version string, straight from the bundle: "1.1.1 (21)".
+    /// The running app's version as people see it, "1.9": the build number
+    /// is not shown anywhere in the app since 1.9.
     static var currentVersion: String {
-        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
-        return "\(short) (\(build))"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.9", points: [
+            String(localized: "Macro recorder: click Record steps, use any app, and your keys, clicks, drags, scrolling and timing become steps"),
+            String(localized: "Macro steps can type text, scroll, run a system action, wait, move the pointer, or wait for a color or words on screen"),
+            String(localized: "Macro playback: Play once tries a macro from the editor, and a macro can set its speed, add random timing, or run until pressed again"),
+            String(localized: "Macro text: read, edit, copy and paste any macro as plain lines such as cmd c, wait 300, type \"hello\""),
+            String(localized: "Voice phrase, a new input: say a phrase and its row fires, through the microphone you choose, with a Voice Commands preset ready to try"),
+            String(localized: "Screen color and Screen text, new inputs: a row fires from the color at a spot on screen, or from words as they appear"),
+            String(localized: "Button sequence and Key sequence, new inputs: a row fires when buttons or keys come in a set order, such as Down, Down, A"),
+            String(localized: "Block the key's own action: W mapped to Up Arrow no longer also types W"),
+            String(localized: "Keyboard and mouse rows can wait for a second control, such as Left Command with a middle click"),
+            String(localized: "New pointer outputs: Mouse Motion Step, Precision While Held, Save Pointer Spot, Return Pointer to Spot and Pointer to Next Screen"),
+            String(localized: "Utilities, set per preset: the speed and direction of your mouse, trackpad and wheel, smooth scrolling, steadying for a shaky hand, the light bar, and controller disconnect and reconnect"),
+            String(localized: "Only work in these apps: a preset that lists apps holds its outputs back while any other app is in front"),
+            String(localized: "Activate with controller: a preset starts when a controller it lists connects, and steps aside when it leaves"),
+            String(localized: "Access controller: fit your own caps and tags, and the visualizer draws them for each profile"),
+            String(localized: "25 more controllers drawn in the Live Visualizer, including the 8BitDo Pro 3, Switch 2 Pro, Joy-Con 2, Backbone One, Razer Kishi V2, flight sticks and racing wheels"),
+            String(localized: "Simple View in the View menu: big buttons for your favorite presets"),
+            String(localized: "Much lighter on your Mac: a running preset uses less than half the CPU, and switching presets is nearly twice as fast"),
+            String(localized: "Tap the Mac is no longer offered on macOS 27 in the App Store version"),
+            String(localized: "Fixed crashes from damaged preset files and from unplugging a controller"),
+            String(localized: "Keys and mouse buttons no longer stay held down if the app freezes"),
+            String(localized: "Idle disconnect no longer drops a pad a game is using, and a pad that reconnects keeps its slot"),
+            String(localized: "Fixed presets not opening from the sidebar on some Macs, and a hang at logout"),
+        ]),
         Entry(version: "1.8", points: [
             String(localized: "Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth"),
             String(localized: "Access profiles: a Profile chip in the Live Visualizer lists the three stored profiles over USB-C, switches them, and edits one beside the drawing with the PS5's own settings"),
@@ -2455,6 +2725,10 @@ struct EmergencyStopSettingsContent: View {
                 } else {
                     // The field is rebuilt below, so say what was saved.
                     AccessibilityNotification.Announcement(String(localized: "Emergency stop shortcut set to \(newSpec.spokenString)")).post()
+                    // A preset chord the old stop chord had kept from
+                    // registering is free now; the library sink only
+                    // re-registers when a preset's chord changes.
+                    PresetHotKeyService.shared.sync(with: presetStore.presets)
                 }
                 panicHotkeyEnabled = EmergencyStopService.shared.isEnabled
                 specRevision &+= 1
@@ -2601,12 +2875,19 @@ struct HotKeyRecorderField: View {
     /// What the field asks for when a press could not be taken.
     private var hint: String? {
         guard needsModifier else { return nil }
+        // A system chord has no safe addition: Command Space plus Control
+        // is Emoji & Symbols.
+        if systemChord { return String(localized: "macOS uses that shortcut. Choose another.") }
         return macOSChord ? String(localized: "macOS uses that: add \u{2303} or \u{2325}") : String(localized: "Add \u{2318} or \u{2303}")
     }
     @State private var macOSChord = false
+    @State private var systemChord = false
 
-    /// Command (or Command Shift) with a key macOS and every app use.
+    /// Command (or Command Shift) with a key macOS and every app use, or
+    /// one of macOS's own default shortcuts (Spotlight, screenshots, Force
+    /// Quit, the lock screen, Mission Control, Show Desktop, Siri).
     private static func isMacOSShortcut(_ s: HotKeySpec) -> Bool {
+        if isSystemHotKey(s) { return true }
         guard s.modifiers == UInt32(cmdKey) || s.modifiers == UInt32(cmdKey | shiftKey) else { return false }
         // Tab and Space by position; letters and the comma by the character
         // the key types, as menus match them (Command M sits on another key
@@ -2620,10 +2901,45 @@ struct HotKeyRecorderField: View {
         return ["q", "w", "h", "m", "c", "v", "x", "z", "a", "s", ","].contains(typed)
     }
 
+    /// The chords macOS registers for itself out of the box. Taking one
+    /// would look set and never fire, or would stop the system feature.
+    private static func isSystemHotKey(_ s: HotKeySpec) -> Bool {
+        let cmd = UInt32(cmdKey), ctrl = UInt32(controlKey), opt = UInt32(optionKey), shift = UInt32(shiftKey)
+        let key = Int(s.keyCode), mods = s.modifiers
+        switch key {
+        case kVK_Space:
+            // Spotlight, the input source switch, Siri, Emoji & Symbols.
+            return [cmd, cmd | opt, ctrl, ctrl | opt, opt, ctrl | cmd].contains(mods)
+        case kVK_Escape:
+            // Force Quit.
+            return mods == cmd | opt
+        case kVK_UpArrow, kVK_DownArrow, kVK_LeftArrow, kVK_RightArrow:
+            // Mission Control, application windows, the spaces either side.
+            return mods == ctrl || mods == ctrl | shift
+        case kVK_F11:
+            // Show Desktop, with the modifier variants macOS keeps for it.
+            return [0, shift, ctrl, opt, cmd].contains(mods)
+        default:
+            break
+        }
+        // Lock screen, by the character as Command Q is matched above.
+        let typed = SystemActionService.character(forVirtualKey: key)?.lowercased()
+        if mods == ctrl | cmd, typed == "q" || (typed == nil && key == kVK_ANSI_Q) { return true }
+        // Screenshots: Command Shift 3, 4 and 5, by position and by the
+        // digit the key types.
+        // With Control they go to the clipboard, and macOS still takes them.
+        if mods == cmd | shift || mods == cmd | shift | ctrl {
+            if [kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5].contains(key) { return true }
+            if let typed, ["3", "4", "5"].contains(typed) { return true }
+        }
+        return false
+    }
+
     private func start() {
         recording = true
         needsModifier = false
         macOSChord = false
+        systemChord = false
         // Said, since a button's changed value is not reliably re-read.
         AccessibilityNotification.Announcement(String(localized: "Recording. Press the shortcut, or Escape to cancel.")
             + (NSWorkspace.shared.isVoiceOverEnabled ? " " + Self.voiceOverPassThrough : "")).post()
@@ -2645,7 +2961,7 @@ struct HotKeyRecorderField: View {
             // produced a shortcut that looked set and silently did nothing.
             // Keep listening instead of recording a dead chord.
             guard mods != 0 else {
-                needsModifier = true; macOSChord = false
+                needsModifier = true; macOSChord = false; systemChord = false
                 return nil
             }
             let recorded = HotKeySpec(keyCode: UInt32(event.keyCode), modifiers: mods)
@@ -2653,13 +2969,13 @@ struct HotKeyRecorderField: View {
             // from every app (Shift slash is "?"), so it needs one more
             // modifier.
             guard !recorded.stealsATypingKey else {
-                needsModifier = true; macOSChord = false
+                needsModifier = true; macOSChord = false; systemChord = false
                 return nil
             }
             // Command Q, W, C, V and the like, pressed out of habit, would
             // stop working in every app.
             guard !Self.isMacOSShortcut(recorded) else {
-                needsModifier = true; macOSChord = true
+                needsModifier = true; macOSChord = true; systemChord = Self.isSystemHotKey(recorded)
                 return nil
             }
             // Stopped first, so InputConfig's own chords are back before
@@ -2690,8 +3006,19 @@ struct HotKeyRecorderField: View {
 /// multicolor wheel, which leaves macOS in charge), then the colors. The
 /// choice takes effect at once in every window through appAccessibility().
 struct AccentColorPicker: View {
-    @AppStorage(AppAccent.storageKey) private var choiceRaw: String = AppAccent.automatic.rawValue
-    @AppStorage(AppAccent.customKey) private var customHex: String = ""
+    @AppStorage private var choiceRaw: String
+    @AppStorage private var customHex: String
+    /// Called after a pick, for a choice something outside SwiftUI draws
+    /// (the menu bar icon).
+    var onChange: () -> Void = {}
+
+    /// The app accent by default; the menu bar's running color passes its
+    /// own keys (Automatic there means the app accent).
+    init(choiceKey: String = AppAccent.storageKey, customKey: String = AppAccent.customKey, onChange: @escaping () -> Void = {}) {
+        _choiceRaw = AppStorage(wrappedValue: AppAccent.automatic.rawValue, choiceKey)
+        _customHex = AppStorage(wrappedValue: "", customKey)
+        self.onChange = onChange
+    }
 
     private var choice: AppAccent { AppAccent(rawValue: choiceRaw) ?? .automatic }
 
@@ -2702,6 +3029,7 @@ struct AccentColorPicker: View {
             set: { newValue in
                 if let hex = AppAccent.hex(of: newValue) { customHex = hex }
                 choiceRaw = AppAccent.custom.rawValue
+                onChange()
             })
     }
 
@@ -2710,6 +3038,7 @@ struct AccentColorPicker: View {
             ForEach(AppAccent.swatches) { option in
                 Button {
                     choiceRaw = option.rawValue
+                    onChange()
                 } label: {
                     swatch(option)
                         .frame(width: 20, height: 20)
@@ -2868,32 +3197,53 @@ enum BackupService {
         var lines: [String] = []
     }
 
-    static func makeEnvelope(presetStore: PresetStore) -> [String: Any] {
-        var presetsArray: [[String: Any]] = []
-        for p in presetStore.presets {
-            if let data = try? JSONEncoder().encode(p),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                presetsArray.append(dict)
-            }
-        }
-        var groupsArray: [[String: Any]] = []
-        for g in presetStore.groups {
-            if let data = try? JSONEncoder().encode(g),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                groupsArray.append(dict)
-            }
-        }
+    /// What the envelope needs from the main actor, encoded so it can be
+    /// carried to a background task: the store's presets, folders and
+    /// trash, each as its own JSON.
+    struct Snapshot: Sendable {
+        var presets: [Data]
+        var groups: [Data]
+        var trash: [Data]
+        var appLanguage: String?
+        var motionCalibration: Data?
+        /// Key names kept on main-actor services, read here so the builder
+        /// off the main actor has them.
+        var deviceListKeys: Set<String>
+        var first16LaunchKey: String
+        var first17LaunchKey: String
+    }
+
+    static func snapshot(presetStore: PresetStore) -> Snapshot {
         // Trash (soft-deleted presets). Captures both the preset and the
         // original deletedAt timestamp so a "restore on new Mac" landing
         // doesn't reset the trash's chronological ordering. Older
         // restores that lack this field just skip the trash block.
-        var trashArray: [[String: Any]] = []
-        for snap in presetStore.snapshotTrashForBackup() {
-            if let data = try? JSONEncoder().encode(snap),
-               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                trashArray.append(dict)
-            }
+        // Gyro calibration lives in its own file; carried so a new Mac
+        // starts with the pads already calibrated.
+        Snapshot(presets: presetStore.presets.compactMap { try? JSONEncoder().encode($0) },
+                 groups: presetStore.groups.compactMap { try? JSONEncoder().encode($0) },
+                 trash: presetStore.snapshotTrashForBackup().compactMap { try? JSONEncoder().encode($0) },
+                 appLanguage: AppLanguage.chosen,
+                 motionCalibration: MotionCalibrationService.shared.exportData(),
+                 deviceListKeys: [HIDDeviceRegistry.rememberedKey, HIDDeviceRegistry.bitwiseBefore17Key,
+                                  HIDDeviceRegistry.rememberedBy17Key],
+                 first16LaunchKey: PresetStore.first16LaunchKey,
+                 first17LaunchKey: PresetStore.first17LaunchKey)
+    }
+
+    static func makeEnvelope(presetStore: PresetStore) -> [String: Any] {
+        makeEnvelope(from: snapshot(presetStore: presetStore))
+    }
+
+    /// The envelope from a snapshot; runs off the main actor for Export
+    /// Backup, so a large library does not stall the window.
+    nonisolated static func makeEnvelope(from snapshot: Snapshot) -> [String: Any] {
+        func dicts(_ items: [Data]) -> [[String: Any]] {
+            items.compactMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
         }
+        let presetsArray = dicts(snapshot.presets)
+        let groupsArray = dicts(snapshot.groups)
+        let trashArray = dicts(snapshot.trash)
         // Mirror selected UserDefaults that we own.
         let defaults = UserDefaults.standard
         var prefs: [String: Any] = [:]
@@ -2921,8 +3271,7 @@ enum BackupService {
                 // Encode Data values as base64 strings for JSON portability.
                 if let d = v as? Data {
                     prefs[key] = ["__data": d.base64EncodedString()]
-                } else if key == HIDDeviceRegistry.rememberedKey || key == HIDDeviceRegistry.bitwiseBefore17Key
-                            || key == HIDDeviceRegistry.rememberedBy17Key,
+                } else if snapshot.deviceListKeys.contains(key),
                           let list = v as? [String] {
                     // A device's key carries its serial hashed with a salt
                     // that stays on this Mac, so it cannot match on another.
@@ -2950,15 +3299,13 @@ enum BackupService {
             "trash": trashArray,
             "userDefaults": prefs
         ]
-        if let first = defaults.object(forKey: PresetStore.first16LaunchKey) as? Date {
+        if let first = defaults.object(forKey: snapshot.first16LaunchKey) as? Date {
             envelope["first16LaunchAt"] = first.timeIntervalSince1970
         }
-        let first17 = defaults.double(forKey: PresetStore.first17LaunchKey)
+        let first17 = defaults.double(forKey: snapshot.first17LaunchKey)
         if first17 > 0 { envelope["first17LaunchAt"] = first17 }
-        if let lang = AppLanguage.chosen { envelope["appLanguage"] = lang }
-        // Gyro calibration lives in its own file; carried so a new Mac
-        // starts with the pads already calibrated.
-        if let motion = MotionCalibrationService.shared.exportData() {
+        if let lang = snapshot.appLanguage { envelope["appLanguage"] = lang }
+        if let motion = snapshot.motionCalibration {
             envelope["motionCalibration"] = motion.base64EncodedString()
         }
         return envelope
@@ -3040,6 +3387,10 @@ enum BackupService {
         let source16 = (envelope["first16LaunchAt"] as? Double).map(Date.init(timeIntervalSince1970:))
         let backupVersion = envelope["appVersion"] as? String ?? ""
         let madeBefore17 = backupVersion.isEmpty || backupVersion.compare("1.7", options: .numeric) == .orderedAscending
+        // What is already here and confirmed stays confirmed: the backup's
+        // list of imports not yet looked at asked about them again.
+        let unreviewedHere = Set(UserDefaults.standard.stringArray(forKey: PresetStore.unreviewedKey) ?? [])
+        let confirmedHere = Set(presetStore.presets.map(\.id.uuidString)).subtracting(unreviewedHere)
         var summary = presetStore.restoreFromBackup(presets: presets, groups: groups, trash: trash,
                                                     madeBy16: madeBy16, madeBefore17: madeBefore17,
                                                     source16Since: source16,
@@ -3096,9 +3447,13 @@ enum BackupService {
                 settingsRestored += 1
             }
         }
+        if let list = UserDefaults.standard.stringArray(forKey: PresetStore.unreviewedKey) {
+            UserDefaults.standard.set(list.filter { !confirmedHere.contains($0) }, forKey: PresetStore.unreviewedKey)
+        }
         if let motion = envelope["motionCalibration"] as? String, let data = Data(base64Encoded: motion) {
             MotionCalibrationService.shared.mergeImported(data)
         }
+        MotionCalibrationService.shared.reloadRezeroButtons()
         // A backup from before 1.7: its devices connected by hand were read
         // bit by bit, and its presets use those bit numbers, so they count
         // as connected before 1.7 here too.
@@ -3121,9 +3476,12 @@ enum BackupService {
         // macOS applies it at the next launch.
         var languageNote = false
         if let lang = envelope["appLanguage"] as? String, AppLanguage.codes.contains(lang),
-           AppLanguage.chosen == nil, lang != AppLanguage.current {
+           AppLanguage.chosen == nil, lang != AppLanguage.nextLaunch {
+            // Against what the next launch would show: after a Reset in this
+            // session the app still runs in the backup's language, and the
+            // choice was skipped, so the relaunch came up in English.
             AppLanguage.choose(lang)
-            languageNote = true
+            languageNote = lang != AppLanguage.current
         }
         // The stored values changed underneath the running services.
         if applyToApp, let mappingEngine {
@@ -3143,9 +3501,12 @@ enum BackupService {
         // and the stop share a chord).
         let clearedShortcuts = presetStore.clearHotKeysClaimedByEmergencyStop()
         // The stop tried to register before that preset let go of its chord.
-        if applyToApp { EmergencyStopService.shared.refreshRegistration() }
+        let stopLost = applyToApp && !EmergencyStopService.shared.refreshRegistration()
 
         var lines: [String] = []
+        if stopLost {
+            lines.append(String(localized: "The Emergency Stop shortcut from this backup could not be set: another app holds it. Choose another in Settings, General."))
+        }
         lines.append(summary.presetsAdded == 1 ? String(localized: "1 preset added") : String(localized: "\(summary.presetsAdded) presets added"))
         if summary.builtInsReplaced > 0 {
             lines.append(summary.builtInsReplaced == 1

@@ -53,7 +53,7 @@ extension ControllerLayout {
             [.brand(.switchPro), .gcHasElement("Button A"), .gcProductCategoryContains("Switch 2")],
         ],
         matchPriority: 30,
-        readability: .partial("USB only, experimental: motion read from report 0x05 as SDL reads it, scale not yet checked on a pad; no Bluetooth, NFC or rumble"),
+        readability: .partial("Experimental: read over USB-C, or over Bluetooth LE when the Switch 2 Bluetooth setting is on, with motion from report 0x05 as SDL reads it, scale not yet checked on a pad; no NFC or rumble"),
         approximate: true,
         sources: [
             "nintendo.com Switch 2 Pro Controller main specifications (105 x 148 x 60.2 mm)",
@@ -98,7 +98,7 @@ extension ControllerLayout {
         PlacedControl(id: "sync", kind: .other, face: .top, center: CGPoint(x: 0.4, y: 0.56), size: 0.025,
                       readable: .notReported("SYNC is handled by the controller itself and has no bit in report 0x09")),
         PlacedControl(id: "usbc", kind: .port, face: .top, center: CGPoint(x: 0.5, y: 0.56), size: 0.06, height: 0.022,
-                      shape: .capsule(angleDegrees: 0), note: "The cable InputConfig reads this controller over"),
+                      shape: .capsule(angleDegrees: 0), note: "The cable InputConfig can read this controller over; Bluetooth LE works too"),
         PlacedControl(id: "recharge-led", kind: .light, face: .top, center: CGPoint(x: 0.585, y: 0.56), size: 0.014,
                       readable: .notReported("A charging light, not an input")),
         PlacedControl(id: "player-leds", kind: .light, face: .top, center: CGPoint(x: 0.5, y: 0.86), size: 0.07, height: 0.012,

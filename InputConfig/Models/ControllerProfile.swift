@@ -137,6 +137,13 @@ struct ControllerProfile: Equatable {
         /// with pressure, and the IMU (layout from SDL's Triton driver).
         case steamController2026
 
+        /// 8BitDo's own report, as SDL's 8BitDo driver reads it
+        /// (SDL_hidapi_8bitdo.c, HIDAPI_Driver8BitDo_HandleStatePacket):
+        /// report 0x01, 0x03 or 0x04, the D-pad at 1, sticks at 2 to 5 with
+        /// 0x7F as the middle, R2 at 6 and L2 at 7, buttons at 8 and 9, and
+        /// L4 and R4 at 10. The Ultimate 2 Wireless in Bluetooth mode.
+        case eightBitDo
+
         /// Elgato Stream Deck: one byte per key, nonzero while pressed.
         /// Connected by hand from the Devices menu only.
         case streamDeck(StreamDeckFormat)

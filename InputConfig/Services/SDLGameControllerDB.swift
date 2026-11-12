@@ -71,16 +71,22 @@ enum SDLGameControllerDB {
     static func parse(_ text: String) -> [Mapping] {
         var out: [Mapping] = []
         for line in text.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Newlines too: a file saved with CRLF left "\r" on the last
+            // value, which then read as no mapping.
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
             let parts = trimmed.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
             guard parts.count > 2, let ids = ids(fromGUID: parts[0]), ids.vendor != 0 else { continue }
             var entries: [String: String] = [:]
+            var platform: String?
             for part in parts.dropFirst(2) {
                 let pair = part.split(separator: ":", maxSplits: 1).map(String.init)
-                guard pair.count == 2, pair[0] != "platform" else { continue }
+                guard pair.count == 2 else { continue }
+                if pair[0] == "platform" { platform = pair[1]; continue }
                 entries[pair[0]] = pair[1]
             }
+            // A row for another platform describes another driver's order.
+            if let platform, platform != "Mac OS X" { continue }
             out.append(Mapping(vendorID: ids.vendor, productID: ids.product, version: ids.version,
                                name: parts[1], entries: entries))
         }
@@ -141,14 +147,16 @@ enum SDLGameControllerDB {
     /// First slot for buttons the row does not name.
     static let firstExtraButton = 22
 
-    /// Names by button slot, for the profile.
-    static func buttonNames(count: Int) -> [String] {
-        let known: [Int: String] = [
+    /// Names by button slot, for the profile. An Xbox row's paddles sit
+    /// on the slots `xboxPaddleSlots` gives them, P1 to P4.
+    static func buttonNames(count: Int, isXbox: Bool = false) -> [String] {
+        var known: [Int: String] = [
             0: "A", 1: "B", 2: "X", 3: "Y", 4: "LB", 5: "RB", 6: "LT", 7: "RT",
             8: "Back", 9: "Start", 10: "Guide", 11: "L3", 12: "R3",
             13: "Touchpad", 14: "Misc", 16: "Left Paddle", 17: "Right Paddle",
             18: "Left Paddle 2", 19: "Right Paddle 2",
         ]
+        if isXbox { for (slot, name) in [(16, "P1"), (17, "P2"), (18, "P3"), (19, "P4")] { known[slot] = name } }
         return (0..<count).map { known[$0] ?? "Button \($0)" }
     }
 
@@ -363,7 +371,7 @@ enum SDLGameControllerDB {
             vendorID: vendorID,
             productMatches: [.exact(productID)],
             layout: .generic(generic),
-            physicalButtonNames: buttonNames(count: topButton + 1)
+            physicalButtonNames: buttonNames(count: topButton + 1, isXbox: vendorID == 0x045E)
         )
     }
 }

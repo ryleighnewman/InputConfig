@@ -89,10 +89,20 @@ enum PresetSearch {
             add("midi", "note", "cc", "knob", "pad", "fader")
         case .cursorRegion:
             add("screen region", "corner", "hot corner", "pointer area", "display", "monitor", "cursor region")
+        case .screenPixel:
+            add("screen color", "pixel", "color", "watch", "health bar", "indicator", "display", "monitor")
+        case .screenText:
+            add("screen text", "ocr", "read text", "words", "label", "caption", "display", "monitor")
+        case .voicePhrase:
+            add("voice", "speech", "say", "spoken", "phrase", "word", "microphone", "listen")
         case .stickRegion:
             add("stick zone", "stick region", "thumbstick area")
         case .stickGesture:
             add("stick gesture", "flick", "double flick", "snap", "stick swipe")
+        case .buttonSequence:
+            add("button sequence", "combo", "sequence", "in order", "button combo", "press in order")
+        case .keySequence:
+            add("key sequence", "typed", "hotstring", "abbreviation", "keys in order", "type to trigger")
         }
         // Outputs people name differently from the menu wording.
         for o in binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) + (binding.tripleTapOutputs ?? []) {
@@ -110,6 +120,7 @@ enum PresetSearch {
                 default: break
                 }
             case .mouseMotion: add("pointer", "cursor", "move the mouse")
+            case .mouseStep: add("pointer", "cursor", "move the mouse", "nudge", "step", "distance")
             case .mouseWheel, .mouseWheelStep: add("scroll", "wheel")
             case .key: add("key", "keystroke", "keyboard")
             case .typeText: add("type", "text", "phrase")
@@ -198,6 +209,9 @@ struct PresetSearchBar: View {
     @Environment(\.appTextScale) private var textScale
     let preset: Preset
     var naming: ((Int) -> (family: FaceLetters?, model: ButtonNames.ModelNames))? = nil
+    /// Changes whenever `naming` would answer differently (a pad arriving
+    /// or leaving), so the index is rebuilt with the new button names.
+    var namingKey: String = ""
     /// Names the preset an Activate Preset output starts.
     var presetName: ((UUID) -> String?)? = nil
     let onGo: (PresetSearchHit) -> Void
@@ -208,6 +222,10 @@ struct PresetSearchBar: View {
     @State private var countAnnouncement: DispatchWorkItem?
     /// Set while typing resets the highlight, which is not worth saying.
     @State private var highlightResetByTyping = false
+    /// The preset's rows as searched, built when the preset changes rather
+    /// than on every keystroke and every controller update.
+    @State private var index: [PresetSearchHit] = []
+    @State private var indexStale = false
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
@@ -217,10 +235,11 @@ struct PresetSearchBar: View {
     static var clearActiveSearch: (() -> Bool)?
 
     var body: some View {
-        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(PresetSearch.index(preset, naming: naming, presetName: presetName), query: trimmed)
+        let hits: [PresetSearchHit] = trimmed.isEmpty ? [] : PresetSearch.matches(index, query: trimmed)
         VStack(alignment: .leading, spacing: 6) {
             searchField(hits)
                 .onAppear {
+                    index = PresetSearch.index(preset, naming: naming, presetName: presetName)
                     Self.clearActiveSearch = {
                         guard !query.isEmpty else { return false }
                         query = ""
@@ -228,6 +247,25 @@ struct PresetSearchBar: View {
                     }
                 }
                 .onDisappear { Self.clearActiveSearch = nil }
+                // Rebuilt for every row on every keystroke in a note or name
+                // field: debounced, and only while a search is showing;
+                // otherwise the index is marked stale and rebuilt when one is.
+                .task(id: preset) {
+                    guard !trimmed.isEmpty else { indexStale = true; return }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
+                    index = PresetSearch.index(preset, naming: naming, presetName: presetName)
+                    indexStale = false
+                }
+                .onChange(of: trimmed.isEmpty) { _, empty in
+                    if !empty, indexStale {
+                        index = PresetSearch.index(preset, naming: naming, presetName: presetName)
+                        indexStale = false
+                    }
+                }
+                .onChange(of: namingKey) { _, _ in
+                    index = PresetSearch.index(preset, naming: naming, presetName: presetName)
+                }
             if !trimmed.isEmpty {
                 // Same left edge as the text field, not the magnifier.
                 results(hits)

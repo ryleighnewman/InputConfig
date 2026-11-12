@@ -22,6 +22,9 @@ struct MotionCalibration: Codable, Hashable {
     var accelDriftY: Float
     var accelDriftZ: Float
     var savedAt: Date
+    /// Set when drift learning seeded the zero on its own; the sheet does
+    /// not announce that as a re-zero. Absent on every file written before.
+    var seededAutomatically: Bool?
 }
 
 /// Stores per-controller motion drift calibrations on disk, applies them to
@@ -29,7 +32,7 @@ struct MotionCalibration: Codable, Hashable {
 /// controller identity. Lives alongside `TouchpadService` as a separate
 /// concern so motion calibration data persists independently.
 final class MotionCalibrationService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = MotionCalibrationService()
+    static let shared = MotionCalibrationService()
 
     private let lock = NSLock()
     private var byKey: [String: MotionCalibration] = [:]
@@ -97,7 +100,22 @@ final class MotionCalibrationService: @unchecked Sendable {
         lock.unlock()
         writeQueue.async {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: Self.fileURL, options: .atomic)
+            do {
+                try data.write(to: Self.fileURL, options: .atomic)
+            } catch {
+                // Said, and tried once more: a full disk lost the calibration
+                // at the next launch while the sheet said it was saved.
+                let message = "Could not save the motion calibration: \(error.localizedDescription)"
+                DispatchQueue.main.async { ActivityLog.shared.error("Motion", message) }
+                // The calibrations as they are then, not this snapshot: a newer
+                // save or a Clear made meanwhile was written over.
+                self.writeQueue.asyncAfter(deadline: .now() + 30) {
+                    self.lock.lock()
+                    let now = self.byKey
+                    self.lock.unlock()
+                    if let fresh = try? JSONEncoder().encode(now) { try? fresh.write(to: Self.fileURL, options: .atomic) }
+                }
+            }
         }
     }
 
@@ -264,12 +282,14 @@ final class MotionCalibrationService: @unchecked Sendable {
     /// multi-second still-hold capture.
     func quickZero(forKey key: String,
                    gyroX: Float, gyroY: Float, gyroZ: Float,
-                   accelX: Float, accelY: Float, accelZ: Float) {
+                   accelX: Float, accelY: Float, accelZ: Float,
+                   automatic: Bool = false) {
         let cal = MotionCalibration(
             controllerKey: key,
             gyroDriftX: gyroX, gyroDriftY: gyroY, gyroDriftZ: gyroZ,
             accelDriftX: accelX, accelDriftY: accelY, accelDriftZ: accelZ,
-            savedAt: Date()
+            savedAt: Date(),
+            seededAutomatically: automatic ? true : nil
         )
         save(cal)
     }
@@ -282,23 +302,37 @@ final class MotionCalibrationService: @unchecked Sendable {
     /// controller identity as the calibration itself, so it follows the
     /// controller rather than a preset.
     private static let rezeroButtonsKey = "InputConfig.motion.rezeroButtons"
+    /// The table, read from the defaults once: the poll loop asks for
+    /// every connected pad on every tick. Guarded by `lock`.
+    private var rezeroTable: [String: Int] =
+        (UserDefaults.standard.dictionary(forKey: MotionCalibrationService.rezeroButtonsKey) as? [String: Int]) ?? [:]
+
+    /// After a backup restore wrote the defaults key behind the cache.
+    func reloadRezeroButtons() {
+        lock.lock(); defer { lock.unlock() }
+        rezeroTable = (UserDefaults.standard.dictionary(forKey: Self.rezeroButtonsKey) as? [String: Int]) ?? [:]
+    }
 
     func rezeroButton(forKey key: String) -> Int? {
         lock.lock(); defer { lock.unlock() }
-        let table = UserDefaults.standard.dictionary(forKey: Self.rezeroButtonsKey) as? [String: Int]
+        let table = rezeroTable
         // -1 marks "none" chosen for this pad, so the model key's button
         // is not adopted again.
-        if let own = table?[key] { return own >= 0 ? own : nil }
-        return Self.legacyKey(of: key).flatMap { table?[$0] }
+        if let own = table[key] { return own >= 0 ? own : nil }
+        return Self.legacyKey(of: key).flatMap { table[$0] }
     }
 
     func setRezeroButton(_ index: Int?, forKey key: String) {
         lock.lock(); defer { lock.unlock() }
-        var table = (UserDefaults.standard.dictionary(forKey: Self.rezeroButtonsKey) as? [String: Int]) ?? [:]
+        var table = rezeroTable
         table[key] = index ?? (Self.legacyKey(of: key) != nil ? -1 : nil)
         // Mirrored to the model key while this is the only pad of its
-        // model, like the calibration.
-        if let index, let model = soleModelKeyLocked(for: key) { table[model] = index }
+        // model, like the calibration; None takes the mirror away too, so
+        // the next pad of the model does not adopt a button nobody wants.
+        if let model = soleModelKeyLocked(for: key) {
+            if let index { table[model] = index } else { table.removeValue(forKey: model) }
+        }
+        rezeroTable = table
         UserDefaults.standard.set(table, forKey: Self.rezeroButtonsKey)
     }
 
@@ -400,7 +434,7 @@ final class ChassisTapActivity: ObservableObject {
 /// The service names are not in any public SDK header, so every step fails
 /// softly and the feature simply does not appear when the sensor is absent.
 final class ChassisTapService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = ChassisTapService()
+    static let shared = ChassisTapService()
 
     // MARK: - Who wants the sensor
 
@@ -1579,4 +1613,20 @@ private func chassisTapRemovalCallback(context: UnsafeMutableRawPointer?,
     guard let context else { return }
     let service = Unmanaged<ChassisTapService>.fromOpaque(context).takeUnretainedValue()
     service.noteDeviceRemoved()
+}
+
+/// Whether new Tap the Mac rows can be offered. macOS 27's sandbox refuses the
+/// write that switches the motion sensor on, and App Review will not grant the
+/// exception, so the App Store build stops offering it there. Rows that exist
+/// stay, and hear taps while something else has the sensor on. macOS 26 and
+/// earlier are unaffected, and the Homebrew build carries the exception.
+enum TapTheMac {
+    static var canOffer: Bool {
+        #if INPUTCONFIG_HOMEBREW
+        return true
+        #else
+        if #available(macOS 27, *) { return false }
+        return true
+        #endif
+    }
 }

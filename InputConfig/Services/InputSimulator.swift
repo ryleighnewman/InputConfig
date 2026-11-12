@@ -14,7 +14,7 @@ import AudioToolbox
 /// you must re-grant permission in System Settings after each rebuild.
 /// Remove old entries and re-add the newly built app.
 final class InputSimulator: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = InputSimulator()
+    static let shared = InputSimulator()
 
     private var pressedKeys: Set<Int> = []
     private var pressedMouseButtons: Set<Int> = []
@@ -42,7 +42,18 @@ final class InputSimulator: @unchecked Sendable {
     /// and ignores any event carrying this marker - that's how we
     /// guarantee a binding's keyboard OUTPUT can't loop back as keyboard
     /// INPUT and trigger itself. "INPUTC01" in ASCII.
-    nonisolated(unsafe) static let ownEventMarker: Int64 = 0x49_4E_50_55_54_43_30_31
+    static let ownEventMarker: Int64 = 0x49_4E_50_55_54_43_30_31
+
+    /// Posted on the main thread after something outside the engine let
+    /// go of every key and button this app was holding: the freeze
+    /// watchdog once main answers again, and the Accessibility service
+    /// when the permission is taken away. The simulator's own held sets
+    /// are already empty by then; the engine observes this to square its
+    /// bookkeeping (toggle latches, turbo, in-flight macros, notes, held
+    /// lights, drive keys) the way its pause edge does, so a toggled row
+    /// does not stay logically on with its key up. `userInfo["reason"]`
+    /// says which.
+    static let outputsForcedReleaseNotification = Notification.Name("InputConfig.OutputsForcedRelease")
 
     /// Post a CGEvent we created, after stamping our marker so the
     /// CGEventTap consumer can recognize and skip it. All post call sites
@@ -82,7 +93,24 @@ final class InputSimulator: @unchecked Sendable {
     /// Tests only: when set, events are handed here instead of posted, so a
     /// test can read exactly what would have gone out without typing into or
     /// moving anything on the Mac. Never compiled into Release.
+    /// It runs under mouseLock, so it must only record: a sink that calls
+    /// back into the simulator's mouse methods deadlocks the bench.
     nonisolated(unsafe) static var debugEventSink: ((CGEvent) -> Void)?
+    /// Tests only: stands in for the HID flags state, so the keyboard's part
+    /// of a mouse event's flags can be set without holding a key.
+    nonisolated(unsafe) static var debugPhysicalFlags: UInt64?
+    /// Tests only: stands in for the mouse's own buttons, so a case's
+    /// placement is not read as a drag while a person clicks.
+    nonisolated(unsafe) static var debugHardwareButtonsDown: Bool?
+    /// Tests only: the flags a mouse event would carry now.
+    func debugMouseFlags(includingStandalone: Bool) -> CGEventFlags {
+        cachedMouseEventFlags(includingStandalone: includingStandalone)
+    }
+    /// Tests only: as if this app had just moved the modifier.
+    func debugNoteOwnModifierChange(_ code: Int) {
+        lastOwnModifierChange[code] = CFAbsoluteTimeGetCurrent()
+        refreshMouseFlagsCache()
+    }
     #endif
 
     // MARK: - Keyboard Simulation
@@ -99,6 +127,9 @@ final class InputSimulator: @unchecked Sendable {
     /// that does not say (the test bench, drive mode), which keeps the old
     /// rule of taking every held modifier.
     private var keyScopes: [Int: Set<Int>] = [:]
+    /// Each holder's own scope: when one row lets go of a key another still
+    /// holds, the key goes on with that row's modifiers.
+    private var ownerScopes: [Int: [String: Set<Int>]] = [:]
 
     /// Press a key.
     ///
@@ -129,6 +160,13 @@ final class InputSimulator: @unchecked Sendable {
     /// position. Off by default: games read keys by position, so a WASD
     /// row stays on the same physical keys on every layout.
     private func virtualCode(for hidCode: Int, scope: Set<Int>?) -> Int? {
+        // fn with an arrow or Delete is Home, End, Page Up, Page Down or
+        // Forward Delete on a Mac keyboard. The fn flag alone does not do
+        // that to a posted key (the system reads the arrow as an arrow), so
+        // the chord goes to the key fn would have made it.
+        if let scope, scope.contains(KeyCodeMap.globeFnCode), let remapped = Self.fnRemappedKeys[hidCode] {
+            return remapped
+        }
         let base = KeyCodeMap.hidToVirtualKeyCode[hidCode]
         let shortcut = scope.map { !$0.isDisjoint(with: Self.shortcutModifiers) } ?? false
         if shortcut, let character = Self.shortcutCharacter(hidCode) {
@@ -140,13 +178,20 @@ final class InputSimulator: @unchecked Sendable {
         guard !shortcut, UserDefaults.standard.bool(forKey: Self.followLayoutKey),
               let character = Self.shortcutCharacter(hidCode) ?? Self.digitCharacter(hidCode) else { return base }
         if let known = layoutPlainKeys[hidCode] { return known ?? base }
-        let found = SystemActionService.virtualKey(typing: character)
+        let found = SystemActionService.plainVirtualKey(typing: character)
         layoutPlainKeys[hidCode] = .some(found)
         return found ?? base
     }
 
     /// The setting that sends plain keys by what they type on the layout.
     nonisolated static let followLayoutKey = "InputConfig.keysFollowLayout"
+
+    /// The virtual key an fn chord sends instead, by HID code: Left, Right,
+    /// Up and Down to Home, End, Page Up and Page Down; Delete to Forward
+    /// Delete.
+    private static let fnRemappedKeys: [Int: Int] = [
+        80: kVK_Home, 79: kVK_End, 82: kVK_PageUp, 81: kVK_PageDown, 42: kVK_ForwardDelete,
+    ]
 
     /// Whether `virtualCode` sends this key by the character it types on a
     /// US keyboard: a letter or mark in a Command or Control shortcut, or a
@@ -162,7 +207,7 @@ final class InputSimulator: @unchecked Sendable {
         guard let character else { return false }
         return KeyLabelCache.typable(character, command: inShortcut) {
             (inShortcut ? SystemActionService.virtualKey(typing: character, command: true)
-                        : SystemActionService.virtualKey(typing: character)) != nil
+                        : SystemActionService.plainVirtualKey(typing: character)) != nil
         }
     }
 
@@ -216,10 +261,12 @@ final class InputSimulator: @unchecked Sendable {
 
     func keyDown(_ hidCode: Int, chord: [Int]? = nil, owner: String = "", repeats: Bool = false) {
         watchLayout()
+        defer { refreshMouseFlagsCache() }
         keyHolders[hidCode, default: []].insert(owner)
         let isModifier = modifierFlags(for: hidCode) != nil
         if repeats && !isModifier { repeatOwners[hidCode, default: []].insert(owner) }
         let scope: Set<Int>? = chord.map { Set($0.filter { self.modifierFlags(for: $0) != nil }) }
+        if let scope, !isModifier { ownerScopes[hidCode, default: [:]][owner] = scope }
         // A modifier held by a switcher shortcut (Command Tab, Command `)
         // lends itself like one held alone: holding the switcher open and
         // pressing arrows or Return on other buttons is how it is used, and
@@ -238,13 +285,17 @@ final class InputSimulator: @unchecked Sendable {
             // No stored scope (drive mode, the test bench) is the same as an
             // empty one: W held by drive mode and pressed by a plain W row
             // blipped up and down for nothing.
+            // Caps Lock toggles on its press, so it is never blipped for a
+            // new scope and never repeats: it just stays down.
             guard !isModifier, let scope, (keyScopes[hidCode] ?? []) != scope,
                   hidCode != KeyCodeMap.globeFnCode,
-                  let virtualCode = virtualCode(for: hidCode, scope: scope) else {
+                  let virtualCode = virtualCode(for: hidCode, scope: scope),
+                  virtualCode != kVK_CapsLock else {
                 // Held already by a row without repeat: this row's repeat
                 // still starts, instead of being dropped.
                 if repeats, !isModifier, repeatTimers[hidCode] == nil,
-                   let virtualCode = postedKeys[hidCode] ?? KeyCodeMap.hidToVirtualKeyCode[hidCode] {
+                   let virtualCode = postedKeys[hidCode] ?? KeyCodeMap.hidToVirtualKeyCode[hidCode],
+                   virtualCode != kVK_CapsLock {
                     startRepeat(hidCode, virtualCode: virtualCode)
                 }
                 return
@@ -254,9 +305,13 @@ final class InputSimulator: @unchecked Sendable {
             keyScopes[hidCode] = scope
             postedKeys[hidCode] = virtualCode
             postPlainKey(virtualCode, down: true, modifiers: scopedModifierFlags(scope))
+            // The second row's repeat starts here as it does on a fresh
+            // press: re-scoped by a Shift row, Down Arrow went out once.
+            if repeats, repeatTimers[hidCode] == nil, virtualCode != kVK_CapsLock { startRepeat(hidCode, virtualCode: virtualCode) }
             return
         }
         pressedKeys.insert(hidCode)
+        if (224...231).contains(hidCode) { mirrorOwnModifierBits() }
         if !isModifier {
             if let scope { keyScopes[hidCode] = scope } else { keyScopes.removeValue(forKey: hidCode) }
         }
@@ -273,7 +328,8 @@ final class InputSimulator: @unchecked Sendable {
             } else {
                 postedKeys[hidCode] = virtualCode
                 postPlainKey(virtualCode, down: true, modifiers: scopedModifierFlags(scope))
-                if repeats { startRepeat(hidCode, virtualCode: virtualCode) }
+                // Caps Lock toggles once on the press; a repeat has nothing to send.
+                if repeats, virtualCode != kVK_CapsLock { startRepeat(hidCode, virtualCode: virtualCode) }
             }
         } else {
             postSpecialKey(hidCode, keyDown: true)
@@ -330,6 +386,7 @@ final class InputSimulator: @unchecked Sendable {
     }
 
     func keyUp(_ hidCode: Int, owner: String = "") {
+        defer { refreshMouseFlagsCache() }
         guard pressedKeys.contains(hidCode) else { keyHolders.removeValue(forKey: hidCode); return }
         // This owner no longer holds it on its own, even if a chord row
         // keeps the key down below.
@@ -344,13 +401,20 @@ final class InputSimulator: @unchecked Sendable {
         }
         if var holders = keyHolders[hidCode] {
             holders.remove(owner)
-            // Still held by another row: stays down.
-            if !holders.isEmpty { keyHolders[hidCode] = holders; return }
+            ownerScopes[hidCode]?[owner] = nil
+            // Still held by another row: stays down, with that row's scope.
+            if !holders.isEmpty {
+                keyHolders[hidCode] = holders
+                if let kept = holders.sorted().compactMap({ ownerScopes[hidCode]?[$0] }).first { keyScopes[hidCode] = kept }
+                return
+            }
             keyHolders.removeValue(forKey: hidCode)
+            ownerScopes.removeValue(forKey: hidCode)
         }
         repeatOwners.removeValue(forKey: hidCode)
         stopRepeat(hidCode)
         pressedKeys.remove(hidCode)
+        if (224...231).contains(hidCode) { mirrorOwnModifierBits() }
         let isModifier = modifierFlags(for: hidCode) != nil
         if isModifier { standaloneModifiers.removeValue(forKey: hidCode) }
         let scope = keyScopes.removeValue(forKey: hidCode)
@@ -382,7 +446,28 @@ final class InputSimulator: @unchecked Sendable {
     /// The modifier flags a key carries: every held modifier that belongs to
     /// its own row (`scope`) or is held on its own. A nil scope takes every
     /// held modifier, the rule for callers that do not say which row pressed.
-    private func scopedModifierFlags(_ scope: Set<Int>?) -> CGEventFlags {
+    private func scopedModifierFlags(_ scope: Set<Int>?, includingStandalone: Bool = true,
+                                     physical: Bool = true) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if physical { flags = physicalKeyFlags(scope) }
+        for code in pressedKeys {
+            guard let f = modifierFlags(for: code) else { continue }
+            if let scope, !scope.contains(code), standaloneModifiers[code] == nil { continue }
+            // A modifier held on its own (a sprint row on Shift) stays off
+            // the pointer's moves and the scroll wheel: Shift turned a
+            // stick's scroll into a horizontal one.
+            if !includingStandalone, standaloneModifiers[code] != nil { continue }
+            flags.insert(f)
+            // Which side, as a real keyboard's key events carry: apps that
+            // tell Right Option from Left (iTerm2, VMs, remote desktops)
+            // saw neither on the letter's own event.
+            if let side = Self.deviceBit[code] { flags.insert(CGEventFlags(rawValue: side)) }
+        }
+        return flags
+    }
+
+    /// The physical keyboard's part of a key's flags. Main thread only.
+    private func physicalKeyFlags(_ scope: Set<Int>?) -> CGEventFlags {
         var flags: CGEventFlags = []
         // A modifier the person is holding on the keyboard (not this app).
         // Shift goes on every key, as on a real keyboard: a one-handed user
@@ -407,15 +492,6 @@ final class InputSimulator: @unchecked Sendable {
         }
         // Caps Lock is on: letters from the controller type capitals too.
         if physical & CGEventFlags.maskAlphaShift.rawValue != 0 { flags.insert(.maskAlphaShift) }
-        for code in pressedKeys {
-            guard let f = modifierFlags(for: code) else { continue }
-            if let scope, !scope.contains(code), standaloneModifiers[code] == nil { continue }
-            flags.insert(f)
-            // Which side, as a real keyboard's key events carry: apps that
-            // tell Right Option from Left (iTerm2, VMs, remote desktops)
-            // saw neither on the letter's own event.
-            if let side = Self.deviceBit[code] { flags.insert(CGEventFlags(rawValue: side)) }
-        }
         return flags
     }
 
@@ -429,7 +505,9 @@ final class InputSimulator: @unchecked Sendable {
     private static let shiftCodes: Set<Int> = [225, 229]
     /// Modifiers the running preset reads as its own inputs (a Mac key row
     /// on Right Command); set by the engine at start.
-    var inputModifierCodes: Set<Int> = []
+    var inputModifierCodes: Set<Int> = [] {
+        didSet { refreshMouseFlagsCache() }
+    }
 
     /// Tab and ` (Grave): the keys of the app and window switchers.
     private static let switcherKeys: Set<Int> = [43, 53]
@@ -442,6 +520,10 @@ final class InputSimulator: @unchecked Sendable {
 
     /// One ordinary key event with its flags written out in full.
     private func postPlainKey(_ virtualCode: Int, down: Bool, modifiers: CGEventFlags) {
+        if virtualCode == kVK_CapsLock {
+            if down { postCapsLockToggle() }
+            return
+        }
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: down) else { return }
         // The bits CoreGraphics gave this key on its own (fn and numeric-pad
         // for the arrows and the keypad) are kept; every other bit is written
@@ -454,6 +536,7 @@ final class InputSimulator: @unchecked Sendable {
         flags.insert(.maskNonCoalesced)
         event.flags = flags
         taggedPost(event)
+        noteOwnPost(key: virtualCode, down: down)
     }
 
     /// A modifier going down or up. It goes out as flagsChanged, which is what
@@ -465,8 +548,49 @@ final class InputSimulator: @unchecked Sendable {
     private func postModifierChange(_ virtualCode: Int, down: Bool) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(virtualCode), keyDown: down) else { return }
         event.type = .flagsChanged
+        var flags = flagsChangedModifierFlags()
+        flags.insert(.maskNonCoalesced)
+        event.flags = flags
+        taggedPost(event)
+        noteOwnPost(key: virtualCode, down: down)
+        refreshMouseFlagsCache()
+    }
+
+    /// The flags a flagsChanged event carries: every modifier this app
+    /// holds, with its side bit, plus the ones the person is holding on the
+    /// keyboard and Caps Lock when it is on. Written with only this app's
+    /// own, a lone Command tap while the person held Shift told every app
+    /// that Shift had been let go.
+    /// A physical modifier is read the way scopedModifierFlags reads it:
+    /// never one this app holds itself (pressedKeys) or moved in the last
+    /// moment, when the system's state can still show the one it let go.
+    private func flagsChangedModifierFlags() -> CGEventFlags {
         var flags = currentModifierFlags()
         flags.formUnion(deviceModifierBits())
+        let now = CFAbsoluteTimeGetCurrent()
+        let physical = CGEventSource.flagsState(.hidSystemState).rawValue
+        for (code, side) in Self.deviceBit where !pressedKeys.contains(code) && physical & side != 0 {
+            guard now - (lastOwnModifierChange[code] ?? 0) > 0.3, let f = modifierFlags(for: code) else { continue }
+            flags.insert(f)
+            flags.insert(CGEventFlags(rawValue: side))
+        }
+        if physical & CGEventFlags.maskAlphaShift.rawValue != 0 { flags.insert(.maskAlphaShift) }
+        return flags
+    }
+
+    /// Caps Lock. A plain keyDown and keyUp on its virtual key never toggles
+    /// the lock: the key is a modifier to the system, and only a
+    /// flagsChanged whose Caps Lock flag differs from the current state
+    /// turns it on or off. One such event on the press, the lock read from
+    /// the HID state first and flipped; the release posts nothing, and the
+    /// own-posted record is left alone, so a releaseAll has nothing to let
+    /// go of (there is no key to hold down).
+    private func postCapsLockToggle() {
+        guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(kVK_CapsLock), keyDown: true) else { return }
+        event.type = .flagsChanged
+        let on = CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift)
+        var flags = flagsChangedModifierFlags()
+        if on { flags.remove(.maskAlphaShift) } else { flags.insert(.maskAlphaShift) }
         flags.insert(.maskNonCoalesced)
         event.flags = flags
         taggedPost(event)
@@ -485,8 +609,15 @@ final class InputSimulator: @unchecked Sendable {
         // 20-UTF-16-unit API limit, which would corrupt the character.
         var chunk: [UInt16] = []
         // The text rides on key 0 (A) unless a row is holding A: its key-up
-        // let go of the held A for the game. F16 then, which nothing holds.
-        let carrier: CGKeyCode = postedKeys.values.contains(0) || pressedKeys.contains(4) ? CGKeyCode(kVK_F16) : 0
+        // let go of the held A for the game. Then the first of a few rarely
+        // bound keys that no row holds either, so a held F16 row is not let
+        // go of the same way.
+        let held = Set(postedKeys.values)
+        let carrier: CGKeyCode = {
+            if !held.contains(0) && !pressedKeys.contains(4) { return 0 }
+            let spares = [kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20, kVK_F13, kVK_F14, kVK_F15]
+            return CGKeyCode(spares.first { !held.contains($0) } ?? kVK_F16)
+        }()
         func flush() {
             guard !chunk.isEmpty else { return }
             // Typed text carries no modifiers. Left unset, the flags came from
@@ -614,6 +745,7 @@ final class InputSimulator: @unchecked Sendable {
             data2: -1
         )
         if let cg = event?.cgEvent { taggedPost(cg) }
+        noteOwnPost(specialKey: hidCode, down: keyDown)
     }
 
     // MARK: - Mouse Button Simulation
@@ -692,12 +824,51 @@ final class InputSimulator: @unchecked Sendable {
     /// origin top-left) before a click, for auto-click rows parked on a
     /// button on screen. Posts a real move event so the app under the
     /// pointer sees the pointer arrive, then warps so the click lands there.
+    /// The pointer goes to a point in a straight line over `seconds` (a
+    /// macro's Move pointer step), or at once when the time is 0. Called
+    /// off the main thread by the macro chain; the sleep ends early when
+    /// the row is canceled.
+    func glidePointer(toX x: Double, y: Double, seconds: Double, row: String, generation: Int) {
+        let steps = seconds > 0 ? max(1, Int(min(seconds, 30) * 120)) : 1
+        if steps <= 1 { placePointer(atX: x, y: y); return }
+        let from = pointerLocationCG()
+        for i in 1...steps {
+            // A chain the engine ended (stop, a pause edge, a lock) stops
+            // moving the pointer at once.
+            if MacroCancelFlags.shared.isCanceled(row, generation: generation) { return }
+            let t = Double(i) / Double(steps)
+            placePointer(atX: Double(from.x) + (x - Double(from.x)) * t, y: Double(from.y) + (y - Double(from.y)) * t)
+            if i < steps { MacroCancelFlags.shared.sleep(seconds / Double(steps), row: row, generation: generation) }
+        }
+    }
+
     func placePointer(atX x: Double, y: Double) {
         let point = CGPoint(x: x, y: y)
-        if let move = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved,
-                              mouseCursorPosition: point, mouseButton: .left) {
+        // The arrival is a drag while a button is held, as a move is in
+        // moveMouse: a plain move with the button down read as the drag
+        // ending, so a drag parked on a fixed point let go halfway.
+        // Decided and posted under the lock, as moveMouse does: a glide on
+        // the macro thread while main posted a click went out as a move
+        // after the button went down, or as a drag after it came up.
+        let leftDown = Self.hardwareButtonDown(.left), rightDown = Self.hardwareButtonDown(.right)
+        mouseLock.lock()
+        let held = pressedMouseButtons
+        let type: CGEventType
+        let button: CGMouseButton
+        var otherNumber: Int?
+        if held.contains(0) { type = .leftMouseDragged; button = .left }
+        else if held.contains(1) { type = .rightMouseDragged; button = .right }
+        else if let other = held.first { type = .otherMouseDragged; button = .center; otherNumber = other }
+        else if leftDown { type = .leftMouseDragged; button = .left }
+        else if rightDown { type = .rightMouseDragged; button = .right }
+        else { type = .mouseMoved; button = .left }
+        if let move = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                              mouseCursorPosition: point, mouseButton: button) {
+            if let n = otherNumber { move.setIntegerValueField(.mouseEventButtonNumber, value: Int64(n)) }
+            move.flags = cachedMouseEventFlagsLocked(includingStandalone: type != .mouseMoved)
             taggedPost(move)
         }
+        mouseLock.unlock()
         #if DEBUG
         if TestCapture.active { TestCapture.note("place \(Int(x)),\(Int(y))"); return }
         #endif
@@ -711,6 +882,21 @@ final class InputSimulator: @unchecked Sendable {
         trackedCursor = point
         trackedAt = ProcessInfo.processInfo.systemUptime
         mouseLock.unlock()
+    }
+
+    /// The mouse's own button, read from the hardware state.
+    private static func hardwareButtonDown(_ button: CGMouseButton) -> Bool {
+        #if DEBUG
+        if let fake = debugHardwareButtonsDown { return fake }
+        #endif
+        return CGEventSource.buttonState(.hidSystemState, button: button)
+    }
+
+    /// Where this app last put the pointer and when (a stick or gyro move, a
+    /// warp, a confine), for the pointer speed shaper to start from there.
+    func lastPlacedPointer() -> (point: CGPoint?, at: TimeInterval) {
+        mouseLock.lock(); defer { mouseLock.unlock() }
+        return (trackedCursor, trackedAt)
     }
 
     /// Put the pointer somewhere without a move event (confine, recenter).
@@ -818,14 +1004,21 @@ final class InputSimulator: @unchecked Sendable {
             lastClickPoint = point
             lastClickCount = count
             pressedClickCounts[button] = count
+            // Posted under the lock, as the pump's moves are: let go of
+            // first, the pump slipped a drag in between the set and the
+            // press, so an app saw a drag start before its mouse-down.
+            // postMouseButton blocks on nothing and takes only the
+            // own-posted lock, which nothing holds while asking for this one.
+            postMouseButton(button, down: true, at: point, clickCount: count)
         }
         mouseLock.unlock()
-        guard !alreadyDown else { return }
-        postMouseButton(button, down: true, at: point, clickCount: count)
     }
 
     func mouseButtonUp(_ button: Int, owner: String = "") {
         guard Self.isPostableMouseButton(button) else { return }
+        // Read before the lock, as mouseButtonDown does: a window server
+        // round trip under it held up the pump and the glide.
+        let here = pointerLocationCG()
         mouseLock.lock()
         if var holders = mouseHolders[button], pressedMouseButtons.contains(button) {
             holders.remove(owner)
@@ -835,12 +1028,13 @@ final class InputSimulator: @unchecked Sendable {
         mouseHolders.removeValue(forKey: button)
         let wasDown = pressedMouseButtons.remove(button) != nil
         let count = pressedClickCounts.removeValue(forKey: button) ?? 1
-        mouseLock.unlock()
-        guard wasDown else { return }
-
         // Always release, even with no screen, so a button never stays
-        // physically down past a sleep.
-        postMouseButton(button, down: false, at: pointerLocationCG(), clickCount: count)
+        // physically down past a sleep. Under the lock, so the pump cannot
+        // post a drag for a button already dropped from the set.
+        if wasDown {
+            postMouseButton(button, down: false, at: here, clickCount: count)
+        }
+        mouseLock.unlock()
     }
 
     /// One button event. Left and right have their own event types; every
@@ -862,7 +1056,64 @@ final class InputSimulator: @unchecked Sendable {
             event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
         }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(max(1, clickCount)))
+        // A click keeps every modifier this app holds, a lone one too: a
+        // Command click row holds its Command on its own (its chord is the
+        // modifier alone), and so does the Option of an Option drag.
+        event.flags = cachedMouseEventFlagsLocked(includingStandalone: true)
         taggedPost(event)
+        noteOwnPost(button: button, down: down)
+    }
+
+    /// The flags a mouse or scroll event carries, written out so the event
+    /// does not inherit every bit the HID state holds: this app's own
+    /// modifiers (the lone-held ones left off when asked), Caps Lock, and
+    /// every modifier the person holds on the keyboard, Command, Option and
+    /// Control included, as 1.8's unset flags gave them: a Command click
+    /// adds to a selection, a Control click opens a menu. Only this app's
+    /// part is cached; the keyboard's is read live from the system with the
+    /// cached gate, so the pump and the macro thread see a Shift pressed or
+    /// let go since the last key event.
+    private var cachedMouseFlags: (all: CGEventFlags, noStandalone: CGEventFlags) = ([], [])
+
+    /// The physical modifiers a mouse event may not take: held by this app
+    /// (its own part covers them) or read by the preset as an input, with
+    /// when this app last moved each one. Read and written under mouseLock.
+    private var cachedPhysicalGate: (skip: Set<Int>, ownChange: [Int: CFAbsoluteTime]) = ([], [:])
+
+    /// Recompute this app's part and the gate. Main thread only, like the
+    /// sets it reads.
+    private func refreshMouseFlagsCache() {
+        let all = scopedModifierFlags(nil, includingStandalone: true, physical: false)
+        let noStandalone = scopedModifierFlags(nil, includingStandalone: false, physical: false)
+        let gate = (skip: pressedKeys.union(inputModifierCodes), ownChange: lastOwnModifierChange)
+        mouseLock.lock()
+        cachedMouseFlags = (all, noStandalone)
+        cachedPhysicalGate = gate
+        mouseLock.unlock()
+    }
+
+    /// The flags, for callers that already hold mouseLock. Any thread.
+    private func cachedMouseEventFlagsLocked(includingStandalone: Bool) -> CGEventFlags {
+        var flags = includingStandalone ? cachedMouseFlags.all : cachedMouseFlags.noStandalone
+        let now = CFAbsoluteTimeGetCurrent()
+        #if DEBUG
+        let physical = Self.debugPhysicalFlags ?? CGEventSource.flagsState(.hidSystemState).rawValue
+        #else
+        let physical = CGEventSource.flagsState(.hidSystemState).rawValue
+        #endif
+        for (code, side) in Self.deviceBit where physical & side != 0 && !cachedPhysicalGate.skip.contains(code) {
+            guard now - (cachedPhysicalGate.ownChange[code] ?? 0) > 0.3, let f = modifierFlags(for: code) else { continue }
+            flags.insert(f)
+            flags.insert(CGEventFlags(rawValue: side))
+        }
+        if physical & CGEventFlags.maskAlphaShift.rawValue != 0 { flags.insert(.maskAlphaShift) }
+        return flags
+    }
+
+    /// The cached flags, from any thread.
+    private func cachedMouseEventFlags(includingStandalone: Bool) -> CGEventFlags {
+        mouseLock.lock(); defer { mouseLock.unlock() }
+        return cachedMouseEventFlagsLocked(includingStandalone: includingStandalone)
     }
 
     // MARK: - Mouse Motion Simulation
@@ -886,6 +1137,96 @@ final class InputSimulator: @unchecked Sendable {
     var holdsMouseButton: Bool {
         mouseLock.lock(); defer { mouseLock.unlock() }
         return !pressedMouseButtons.isEmpty
+    }
+
+    // MARK: Precision, saved spots, next screen
+
+    private let precisionLock = NSLock()
+    /// Precision While Held: the share of normal speed each holding row
+    /// asks for. The smallest wins; empty means full speed.
+    private var precisionHolders: [String: Double] = [:]
+    private var precisionCarry: (x: Double, y: Double) = (0, 0)
+    /// Save Pointer Spot's spots 1 to 3, in CoreGraphics space.
+    private var savedSpots: [Int: CGPoint] = [:]
+
+    func setPrecision(_ share: Double?, owner: String) {
+        precisionLock.lock(); defer { precisionLock.unlock() }
+        if let share { precisionHolders[owner] = share } else { precisionHolders[owner] = nil }
+        if precisionHolders.isEmpty { precisionCarry = (0, 0) }
+    }
+
+    func clearPrecision() {
+        precisionLock.lock(); defer { precisionLock.unlock() }
+        precisionHolders.removeAll()
+        precisionCarry = (0, 0)
+    }
+
+    #if DEBUG
+    var debugPrecisionHolders: Int {
+        precisionLock.lock(); defer { precisionLock.unlock() }
+        return precisionHolders.count
+    }
+    #endif
+
+    /// The holds of one controller group's rows, for a pad that left.
+    func clearPrecision(ownerPrefix prefix: String) {
+        precisionLock.lock(); defer { precisionLock.unlock() }
+        precisionHolders = precisionHolders.filter { !$0.key.hasPrefix(prefix) }
+        if precisionHolders.isEmpty { precisionCarry = (0, 0) }
+    }
+
+    /// moveMouse for continuous pointer motion (sticks, gyro, touchpads,
+    /// Mouse Motion rows), slowed while Precision While Held is held. The
+    /// fraction a slow frame leaves is carried, so slow motion still moves.
+    func moveMouseScaled(deltaX: Int, deltaY: Int) {
+        precisionLock.lock()
+        guard let share = precisionHolders.values.min() else {
+            precisionLock.unlock()
+            moveMouse(deltaX: deltaX, deltaY: deltaY)
+            return
+        }
+        let x = Double(deltaX) * share + precisionCarry.x
+        let y = Double(deltaY) * share + precisionCarry.y
+        let wx = Int(x), wy = Int(y)
+        precisionCarry = (x - Double(wx), y - Double(wy))
+        precisionLock.unlock()
+        if wx != 0 || wy != 0 { moveMouse(deltaX: wx, deltaY: wy) }
+    }
+
+    func savePointerSpot(_ spot: Int) {
+        let here = pointerLocationCG()
+        precisionLock.lock(); savedSpots[spot] = here; precisionLock.unlock()
+    }
+
+    #if DEBUG
+    /// Tests only: a saved spot as it is, and put back as it was.
+    var debugSavedSpots: [Int: CGPoint] {
+        get { precisionLock.lock(); defer { precisionLock.unlock() }; return savedSpots }
+        set { precisionLock.lock(); savedSpots = newValue; precisionLock.unlock() }
+    }
+    #endif
+
+    /// Back to a saved spot, returning it; nil when that spot was never
+    /// saved or is on no display now.
+    @discardableResult
+    func returnToPointerSpot(_ spot: Int) -> CGPoint? {
+        precisionLock.lock(); let point = savedSpots[spot]; precisionLock.unlock()
+        guard let point, displayRectsCG().contains(where: { $0.insetBy(dx: -1, dy: -1).contains(point) }) else { return nil }
+        placePointer(atX: Double(point.x), y: Double(point.y))
+        return point
+    }
+
+    /// The pointer to the middle of the next display, left to right, round
+    /// to the first after the last. Nil with a single display.
+    @discardableResult
+    func pointerToNextScreen() -> CGPoint? {
+        let displays = displayRectsCG().sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
+        guard displays.count > 1 else { return nil }
+        let here = pointerLocationCG()
+        let current = displays.firstIndex { $0.insetBy(dx: -1, dy: -1).contains(here) } ?? 0
+        let next = displays[(current + 1) % displays.count]
+        placePointer(atX: Double(next.midX), y: Double(next.midY))
+        return CGPoint(x: next.midX, y: next.midY)
     }
 
     func moveMouse(deltaX: Int, deltaY: Int) {
@@ -959,6 +1300,10 @@ final class InputSimulator: @unchecked Sendable {
             if let held = heldButton, let n = pressedClickCounts[held] {
                 event.setIntegerValueField(.mouseEventClickState, value: Int64(n))
             }
+            // A drag keeps the modifiers of the press that started it (an
+            // Option drag copies); a plain move leaves the lone-held ones off.
+            // From the cache: the pump calls this off the main thread.
+            event.flags = cachedMouseEventFlagsLocked(includingStandalone: type != .mouseMoved)
             taggedPost(event)
         }
     }
@@ -966,8 +1311,62 @@ final class InputSimulator: @unchecked Sendable {
     // MARK: - Mouse Wheel Simulation
 
     func scrollWheel(deltaX: Int32, deltaY: Int32) {
+        scrollLock.lock()
+        let dx = scrollReverseHorizontal ? 0 &- deltaX : deltaX
+        let dy = scrollReverseVertical ? 0 &- deltaY : deltaY
+        if scrollGlide != nil {
+            glideOwed.x += Double(dx)
+            glideOwed.y += Double(dy)
+            scrollLock.unlock()
+            startGlide()
+            return
+        }
+        scrollLock.unlock()
+        postPixelScroll(deltaX: dx, deltaY: dy)
+    }
+
+    /// The pump's own stick or dial scroll, from its tick. With Smooth
+    /// scrolling on, the pump steps the glide itself (glideStep, called next
+    /// in the same tick, so the first share goes out as the scroll arrives)
+    /// and true comes back; a glide the private timer was stepping is taken
+    /// over, so a scrolling stick never keeps two 125 Hz timers going.
+    func scrollWheelFromPump(deltaX: Int32, deltaY: Int32) -> Bool {
+        scrollLock.lock()
+        let dx = scrollReverseHorizontal ? 0 &- deltaX : deltaX
+        let dy = scrollReverseVertical ? 0 &- deltaY : deltaY
+        if scrollGlide != nil {
+            glideOwed.x += Double(dx)
+            glideOwed.y += Double(dy)
+            switch glideDriver {
+            case .none:
+                glideDriver = .pump
+                glideLastTick = CACurrentMediaTime()
+            case .timer:
+                // glideLastTick carries on: the next step measures from the
+                // timer's last one, as the timer's own next tick would have.
+                glideTimer?.cancel(); glideTimer = nil
+                glideDriver = .pump
+            case .pump:
+                break
+            }
+            scrollLock.unlock()
+            return true
+        }
+        scrollLock.unlock()
+        postPixelScroll(deltaX: dx, deltaY: dy)
+        return false
+    }
+
+    /// A pixel scroll as it goes out: to the Test Bench's catcher or posted.
+    /// Not private: the pump posts its glide steps through it.
+    func postPixelScroll(deltaX: Int32, deltaY: Int32) {
+        if let sink = scrollSink() { sink(deltaX, deltaY, false); return }
         if let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .pixel,
                                wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0) {
+            // Left unset, the flags came from the HID state, where a sprint
+            // row's Shift turned the stick's scroll into a horizontal one.
+            // From the cache: the pump calls this off the main thread.
+            event.flags = cachedMouseEventFlags(includingStandalone: false)
             taggedPost(event)
         }
     }
@@ -980,21 +1379,233 @@ final class InputSimulator: @unchecked Sendable {
     /// `lines` carries the preset's Scroll speed, which these rows ignored.
     func scrollWheelStep(axis: MouseAxis, direction: MouseDirection, lines: Int = 1) {
         let count = Int32(max(1, min(20, lines)))
-        let delta: Int32 = direction == .positive ? count : -count
         let vertical = axis == .vertical
+        // With a modifier down (held on its own by a row, in a chord, or on
+        // the keyboard) the notch stays a line event, so Command then
+        // Scroll up zooms: the wheel shaper keeps the real wheel's notch
+        // the same way, and a glide's pixel scrolls read as a trackpad.
+        let modified = !cachedMouseEventFlags(includingStandalone: true)
+            .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
+        scrollLock.lock()
+        let reversed = vertical ? scrollReverseVertical : scrollReverseHorizontal
+        let delta: Int32 = (direction == .positive) != reversed ? count : -count
+        // Smooth scrolling glides the notch out in pixels. Games that count
+        // notches see none, which the utility's description says.
+        if scrollGlide != nil, !modified {
+            let pixels = Double(delta) * Self.glidePixelsPerLine
+            if vertical { glideOwed.y += pixels } else { glideOwed.x += pixels }
+            scrollLock.unlock()
+            startGlide()
+            return
+        }
+        scrollLock.unlock()
+        if let sink = scrollSink() { sink(vertical ? 0 : delta, vertical ? delta : 0, true); return }
         if let event = CGEvent(scrollWheelEvent2Source: eventSource, units: .line,
                                wheelCount: 2, wheel1: vertical ? delta : 0,
                                wheel2: vertical ? 0 : delta, wheel3: 0) {
+            // A notch a row or macro asked for by name keeps a modifier held
+            // on its own: Command then Scroll up zooms. Only the pump's pixel
+            // scrolls leave it off.
+            event.flags = cachedMouseEventFlags(includingStandalone: true)
             taggedPost(event)
         }
+    }
+
+    // MARK: - Scroll direction and smooth scrolling
+
+    /// The running preset's Scroll direction and Smooth scrolling, applied
+    /// to every scroll this app posts. Set by MappingEngine when the
+    /// running preset changes; off when nothing runs.
+    private let scrollLock = NSLock()
+    private var scrollReverseVertical = false
+    private var scrollReverseHorizontal = false
+    /// The glide's time constant in seconds; nil posts each scroll at once.
+    private var scrollGlide: Double?
+    /// Pixels still to scroll, handed out a share per tick.
+    private var glideOwed: (x: Double, y: Double) = (0, 0)
+    /// Who steps the glide: nobody, its own timer (the fallback, while the
+    /// pump is not running), or the pump's tick. One at a time, so a share
+    /// is never taken twice in a frame. Under scrollLock, as all glide state.
+    private enum GlideDriver { case none, timer, pump }
+    private var glideDriver: GlideDriver = .none
+    private var glideTimer: DispatchSourceTimer?
+    /// Which timer is current: a canceled one's tick already queued does nothing.
+    private var glideTimerSerial: UInt64 = 0
+    private var glideLastTick: CFTimeInterval = 0
+    private let glideQueue = DispatchQueue(label: "InputConfig.SmoothScroll", qos: .userInteractive)
+    /// One wheel notch's distance when it glides.
+    private static let glidePixelsPerLine: Double = 40
+
+    /// The Test Bench's catcher: scrolls go to it (x, y, in lines) instead
+    /// of the system, so a check never scrolls the app in front.
+    private var testScrollSink: ((Int32, Int32, Bool) -> Void)?
+    func setTestScrollSink(_ sink: ((Int32, Int32, Bool) -> Void)?) {
+        scrollLock.lock(); testScrollSink = sink; scrollLock.unlock()
+    }
+    private func scrollSink() -> ((Int32, Int32, Bool) -> Void)? {
+        scrollLock.lock(); defer { scrollLock.unlock() }
+        return testScrollSink
+    }
+
+    /// `glideMs` is how long a scroll takes to settle; nil turns it off.
+    func setScrollStyle(reverseVertical: Bool, reverseHorizontal: Bool, glideMs: Double?) {
+        scrollLock.lock()
+        scrollReverseVertical = reverseVertical
+        scrollReverseHorizontal = reverseHorizontal
+        // About 95% of the distance is covered in three time constants.
+        scrollGlide = glideMs.map { max(0.01, $0 / 3000) }
+        if scrollGlide == nil { glideOwed = (0, 0) }
+        scrollLock.unlock()
+    }
+
+    /// Sets a glide going. While the pump runs, its tick steps the glide
+    /// (glideStep), woken for it at once, so the glide does not keep a
+    /// second 125 Hz timer beside the pump's. Otherwise the glide's own
+    /// timer steps it, as before: the wheel shaper and scrollWheelStep
+    /// glide with no pointer preset running, and so no pump.
+    private func startGlide() {
+        scrollLock.lock()
+        guard glideDriver == .none else { scrollLock.unlock(); return }
+        // Claimed for the pump before asking it, so a tick that comes at
+        // once finds it; handed to the timer below when the pump is off.
+        glideDriver = .pump
+        glideLastTick = CACurrentMediaTime()
+        scrollLock.unlock()
+        // Never with scrollLock held: the pump's lock is never taken inside it.
+        if MouseMotionPump.shared.wakeForGlide() { return }
+        scrollLock.lock()
+        // Still ours: a pump that stopped meanwhile may have started the
+        // timer already (glidePumpStopped), or a late tick finished it.
+        if glideDriver == .pump { startGlideTimerLocked(firstIn: .now()) }
+        scrollLock.unlock()
+    }
+
+    /// The glide's own timer, with scrollLock held.
+    private func startGlideTimerLocked(firstIn deadline: DispatchTime) {
+        glideTimer?.cancel()
+        glideTimerSerial &+= 1
+        let serial = glideTimerSerial
+        let timer = DispatchSource.makeTimerSource(queue: glideQueue)
+        timer.schedule(deadline: deadline, repeating: .milliseconds(8), leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in self?.glideTick(serial: serial) }
+        glideTimer = timer
+        glideDriver = .timer
+        timer.resume()
+    }
+
+    /// The glide's own timer: posts a share of what is owed, more while a
+    /// lot is owed and less as it settles, so a scroll eases out instead of
+    /// jumping.
+    private func glideTick(serial: UInt64) {
+        let now = CACurrentMediaTime()
+        scrollLock.lock()
+        // Taken over by the pump, or replaced: this timer is done.
+        guard glideDriver == .timer, serial == glideTimerSerial else { scrollLock.unlock(); return }
+        let step = glideShareLocked(now: now)
+        if !step.owedLeft {
+            glideTimer?.cancel(); glideTimer = nil
+            glideDriver = .none
+        }
+        scrollLock.unlock()
+        if step.x != 0 || step.y != 0 { postPixelScroll(deltaX: step.x, deltaY: step.y) }
+    }
+
+    /// One step of a glide the pump is stepping, from the pump's tick and
+    /// outside its lock. The caller posts x and y (postPixelScroll). When
+    /// owedLeft is false the glide is over (or is not the pump's) and the
+    /// pump may sleep again.
+    func glideStep(now: CFTimeInterval) -> (x: Int32, y: Int32, owedLeft: Bool) {
+        scrollLock.lock(); defer { scrollLock.unlock() }
+        guard glideDriver == .pump else { return (0, 0, false) }
+        let step = glideShareLocked(now: now)
+        if !step.owedLeft { glideDriver = .none }
+        return step
+    }
+
+    /// The pump stopped (a preset stopped, the watchdog): a glide it was
+    /// stepping goes on on the glide's own timer from the next frame, as a
+    /// glide always did once started. The watchdog then drops what is owed
+    /// (forgetHeldPointerState), and the timer's next tick finds nothing.
+    /// Never called with the pump's lock held.
+    func glidePumpStopped() {
+        scrollLock.lock(); defer { scrollLock.unlock() }
+        guard glideDriver == .pump else { return }
+        if abs(glideOwed.x) < 1 && abs(glideOwed.y) < 1 {
+            glideOwed = (0, 0)
+            glideDriver = .none
+        } else {
+            startGlideTimerLocked(firstIn: .now() + .milliseconds(8))
+        }
+    }
+
+    #if DEBUG
+    /// Tests only: every glide step takes this time step instead of the
+    /// time measured, so a glide's steps are the same whoever ticks it.
+    nonisolated(unsafe) static var debugGlideStepSeconds: Double?
+    #endif
+
+    /// A share of what is owed, with scrollLock held. The same for the
+    /// timer and the pump. owedLeft false: nothing was left to send, what is
+    /// owed is cleared, and the glide is over.
+    private func glideShareLocked(now: CFTimeInterval) -> (x: Int32, y: Int32, owedLeft: Bool) {
+        // At least one frame's share: the first tick fires as the scroll
+        // arrives, with no time gone, and sent a single pixel.
+        let measured = min(0.05, max(1.0 / 120, now - glideLastTick))
+        #if DEBUG
+        let dt = Self.debugGlideStepSeconds ?? measured
+        #else
+        let dt = measured
+        #endif
+        glideLastTick = now
+        guard let tau = scrollGlide else {
+            glideOwed = (0, 0)
+            return (0, 0, false)
+        }
+        let share = 1 - exp(-dt / tau)
+        func take(_ owed: inout Double) -> Int32 {
+            guard abs(owed) >= 1 else { return 0 }
+            // At least a pixel a tick, so the end of a glide does not crawl.
+            let step = owed * share
+            let whole = abs(step) < 1 ? (owed > 0 ? 1 : -1) : step.rounded(.towardZero)
+            let clamped = max(-4096, min(4096, whole))
+            owed -= clamped
+            return Int32(clamped)
+        }
+        let x = take(&glideOwed.x)
+        let y = take(&glideOwed.y)
+        if x == 0 && y == 0 {
+            glideOwed = (0, 0)
+            return (0, 0, false)
+        }
+        return (x, y, true)
+    }
+
+    /// The mouse wheel's own notch, already turned the way it should go:
+    /// glided while smooth scrolling is on. Returns false when it is off,
+    /// so the wheel's event is let through instead of lost.
+    func glideWheel(x: Double, y: Double) -> Bool {
+        scrollLock.lock()
+        // Not into the Test Bench's catcher: a real notch turned during
+        // its checks goes through as it was.
+        guard scrollGlide != nil, testScrollSink == nil else { scrollLock.unlock(); return false }
+        glideOwed.x += x
+        glideOwed.y += y
+        scrollLock.unlock()
+        startGlide()
+        return true
+    }
+
+    /// Drops a glide still under way, for a stop or a forced release.
+    nonisolated private func cancelGlide() {
+        scrollLock.lock()
+        glideOwed = (0, 0)
+        scrollLock.unlock()
     }
 
     // MARK: - Release All
 
     func releaseAll() {
-        // A forced release is never the first half of a double click: the
-        // next press after a preset switch or a pause goes out as click 1.
-        defer { lastClickTime = 0 }
+        cancelGlide()
         // Every key goes out through keyUp, the one place that knows how to
         // release a modifier: a bare key-up event for Command or Shift
         // inherits the HID state where the key is still down, so the system
@@ -1012,6 +1623,10 @@ final class InputSimulator: @unchecked Sendable {
         mouseLock.lock()
         mouseHolders.removeAll()
         let heldButtons = pressedMouseButtons
+        // A forced release is never the first half of a double click: the
+        // next press after a preset switch or a pause goes out as click 1.
+        // Under the lock, with the rest of the click record.
+        lastClickTime = 0
         mouseLock.unlock()
         for button in heldButtons {
             mouseButtonUp(button)
@@ -1028,9 +1643,12 @@ final class InputSimulator: @unchecked Sendable {
         }
         for key in held { keyUp(key) }
         pressedKeys.removeAll()
+        mirrorOwnModifierBits()
         keyScopes.removeAll()
+        ownerScopes.removeAll()
         postedKeys.removeAll()
         standaloneModifiers.removeAll()
+        refreshMouseFlagsCache()
     }
 
     /// After a crash or force quit, a modifier or mouse button this app was
@@ -1059,8 +1677,11 @@ final class InputSimulator: @unchecked Sendable {
         }
         let point = pointerLocationCG()
         for number in 0..<32 {
-            guard let button = CGMouseButton(rawValue: UInt32(number)),
-                  CGEventSource.buttonState(.combinedSessionState, button: button) else { continue }
+            // CGMouseButton names only buttons 0 to 2, so only those can be
+            // asked whether they are down; the side buttons are let go of
+            // unasked, since an up for a button not held changes nothing.
+            let button = CGMouseButton(rawValue: UInt32(number)) ?? .center
+            if number < 3, !CGEventSource.buttonState(.combinedSessionState, button: button) { continue }
             let type: CGEventType = number == 0 ? .leftMouseUp : (number == 1 ? .rightMouseUp : .otherMouseUp)
             if let up = CGEvent(mouseEventSource: eventSource, mouseType: type,
                                 mouseCursorPosition: point, mouseButton: button) {
@@ -1070,6 +1691,116 @@ final class InputSimulator: @unchecked Sendable {
         }
     }
 
+    // MARK: Own-posted record
+
+    /// The virtual keys and mouse buttons this app itself has posted down
+    /// and not yet up, kept under a lock of their own so a thread other than
+    /// main (the freeze watchdog, the SIGTERM fallback) can let go of exactly
+    /// these while main is hung. The session's own key state is not used for
+    /// that: it also reports the keys the person is holding during the hang.
+    /// Written where the events go out (postPlainKey, postModifierChange,
+    /// postMouseButton), so it tracks postedKeys and pressedMouseButtons.
+    private let ownPostedLock = NSLock()
+    private var ownPostedKeys: Set<Int> = []
+    private var ownPostedButtons: Set<Int> = []
+    /// The media and brightness keys (HID codes in specialKeyMap) posted
+    /// down as NX system events, released the same way.
+    private var ownPostedSpecialKeys: Set<Int> = []
+
+    private func noteOwnPost(key virtualCode: Int, down: Bool) {
+        ownPostedLock.lock()
+        if down { ownPostedKeys.insert(virtualCode) } else { ownPostedKeys.remove(virtualCode) }
+        ownPostedLock.unlock()
+    }
+
+    private func noteOwnPost(button: Int, down: Bool) {
+        ownPostedLock.lock()
+        if down { ownPostedButtons.insert(button) } else { ownPostedButtons.remove(button) }
+        ownPostedLock.unlock()
+    }
+
+    private func noteOwnPost(specialKey hidCode: Int, down: Bool) {
+        ownPostedLock.lock()
+        if down { ownPostedSpecialKeys.insert(hidCode) } else { ownPostedSpecialKeys.remove(hidCode) }
+        ownPostedLock.unlock()
+    }
+
+    /// releaseAll with the own-posted record kept. With the Accessibility
+    /// permission just taken away the ups go out but macOS drops them, so
+    /// what was down may still be down when the permission comes back;
+    /// releaseOwnPostedLeftovers lets go of it then.
+    func releaseAllKeepingOwnRecord() {
+        ownPostedLock.lock()
+        let keys = ownPostedKeys, buttons = ownPostedButtons, special = ownPostedSpecialKeys
+        ownPostedLock.unlock()
+        releaseAll()
+        ownPostedLock.lock()
+        ownPostedKeys.formUnion(keys)
+        ownPostedButtons.formUnion(buttons)
+        ownPostedSpecialKeys.formUnion(special)
+        ownPostedLock.unlock()
+        refreshMouseFlagsCache()
+    }
+
+    /// After the watchdog's sweep, while main is hung: the posters that
+    /// need no main (a macro's glide, a scroll tail) would go on reading the
+    /// held buttons and flags it just let go of, posting drags after the
+    /// mouse up. The ups went out already, so nothing is owed for these.
+    nonisolated func forgetHeldPointerState() {
+        mouseLock.lock()
+        pressedMouseButtons.removeAll()
+        cachedMouseFlags = ([], [])
+        mouseLock.unlock()
+        cancelGlide()
+    }
+
+    /// Let go of what this app posted down itself and nothing else: a key
+    /// the person is physically holding during a beachball is left alone.
+    /// Safe from any thread; the main-thread held sets are not touched, so
+    /// releaseAll squares them up once main answers again. Mouse buttons
+    /// first, then ordinary keys, then modifiers, as releaseAll orders them,
+    /// and the media keys last.
+    nonisolated func releaseOwnPostedLeftovers() {
+        ownPostedLock.lock()
+        let keys = ownPostedKeys
+        let buttons = ownPostedButtons
+        let special = ownPostedSpecialKeys
+        ownPostedKeys.removeAll()
+        ownPostedButtons.removeAll()
+        ownPostedSpecialKeys.removeAll()
+        ownPostedLock.unlock()
+        guard !keys.isEmpty || !buttons.isEmpty || !special.isEmpty else { return }
+
+        let point = pointerLocationCG()
+        for number in buttons.sorted() where number >= 0 && number < 32 {
+            let button = CGMouseButton(rawValue: UInt32(number)) ?? .center
+            let type: CGEventType = number == 0 ? .leftMouseUp : (number == 1 ? .rightMouseUp : .otherMouseUp)
+            if let up = CGEvent(mouseEventSource: eventSource, mouseType: type,
+                                mouseCursorPosition: point, mouseButton: button) {
+                up.setIntegerValueField(.mouseEventButtonNumber, value: Int64(number))
+                taggedPost(up)
+            }
+        }
+        let modifiers: Set<Int> = [56, 60, 59, 62, 58, 61, 55, 54, 63]
+        let ordered = keys.sorted { a, b in !modifiers.contains(a) && modifiers.contains(b) }
+        for vk in ordered {
+            guard let up = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(vk), keyDown: false) else { continue }
+            if modifiers.contains(vk) { up.type = .flagsChanged }
+            up.flags = []
+            taggedPost(up)
+        }
+        for hidCode in special.sorted() {
+            postSpecialKey(hidCode, keyDown: false)
+        }
+    }
+
+    /// Forget when this app last changed each modifier itself. Called on
+    /// the main thread when the Accessibility permission comes back.
+    func clearOwnModifierChanges() {
+        lastOwnModifierChange.removeAll()
+        refreshMouseFlagsCache()
+    }
+
     /// True while this app holds the key down itself. Read on the main
     /// thread, where keys are pressed and released.
     func isHolding(_ hidCode: Int) -> Bool { pressedKeys.contains(hidCode) }
@@ -1077,6 +1808,23 @@ final class InputSimulator: @unchecked Sendable {
     /// The side bits of the modifiers this app holds, as posted on its
     /// own events; the input poll masks them out of the session's flags.
     func ownDeviceModifierBits() -> UInt { UInt(deviceModifierBits().rawValue) }
+
+    /// The same bits from any thread, for the key and button taps, which run
+    /// on their own and cannot read `pressedKeys`: a mirror written on main
+    /// after each change to a held modifier.
+    func ownModifierBitsSnapshot() -> UInt {
+        ownModifierLock.lock()
+        defer { ownModifierLock.unlock() }
+        return ownModifierBitsMirror
+    }
+    private let ownModifierLock = NSLock()
+    private var ownModifierBitsMirror: UInt = 0
+    private func mirrorOwnModifierBits() {
+        let bits = UInt(deviceModifierBits().rawValue)
+        ownModifierLock.lock()
+        ownModifierBitsMirror = bits
+        ownModifierLock.unlock()
+    }
 
     /// Let go of what owners starting with `prefix` hold (a controller group's
     /// rows, "2:" for group 2). A key or button another owner still holds
@@ -1183,8 +1931,32 @@ final class AccessibilityPermissionService: ObservableObject {
                                                        : String(localized: "Accessibility access not granted")).post()
             if now {
                 ActivityLog.shared.info("Permissions", "Accessibility access granted")
+                // Whatever went out before the permission was taken away may
+                // have landed in part: let go of what this app posted down
+                // (not a key the person holds), and forget when this app last
+                // touched a modifier, since those changes may never have been
+                // accepted.
+                InputSimulator.shared.releaseOwnPostedLeftovers()
+                InputSimulator.shared.clearOwnModifierChanges()
+                // The held sets still say those are down, so a stick held
+                // through the grant did nothing until it was pushed again:
+                // squared as after a freeze, and the next poll presses what
+                // is really held.
+                InputSimulator.shared.releaseAll()
+                NotificationCenter.default.post(name: InputSimulator.outputsForcedReleaseNotification,
+                                                object: nil, userInfo: ["reason": "accessibility"])
             } else {
                 ActivityLog.shared.error("Permissions", "Accessibility access is missing: no key or mouse output can be sent until it is granted in System Settings, Privacy & Security, Accessibility")
+                // macOS accepts nothing from here on, so the engine's held
+                // sets would only drift from what is really down. The ups
+                // posted here are dropped too, so the own-posted record is
+                // kept for the sweep when the permission comes back.
+                InputSimulator.shared.releaseAllKeepingOwnRecord()
+                // The engine squares its latches with that release, as it
+                // does on pause and suspend; nothing else stops it here,
+                // since MIDI, Open App, speech and lights still work.
+                NotificationCenter.default.post(name: InputSimulator.outputsForcedReleaseNotification,
+                                                object: nil, userInfo: ["reason": "accessibility"])
             }
         }
     }
@@ -1256,7 +2028,7 @@ final class AccessibilityPermissionService: ObservableObject {
 /// does not own. This owns the single handler, reads the ID off the
 /// event, and calls only the action registered for it.
 final class HotKeyCenter: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = HotKeyCenter()
+    static let shared = HotKeyCenter()
 
     private let lock = NSLock()
     private var handlerRef: EventHandlerRef?
@@ -1273,6 +2045,20 @@ final class HotKeyCenter: @unchecked Sendable {
     /// Registers a system-wide chord. Returns a token for `unregister`, or
     /// nil when the chord is unavailable (usually another app owns it).
     @discardableResult
+    /// Whether a key press with these flags is one of the app's own
+    /// shortcuts (the emergency stop, a preset's shortcut). The key block
+    /// runs ahead of the shortcut matching, so it must never swallow one.
+    func isShortcut(virtualKey: Int, flags: CGEventFlags) -> Bool {
+        var mask: UInt32 = 0
+        if flags.contains(.maskCommand) { mask |= UInt32(cmdKey) }
+        if flags.contains(.maskShift) { mask |= UInt32(shiftKey) }
+        if flags.contains(.maskAlternate) { mask |= UInt32(optionKey) }
+        if flags.contains(.maskControl) { mask |= UInt32(controlKey) }
+        lock.lock()
+        defer { lock.unlock() }
+        return chords.values.contains { $0.keyCode == UInt32(virtualKey) && $0.modifiers == mask }
+    }
+
     func register(keyCode: UInt32, modifiers: UInt32,
                   action: @escaping () -> Void) -> UInt32? {
         lock.lock()
@@ -1335,6 +2121,15 @@ final class HotKeyCenter: @unchecked Sendable {
     /// `lostOnResume`.
     @discardableResult
     func resumeAll(first: Set<UInt32> = []) -> Set<UInt32> {
+        let failed = resumeAllLocked(first: first)
+        // The preset chords that were lost, so Settings and the editor can
+        // say so; the stop's own, the caller looks after. Outside the lock:
+        // the service registers again from there.
+        if !failed.isEmpty { PresetHotKeyService.shared.noteLost(tokens: failed) }
+        return failed
+    }
+
+    private func resumeAllLocked(first: Set<UInt32>) -> Set<UInt32> {
         lock.lock()
         defer { lock.unlock() }
         guard suspendDepth > 0 else { return [] }
@@ -1420,20 +2215,26 @@ struct HotKeySpec: Codable, Hashable {
         return (words + [Self.spokenKey(HotKeySpec.keyName(for: keyCode))]).joined(separator: " ")
     }
 
+    /// Each punctuation mark a key name can be, as its spoken word. Built
+    /// once: every binding row's VoiceOver label reads it on each render,
+    /// and the app's language changes only with a relaunch.
+    static let spokenMarkWords: [String: String] = [
+        ".": String(localized: "period"), ",": String(localized: "comma"), "/": String(localized: "slash"),
+        ";": String(localized: "semicolon"), ":": String(localized: "colon"),
+        "!": String(localized: "exclamation mark"), "-": String(localized: "hyphen"),
+        "=": String(localized: "equals sign"), "?": String(localized: "question mark"),
+        "'": String(localized: "apostrophe"), "esc": String(localized: "escape"),
+        "[": String(localized: "left bracket"), "]": String(localized: "right bracket"),
+        "\\": String(localized: "backslash"), "`": String(localized: "grave accent"),
+        "^": String(localized: "caret"), "<": String(localized: "less than"),
+        "#": String(localized: "number sign"), "\u{00B4}": String(localized: "acute accent"),
+        "*": String(localized: "asterisk"),
+    ]
+
     /// A key name with its punctuation mark spoken as a word.
     static func spokenKey(_ key: String) -> String {
-        let marks = [".": String(localized: "period"), ",": String(localized: "comma"), "/": String(localized: "slash"),
-                     ";": String(localized: "semicolon"), ":": String(localized: "colon"),
-                     "!": String(localized: "exclamation mark"), "-": String(localized: "hyphen"),
-                     "=": String(localized: "equals sign"), "?": String(localized: "question mark"),
-                     "'": String(localized: "apostrophe"), "esc": String(localized: "escape"),
-                     "[": String(localized: "left bracket"), "]": String(localized: "right bracket"),
-                     "\\": String(localized: "backslash"), "`": String(localized: "grave accent"),
-                     "^": String(localized: "caret"), "<": String(localized: "less than"),
-                     "#": String(localized: "number sign"), "\u{00B4}": String(localized: "acute accent"),
-                     "*": String(localized: "asterisk")]
         let bare = key.hasPrefix("\u{200F}") ? String(key.dropFirst()) : key
-        return marks[bare] ?? key
+        return spokenMarkWords[bare] ?? key
     }
 
     /// Text for VoiceOver with each lone mark ("Command + .") as its word.
@@ -1543,7 +2344,7 @@ struct HotKeySpec: Codable, Hashable {
 /// menu bar. The controller path matters most: if a preset has taken over
 /// the keyboard and mouse, the controller may be the only input you have.
 final class EmergencyStopService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = EmergencyStopService()
+    static let shared = EmergencyStopService()
 
     /// Posted after a stop so the UI can deactivate the preset and confirm.
     static let stoppedNotification = Notification.Name("InputConfig.EmergencyStopped")
@@ -1609,7 +2410,8 @@ final class EmergencyStopService: @unchecked Sendable {
         let own = Bundle.main.bundleIdentifier.flatMap { d.persistentDomain(forName: $0) }
         let recorded = own?[Self.keyCodeKey] != nil || own?[Self.modifiersKey] != nil
         if !recorded, stored == Self.defaultSpec,
-           let period = SystemActionService.virtualKey(typing: ".", command: true), period != Int(Self.defaultSpec.keyCode) {
+           let period = SystemActionService.virtualKey(typing: ".", command: true),
+           !SystemActionService.keypadKeys.contains(period), period != Int(Self.defaultSpec.keyCode) {
             return HotKeySpec(keyCode: UInt32(period), modifiers: stored.modifiers)
         }
         return stored
@@ -1721,16 +2523,23 @@ final class EmergencyStopService: @unchecked Sendable {
     private func observeDefaults() {
         guard defaultsObserver == nil else { return }
         defaultsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+            forName: UserDefaults.didChangeNotification, object: nil, queue: nil
         ) { [weak self] _ in
-            self?.refreshCachedSettings()
+            // Not queue: .main, which made a write from any other thread
+            // (the freeze watchdog's) wait for the main thread.
+            DispatchQueue.main.async { self?.refreshCachedSettings() }
         }
     }
+
+    /// Tries a stop chord that failed again each time this app comes to the
+    /// front, as preset chords are: once another app let it go, the stop
+    /// stayed off until a relaunch.
+    private var registrationRetry: NSObjectProtocol?
 
     /// (Re-)register the chord to match the current settings. Safe to call
     /// repeatedly; it tears down the previous registration first.
     @discardableResult
-    func refreshRegistration() -> Bool {
+    func refreshRegistration(quiet: Bool = false) -> Bool {
         refreshCachedSettings()
         MainActor.assumeIsolated { InputSimulator.shared.watchLayout() }
         observeDefaults()
@@ -1742,7 +2551,17 @@ final class EmergencyStopService: @unchecked Sendable {
         guard let t = HotKeyCenter.shared.register(keyCode: s.keyCode, modifiers: s.modifiers,
                                                    action: { EmergencyStopService.shared.stop(reason: .hotkey) })
         else {
-            ActivityLog.shared.warning("Emergency stop", "The shortcut \(s.displayString) is taken by another app; the keyboard emergency stop is off")
+            if !quiet {
+                ActivityLog.shared.warning("Emergency stop", "The shortcut \(s.displayString) is taken by another app; the keyboard emergency stop is off")
+            }
+            if registrationRetry == nil {
+                registrationRetry = NotificationCenter.default.addObserver(
+                    forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+                ) { _ in
+                    let stop = EmergencyStopService.shared
+                    if stop.isEnabled, !stop.isRegistered { stop.refreshRegistration(quiet: true) }
+                }
+            }
             return false
         }
         token = t
@@ -1785,8 +2604,13 @@ final class EmergencyStopService: @unchecked Sendable {
     /// Takes the Shift chord back once no preset holds it: given away, it was
     /// never returned, so the stop failed while a preset held Shift.
     func reclaimShiftVariant(presets: [Preset]) {
+        reclaimShiftVariant(specs: presets.compactMap(\.activateHotKey))
+    }
+
+    /// The same, given the chords alone.
+    func reclaimShiftVariant(specs: [HotKeySpec]) {
         guard isRegistered, shiftToken == nil, let variant = shiftVariant,
-              !presets.contains(where: { $0.activateHotKey == variant }) else { return }
+              !specs.contains(variant) else { return }
         shiftToken = HotKeyCenter.shared.register(keyCode: variant.keyCode, modifiers: variant.modifiers,
                                                   action: { EmergencyStopService.shared.stop(reason: .hotkey) })
     }
@@ -1798,22 +2622,26 @@ final class EmergencyStopService: @unchecked Sendable {
         let d = UserDefaults.standard
         let previous = spec
         let wasEnabled = isEnabled
+        // Whether the chord had ever been recorded (in the app's own domain,
+        // not the registered defaults): a chord never recorded goes back to
+        // never recorded, so the default keeps following the layout's
+        // period key instead of being written down as the US one.
+        let own = Bundle.main.bundleIdentifier.flatMap { d.persistentDomain(forName: $0) }
+        let wasRecorded = own?[Self.keyCodeKey] != nil || own?[Self.modifiersKey] != nil
         d.set(Int(newSpec.keyCode), forKey: Self.keyCodeKey)
         d.set(Int(newSpec.modifiers), forKey: Self.modifiersKey)
         d.set(true, forKey: Self.enabledKey)
         if refreshRegistration() { return true }
-        d.set(Int(previous.keyCode), forKey: Self.keyCodeKey)
-        d.set(Int(previous.modifiers), forKey: Self.modifiersKey)
+        if wasRecorded {
+            d.set(Int(previous.keyCode), forKey: Self.keyCodeKey)
+            d.set(Int(previous.modifiers), forKey: Self.modifiersKey)
+        } else {
+            d.removeObject(forKey: Self.keyCodeKey)
+            d.removeObject(forKey: Self.modifiersKey)
+        }
         d.set(wasEnabled, forKey: Self.enabledKey)
         refreshRegistration()
         return false
-    }
-
-    func setSpec(_ newSpec: HotKeySpec) {
-        let d = UserDefaults.standard
-        d.set(Int(newSpec.keyCode), forKey: Self.keyCodeKey)
-        d.set(Int(newSpec.modifiers), forKey: Self.modifiersKey)
-        refreshRegistration()
     }
 
     func setEnabled(_ on: Bool) {
@@ -1826,23 +2654,25 @@ final class EmergencyStopService: @unchecked Sendable {
         case controllerHold = "controller button held"
         case binding = "a binding"
         case menu = "the menu"
+        /// Siri, a shortcut, Spotlight or a Voice Control command (App Intents).
+        case intent = "Siri or a shortcut"
     }
 
     /// Stop everything, in the order that matters: halt the engine first so
     /// nothing is re-pressed on the next frame, then let go of every key,
     /// button, and note we are holding, then put the cursor back.
     func stop(reason: Reason) {
-        // Heard and spoken, so a stop is never silent; from the controller,
-        // also how to start again.
-        // Shown as well, for someone who hears neither.
-        DispatchQueue.main.async {
-            #if DEBUG
-            let quiet = TestCapture.active
-            if quiet { TestCapture.note("stop sound \(reason)") }
-            #else
-            let quiet = false
-            #endif
-            if !quiet { NSSound(named: "Funk")?.play() }
+        let work = {
+            // 1. Engine and preset. Observers run synchronously on this
+            //    thread, so the poll loop is stopped before we release.
+            NotificationCenter.default.post(name: Self.stoppedNotification,
+                                            object: nil,
+                                            userInfo: ["reason": reason.rawValue])
+            // Heard and spoken, so a stop is never silent; from the
+            // controller, also how to start again. Shown as well, for
+            // someone who hears neither. The line is worked out here, after
+            // the observers set lastStopStoppedSomething: read before the
+            // hop to main, a stop from another thread spoke the last stop's.
             let said: String
             if reason == .controllerHold {
                 said = String(localized: "Stopped by the controller hold. Hold it again to start the preset back up.")
@@ -1851,25 +2681,31 @@ final class EmergencyStopService: @unchecked Sendable {
             } else {
                 said = String(localized: "Emergency stop. Everything stopped.")
             }
-            AccessibilityNotification.Announcement(said).post()
-            MainActor.assumeIsolated { StatusHUD.shared.show(said) }
-        }
-        let work = {
-            // 1. Engine and preset. Observers run synchronously on this
-            //    thread, so the poll loop is stopped before we release.
-            NotificationCenter.default.post(name: Self.stoppedNotification,
-                                            object: nil,
-                                            userInfo: ["reason": reason.rawValue])
+            DispatchQueue.main.async {
+                #if DEBUG
+                let quiet = TestCapture.active
+                if quiet { TestCapture.note("stop sound \(reason)") }
+                #else
+                let quiet = false
+                #endif
+                if !quiet { NSSound(named: "Funk")?.play() }
+                AccessibilityNotification.Announcement(said).post()
+                MainActor.assumeIsolated { StatusHUD.shared.show(said) }
+            }
             // 2. Let go of everything we are holding down, including the
             //    controller's motors and any light this app is holding: a
             //    stop that leaves a pad buzzing is not a stop.
             InputSimulator.shared.releaseAll()
             MIDIService.shared.releaseAllNotes()
             InProcessLightWriter.shared.stopMotors()
-            MainActor.assumeIsolated { RawHIDGamepadService.shared.stopSteamController2026Rumble() }
+            MainActor.assumeIsolated { RawHIDGamepadService.shared.stopSteamController2026Rumble(); RawHIDGamepadService.shared.stopEightBitDoRumble() }
             MainActor.assumeIsolated { FeedbackService.shared.clearHapticEngines() }
             // A row's phrase stops too, so it does not talk over the stop.
             MainActor.assumeIsolated { FeedbackService.shared.stopSpeaking() }
+            // A macro recording is not an output, but "everything stopped"
+            // covers it: left running it would keep saying so in the sheet
+            // and keep the chord's modifiers as steps.
+            MainActor.assumeIsolated { MacroRecorderService.shared.stopForEmergencyStop() }
             // 3. Give the pointer back. CursorGuardService is main-actor
             //    isolated and this block only ever runs on the main thread.
             MainActor.assumeIsolated {
@@ -1887,7 +2723,7 @@ final class EmergencyStopService: @unchecked Sendable {
 /// system-wide chord that switches to it; pressing it again while that
 /// preset is the active one stops it.
 final class PresetHotKeyService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = PresetHotKeyService()
+    static let shared = PresetHotKeyService()
 
     /// Posted with the preset id in `object` when its chord is pressed.
     static let activateNotification = Notification.Name("InputConfig.ActivatePresetHotKey")
@@ -1895,37 +2731,78 @@ final class PresetHotKeyService: @unchecked Sendable {
     private var tokens: [UUID: UInt32] = [:]
     /// Chords that could not be claimed, so Settings can say so.
     private(set) var failed: Set<UUID> = []
+    /// The chord of every preset that has one, kept so a lost or failed
+    /// one can be tried again without the library.
+    private var specs: [UUID: HotKeySpec] = [:]
+    private var activationObserver: NSObjectProtocol?
 
     private init() {}
 
     /// Re-register every preset chord. Called whenever the library changes.
     func sync(with presets: [Preset]) {
+        watchActivation()
         for (_, token) in tokens { HotKeyCenter.shared.unregister(token) }
         tokens.removeAll()
         failed.removeAll()
+        specs.removeAll()
         for preset in presets {
             guard let spec = preset.activateHotKey else { continue }
-            let id = preset.id
-            if let token = HotKeyCenter.shared.register(
-                keyCode: spec.keyCode, modifiers: spec.modifiers,
-                action: {
-                    NotificationCenter.default.post(
-                        name: PresetHotKeyService.activateNotification, object: id)
-                }) {
-                tokens[id] = token
-            } else if EmergencyStopService.shared.yieldShiftVariant(to: spec),
-                      let token = HotKeyCenter.shared.register(
-                        keyCode: spec.keyCode, modifiers: spec.modifiers,
-                        action: {
-                            NotificationCenter.default.post(
-                                name: PresetHotKeyService.activateNotification, object: id)
-                        }) {
-                tokens[id] = token
-            } else {
-                failed.insert(id)
-            }
+            specs[preset.id] = spec
+            if !register(preset.id, spec: spec) { failed.insert(preset.id) }
         }
         EmergencyStopService.shared.reclaimShiftVariant(presets: presets)
+    }
+
+    /// One chord, taking the stop's Shift variant over when that is what
+    /// blocks it. True when registered.
+    private func register(_ id: UUID, spec: HotKeySpec) -> Bool {
+        let action = {
+            NotificationCenter.default.post(
+                name: PresetHotKeyService.activateNotification, object: id)
+        }
+        if let token = HotKeyCenter.shared.register(
+            keyCode: spec.keyCode, modifiers: spec.modifiers, action: action) {
+            tokens[id] = token
+            return true
+        }
+        if EmergencyStopService.shared.yieldShiftVariant(to: spec),
+           let token = HotKeyCenter.shared.register(
+            keyCode: spec.keyCode, modifiers: spec.modifiers, action: action) {
+            tokens[id] = token
+            return true
+        }
+        return false
+    }
+
+    /// Chords a recorder could not take back on resume: the presets they
+    /// belonged to count as failed, as if sync had not claimed them, so the
+    /// editor's warning is truthful instead of a chord that silently does
+    /// nothing. Called by HotKeyCenter.resumeAll.
+    func noteLost(tokens lost: Set<UInt32>) {
+        for (id, token) in tokens where lost.contains(token) {
+            tokens.removeValue(forKey: id)
+            failed.insert(id)
+        }
+    }
+
+    /// Another app may have let a chord go since: each failed one is tried
+    /// again when this app comes to the front, once per activation.
+    private func watchActivation() {
+        guard activationObserver == nil else { return }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.retryFailed()
+        }
+    }
+
+    private func retryFailed() {
+        guard !failed.isEmpty else { return }
+        for id in failed {
+            guard let spec = specs[id], register(id, spec: spec) else { continue }
+            failed.remove(id)
+        }
+        EmergencyStopService.shared.reclaimShiftVariant(specs: Array(specs.values))
     }
 
     /// True when two presets ask for the same chord, or one collides with
@@ -1944,7 +2821,7 @@ final class PresetHotKeyService: @unchecked Sendable {
 /// behavior; it now goes through HotKeyCenter so it only fires for its own
 /// chord rather than for every hot key the app registers.
 final class GlobalHotKeyService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = GlobalHotKeyService()
+    static let shared = GlobalHotKeyService()
     static let toggleNotification = Notification.Name("InputConfig.ToggleRecentPreset")
     /// UserDefaults key shared by Settings (the toggle) and AppState (boot).
     static let enabledDefaultsKey = "InputConfig.globalHotkeyEnabled"
@@ -2009,6 +2886,249 @@ final class GlobalHotKeyService: @unchecked Sendable {
     }
 }
 
+/// Scroll direction and Smooth scrolling for the mouse wheel itself, while
+/// a preset that asks for them runs, and the direction of a trackpad or
+/// Magic Mouse when the preset includes them. Its own tap on its own thread, so
+/// a busy main thread never holds up anyone's scrolling, and appended last
+/// so the app's listening tap still sees the wheel as it was turned.
+final class MouseWheelShaper: @unchecked Sendable {
+    static let shared = MouseWheelShaper()
+    private let lock = NSLock()
+    private var reverseVertical = false
+    private var reverseHorizontal = false
+    /// Which devices the direction applies to: a notched wheel, and a
+    /// trackpad or Magic Mouse (continuous scrolling, momentum included).
+    private var flipsWheel = false
+    private var flipsTrackpad = false
+    /// Scroll speed for each, 1 as it comes.
+    private var wheelSpeed = 1.0
+    private var trackpadSpeed = 1.0
+    /// Lines left over from a scaled notch, per axis; tap thread only.
+    private var lineCarry: (x: Double, y: Double) = (0, 0)
+    private var smooth = false
+    private var tap: CFMachPort?
+    private var runLoop: CFRunLoop?
+    /// Wanted: set at once, before the thread has its tap, so a second
+    /// configure neither starts another thread nor misses a removal.
+    private var active = false
+    /// InputConfig is the app in front: its own windows scroll as the
+    /// person set them, so the editor does not scroll backwards while a
+    /// preset with Reverse is tuned. Set from the engine's app observer;
+    /// the tap thread never asks NSWorkspace.
+    private var selfInFront = false
+    /// The running preset is held back: every scroll passes as it came.
+    private var passing = false
+    /// A refused tap is logged once, until one is made again.
+    private var failureLogged = false
+    /// The tap is turned off here on purpose while every scroll would pass
+    /// anyway (`passing` or `selfInFront`): the window server then stops
+    /// sending each scroll to the tap thread and waiting for it to come back
+    /// untouched, 60 to 120 round trips a second while a trackpad scrolls.
+    /// The tap and its thread stay, as they do for `passing`. Not to be read
+    /// as Accessibility revoked, and not turned back on after a timeout.
+    private var disabledOnPurpose = false
+    /// Serializes turning the tap on and off, so the last change made is
+    /// the one that holds. Never taken by the tap's callback.
+    private let enableLock = NSLock()
+
+    private init() {}
+
+    func setSelfInFront(_ front: Bool) {
+        lock.lock(); selfInFront = front; lock.unlock()
+        applyTapEnabled()
+    }
+
+    #if DEBUG
+    /// Tests only: whether a tap is held, whether the system has it on, and
+    /// whether it was turned off here on purpose; and the app-in-front flag.
+    var debugTapState: (present: Bool, enabled: Bool, offOnPurpose: Bool, selfInFront: Bool) {
+        lock.lock()
+        let tap = self.tap, off = disabledOnPurpose, front = selfInFront
+        lock.unlock()
+        guard let tap else { return (false, false, off, front) }
+        return (true, CGEvent.tapIsEnabled(tap: tap), off, front)
+    }
+    #endif
+
+    /// Turns the tap off while it would only pass scrolls and on again when
+    /// it shapes them. The callback still checks `passing` and
+    /// `selfInFront`, so a tap left on by a race only costs what it did.
+    private func applyTapEnabled() {
+        enableLock.lock(); defer { enableLock.unlock() }
+        lock.lock()
+        guard let tap else { lock.unlock(); return }
+        // InputConfig in front no longer turns the shaping off: a speed or
+        // direction set in the editor works at once, not only after another
+        // app comes to the front.
+        let off = passing
+        let change = off != disabledOnPurpose
+        disabledOnPurpose = off
+        lock.unlock()
+        if change { CGEvent.tapEnable(tap: tap, enable: !off) }
+    }
+
+    /// `passing` holds the shaping back with the tap kept: the preset is
+    /// suspended or paused (an unlisted app in front, the lock screen, a
+    /// Scan), and removing the tap and its thread on each such edge cost a
+    /// thread per app switch and let a notch through unshaped meanwhile.
+    func configure(reverseVertical: Bool, reverseHorizontal: Bool, wheel: Bool, trackpad: Bool, smooth: Bool,
+                   wheelSpeed: Double = 1, trackpadSpeed: Double = 1, passing: Bool = false) {
+        lock.lock()
+        self.passing = passing
+        self.reverseVertical = reverseVertical
+        self.reverseHorizontal = reverseHorizontal
+        flipsWheel = wheel
+        flipsTrackpad = trackpad
+        self.smooth = smooth
+        self.wheelSpeed = wheelSpeed
+        self.trackpadSpeed = trackpadSpeed
+        let wanted = ((reverseVertical || reverseHorizontal) && (wheel || trackpad)) || smooth
+            || wheelSpeed != 1 || trackpadSpeed != 1
+        let was = active
+        active = wanted
+        lock.unlock()
+        if wanted && !was { remove(); install(); return }
+        if !wanted { if was { remove() }; return }
+        // Kept: on or off as the preset is held back or not. Then a tap
+        // macOS turned off (Accessibility revoked) counts as absent and is
+        // made again; one turned off here on purpose does not.
+        applyTapEnabled()
+        lock.lock()
+        let tap = self.tap, offOnPurpose = disabledOnPurpose
+        lock.unlock()
+        if let tap, !offOnPurpose, !CGEvent.tapIsEnabled(tap: tap) { remove(); install() }
+    }
+
+    private func install() {
+        let thread = Thread { [weak self] in
+            guard let self else { return }
+            let callback: CGEventTapCallBack = { _, type, event, info in
+                guard let info else { return Unmanaged.passUnretained(event) }
+                return Unmanaged<MouseWheelShaper>.fromOpaque(info).takeUnretainedValue().handle(type, event)
+            }
+            guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap,
+                                              options: .defaultTap,
+                                              eventsOfInterest: 1 << CGEventType.scrollWheel.rawValue,
+                                              callback: callback,
+                                              userInfo: Unmanaged.passUnretained(self).toOpaque())
+            else {
+                // No Accessibility, or the system refused an active tap:
+                // not wanted any more, so the next configure tries again.
+                // Unless another thread already holds a working tap, which
+                // the next configure must still be able to remove.
+                self.lock.lock()
+                if self.tap == nil { self.active = false }
+                let firstFailure = !self.failureLogged
+                self.failureLogged = true
+                self.lock.unlock()
+                if firstFailure {
+                    ActivityLog.shared.warning("Scrolling", "The mouse wheel cannot be shaped: the event tap could not be created; check Accessibility in System Settings")
+                }
+                return
+            }
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            let loop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(loop, source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            self.lock.lock()
+            // Turned off again while this thread was starting, or turned
+            // off and on so another thread started too: the first to get
+            // here keeps its tap and the other lets go of its own.
+            guard self.active, self.tap == nil else {
+                self.lock.unlock()
+                CGEvent.tapEnable(tap: tap, enable: false)
+                CFMachPortInvalidate(tap)
+                return
+            }
+            self.tap = tap
+            self.runLoop = loop
+            self.failureLogged = false
+            self.disabledOnPurpose = false
+            // A fraction left from an earlier speed starts over.
+            self.lineCarry = (0, 0)
+            self.lock.unlock()
+            // Made while held back: off until the preset shapes again.
+            self.applyTapEnabled()
+            CFRunLoopRun()
+        }
+        thread.name = "InputConfig.MouseWheel"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
+
+    private func remove() {
+        lock.lock()
+        let tap = self.tap, loop = runLoop
+        self.tap = nil
+        runLoop = nil
+        disabledOnPurpose = false
+        lock.unlock()
+        if let tap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+        }
+        if let loop { CFRunLoopStop(loop) }
+    }
+
+    private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            lock.lock(); let tap = self.tap, offOnPurpose = disabledOnPurpose; lock.unlock()
+            // Not while turned off on purpose: it would only pass scrolls.
+            if let tap, !offOnPurpose { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard type == .scrollWheel,
+              event.getIntegerValueField(.eventSourceUserData) != InputSimulator.ownEventMarker
+        else { return Unmanaged.passUnretained(event) }
+        let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous) != 0
+        lock.lock()
+        if passing { lock.unlock(); return Unmanaged.passUnretained(event) }
+        let flips = continuous ? flipsTrackpad : flipsWheel
+        let speed = continuous ? trackpadSpeed : wheelSpeed
+        let kY = (flips && reverseVertical ? -1 : 1) * speed
+        let kX = (flips && reverseHorizontal ? -1 : 1) * speed
+        // A trackpad already glides; only a notched wheel is smoothed.
+        let glide = smooth && !continuous
+        lock.unlock()
+        // With a modifier held the wheel zooms or scrolls sideways in many
+        // apps; the glide's events would lose the key, so it goes as is.
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+        if glide, event.flags.intersection(modifiers).isEmpty {
+            func pixels(line: CGEventField, point: CGEventField) -> Double {
+                let l = Double(event.getIntegerValueField(line))
+                let p = Double(event.getIntegerValueField(point))
+                // The point delta carries the wheel's acceleration; a notch
+                // of 10 points glides as far as a line.
+                let fast = p * 4
+                return abs(fast) > abs(l * 40) ? fast : l * 40
+            }
+            let y = pixels(line: .scrollWheelEventDeltaAxis1, point: .scrollWheelEventPointDeltaAxis1)
+            let x = pixels(line: .scrollWheelEventDeltaAxis2, point: .scrollWheelEventPointDeltaAxis2)
+            if InputSimulator.shared.glideWheel(x: x * kX, y: y * kY) { return nil }
+        }
+        if kY != 1 { Self.scale(event, by: kY, carry: &lineCarry.y, line: .scrollWheelEventDeltaAxis1, point: .scrollWheelEventPointDeltaAxis1, fixed: .scrollWheelEventFixedPtDeltaAxis1) }
+        if kX != 1 { Self.scale(event, by: kX, carry: &lineCarry.x, line: .scrollWheelEventDeltaAxis2, point: .scrollWheelEventPointDeltaAxis2, fixed: .scrollWheelEventFixedPtDeltaAxis2) }
+        return Unmanaged.passUnretained(event)
+    }
+
+    /// Flips and speeds up or slows down one axis. All three readings
+    /// first: writing the line delta makes macOS work the point delta out
+    /// again, so a point flipped after it came back pointing the old way.
+    /// Whole lines only, the rest carried, so a slowed notch still adds up.
+    private static func scale(_ event: CGEvent, by k: Double, carry: inout Double,
+                              line: CGEventField, point: CGEventField, fixed: CGEventField) {
+        let l = event.getIntegerValueField(line)
+        let p = event.getIntegerValueField(point)
+        let f = event.getDoubleValueField(fixed)
+        let lines = Double(l) * k + carry
+        let whole = lines.rounded(.towardZero)
+        carry = l == 0 ? carry : lines - whole
+        event.setIntegerValueField(line, value: Int64(max(-10_000, min(10_000, whole))))
+        event.setDoubleValueField(fixed, value: f * k)
+        event.setIntegerValueField(point, value: Int64(max(-100_000, min(100_000, (Double(p) * k).rounded()))))
+    }
+}
+
 #else
 
 // iOS stub - input simulation not available
@@ -2022,9 +3142,17 @@ final class InputSimulator: @unchecked Sendable {
     func moveMouse(deltaX: Int, deltaY: Int) {}
     func scrollWheel(deltaX: Int32, deltaY: Int32) {}
     func scrollWheelStep(axis: MouseAxis, direction: MouseDirection, lines: Int = 1) {}
+    func setScrollStyle(reverseVertical: Bool, reverseHorizontal: Bool, glideMs: Double?) {}
     func releaseAll() {}
+    static let outputsForcedReleaseNotification = Notification.Name("InputConfig.OutputsForcedRelease")
+    func releaseAllKeepingOwnRecord() {}
+    func releaseOwnPostedLeftovers() {}
+    func forgetHeldPointerState() {}
+    func releaseLeftoversFromLastRun() {}
+    func clearOwnModifierChanges() {}
     func releaseOwners(withPrefix prefix: String) {}
     func ownDeviceModifierBits() -> UInt { 0 }
+    func ownModifierBitsSnapshot() -> UInt { 0 }
 
 }
 
@@ -2052,7 +3180,7 @@ final class AccessibilityPermissionService: ObservableObject {
 /// etc.), and writes are suppressed below a small epsilon so a resting
 /// knob costs nothing.
 final class SystemVolumeService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = SystemVolumeService()
+    static let shared = SystemVolumeService()
 
     private let lock = NSLock()
     private var cachedDevice: AudioObjectID = kAudioObjectUnknown
@@ -2068,7 +3196,8 @@ final class SystemVolumeService: @unchecked Sendable {
             guard let self else { return }
             self.lock.lock()
             self.cachedDevice = kAudioObjectUnknown
-            self.lastSet = -1
+            // lastSet stays: cleared, a fader at rest wrote its position to
+            // the new device (AirPods at full volume) with nobody touching it.
             self.lock.unlock()
         }
     }
@@ -2097,11 +3226,22 @@ final class SystemVolumeService: @unchecked Sendable {
         let clamped = max(0, min(1, level))
         lock.lock()
         if abs(clamped - lastSet) < 0.004 { lock.unlock(); return }
+        let rising = lastSet >= 0 && clamped > lastSet
         lastSet = clamped
         let device = defaultOutputDevice()
         lock.unlock()
         guard device != kAudioObjectUnknown else { return }
 
+        // Turned up out of mute, as the volume key does: the level rose in
+        // the menu bar and nothing was heard.
+        if rising {
+            var mute = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyMute, mScope: kAudioDevicePropertyScopeOutput,
+                                                  mElement: kAudioObjectPropertyElementMain)
+            var off: UInt32 = 0
+            if AudioObjectHasProperty(device, &mute) {
+                AudioObjectSetPropertyData(device, &mute, 0, nil, UInt32(MemoryLayout<UInt32>.size), &off)
+            }
+        }
         var value = clamped
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
@@ -2150,7 +3290,7 @@ final class SystemListsCache: ObservableObject {
 }
 
 final class SystemActionService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = SystemActionService()
+    static let shared = SystemActionService()
     private init() {}
 
     /// How far one Volume Up / Down press moves, matching the keyboard's
@@ -2229,6 +3369,11 @@ final class SystemActionService: @unchecked Sendable {
         "file", "shortcuts", "javascript", "data", "applescript",
         "ssh", "vnc", "smb", "afp", "nfs", "ftp", "telnet",
         "tel", "sms", "facetime", "facetime-audio", "x-apple.systempreferences",
+        // The same things under other names: a network share, a Shortcut
+        // run, a call placed.
+        "cifs", "nwnode", "workflow", "shortcuts-production",
+        "facetime-group", "facetime-open-link", "system-call-controls",
+        "x-man-page", "imessage", "im", "sms-private",
     ]
 
     /// Whether an Open URL output or a launch link may open this URL.
@@ -2252,6 +3397,26 @@ final class SystemActionService: @unchecked Sendable {
         virtualKey(typing: character, modifierState: 0)
     }
 
+    /// The key that types a character with no modifiers. A digit or a mark
+    /// with no plain key on the layout (AZERTY's 1 is Shift &, its / is
+    /// Shift :) goes to the keypad key that types it, checked against the
+    /// layout, as 1.8's scan found it; a layout whose keypad types something
+    /// else keeps the US position. Only for the setting that follows the
+    /// layout, whose caption promises the character.
+    static func plainVirtualKey(typing character: Character) -> Int? {
+        if let key = virtualKey(typing: character) { return key }
+        guard let keypad = keypadKeysByCharacter[character],
+              self.character(forVirtualKey: keypad) == String(character) else { return nil }
+        return keypad
+    }
+
+    private static let keypadKeysByCharacter: [Character: Int] = [
+        "0": kVK_ANSI_Keypad0, "1": kVK_ANSI_Keypad1, "2": kVK_ANSI_Keypad2, "3": kVK_ANSI_Keypad3, "4": kVK_ANSI_Keypad4,
+        "5": kVK_ANSI_Keypad5, "6": kVK_ANSI_Keypad6, "7": kVK_ANSI_Keypad7, "8": kVK_ANSI_Keypad8, "9": kVK_ANSI_Keypad9,
+        "/": kVK_ANSI_KeypadDivide, "*": kVK_ANSI_KeypadMultiply, "-": kVK_ANSI_KeypadMinus, "+": kVK_ANSI_KeypadPlus,
+        ".": kVK_ANSI_KeypadDecimal, "=": kVK_ANSI_KeypadEquals,
+    ]
+
     /// What a key types on the current layout with no modifiers, or nil.
     static func character(forVirtualKey code: Int) -> String? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
@@ -2263,13 +3428,17 @@ final class SystemActionService: @unchecked Sendable {
             var chars = [UniChar](repeating: 0, count: 4)
             var length = 0
             let status = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), 0,
-                                        UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                        UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
                                         &deadKeys, chars.count, &length, &chars)
             guard status == noErr, length > 0 else { return nil }
             let s = String(utf16CodeUnits: chars, count: length)
             return s.trimmingCharacters(in: .controlCharacters).isEmpty ? nil : s
         }
     }
+
+    /// The keypad's virtual keys (65 to 92, and the JIS keypad comma, 95),
+    /// which the layout scan never answers with.
+    static let keypadKeys: Set<Int> = Set(65...92).union([95])
 
     private static func virtualKey(typing character: Character, modifierState: UInt32) -> Int? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
@@ -2278,12 +3447,16 @@ final class SystemActionService: @unchecked Sendable {
         let target = String(character).lowercased()
         return data.withUnsafeBytes { buffer -> Int? in
             guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
-            for code in 0..<128 {
+            // The main block only. The keypad types digits and marks too,
+            // and a mark sent there is a different key to every app and
+            // game. No match here, so the caller keeps the US position, or
+            // for a digit asks plainVirtualKey.
+            for code in 0..<128 where !keypadKeys.contains(code) {
                 var deadKeys: UInt32 = 0
                 var chars = [UniChar](repeating: 0, count: 4)
                 var length = 0
                 let status = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), modifierState,
-                                            UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                                            UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
                                             &deadKeys, chars.count, &length, &chars)
                 if status == noErr, length > 0,
                    String(utf16CodeUnits: chars, count: length).lowercased() == target {
@@ -2485,7 +3658,34 @@ final class SystemActionService: @unchecked Sendable {
         #if DEBUG
         if TestCapture.active { TestCapture.note("shortcut \(name)"); return }
         #endif
-        DispatchQueue.global(qos: .userInitiated).async {
+        // One run per shortcut name at a time: `shortcuts run` returns only
+        // when the shortcut finishes, and one that shows a dialog waits for
+        // the person, so a turbo or fast-tapped row would otherwise stack a
+        // process (and a blocked thread) per pulse. A press that lands while
+        // the last run is still going is dropped, not queued, and said once
+        // per run.
+        shortcutsLock.lock()
+        if runningShortcuts.contains(name) {
+            let say = warnedShortcuts.insert(name).inserted
+            shortcutsLock.unlock()
+            if say {
+                // The name counted, not written out, as the privacy policy says.
+                ActivityLog.shared.warning("Outputs", "A shortcut (name of \(name.count) characters) is still running; the press was skipped")
+            }
+            return
+        }
+        runningShortcuts.insert(name)
+        shortcutsLock.unlock()
+        // A thread of its own rather than a global queue worker, so a
+        // shortcut sitting on a dialog does not hold one of GCD's few
+        // workers away from the editor's lists and everything else.
+        let thread = Thread {
+            defer {
+                self.shortcutsLock.lock()
+                self.runningShortcuts.remove(name)
+                self.warnedShortcuts.remove(name)
+                self.shortcutsLock.unlock()
+            }
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
             task.arguments = ["run", name]
@@ -2525,7 +3725,15 @@ final class SystemActionService: @unchecked Sendable {
                 }
             }
         }
+        thread.qualityOfService = .userInitiated
+        thread.start()
     }
+
+    /// Shortcut names with a `shortcuts run` still going, and those a
+    /// skipped press has been logged for during that run. Under
+    /// `shortcutsLock`.
+    private var runningShortcuts = Set<String>()
+    private var warnedShortcuts = Set<String>()
 
     /// The user's installed Shortcuts, for the picker in the binding
     /// editor. Cached for a few seconds so opening the menu twice doesn't
@@ -2712,10 +3920,6 @@ enum HIDWrite {
     static var recorded: [Record] {
         recordLock.lock(); defer { recordLock.unlock() }
         return ring
-    }
-
-    static func clearRecorded() {
-        recordLock.lock(); ring.removeAll(); recordLock.unlock()
     }
 
     static func record(_ device: IOHIDDevice, _ type: IOHIDReportType, _ id: CFIndex, _ bytes: [UInt8],

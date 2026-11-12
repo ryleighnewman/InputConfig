@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle Rechte vorbehalten.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig hört auf die Sprachbefehle eines Presets, nur solange dieses Preset läuft oder sein Sprachbefehle-Fenster offen ist. Es wird nichts aufgezeichnet oder behalten.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig erkennt die Sprachbefehle eines Presets, auf diesem Mac, wenn die Sprache es erlaubt. Es wird nichts aufgezeichnet oder behalten.";

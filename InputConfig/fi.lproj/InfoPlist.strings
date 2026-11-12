@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Kaikki oikeudet pidätetään.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig kuuntelee esiasetuksen puhelauseita vain, kun se esiasetus on käynnissä tai sen Puhelauseet-ikkuna on auki. Mitään ei tallenneta tai säilytetä.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig tunnistaa esiasetuksen puhelauseet tällä Macilla, kun kieli sen sallii. Mitään ei tallenneta tai säilytetä.";

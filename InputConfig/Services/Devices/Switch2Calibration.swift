@@ -71,6 +71,17 @@ struct Switch2Calibration: Equatable {
     /// A user calibration block starts with this magic, then the nine bytes.
     static let userMagic: [UInt8] = [0xB2, 0xA1]
 
+    /// Whether a reply answers the flash read of `address`: the command's
+    /// four byte header comes back with 0x01 (response, not 0x00 error) in
+    /// its second byte, and the address is echoed where the command put
+    /// it, so a reply left over from an earlier command is not read as
+    /// this block.
+    static func isReply(_ reply: [UInt8], toReadOf address: UInt32) -> Bool {
+        guard reply.count >= replyLength, reply[0] == 0x02, reply[1] == 0x01, reply[3] == 0x01 else { return false }
+        let echoed = UInt32(reply[12]) | UInt32(reply[13]) << 8 | UInt32(reply[14]) << 16 | UInt32(reply[15]) << 24
+        return echoed == address
+    }
+
     static func data(fromReply reply: [UInt8]) -> [UInt8]? {
         guard reply.count >= replyLength else { return nil }
         return Array(reply[replyDataOffset..<replyLength])
@@ -86,8 +97,10 @@ struct Switch2Calibration: Equatable {
         return Stick(block: Array(d[2..<11]))
     }
 
+    /// Rest points past 200 (of 232 full) are not real and would leave a
+    /// trigger stuck or inverted; the fallback is used instead.
     static func triggerZeros(fromReply reply: [UInt8]) -> (l: Int, r: Int)? {
-        guard let d = data(fromReply: reply), d.count >= 2, d[0] != 0xFF, d[1] != 0xFF else { return nil }
+        guard let d = data(fromReply: reply), d.count >= 2, d[0] <= 200, d[1] <= 200 else { return nil }
         return (Int(d[0]), Int(d[1]))
     }
 

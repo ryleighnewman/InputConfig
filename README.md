@@ -19,6 +19,14 @@ and [ready-made presets for 450+ games and apps](https://inputconfig.com/presets
 
 <a href="https://apps.apple.com/us/app/inputconfig/id6777759147?pt=128760092&amp;ct=github&amp;mt=12"><img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-mac-app-store/black/en-us" alt="Download on the Mac App Store" height="56"></a>
 
+Or install it with Homebrew:
+
+```
+brew install --cask ryleighnewman/inputconfig/inputconfig
+```
+
+It is the same app, signed with a Developer ID and notarized. The tip jar is empty outside the App Store, and the two copies share one preset library, so keep one or the other in Applications.
+
 ## Overview
 
 Plug in your device, pick a preset, and go. Or build your own from scratch: every
@@ -30,20 +38,30 @@ It is not just for game controllers. Your Mac keyboard, a second keyboard, extra
 mouse buttons, the trackpad (including Force Touch pressure), regions of the screen,
 and full MIDI gear all work as inputs too.
 
-## What's new in 1.8
+## What's new in 1.9
 
-- Access controller: Socket 1 to 8, the stick, the center, PS and Profile buttons, and whatever is plugged into E1 to E4 are read by name, over USB-C and Bluetooth
-- Access profiles: a Profile chip in the Live Visualizer lists the three stored profiles over USB-C, switches them, and edits one beside the drawing with the PS5's own settings
-- Controller Profile, a new output: a row switches an Access controller to the next, previous, or a numbered profile
-- DualSense Edge: its four stored profiles are read over USB-C and listed with what each one remaps
-- Trigger feel: click L2 or R2 in the Live Visualizer of a DualSense or DualSense Edge for light, medium or firm resistance
-- Switch 2 controllers over Bluetooth: with the new Devices setting on, a paired Switch 2 Pro, GameCube or Joy-Con 2 controller is read wirelessly; Joy-Con 2 are read over USB in the grip too
-- Switch 2 Pro and GameCube controllers read their stick and trigger calibration and their motion sensors from the controller
-- Xbox pads over Bluetooth: Share works on every firmware, Elite Series 2 paddles and profiles are read, and the Devices menu names the pads macOS does not read over USB
-- Pen tablets: pressure, tilt, pen buttons, eraser and in range are inputs of their own
-- Contour ShuttlePRO and 3Dconnexion SpaceMouse are read, jog, shuttle and all six axes included
-- Triple tap: a row can do something else on three quick taps, beside its hold and double tap actions
-- Wireless controllers: optionally disconnect a controller after it sits unused for 5 to 60 minutes, and try to reconnect paired controllers when the app opens, the Mac wakes or a preset starts
+- Macro recorder: click Record steps, use any app, and your keys, clicks, drags, scrolling and timing become steps
+- Macro steps can type text, scroll, run a system action, wait, move the pointer, or wait for a color or words on screen
+- Macro playback: Play once tries a macro from the editor, and a macro can set its speed, add random timing, or run until pressed again
+- Macro text: read, edit, copy and paste any macro as plain lines such as cmd c, wait 300, type "hello"
+- Voice phrase, a new input: say a phrase and its row fires, through the microphone you choose, with a Voice Commands preset ready to try
+- Screen color and Screen text, new inputs: a row fires from the color at a spot on screen, or from words as they appear
+- Button sequence and Key sequence, new inputs: a row fires when buttons or keys come in a set order, such as Down, Down, A
+- Block the key's own action: W mapped to Up Arrow no longer also types W
+- Keyboard and mouse rows can wait for a second control, such as Left Command with a middle click
+- New pointer outputs: Mouse Motion Step, Precision While Held, Save Pointer Spot, Return Pointer to Spot and Pointer to Next Screen
+- Utilities, set per preset: the speed and direction of your mouse, trackpad and wheel, smooth scrolling, steadying for a shaky hand, the light bar, and controller disconnect and reconnect
+- Only work in these apps: a preset that lists apps holds its outputs back while any other app is in front
+- Activate with controller: a preset starts when a controller it lists connects, and steps aside when it leaves
+- Access controller: fit your own caps and tags, and the visualizer draws them for each profile
+- 25 more controllers drawn in the Live Visualizer, including the 8BitDo Pro 3, Switch 2 Pro, Joy-Con 2, Backbone One, Razer Kishi V2, flight sticks and racing wheels
+- Simple View in the View menu: big buttons for your favorite presets
+- Much lighter on your Mac: a running preset uses less than half the CPU, and switching presets is nearly twice as fast
+- Tap the Mac is no longer offered on macOS 27 in the App Store version
+- Fixed crashes from damaged preset files and from unplugging a controller
+- Keys and mouse buttons no longer stay held down if the app freezes
+- Idle disconnect no longer drops a pad a game is using, and a pad that reconnects keeps its slot
+- Fixed presets not opening from the sidebar on some Macs, and a hang at logout
 
 Full release history in [CHANGELOG.md](CHANGELOG.md). This section tracks the latest release.
 
@@ -110,24 +128,31 @@ No accounts, no tracking, no locked features. Built by one person who needed it.
 
 ## How it compares
 
-| | InputConfig | Joystick Mapper | Gamepad Companion | Enjoyable | Karabiner-Elements |
-|---|---|---|---|---|---|
-| Cost | Free | Paid | Paid | Free | Free |
-| Open source | Yes, MIT | No | No | Yes | Yes |
-| Game controllers | Yes | Yes | Yes | Yes | No, keyboards only |
-| MIDI keyboards and pads as input | Yes | No | No | No | No |
-| Mac keyboard/mouse/trackpad as input | Yes | No | No | No | Keyboard only |
-| DualSense Edge paddles and extras | Yes | No | No | No | No |
-| System functions and Siri Shortcuts | Yes | No | No | No | Limited |
-| Per-app preset switching | Yes | No | No | No | Yes |
-| Macros, turbo, tap and hold | Yes | Limited | Limited | No | Limited |
-| MIDI output | Yes | No | No | No | No |
-| Gyroscope and motion | Yes | No | No | No | No |
-| Light bar control | Yes | No | No | No | No |
-| Still updated | Yes | Rarely | Rarely | No | Yes |
+| | InputConfig | Joystick Mapper | Gamepad Mapper | JoyMapper | ConMapper | ControllerKeys | Recontrol | Enjoyable | Karabiner-Elements |
+|---|---|---|---|---|---|---|---|---|---|
+| Cost | Free | Paid | Free, paid add-ons per controller | Free trial, then paid | Free, in-app purchases | Paid, 14-day trial | Free | Free | Free |
+| Open source | Yes, MIT | No | No | No | No | Source available, noncommercial license | Not stated | Yes | Yes |
+| Game controllers | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No, keyboards only |
+| MIDI keyboards and pads as input | Yes | No | No | No | No | No | No | No | No |
+| Mac keyboard/mouse/trackpad as input | Yes | No | No | No | No | No | No | No | Keyboard only |
+| DualSense Edge paddles and extras | Yes | No | No | Not stated | Not stated | Not stated | Not stated | No | No |
+| System functions and Siri Shortcuts | Yes | No | System functions, paid add-on | No | Shortcuts and app launch | Yes | Media keys | No | Limited |
+| Per-app preset switching | Yes | No | No | Yes | Yes | Yes | Not stated | No | Yes |
+| Macros, turbo, tap and hold | Yes | Limited | Limited, paid add-on | Not stated | Not stated | Yes | Not stated | No | Limited |
+| MIDI output | Yes | No | No | No | No | Trigger to CC | No | No | No |
+| Gyroscope and motion | Yes | No | Not stated | Yes | Yes | Yes | Not stated | No | No |
+| Light bar control | Yes | No | Not stated | Not stated | Not stated | Yes | Not stated | No | No |
+| Still updated | Yes | No, last update 2019 | No, last update 2024 | Yes | Yes | Yes | Yes | No | Yes |
+| Minimum macOS | 14 | 10.9 | 12 | 10.14 | 14 | 14.6 | 15.6 | Intel only | 13 |
 
-Checked August 2026. Some of these have been around far longer than mine and are good
-tools. Check for yourself before you switch.
+Checked November 2026 against each app's own App Store listing or site. "Not stated" means the
+app does not claim it, not that it cannot do it. Gamepad Companion is no longer on the Mac
+App Store. Some of these have been around far longer than mine and are good tools. Check for
+yourself before you switch.
+
+Coming from Windows? JoyToKey, reWASD, DS4Windows, AntiMicroX and Xpadder do not run on a Mac.
+InputConfig covers the same ground, and [inputconfig.com](https://inputconfig.com/questions/best-controller-mapper-for-mac)
+compares every Mac option in one place.
 
 ## Everything it does
 
@@ -142,7 +167,7 @@ tools. Check for yourself before you switch.
 - Per-binding MIDI channel and device filters, so two keyboards stay independent
 - Your Mac keyboard as an input: every key, including Shift, Control, Option, Command, Caps Lock, fn, and the brightness, media, and volume keys, on the built-in keyboard or any keyboard you connect (all keyboards read as one)
 - Your mouse and trackpad as inputs: every button, double click, scroll in four directions, scroll gestures, Force Touch pressure, and Force Click
-- Tap the Mac: knock on the palm rest and the MacBook's motion sensor fires any output, single to quintuple taps, with a live calibration plot
+- Tap the Mac: knock on the palm rest and the MacBook's motion sensor fires any output, single to quintuple taps, with a live calibration plot (on macOS 27, in the Homebrew version)
 - Screen regions: areas of any display that act as inputs while the pointer is inside them, per display or on every display
 - Bluetooth headset and hearing aid buttons as media keys
 - Switches, pedals, and sticks plugged into a PlayStation Access Controller or Xbox Adaptive Controller
@@ -296,7 +321,7 @@ nothing.
 
 - macOS 14.0 or later
 - Accessibility permission (for keyboard and mouse simulation)
-- Tap the Mac needs an Apple silicon MacBook: desktop Macs and Intel Macs have no motion sensor, and some earlier models do not publish it. On macOS 27 the Mac App Store sandbox does not let InputConfig switch the motion sensor on, so taps are heard while the sensor is already on
+- Tap the Mac needs an Apple silicon MacBook: desktop Macs and Intel Macs have no motion sensor, and some earlier models do not publish it. On macOS 27 the Mac App Store sandbox does not let InputConfig switch the motion sensor on, so the App Store version no longer offers it there; the Homebrew version still does
 
 ## Building
 

@@ -33,7 +33,7 @@ extension ControllerLayout {
         family: nil,
         // Read raw from its descriptor, it reports the Switch bits it rides
         // on; these name them for what this pad prints.
-        modelNames: ButtonNames.ModelNames(renamed: [0: "B", 1: "A", 2: "Y", 3: "X", 12: "HOME", 13: "Capture", 9: "START", 7: "MODE", 5: "C"],
+        modelNames: ButtonNames.ModelNames(renamed: [0: "B", 1: "A", 2: "Y", 3: "X", 4: "Z", 12: "HOME", 13: "Capture", 9: "START", 7: "MODE", 5: "C"],
                                            absent: [6, 8, 10, 11, 14, 15, 16, 17]),
         aspect: 1.8,
         topStrip: 0.16,

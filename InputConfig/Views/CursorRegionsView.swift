@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 /// Editor for a preset's screen regions: rectangles on a display that a
 /// Screen region input fires from while the pointer is inside, whatever is
@@ -27,6 +28,7 @@ struct CursorRegionsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTextScale) private var textScale
+    @Environment(\.regionsCompact) private var regionsCompact
 
     /// Opened from a screen region row: the display that region belongs to,
     /// shown alone (nil is every display), with no display menu.
@@ -95,6 +97,12 @@ struct CursorRegionsView: View {
             CursorRegionService.shared.beginTracking()
         }
         .onDisappear { CursorRegionService.shared.endTracking() }
+        // A selection stays only while its region is on the canvas shown:
+        // the bounds fields otherwise edited a region on another display.
+        .onChange(of: chosenDisplay) { _, _ in
+            guard let id = selectedRegionID, !regionsOnCanvas.contains(where: { $0.id == id }) else { return }
+            selectedRegionID = nil
+        }
     }
 
     private var header: some View {
@@ -145,7 +153,7 @@ struct CursorRegionsView: View {
     /// Laid out as the Adjust live sheet and the stick's Regions are: the
     /// display, the buttons under it, then the list and the live readings.
     private var embeddedContent: some View {
-        HStack(alignment: .top, spacing: 28) {
+        regionEditorLayout(compact: regionsCompact).callAsFunction {
             VStack(alignment: .leading, spacing: 10) {
                 header
                 regionsPanel
@@ -178,7 +186,7 @@ struct CursorRegionsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 regionsList
                 HStack(spacing: 20) {
-                    statBlock("Pointer", pointerOnly)
+                    LivePointerReader { _ in statBlock("Pointer", pointerOnly) }
                     statBlock("In region", pressedNames.isEmpty ? String(localized: "None") : pressedNames.formatted(.list(type: .and)))
                     statBlock("Trackpad pressure", externalInput.trackpadPressureStage >= 2
                               ? String(localized: "Deep")
@@ -222,9 +230,11 @@ struct CursorRegionsView: View {
 
                     Spacer(minLength: 8)
 
-                    Text(cursorReadout)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.hint)
+                    LivePointerReader { _ in
+                        Text(cursorReadout)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.hint)
+                    }
 
                     Text("\(regions.count) / \(Self.maxRegions) regions")
                         .font(.caption)
@@ -354,13 +364,14 @@ struct CursorRegionsView: View {
                 // hit-test against, only when the pointer is on this display.
                 // The live dot the Adjust live sheet draws.
                 if pointerIsOnShownDisplay {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 12, height: 12)
-                        .shadow(color: Color.accentColor.opacity(0.5), radius: 4)
-                        .position(x: svc.cursorNormalized.x * geo.size.width,
-                                  y: svc.cursorNormalized.y * geo.size.height)
-                        .allowsHitTesting(false)
+                    LivePointerReader { p in
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 12, height: 12)
+                            .shadow(color: Color.accentColor.opacity(0.5), radius: 4)
+                            .position(x: p.x * geo.size.width, y: p.y * geo.size.height)
+                            .allowsHitTesting(false)
+                    }
                 }
 
                 // Which display the canvas represents; the editor names it above.
@@ -640,7 +651,7 @@ struct CursorRegionsView: View {
 
     private func addRegion(minX: Double, maxX: Double, minY: Double, maxY: Double) {
         let count = regions.count
-        let name = String(localized: "Region \(count + 1)").withoutRTLMark
+        let name = nextRegionName()
         let colorIndex = count % TouchpadRegion.colorPalette.count
         let region = TouchpadRegion(name: name, minX: minX, maxX: maxX,
                                      minY: minY, maxY: maxY, colorIndex: colorIndex,
@@ -649,10 +660,20 @@ struct CursorRegionsView: View {
         selectedRegionID = region.id
     }
 
-    /// A copy beside the original, on the same display.
+    /// The lowest number no region carries: after Region 2 of three is
+    /// deleted, the next one is Region 2 again, not a second Region 3.
+    private func nextRegionName() -> String {
+        let names = Set(regions.map(\.name))
+        var n = 1
+        while names.contains(String(localized: "Region \(n)").withoutRTLMark) { n += 1 }
+        return String(localized: "Region \(n)").withoutRTLMark
+    }
+
+    /// A copy beside the original, on the same display, named as a new one
+    /// is (by count, it could repeat a name already there).
     private func duplicate(_ region: TouchpadRegion) {
         guard regions.count < Self.maxRegions else { return }
-        let copy = RectRegionDrag.duplicate(region, name: String(localized: "Region \(regions.count + 1)").withoutRTLMark,
+        let copy = RectRegionDrag.duplicate(region, name: nextRegionName(),
                                             colorIndex: regions.count % TouchpadRegion.colorPalette.count)
         svc.upsert(copy)
         selectedRegionID = copy.id
@@ -723,6 +744,13 @@ struct CursorRegionsView: View {
     }
 }
 
+
+/// What follows the pointer, redrawn alone as it moves.
+private struct LivePointerReader<Content: View>: View {
+    @ObservedObject private var pointer = CursorRegionService.shared.livePointer
+    @ViewBuilder let content: (CGPoint) -> Content
+    var body: some View { content(pointer.normalized) }
+}
 
 /// A region's place and size as typed numbers, in percent of the area it is
 /// drawn on: left and top edge, width and height. Kept inside the area and

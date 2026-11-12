@@ -16,6 +16,7 @@ struct StickRegionsView: View {
     @EnvironmentObject private var controllerService: GameControllerService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTextScale) private var textScale
+    @Environment(\.regionsCompact) private var regionsCompact
 
     /// Where to open: a stick (0, 1) or an axis's bands (100 plus the axis).
     var startKey: Int? = nil
@@ -150,6 +151,10 @@ struct StickRegionsView: View {
             startPolling()
         }
         .onDisappear(perform: stopPolling)
+        // The timer's closure holds the view as it was when polling began,
+        // so a new controller slot or changed deadzones start it over.
+        .onChange(of: slot) { _, _ in startPolling() }
+        .onChange(of: rowDeadzones) { _, _ in startPolling() }
         // The other stick's selection, rename and drawing do not carry over
         // to one that does not show them.
         .onChange(of: regionKey) { _, _ in
@@ -210,7 +215,7 @@ struct StickRegionsView: View {
     /// part and the live readings. Side by side, so the card's width is
     /// used rather than one tall stack.
     private var mainContent: some View {
-        HStack(alignment: .top, spacing: 28) {
+        regionEditorLayout(compact: regionsCompact).callAsFunction {
             VStack(spacing: 10) {
                 if showsBands { bandPanel } else { regionsPanel }
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -781,7 +786,10 @@ struct StickRegionsView: View {
                     // it: a band starting a little above it stays clear of
                     // a released trigger.
                     let low = from <= 0.01 ? 0 : (from * 100).rounded() / 100
-                    if to - from > 0.03 { addBand(from: low, to: Self.snapEdge(to)) }
+                    // The saved edges are tested, after the snap: a band from
+                    // rest to 3.2% was kept as 0 to 0, which never fires.
+                    let high = Self.snapEdge(to)
+                    if high - low > 0.03 { addBand(from: low, to: high) }
                     return
                 }
                 if newShape == .ring {
@@ -826,8 +834,13 @@ struct StickRegionsView: View {
     }
 
     private func nextName() -> (name: String, colorIndex: Int) {
-        let count = svc.regions(forStick: regionKey).count
-        return (String(localized: "Region \(count + 1)").withoutRTLMark, count % TouchpadRegion.colorPalette.count)
+        let existing = svc.regions(forStick: regionKey)
+        // The lowest number no zone here carries: after Region 2 of three
+        // is deleted, the next one is Region 2 again, not a second Region 3.
+        let names = Set(existing.map(\.name))
+        var n = 1
+        while names.contains(String(localized: "Region \(n)").withoutRTLMark) { n += 1 }
+        return (String(localized: "Region \(n)").withoutRTLMark, existing.count % TouchpadRegion.colorPalette.count)
     }
 
     private func addRing(_ ring: RingSector) {
@@ -905,6 +918,8 @@ struct StickRegionsView: View {
         }
         // The app reads stick Y with down positive, the canvas's own way.
         let fx = state.axes[selectedStick * 2] ?? 0, fy = state.axes[selectedStick * 2 + 1] ?? 0
+        // A resting stick's jitter redrew the whole card 60 times a second.
+        guard !liveStickActive || abs(fx - liveX) > 0.002 || abs(fy - liveY) > 0.002 else { return }
         let x = Double(fx), y = Double(fy)
         liveStickPosition = CGPoint(x: (x + 1.0) / 2.0, y: (y + 1.0) / 2.0)
         liveX = fx; liveY = fy
@@ -952,6 +967,12 @@ struct StickRegionsView: View {
     /// name of the region it is currently inside.
     private var stickAccessibilityValue: String {
         guard liveStickActive else { return String(localized: "No controller connected") }
+        // A trigger or axis travel bar is no stick: it said "Stick centered"
+        // at any pull no band covered.
+        if showsBands {
+            return occupiedRegion.map { String(localized: "In band \($0.shownName)") }
+                ?? String(localized: "Pulled \(DeadzoneCalibrationView.percent(liveFraction)), outside all bands")
+        }
         if let occupied = occupiedRegion {
             return String(localized: "Stick in region \(occupied.shownName)")
         }
@@ -1326,6 +1347,9 @@ struct StickGestureRecorder: View {
         .frame(width: 480)
         // Holds the running preset's outputs back while it listens, as Scan
         // does, so the flicks being recorded do not also fire the stick's rows.
+        // Held back only while taking: once finished, the person who drives
+        // the pointer with the controller has to reach Use and Cancel.
+        .onChange(of: finished) { _, done in MappingEngine.editorListenerArmed = !done }
         .onAppear { MappingEngine.editorListenerArmed = true; start() }
         .onDisappear { MappingEngine.editorListenerArmed = false; timer?.invalidate(); timer = nil }
     }
@@ -1387,10 +1411,7 @@ struct StickGestureRecorder: View {
         point = CGPoint(x: (max(-1, min(1, x)) + 1) / 2, y: (max(-1, min(1, y)) + 1) / 2)
         let now = CACurrentMediaTime()
         if !steps.isEmpty, !out, !finished, now - lastFlickAt > quietEnd {
-            finished = true
-            AccessibilityNotification.Announcement(steps.count == 1
-                ? String(localized: "Recorded 1 flick: \(GestureStep.describe(steps))")
-                : String(localized: "Recorded \(steps.count) flicks: \(GestureStep.describe(steps))")).post()
+            finishRecording()
         }
         guard !finished, steps.count < GestureStep.maxSteps else { return }
         let m = hypot(x, y)
@@ -1411,7 +1432,15 @@ struct StickGestureRecorder: View {
         steps.append(GestureStep(direction: direction))
         AccessibilityNotification.Announcement(direction.displayName).post()
         lastFlickAt = now
-        if steps.count >= GestureStep.maxSteps { finished = true }
+        // The eighth flick ends it too, with the same summary spoken.
+        if steps.count >= GestureStep.maxSteps { finishRecording() }
+    }
+
+    private func finishRecording() {
+        finished = true
+        AccessibilityNotification.Announcement(steps.count == 1
+            ? String(localized: "Recorded 1 flick: \(GestureStep.describe(steps))")
+            : String(localized: "Recorded \(steps.count) flicks: \(GestureStep.describe(steps))")).post()
     }
 
     /// The nearest of the eight directions to a point.
@@ -1716,3 +1745,23 @@ struct MarketingPointer: View {
     }
 }
 #endif
+
+/// The region editors sit in a half-width card (beside Automation): the
+/// drawing goes above the list instead of beside it.
+private struct RegionsCompactKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var regionsCompact: Bool {
+        get { self[RegionsCompactKey.self] }
+        set { self[RegionsCompactKey.self] = newValue }
+    }
+}
+
+/// The editors' own side-by-side layout, or one above the other in a
+/// half-width card.
+func regionEditorLayout(compact: Bool) -> AnyLayout {
+    compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 28))
+}

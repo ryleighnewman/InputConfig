@@ -172,10 +172,15 @@ extension HIDReportDecoder {
         guard isSwitch2GameCubeInputReport(report) else { return }
         let bytes = Array(report)
         let d5 = UInt16(bytes[5]), d6 = UInt16(bytes[6]), d7 = UInt16(bytes[7])
+        // [5] Y, X, B, A on bits 0 to 3, the Switch 2 Pro's own order (SDL
+        // HandleGameCubeState: WEST 0x01, NORTH 0x02, SOUTH 0x04, EAST 0x08,
+        // the controller sending the Switch letters). B and Y were swapped
+        // before 1.9 (39); RawHIDReportApplier keeps that for a pad an
+        // older preset was made on.
         state.buttons[0] = bit(d5, 3)    // A
-        state.buttons[1] = bit(d5, 0)    // B
+        state.buttons[1] = bit(d5, 2)    // B
         state.buttons[2] = bit(d5, 1)    // X
-        state.buttons[3] = bit(d5, 2)    // Y
+        state.buttons[3] = bit(d5, 0)    // Y
         state.buttons[5] = bit(d5, 7)    // Z
         state.buttons[7] = bit(d5, 6)    // R click
         state.buttons[9] = bit(d6, 1)    // Start
@@ -191,7 +196,9 @@ extension HIDReportDecoder {
         // at rest. The click at the end of the pull reads as fully pressed.
         let cal = Switch2Calibration.current(product: 0x2073)
         func trigger(_ raw: UInt8, zero: Int, click: Float) -> Float {
-            let v = max(0, min(1, (Float(raw) - Float(zero)) / Float(232 - zero)))
+            // A span of at least 1: a zero at or past 232 gave NaN (read as
+            // fully pressed) or an inverted pull.
+            let v = max(0, min(1, (Float(raw) - Float(zero)) / Float(max(1, 232 - zero))))
             return click > 0.5 ? 1 : v
         }
         state.axes[4] = trigger(bytes[61], zero: cal?.triggerZeroL ?? Switch2Calibration.fallbackTriggerZero, click: state.buttons[4] ?? 0)
@@ -268,8 +275,9 @@ extension HIDReportDecoder {
             state.buttons[15] = bit(d6, 6)   // C
             state.buttons[17] = bit(d8, 0)   // GR
             // A quarter turn clockwise: upright up is now right, upright
-            // right is down.
-            let raw = switch2Stick(bytes[14], bytes[15], bytes[16], calibration: cal?.right)
+            // right is down. A lone right Joy-Con keeps its own stick in the
+            // first block, the one SDL reads as left_stick.
+            let raw = switch2Stick(bytes[14], bytes[15], bytes[16], calibration: cal?.left ?? cal?.right)
             state.axes[0] = raw.y
             state.axes[1] = raw.x
         }

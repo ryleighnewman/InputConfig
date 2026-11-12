@@ -16,20 +16,41 @@ struct HelpGuideView: View {
     @State private var query = ""
     /// The match count, said once typing pauses.
     @State private var countAnnouncement: DispatchWorkItem?
+    /// The last search and its matches: the list and the query's onChange
+    /// both ask on each keystroke.
+    @State private var searchMemo = HelpSearchMemo()
 
     private var visibleGuides: [HelpGuide] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return HelpGuideLibrary.localizedAll }
+        if let hit = searchMemo.query, hit == q { return searchMemo.guides }
+        let guides = Self.matching(q)
+        searchMemo.query = q
+        searchMemo.guides = guides
+        return guides
+    }
+
+    /// The guides holding `q` (lowercased, not empty).
+    static func matching(_ q: String) -> [HelpGuide] {
         // Search the guide in the app's language, and in English too, so an
         // English term found on the website still finds its guide.
         // Against text lowercased once per launch: lowercasing every guide
         // in two languages on each keystroke stalled the search field.
-        return zip(HelpGuideLibrary.localizedAll, zip(Self.searchLocalized, Self.searchEnglish))
-            .filter { $0.1.0.contains(q) || (HelpLocalizer.isTranslated && $0.1.1.contains(q)) }.map(\.0)
+        // Without accents too, so "resume" finds "résumé" and the other way.
+        // NSString haystacks: a Swift String is bridged whole to NSString on
+        // every range(of:), 292 KB twice per keystroke; the search itself
+        // is the same call.
+        let options: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        return zip(HelpGuideLibrary.localizedAll, zip(searchLocalized, searchEnglish))
+            .filter { $0.1.0.range(of: q, options: options).location != NSNotFound
+                || (HelpLocalizer.isTranslated && $0.1.1.range(of: q, options: options).location != NSNotFound) }.map(\.0)
     }
 
-    private static let searchLocalized: [String] = HelpGuideLibrary.localizedAll.map(\.searchText)
-    private static let searchEnglish: [String] = HelpGuideLibrary.all.map(\.searchText)
+    @MainActor private static let searchLocalized: [NSString] = HelpGuideLibrary.localizedAll.map { $0.searchText as NSString }
+    /// Never searched in English, where it is the same text.
+    @MainActor private static let searchEnglish: [NSString] = HelpLocalizer.isTranslated
+        ? HelpGuideLibrary.all.map { $0.searchText as NSString }
+        : Array(repeating: "", count: HelpGuideLibrary.all.count)
 
     private var guidesByCategory: [(category: String, guides: [HelpGuide])] {
         let visible = visibleGuides
@@ -64,12 +85,13 @@ struct HelpGuideView: View {
                     Section(HelpLocalizer.t(group.category)) {
                         ForEach(group.guides) { guide in
                             Text(guide.title)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .tag(guide.id as String?)
                                 .accessibilityAddTraits(!showingHome && selectedGuideID == guide.id ? .isSelected : [])
                                 // The guide that is already selected behind
                                 // Overview opens too: picking it again does
                                 // not change the selection.
-                                .simultaneousGesture(TapGesture().onEnded {
+                                .background(SidebarClickTarget {
                                     if selectedGuideID == guide.id { showingHome = false }
                                 })
                                 .accessibilityAction {
@@ -177,6 +199,13 @@ struct HelpGuideView: View {
     }
 }
 
+/// HelpGuideView's last search, kept by reference so storing it from the
+/// body does not count as a state change.
+final class HelpSearchMemo {
+    var query: String?
+    var guides: [HelpGuide] = []
+}
+
 extension HelpGuide {
     /// Every searchable word of the guide, lowercased, in one string.
     var searchText: String {
@@ -200,6 +229,7 @@ extension HelpBlock {
         case .terms(let terms): return terms.map { $0.term + " " + $0.detail }.joined(separator: " ")
         case .table(let header, let rows): return (header + rows.flatMap { $0 }).joined(separator: " ")
         case .questions(let qs): return qs.map { $0.question + " " + $0.answer }.joined(separator: " ")
+        case .code(let lines): return lines.joined(separator: " ")
         }
     }
 }
@@ -207,10 +237,34 @@ extension HelpBlock {
 // MARK: - Shared text helpers
 
 /// Markdown (links, bold) to an attributed string; plain text if it does
-/// not parse.
+/// not parse. Each text is parsed once: a page was parsed again on every
+/// show, every return to it and every text size change.
 func helpMarkdown(_ text: String) -> AttributedString {
-    (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+    if let parsed = HelpMarkdownCache.lookup(text) { return parsed }
+    let parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
         ?? AttributedString(text)
+    HelpMarkdownCache.store(parsed, for: text)
+    return parsed
+}
+
+/// helpMarkdown's parses, by source text. All the help in one language is
+/// about 2,100 texts; past the cap it starts over rather than growing.
+enum HelpMarkdownCache {
+    private static let lock = NSLock()
+    /// Guarded by `lock`.
+    nonisolated(unsafe) private static var parsed: [String: AttributedString] = [:]
+    static let cap = 4096
+
+    static func lookup(_ text: String) -> AttributedString? {
+        lock.lock(); defer { lock.unlock() }
+        return parsed[text]
+    }
+
+    static func store(_ value: AttributedString, for text: String) {
+        lock.lock(); defer { lock.unlock() }
+        if parsed.count >= cap { parsed.removeAll(keepingCapacity: true) }
+        parsed[text] = value
+    }
 }
 
 /// The id the site gives a section heading ("If a pad does nothing" is
@@ -409,14 +463,16 @@ private struct HelpBlockView: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                     GridRow {
                         ForEach(0..<columns, id: \.self) { c in
-                            Text(helpMarkdown(c < row.count ? row[c] : ""))
+                            // Parsed once for the text and its spoken label.
+                            let cell = helpMarkdown(c < row.count ? row[c] : "")
+                            Text(cell)
                                 .font(.body)
                                 .padding(.vertical, 6)
                                 .fixedSize(horizontal: false, vertical: true)
                                 // "Output: Space", so VoiceOver keeps the column.
                                 .accessibilityLabel(c < header.count && !header[c].isEmpty
-                                    ? String(localized: "\(header[c]): \(String(helpMarkdown(c < row.count ? row[c] : "").characters))")
-                                    : String(helpMarkdown(c < row.count ? row[c] : "").characters))
+                                    ? String(localized: "\(header[c]): \(String(cell.characters))")
+                                    : String(cell.characters))
                         }
                     }
                     if index < rows.count - 1 {
@@ -442,6 +498,21 @@ private struct HelpBlockView: View {
                     }
                 }
             }
+
+        case .code(let lines):
+            // Shown as written: macro text is the same in every language.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(verbatim: line)
+                        .font(.body.monospaced())
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .textSelection(.enabled)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
         }
     }
 }
@@ -633,7 +704,8 @@ final class HelpGuideWindowController {
     private var openedForTour = false
 
     func showForTour() {
-        if window?.isVisible != true { openedForTour = true }
+        // A Help window minimized to the Dock is the person's own: kept.
+        if window == nil || !(window!.isVisible || window!.isMiniaturized) { openedForTour = true }
         show()
     }
 

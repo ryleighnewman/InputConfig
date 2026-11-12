@@ -62,14 +62,28 @@ enum MacroStepKind: String, Codable, CaseIterable, Identifiable {
     case tap
     case down
     case up
+    /// A pause of the step's wait; nothing is pressed.
+    case wait
+    /// The pointer goes to the step's point (the action's clickX and
+    /// clickY, CoreGraphics coordinates); a hold is a glide that long.
+    case moveTo
+    /// The macro waits until the step's screen color or screen text watch
+    /// (`watchID`) reads as pressed, up to `timeoutMs`; past that the rest
+    /// of the macro is skipped.
+    case waitFor
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .tap: return String(localized: "Tap")
         case .down: return String(localized: "Hold down")
         case .up: return String(localized: "Release")
+        case .wait: return String(localized: "Wait")
+        case .moveTo: return String(localized: "Move pointer")
+        case .waitFor: return String(localized: "Wait for screen")
         }
     }
+    /// Whether the step presses its action at all.
+    var presses: Bool { self == .tap || self == .down || self == .up }
 }
 
 /// A single step in a macro sequence
@@ -83,15 +97,44 @@ struct MacroStep: Identifiable, Codable, Hashable {
     /// key step, so one step can be a shortcut such as Command V. nil for a
     /// plain key, and for every step saved before this existed.
     var modifiers: [Int]?
+    /// Lines for a scroll step (a Tap of a Mouse Wheel Step action), 1 to
+    /// 100. nil is one.
+    var count: Int?
+    /// The screen color or screen text watch a Wait for screen step waits on.
+    var watchID: UUID?
+    /// How long a Wait for screen step waits at most, in milliseconds.
+    /// nil is 10 seconds.
+    var timeoutMs: Int?
+    /// When true a Wait for screen step that times out lets the rest of
+    /// the macro run; nil or false skips the rest.
+    var continueOnTimeout: Bool?
 
     init(action: OutputAction, delayMs: Int = 50, holdMs: Int = 50,
-         eventKind: MacroStepKind? = nil, modifiers: [Int]? = nil) {
+         eventKind: MacroStepKind? = nil, modifiers: [Int]? = nil,
+         count: Int? = nil, watchID: UUID? = nil, timeoutMs: Int? = nil,
+         continueOnTimeout: Bool? = nil) {
         self.id = UUID()
         self.action = action
         self.delayMs = delayMs
         self.holdMs = holdMs
         self.eventKind = eventKind
         self.modifiers = modifiers
+        self.count = count
+        self.watchID = watchID
+        self.timeoutMs = timeoutMs
+        self.continueOnTimeout = continueOnTimeout
+    }
+
+    /// Seconds a wait or hold plays for: the milliseconds divided by the
+    /// playback speed, spread by up to the jitter percent either way
+    /// (`roll` in -1...1), never negative, capped at 30 s.
+    static func playbackSeconds(_ ms: Int, speed: Double, jitterPercent: Int, roll: Double) -> Double {
+        guard ms > 0 else { return 0 }
+        let rate = speed.isFinite && speed > 0 ? min(4, max(0.25, speed)) : 1
+        let spread = Double(min(50, max(0, jitterPercent))) / 100
+        let r = roll.isFinite ? min(1, max(-1, roll)) : 0
+        let seconds = Double(ms) / 1000 / rate * (1 + spread * r)
+        return min(30, max(0, seconds))
     }
 
     /// What the step presses: its modifiers first, then its action.
@@ -166,6 +209,16 @@ struct BindingModel: Identifiable, Codable, Hashable {
 
     // Macro sequence (overrides outputs when set)
     var macroSteps: [MacroStep]?
+    /// Playback speed of the macro: every wait and hold is divided by it,
+    /// 0.25 to 4. nil is 1, as recorded or typed.
+    var macroSpeed: Double?
+    /// Random spread on each wait and hold, in percent of its length, so
+    /// a replayed macro does not land on the same milliseconds every time.
+    /// nil or 0 is none.
+    var macroJitterPercent: Int?
+    /// When true the macro plays again and again until the input is
+    /// pressed a second time (the second press stops it). nil is one run.
+    var macroLoop: Bool?
 
     /// When true, releasing the input stops the rest of a running macro
     /// chain and releases any held steps. nil decodes as false.
@@ -231,6 +284,11 @@ struct BindingModel: Identifiable, Codable, Hashable {
     /// seeing the button, so it does only what this row says (a side
     /// button no longer also goes Back). nil = off.
     var blockOriginal: Bool?
+    /// The row's Second control keys and mouse buttons are held back from
+    /// other apps too, every time while the preset runs (a held key goes
+    /// down before the app can know the rest of the chord is coming), so
+    /// K held for W no longer types K. Modifiers never. nil = off.
+    var blockHeldControls: Bool?
     /// Key outputs held by this row repeat like a held key (see
     /// InputSimulator). nil = off, as for every preset before 1.6; true
     /// turns it on for this row.
@@ -287,6 +345,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
          speechDestination: SpeechDestination? = nil,
          macroSteps: [MacroStep]? = nil,
          macroInterruptOnRelease: Bool? = nil,
+         macroLoop: Bool? = nil,
          holdOutputs: [OutputAction]? = nil,
          holdThresholdMs: Int? = nil,
          doubleTapOutputs: [OutputAction]? = nil,
@@ -321,6 +380,7 @@ struct BindingModel: Identifiable, Codable, Hashable {
         self.speechDestination = speechDestination
         self.macroSteps = macroSteps
         self.macroInterruptOnRelease = macroInterruptOnRelease
+        self.macroLoop = macroLoop
         self.holdOutputs = holdOutputs
         self.holdThresholdMs = holdThresholdMs
         self.doubleTapOutputs = doubleTapOutputs
@@ -401,6 +461,9 @@ extension JoystickMapping {
         case "Keyboard+Mouse+MIDI": return String(localized: "Keyboard, mouse and MIDI")
         case "Keyboard+Screen+MIDI": return String(localized: "Keyboard, screen and MIDI")
         case "Mouse+Screen+MIDI": return String(localized: "Mouse, screen and MIDI")
+        case "Voice": return String(localized: "Voice")
+        case "Mac": return String(localized: "Tap the Mac")
+        case let combo where combo.contains("Voice"): return String(localized: "Mac inputs and voice")
         default: return String(localized: "Keyboard, mouse, screen and MIDI")
         }
     }
@@ -421,15 +484,21 @@ extension JoystickMapping {
         for b in bindings {
             let kind: String
             switch b.input.type {
-            case .extKey: kind = "Keyboard"
+            case .extKey, .keySequence: kind = "Keyboard"
             case .extMouse: kind = "Mouse"
-            case .cursorRegion: kind = "Screen"
+            case .cursorRegion, .screenPixel, .screenText: kind = "Screen"
+            case .voicePhrase: kind = "Voice"
             case .midi: kind = "MIDI"
+            // Taps on the Mac read no device: the other rows decide, and a
+            // group of taps alone is the Mac's. Missing, the built-in Tap the
+            // Mac preset asked to pick an input device.
+            case .chassisTap: continue
             default: return nil
             }
             if !kinds.contains(kind) { kinds.append(kind) }
         }
-        let ordered = ["Keyboard", "Mouse", "Screen", "MIDI"].filter(kinds.contains)
+        if kinds.isEmpty { return ["Mac"] }
+        let ordered = ["Keyboard", "Mouse", "Screen", "MIDI", "Voice"].filter(kinds.contains)
         return ordered.isEmpty ? nil : ordered
     }
 
@@ -439,6 +508,8 @@ extension JoystickMapping {
         case "Mouse"?: return "computermouse"
         case "Screen"?: return "display"
         case "MIDI"?: return "pianokeys"
+        case "Voice"?: return "waveform"
+        case "Mac"?: return "hand.tap"
         default: return "keyboard"
         }
     }
@@ -558,8 +629,16 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
         for i in rows.indices where !rowExtras[i].isEmpty { rowExtraFields[rows[i].id] = rowExtras[i] }
         self.bindings = rows
         self.unreadableRows = kept
-        if !kept.isEmpty { Self.keptRowsDuringDecode += kept.count }
-        if dropped > 0 { Self.droppedRowsDuringDecode += dropped }
+        // A decode that brought its own counter (the store's launch read,
+        // several files at once on several threads) counts there; every
+        // other decode keeps using the statics.
+        if let counts = decoder.userInfo[RowDecodeCounts.key] as? RowDecodeCounts {
+            counts.kept += kept.count
+            counts.dropped += dropped
+        } else {
+            if !kept.isEmpty { Self.keptRowsDuringDecode += kept.count }
+            if dropped > 0 { Self.droppedRowsDuringDecode += dropped }
+        }
         self.isExpanded = (try? c.decodeIfPresent(Bool.self, forKey: .isExpanded)) ?? true
         self.customName = try? c.decodeIfPresent(String.self, forKey: .customName)
         // try?: a slot kind added by a newer build must not make the preset unreadable.
@@ -613,6 +692,16 @@ struct JoystickMapping: Identifiable, Codable, Hashable {
     nonisolated(unsafe) static var keptRowsDuringDecode = 0
 }
 
+/// The dropped and kept row counts of one decode, handed in through the
+/// decoder's userInfo under `key`. The statics above are shared, so files
+/// decoded at the same time on several threads mixed their counts. Each
+/// file gets its own counter, touched only by the thread decoding it.
+final class RowDecodeCounts: @unchecked Sendable {
+    var dropped = 0
+    var kept = 0
+    static let key = CodingUserInfoKey(rawValue: "InputConfig.rowDecodeCounts")!
+}
+
 /// Any JSON value, kept as it was read, so parts of a file this build
 /// cannot interpret are written back unchanged instead of deleted.
 extension JoystickMapping {
@@ -645,10 +734,12 @@ enum JSONValue: Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
+        // Strings and numbers first: they are most of any preset file, and
+        // every failed try before the right one costs a thrown error.
         if c.decodeNil() { self = .null }
-        else if let v = try? c.decode(Bool.self) { self = .bool(v) }
-        else if let v = try? c.decode(Double.self) { self = .number(v) }
         else if let v = try? c.decode(String.self) { self = .string(v) }
+        else if let v = try? c.decode(Double.self) { self = .number(v) }
+        else if let v = try? c.decode(Bool.self) { self = .bool(v) }
         else if let v = try? c.decode([JSONValue].self) { self = .array(v) }
         else { self = .object(try c.decode([String: JSONValue].self)) }
     }
@@ -684,6 +775,16 @@ struct RowWithExtras: Codable {
 
     init(from decoder: Decoder) throws {
         row = try BindingModel(from: decoder)
+        // Nearly every file was written by this build or an older one, so
+        // it holds nothing this build does not know. Walking the file's key
+        // names costs a few container probes; the full comparison below
+        // decoded the row three more times (the file as a tree, the row
+        // written back, that written back as a tree), five times the plain
+        // decode, on every row at launch, in every version list and import.
+        if Self.holdsOnlyKnownFields(decoder, row: row) {
+            extras = [:]
+            return
+        }
         let raw = try JSONValue(from: decoder)
         guard case .object(let file) = raw,
               let data = try? JSONEncoder().encode(row),
@@ -694,6 +795,144 @@ struct RowWithExtras: Codable {
         extras = Self.difference(file, written)
     }
 
+    // MARK: Known-field walk
+
+    /// An output's keys, from its coding keys.
+    private static let outputKeys = Set(OutputAction.CodingKeys.allCases.map(\.rawValue))
+    /// A type with synthesized coding: its stored property names are its keys.
+    private static func labels(_ value: Any) -> Set<String> {
+        Set(Mirror(reflecting: value).children.compactMap(\.label))
+    }
+    /// The row's and the input's keys (property names: their coding is
+    /// synthesized, the same sets the encoder treats as known), taken from
+    /// the first row seen and kept: a Mirror walk per row cost more than
+    /// the comparison this path skips.
+    private static let knownKeysLock = NSLock()
+    nonisolated(unsafe) private static var knownRowKeys: Set<String>?
+    nonisolated(unsafe) private static var knownInputKeys: Set<String>?
+    private static func knownKeys(for row: BindingModel) -> (row: Set<String>, input: Set<String>) {
+        knownKeysLock.lock(); defer { knownKeysLock.unlock() }
+        if let r = knownRowKeys, let i = knownInputKeys { return (r, i) }
+        let r = labels(row), i = labels(row.input)
+        knownRowKeys = r; knownInputKeys = i
+        return (r, i)
+    }
+
+    /// True when every key in the file, at every level this walk reads, is
+    /// one this build writes, and nothing structured sits where the walk
+    /// does not look. Anything else takes the full comparison, so a newer
+    /// build's field is never dropped: this is a fast path, not a rule.
+    static func holdsOnlyKnownFields(_ decoder: Decoder, row: BindingModel) -> Bool {
+        guard let c = try? decoder.container(keyedBy: AnyCodingKey.self) else { return false }
+        let (rowKeys, inputKeys) = knownKeys(for: row)
+        for key in c.allKeys {
+            let name = key.stringValue
+            guard rowKeys.contains(name) else { return false }
+            switch name {
+            case "input", "modifierInput":
+                guard flatObject(c, key, known: inputKeys) else { return false }
+            case "extraModifierInputs":
+                guard flatList(c, key, known: inputKeys) else { return false }
+            case "outputs", "holdOutputs", "doubleTapOutputs", "tripleTapOutputs":
+                guard flatList(c, key, known: outputKeys) else { return false }
+            case "macroSteps":
+                guard let steps = row.macroSteps, macroStepsKnown(c, key, labels: steps.first.map(stepKeys) ?? []) else {
+                    // A null or missing list decodes to nil: scalar, fine.
+                    if holdsStructure(c, key) { return false }
+                    continue
+                }
+            default:
+                // A scalar is fine; an object or a list of objects here is
+                // something this walk does not know how to read.
+                if holdsStructure(c, key) { return false }
+            }
+        }
+        return true
+    }
+
+    /// An object whose keys are all known and whose values are all scalars.
+    private static func flatObject(_ c: KeyedDecodingContainer<AnyCodingKey>, _ key: AnyCodingKey, known: Set<String>) -> Bool {
+        guard let o = try? c.nestedContainer(keyedBy: AnyCodingKey.self, forKey: key) else {
+            // null (a missing optional) is a scalar
+            return !holdsStructure(c, key)
+        }
+        return flat(o, known: known)
+    }
+
+    private static func flat(_ o: KeyedDecodingContainer<AnyCodingKey>, known: Set<String>) -> Bool {
+        for k in o.allKeys {
+            guard known.contains(k.stringValue), !holdsStructure(o, k) else { return false }
+        }
+        return true
+    }
+
+    /// A list of flat objects with known keys (an empty or null list is fine).
+    private static func flatList(_ c: KeyedDecodingContainer<AnyCodingKey>, _ key: AnyCodingKey, known: Set<String>) -> Bool {
+        guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return !holdsStructure(c, key) }
+        while !list.isAtEnd {
+            guard let o = try? list.nestedContainer(keyedBy: AnyCodingKey.self), flat(o, known: known) else { return false }
+        }
+        return true
+    }
+
+    nonisolated(unsafe) private static var knownStepKeys: Set<String>?
+    private static func stepKeys(_ step: MacroStep) -> Set<String> {
+        knownKeysLock.lock(); defer { knownKeysLock.unlock() }
+        if let s = knownStepKeys { return s }
+        let s = labels(step); knownStepKeys = s; return s
+    }
+
+    /// Macro steps: known step keys, scalar values, except the action, an
+    /// output, and the modifiers, a list of numbers.
+    private static func macroStepsKnown(_ c: KeyedDecodingContainer<AnyCodingKey>, _ key: AnyCodingKey, labels stepKeys: Set<String>) -> Bool {
+        guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return !holdsStructure(c, key) }
+        while !list.isAtEnd {
+            guard let step = try? list.nestedContainer(keyedBy: AnyCodingKey.self) else { return false }
+            for k in step.allKeys {
+                guard stepKeys.contains(k.stringValue) else { return false }
+                switch k.stringValue {
+                case "action":
+                    guard let o = try? step.nestedContainer(keyedBy: AnyCodingKey.self, forKey: k), flat(o, known: outputKeys) else { return false }
+                case "modifiers":
+                    guard scalarList(step, k) else { return false }
+                default:
+                    if holdsStructure(step, k) { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    /// A list holding no object and no list (an empty one counts).
+    private static func scalarList(_ c: KeyedDecodingContainer<AnyCodingKey>, _ key: AnyCodingKey) -> Bool {
+        guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return !holdsStructure(c, key) }
+        while !list.isAtEnd {
+            if (try? list.nestedContainer(keyedBy: AnyCodingKey.self)) != nil { return false }
+            if (try? list.nestedUnkeyedContainer()) != nil { return false }
+            // A value that does not decode must not loop forever.
+            if (try? list.decode(JSONValue.self)) == nil { return false }
+        }
+        return true
+    }
+
+    /// Whether the value at `key` is an object, or a list holding an object
+    /// or a list.
+    private static func holdsStructure(_ c: KeyedDecodingContainer<AnyCodingKey>, _ key: AnyCodingKey) -> Bool {
+        if (try? c.nestedContainer(keyedBy: AnyCodingKey.self, forKey: key)) != nil { return true }
+        guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return false }
+        return !scalarListBody(&list)
+    }
+
+    private static func scalarListBody(_ list: inout UnkeyedDecodingContainer) -> Bool {
+        while !list.isAtEnd {
+            if (try? list.nestedContainer(keyedBy: AnyCodingKey.self)) != nil { return false }
+            if (try? list.nestedUnkeyedContainer()) != nil { return false }
+            // A value that does not decode must not loop forever.
+            if (try? list.decode(JSONValue.self)) == nil { return false }
+        }
+        return true
+    }
+
     func encode(to encoder: Encoder) throws {
         guard !extras.isEmpty,
               let data = try? JSONEncoder().encode(row),
@@ -701,7 +940,11 @@ struct RowWithExtras: Codable {
             try row.encode(to: encoder)
             return
         }
-        Self.merge(extras, into: &written)
+        // A field the row has (its own coding keys, which are its property
+        // names) and no longer writes was cleared here: not put back as the
+        // fragment a newer build's nested field left, which no build reads.
+        let known = Set(Mirror(reflecting: row).children.compactMap(\.label))
+        Self.merge(extras, into: &written, known: known)
         try JSONValue.object(written).encode(to: encoder)
     }
 
@@ -733,9 +976,12 @@ struct RowWithExtras: Codable {
         }
     }
 
-    static func merge(_ extras: [String: JSONValue], into written: inout [String: JSONValue]) {
+    static func merge(_ extras: [String: JSONValue], into written: inout [String: JSONValue], known: Set<String> = []) {
         for (key, value) in extras {
-            guard let mine = written[key] else { written[key] = value; continue }
+            guard let mine = written[key] else {
+                if !known.contains(key) { written[key] = value }
+                continue
+            }
             written[key] = merged(value, into: mine)
         }
     }
@@ -825,6 +1071,13 @@ struct PresetAutomation: Codable, Hashable {
     /// this field existed decode unchanged.
     var autoActivateBundleIDs: [String]?
 
+    /// Names of controllers that activate this preset when one connects;
+    /// it steps aside when the last of them disconnects. Matched the way a
+    /// device group picks its controller by name, and gated by the same
+    /// automatic switching toggle in Settings. Optional so older files
+    /// are unchanged.
+    var autoActivateControllers: [String]?
+
     /// The D-pad counts one direction at a time: the direction pressed first
     /// keeps the pad until it is let go, and a diagonal that is pressed
     /// straight away waits until it settles on one side. A quick press on
@@ -832,6 +1085,54 @@ struct PresetAutomation: Codable, Hashable {
     /// once (Copy and Cut, a page and a tab). Optional so older files and
     /// presets that never set it are unchanged; nil is off.
     var dpadOneDirection: Bool?
+    /// Opens the auto-launch app without bringing it to the front. Optional
+    /// so older files are unchanged; nil brings it forward as before.
+    var launchInBackground: Bool?
+    /// Flips the scrolling this preset makes, up and down or sideways.
+    /// Optional so older files are unchanged; nil is off.
+    var scrollReverseVertical: Bool?
+    var scrollReverseHorizontal: Bool?
+    /// Glides each scroll this preset makes out over a short time instead
+    /// of jumping, wheel notches included. nil is off.
+    var smoothScrolling: Bool?
+    /// How long a smooth scroll takes to settle, in milliseconds. nil is
+    /// the default, kept while smooth scrolling is off.
+    var smoothScrollMs: Double?
+    static let defaultSmoothScrollMs: Double = 200
+    /// The mouse wheel follows Scroll direction and Smooth scrolling too,
+    /// unless these are set. nil is included.
+    var scrollReverseSkipsMouse: Bool?
+    var smoothScrollSkipsMouse: Bool?
+    /// Scroll direction flips a trackpad and Magic Mouse too. nil is off:
+    /// macOS's Natural Scrolling setting is theirs unless asked.
+    var scrollReverseTrackpad: Bool?
+    /// Scroll speed scales the mouse wheel and the trackpad too. nil is
+    /// off, so a preset saved with a scroll speed keeps the real mouse as
+    /// it was.
+    var scrollSpeedIncludesMouse: Bool?
+    var scrollSpeedIncludesTrackpad: Bool?
+    /// Pointer speed scales the Mac's own mouse and trackpad too. nil is
+    /// off, so a preset saved with a pointer speed keeps them as they were.
+    var pointerSpeedIncludesMouse: Bool?
+    /// The Mac's own mouse and trackpad move the pointer the other way,
+    /// left and right, up and down. nil is off.
+    var pointerReverseHorizontal: Bool?
+    var pointerReverseVertical: Bool?
+    /// Steadies the Mac's own mouse and trackpad: 0 off, up to 1, how much
+    /// each move is smoothed into the ones before it, for a hand that
+    /// shakes. nil is off.
+    var pointerSteadying: Double?
+    /// Device options for while this preset runs; nil follows Settings.
+    /// The PlayStation light bar left to macOS and other apps.
+    var leaveLightBar: Bool?
+    /// Minutes a wireless controller may sit unused before it is
+    /// disconnected; 0 never while this preset runs.
+    var idleDisconnectMinutes: Int?
+    /// Paired controllers are asked to connect when this preset starts.
+    var reconnectOnStart: Bool?
+    /// The preset does nothing unless one of autoActivateBundleIDs is in
+    /// front, even when started by hand. nil is off.
+    var onlyInListedApps: Bool?
 
     /// Automation fields this build has no key for (written by a newer
     /// version), kept and written back so saving here does not delete them.
@@ -845,6 +1146,16 @@ extension PresetAutomation {
         case sensitivityMultiplier, autoActivateBundleIDs
         case scrollMultiplier
         case dpadOneDirection
+        case launchInBackground
+        case scrollReverseVertical, scrollReverseHorizontal
+        case smoothScrolling, smoothScrollMs
+        case scrollReverseSkipsMouse, smoothScrollSkipsMouse, onlyInListedApps
+        case scrollReverseTrackpad
+        case scrollSpeedIncludesMouse, scrollSpeedIncludesTrackpad
+        case pointerSpeedIncludesMouse
+        case pointerReverseHorizontal, pointerReverseVertical, pointerSteadying
+        case leaveLightBar, idleDisconnectMinutes, reconnectOnStart
+        case autoActivateControllers
     }
 
     func encode(to encoder: Encoder) throws {
@@ -860,6 +1171,25 @@ extension PresetAutomation {
         try c.encode(scrollMultiplier, forKey: .scrollMultiplier)
         try c.encodeIfPresent(autoActivateBundleIDs, forKey: .autoActivateBundleIDs)
         try c.encodeIfPresent(dpadOneDirection, forKey: .dpadOneDirection)
+        try c.encodeIfPresent(launchInBackground, forKey: .launchInBackground)
+        try c.encodeIfPresent(scrollReverseVertical, forKey: .scrollReverseVertical)
+        try c.encodeIfPresent(scrollReverseHorizontal, forKey: .scrollReverseHorizontal)
+        try c.encodeIfPresent(smoothScrolling, forKey: .smoothScrolling)
+        try c.encodeIfPresent(smoothScrollMs, forKey: .smoothScrollMs)
+        try c.encodeIfPresent(scrollReverseSkipsMouse, forKey: .scrollReverseSkipsMouse)
+        try c.encodeIfPresent(smoothScrollSkipsMouse, forKey: .smoothScrollSkipsMouse)
+        try c.encodeIfPresent(onlyInListedApps, forKey: .onlyInListedApps)
+        try c.encodeIfPresent(scrollReverseTrackpad, forKey: .scrollReverseTrackpad)
+        try c.encodeIfPresent(scrollSpeedIncludesMouse, forKey: .scrollSpeedIncludesMouse)
+        try c.encodeIfPresent(scrollSpeedIncludesTrackpad, forKey: .scrollSpeedIncludesTrackpad)
+        try c.encodeIfPresent(pointerSpeedIncludesMouse, forKey: .pointerSpeedIncludesMouse)
+        try c.encodeIfPresent(pointerReverseHorizontal, forKey: .pointerReverseHorizontal)
+        try c.encodeIfPresent(pointerReverseVertical, forKey: .pointerReverseVertical)
+        try c.encodeIfPresent(pointerSteadying, forKey: .pointerSteadying)
+        try c.encodeIfPresent(leaveLightBar, forKey: .leaveLightBar)
+        try c.encodeIfPresent(idleDisconnectMinutes, forKey: .idleDisconnectMinutes)
+        try c.encodeIfPresent(reconnectOnStart, forKey: .reconnectOnStart)
+        try c.encodeIfPresent(autoActivateControllers, forKey: .autoActivateControllers)
         try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 
@@ -872,17 +1202,36 @@ extension PresetAutomation {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         var a = PresetAutomation()
-        a.launchAppPath = try c.decodeIfPresent(String.self, forKey: .launchAppPath) ?? a.launchAppPath
-        a.launchURL = try c.decodeIfPresent(String.self, forKey: .launchURL) ?? a.launchURL
-        a.confineCursor = try c.decodeIfPresent(Bool.self, forKey: .confineCursor) ?? a.confineCursor
-        a.confineBufferPx = try c.decodeIfPresent(Double.self, forKey: .confineBufferPx) ?? a.confineBufferPx
-        a.autoRecenterCursor = try c.decodeIfPresent(Bool.self, forKey: .autoRecenterCursor) ?? a.autoRecenterCursor
-        a.autoRecenterIntervalMs = try c.decodeIfPresent(Double.self, forKey: .autoRecenterIntervalMs) ?? a.autoRecenterIntervalMs
-        a.hideCursorWhileActive = try c.decodeIfPresent(Bool.self, forKey: .hideCursorWhileActive) ?? a.hideCursorWhileActive
-        a.sensitivityMultiplier = try c.decodeIfPresent(Double.self, forKey: .sensitivityMultiplier) ?? a.sensitivityMultiplier
-        a.scrollMultiplier = try c.decodeIfPresent(Double.self, forKey: .scrollMultiplier) ?? a.scrollMultiplier
-        a.autoActivateBundleIDs = try c.decodeIfPresent([String].self, forKey: .autoActivateBundleIDs) ?? a.autoActivateBundleIDs
-        a.dpadOneDirection = try c.decodeIfPresent(Bool.self, forKey: .dpadOneDirection)
+        a.launchAppPath = c.lenient(String.self, .launchAppPath) ?? a.launchAppPath
+        a.launchURL = c.lenient(String.self, .launchURL) ?? a.launchURL
+        a.confineCursor = c.lenient(Bool.self, .confineCursor) ?? a.confineCursor
+        a.confineBufferPx = c.lenient(Double.self, .confineBufferPx) ?? a.confineBufferPx
+        a.autoRecenterCursor = c.lenient(Bool.self, .autoRecenterCursor) ?? a.autoRecenterCursor
+        a.autoRecenterIntervalMs = c.lenient(Double.self, .autoRecenterIntervalMs) ?? a.autoRecenterIntervalMs
+        a.hideCursorWhileActive = c.lenient(Bool.self, .hideCursorWhileActive) ?? a.hideCursorWhileActive
+        a.sensitivityMultiplier = c.lenient(Double.self, .sensitivityMultiplier) ?? a.sensitivityMultiplier
+        a.scrollMultiplier = c.lenient(Double.self, .scrollMultiplier) ?? a.scrollMultiplier
+        a.autoActivateBundleIDs = c.lenient([String].self, .autoActivateBundleIDs) ?? a.autoActivateBundleIDs
+        a.dpadOneDirection = c.lenient(Bool.self, .dpadOneDirection)
+        a.launchInBackground = c.lenient(Bool.self, .launchInBackground)
+        a.scrollReverseVertical = c.lenient(Bool.self, .scrollReverseVertical)
+        a.scrollReverseHorizontal = c.lenient(Bool.self, .scrollReverseHorizontal)
+        a.smoothScrolling = c.lenient(Bool.self, .smoothScrolling)
+        a.smoothScrollMs = c.lenient(Double.self, .smoothScrollMs)
+        a.scrollReverseSkipsMouse = c.lenient(Bool.self, .scrollReverseSkipsMouse)
+        a.smoothScrollSkipsMouse = c.lenient(Bool.self, .smoothScrollSkipsMouse)
+        a.onlyInListedApps = c.lenient(Bool.self, .onlyInListedApps)
+        a.scrollReverseTrackpad = c.lenient(Bool.self, .scrollReverseTrackpad)
+        a.scrollSpeedIncludesMouse = c.lenient(Bool.self, .scrollSpeedIncludesMouse)
+        a.scrollSpeedIncludesTrackpad = c.lenient(Bool.self, .scrollSpeedIncludesTrackpad)
+        a.pointerSpeedIncludesMouse = c.lenient(Bool.self, .pointerSpeedIncludesMouse)
+        a.pointerReverseHorizontal = c.lenient(Bool.self, .pointerReverseHorizontal)
+        a.pointerReverseVertical = c.lenient(Bool.self, .pointerReverseVertical)
+        a.pointerSteadying = c.lenient(Double.self, .pointerSteadying)
+        a.leaveLightBar = c.lenient(Bool.self, .leaveLightBar)
+        a.idleDisconnectMinutes = c.lenient(Int.self, .idleDisconnectMinutes)
+        a.reconnectOnStart = c.lenient(Bool.self, .reconnectOnStart)
+        a.autoActivateControllers = c.lenient([String].self, .autoActivateControllers)
         a.extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = a
     }
@@ -1013,31 +1362,33 @@ extension DriveConfig {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         var d = DriveConfig()
-        d.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
-        d.slot = try c.decodeIfPresent(Int.self, forKey: .slot) ?? d.slot
-        d.steerAxis = try c.decodeIfPresent(Int.self, forKey: .steerAxis) ?? d.steerAxis
-        d.throttleAxis = try c.decodeIfPresent(Int.self, forKey: .throttleAxis) ?? d.throttleAxis
-        d.invertSteer = try c.decodeIfPresent(Bool.self, forKey: .invertSteer) ?? d.invertSteer
-        d.invertThrottle = try c.decodeIfPresent(Bool.self, forKey: .invertThrottle) ?? d.invertThrottle
-        d.deadzone = try c.decodeIfPresent(Double.self, forKey: .deadzone) ?? d.deadzone
+        d.enabled = c.lenient(Bool.self, .enabled) ?? d.enabled
+        // Never negative: a slot of -1 from a file indexed the groups on
+        // the first poll.
+        d.slot = max(0, c.lenient(Int.self, .slot) ?? d.slot)
+        d.steerAxis = max(0, c.lenient(Int.self, .steerAxis) ?? d.steerAxis)
+        d.throttleAxis = max(0, c.lenient(Int.self, .throttleAxis) ?? d.throttleAxis)
+        d.invertSteer = c.lenient(Bool.self, .invertSteer) ?? d.invertSteer
+        d.invertThrottle = c.lenient(Bool.self, .invertThrottle) ?? d.invertThrottle
+        d.deadzone = c.lenient(Double.self, .deadzone) ?? d.deadzone
         // try?: a steering mode added by a newer build falls back to the default.
         d.steerMode = ((try? c.decodeIfPresent(SteerMode.self, forKey: .steerMode)) ?? nil) ?? d.steerMode
-        d.steerMouseSpeed = try c.decodeIfPresent(Double.self, forKey: .steerMouseSpeed) ?? d.steerMouseSpeed
-        d.steerLeftKey = try c.decodeIfPresent(Int.self, forKey: .steerLeftKey) ?? d.steerLeftKey
-        d.steerRightKey = try c.decodeIfPresent(Int.self, forKey: .steerRightKey) ?? d.steerRightKey
-        d.accelKey = try c.decodeIfPresent(Int.self, forKey: .accelKey) ?? d.accelKey
-        d.brakeKey = try c.decodeIfPresent(Int.self, forKey: .brakeKey) ?? d.brakeKey
-        d.reverseKey = try c.decodeIfPresent(Int.self, forKey: .reverseKey) ?? d.reverseKey
-        d.throttleCurve = try c.decodeIfPresent(Double.self, forKey: .throttleCurve) ?? d.throttleCurve
-        d.pwmPeriodTicks = try c.decodeIfPresent(Int.self, forKey: .pwmPeriodTicks) ?? d.pwmPeriodTicks
-        d.reverseGestureEnabled = try c.decodeIfPresent(Bool.self, forKey: .reverseGestureEnabled) ?? d.reverseGestureEnabled
-        d.reverseTapCount = try c.decodeIfPresent(Int.self, forKey: .reverseTapCount) ?? d.reverseTapCount
-        d.reverseWindowMs = try c.decodeIfPresent(Int.self, forKey: .reverseWindowMs) ?? d.reverseWindowMs
-        d.gestureThreshold = try c.decodeIfPresent(Double.self, forKey: .gestureThreshold) ?? d.gestureThreshold
-        d.steerCurve = try c.decodeIfPresent(Double.self, forKey: .steerCurve) ?? d.steerCurve
-        d.throttleIsTrigger = try c.decodeIfPresent(Bool.self, forKey: .throttleIsTrigger) ?? d.throttleIsTrigger
-        d.coastBrake = try c.decodeIfPresent(Bool.self, forKey: .coastBrake) ?? d.coastBrake
-        d.coastBrakeStrength = try c.decodeIfPresent(Double.self, forKey: .coastBrakeStrength) ?? d.coastBrakeStrength
+        d.steerMouseSpeed = c.lenient(Double.self, .steerMouseSpeed) ?? d.steerMouseSpeed
+        d.steerLeftKey = c.lenient(Int.self, .steerLeftKey) ?? d.steerLeftKey
+        d.steerRightKey = c.lenient(Int.self, .steerRightKey) ?? d.steerRightKey
+        d.accelKey = c.lenient(Int.self, .accelKey) ?? d.accelKey
+        d.brakeKey = c.lenient(Int.self, .brakeKey) ?? d.brakeKey
+        d.reverseKey = c.lenient(Int.self, .reverseKey) ?? d.reverseKey
+        d.throttleCurve = c.lenient(Double.self, .throttleCurve) ?? d.throttleCurve
+        d.pwmPeriodTicks = c.lenient(Int.self, .pwmPeriodTicks) ?? d.pwmPeriodTicks
+        d.reverseGestureEnabled = c.lenient(Bool.self, .reverseGestureEnabled) ?? d.reverseGestureEnabled
+        d.reverseTapCount = c.lenient(Int.self, .reverseTapCount) ?? d.reverseTapCount
+        d.reverseWindowMs = c.lenient(Int.self, .reverseWindowMs) ?? d.reverseWindowMs
+        d.gestureThreshold = c.lenient(Double.self, .gestureThreshold) ?? d.gestureThreshold
+        d.steerCurve = c.lenient(Double.self, .steerCurve) ?? d.steerCurve
+        d.throttleIsTrigger = c.lenient(Bool.self, .throttleIsTrigger) ?? d.throttleIsTrigger
+        d.coastBrake = c.lenient(Bool.self, .coastBrake) ?? d.coastBrake
+        d.coastBrakeStrength = c.lenient(Double.self, .coastBrakeStrength) ?? d.coastBrakeStrength
         d.extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = d
     }
@@ -1068,6 +1419,12 @@ struct Preset: Identifiable, Codable, Hashable {
     /// the copies of the preset that is running or being edited.
     var touchpadRegions: [TouchpadRegion] = []
     var cursorRegions: [TouchpadRegion] = []
+    /// Screen color watches the rows refer to (1.9). Kept with the preset
+    /// like its regions; loaded into ScreenPixelService while it runs.
+    var screenPixels: [ScreenPixelWatch] = []
+    /// Screen text watches and voice phrases (1.9), kept the same way.
+    var screenTexts: [ScreenTextWatch] = []
+    var voicePhrases: [VoicePhrase] = []
     var stickRegions: [String: [TouchpadRegion]] = [:]
     /// Written with every save; see `currentFormatVersion`.
     var formatVersion: Int = Preset.currentFormatVersion
@@ -1108,6 +1465,12 @@ struct Preset: Identifiable, Codable, Hashable {
     /// resistance across the pull.
     var triggerFeelLeft: Int?
     var triggerFeelRight: Int?
+    /// The built-in updates (BuiltInUpdate ids) this copy has had: seeded
+    /// with the rows, or taken in the editor. Kept across every save, where
+    /// the format number is rewritten by each one, so a backup of an
+    /// untouched older copy still reads as untouched once the update is
+    /// applied, and rows deleted after it are the person's edit.
+    var seenUpdates: [String]?
 
     /// Per-preset automation: cursor confine + recenter, hide cursor,
     /// auto-open an application on activate. Lives on the preset (not
@@ -1157,6 +1520,7 @@ struct Preset: Identifiable, Codable, Hashable {
         case groupID, notes, lightBarColor, lightBarBrightness, automation, driveConfig
         case sortOrder
         case touchpadRegions, cursorRegions, stickRegions
+        case screenPixels, screenTexts, voicePhrases
         // Was missing here, so the synthesized encode(to:) silently dropped
         // every per-preset shortcut on save and init(from:) never read one
         // back. Setting a preset shortcut appeared to work and then did
@@ -1167,6 +1531,7 @@ struct Preset: Identifiable, Codable, Hashable {
         case familyBeforeModel
         case lightBarRainbow, lightBarRainbowSpeed
         case triggerResistance, triggerFeelLeft, triggerFeelRight
+        case seenUpdates
     }
 
     /// The on-disk format this file was written in. Absent means 1. Read
@@ -1178,7 +1543,12 @@ struct Preset: Identifiable, Codable, Hashable {
     /// 3 from 1.7: a stick zone takes over its stick's direction rows unless
     /// it shares the stick; zone rows in a file with less keep sharing, so a
     /// 1.6 preset behaves as it did.
-    static let currentFormatVersion = 3
+    /// 4 from 1.9: Block also holds back a keyboard key, a key sequence's
+    /// keys and a double-clicked mouse button. Before, only a pressed
+    /// mouse button blocked, and the flag stayed on a row whose input was
+    /// changed, so in a file with less it is dropped from every other row
+    /// rather than silently swallowing a key after the update.
+    static let currentFormatVersion = 4
 
     /// Custom Codable init so older preset files without `notes`,
     /// `lightBarColor`, or `lightBarBrightness` keys still decode cleanly
@@ -1251,7 +1621,7 @@ struct Preset: Identifiable, Codable, Hashable {
         if version > Self.currentFormatVersion {
             NSLog("Preset \(name): written by a newer format (\(version)); reading what this build understands")
         }
-        self.groupID = try c.decodeIfPresent(UUID.self, forKey: .groupID)
+        self.groupID = (try? c.decodeIfPresent(UUID.self, forKey: .groupID)) ?? nil
         self.notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         // Optional parts decode leniently: one field a newer build shaped
         // differently must not make the whole preset unreadable.
@@ -1264,6 +1634,7 @@ struct Preset: Identifiable, Codable, Hashable {
         let both = (try? c.decodeIfPresent(Int.self, forKey: .triggerResistance)) ?? nil
         self.triggerFeelLeft = ((try? c.decodeIfPresent(Int.self, forKey: .triggerFeelLeft)) ?? nil) ?? both
         self.triggerFeelRight = ((try? c.decodeIfPresent(Int.self, forKey: .triggerFeelRight)) ?? nil) ?? both
+        self.seenUpdates = (try? c.decodeIfPresent([String].self, forKey: .seenUpdates)) ?? nil
         self.automation = ((try? c.decodeIfPresent(PresetAutomation.self, forKey: .automation)) ?? nil)
             ?? PresetAutomation()
         self.driveConfig = (try? c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)) ?? nil
@@ -1282,6 +1653,31 @@ struct Preset: Identifiable, Codable, Hashable {
         }
         self.touchpadRegions = regions(.touchpadRegions)
         self.cursorRegions = regions(.cursorRegions)
+        // Same tolerance for the watches: one bad entry never drops the rest.
+        if var list = try? c.nestedUnkeyedContainer(forKey: .screenPixels) {
+            var out: [ScreenPixelWatch] = []
+            while !list.isAtEnd {
+                if let w = try? list.decode(ScreenPixelWatch.self) { out.append(w) }
+                else if (try? list.decode(JSONValue.self)) == nil { break }
+            }
+            self.screenPixels = out
+        }
+        if var list = try? c.nestedUnkeyedContainer(forKey: .screenTexts) {
+            var out: [ScreenTextWatch] = []
+            while !list.isAtEnd {
+                if let w = try? list.decode(ScreenTextWatch.self) { out.append(w) }
+                else if (try? list.decode(JSONValue.self)) == nil { break }
+            }
+            self.screenTexts = out
+        }
+        if var list = try? c.nestedUnkeyedContainer(forKey: .voicePhrases) {
+            var out: [VoicePhrase] = []
+            while !list.isAtEnd {
+                if let w = try? list.decode(VoicePhrase.self) { out.append(w) }
+                else if (try? list.decode(JSONValue.self)) == nil { break }
+            }
+            self.voicePhrases = out
+        }
         if let byStick = try? c.nestedContainer(keyedBy: AnyKey.self, forKey: .stickRegions) {
             var out: [String: [TouchpadRegion]] = [:]
             for k in byStick.allKeys {
@@ -1322,9 +1718,24 @@ struct Preset: Identifiable, Codable, Hashable {
                     extraFields[key.stringValue] = value
                 }
             }
-        }        // A hostile or damaged file cannot carry a value that traps later
+        }
+        if version < 4 { dropStaleBlocks() }
+        // A hostile or damaged file cannot carry a value that traps later
         // (a negative controller slot, an infinite deadzone, a huge number).
         clampInPlace()
+    }
+
+    /// Block on a row it never applied to before format 4 (see
+    /// currentFormatVersion): anything but a pressed mouse button.
+    private mutating func dropStaleBlocks() {
+        for g in joysticks.indices {
+            for r in joysticks[g].bindings.indices where joysticks[g].bindings[r].blockOriginal == true {
+                let input = joysticks[g].bindings[r].input
+                if input.type != .extMouse || (input.extMouseKind ?? .button) != .button {
+                    joysticks[g].bindings[r].blockOriginal = nil
+                }
+            }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1347,11 +1758,17 @@ struct Preset: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(lightBarRainbowSpeed, forKey: .lightBarRainbowSpeed)
         try c.encodeIfPresent(triggerFeelLeft, forKey: .triggerFeelLeft)
         try c.encodeIfPresent(triggerFeelRight, forKey: .triggerFeelRight)
+        try c.encodeIfPresent(seenUpdates, forKey: .seenUpdates)
         try c.encode(automation, forKey: .automation)
         try c.encodeIfPresent(driveConfig, forKey: .driveConfig)
         try c.encodeIfPresent(sortOrder, forKey: .sortOrder)
         try c.encode(touchpadRegions, forKey: .touchpadRegions)
         try c.encode(cursorRegions, forKey: .cursorRegions)
+        // Written only when there are some, so a preset from before 1.9
+        // round-trips byte for byte.
+        if !screenPixels.isEmpty { try c.encode(screenPixels, forKey: .screenPixels) }
+        if !screenTexts.isEmpty { try c.encode(screenTexts, forKey: .screenTexts) }
+        if !voicePhrases.isEmpty { try c.encode(voicePhrases, forKey: .voicePhrases) }
         try c.encode(stickRegions, forKey: .stickRegions)
         try c.encodeIfPresent(activateHotKey, forKey: .activateHotKey)
         try c.encode(formatVersion, forKey: .formatVersion)
@@ -1382,6 +1799,9 @@ struct Preset: Identifiable, Codable, Hashable {
     func applyRegionsToServices() {
         TouchpadService.shared.load(touchpadRegions)
         CursorRegionService.shared.load(cursorRegions)
+        ScreenPixelService.shared.load(screenPixels)
+        ScreenTextService.shared.load(screenTexts)
+        VoicePhraseService.shared.load(voicePhrases)
         var byStick: [Int: [TouchpadRegion]] = [0: [], 1: []]
         for (key, list) in stickRegions { if let i = Int(key) { byStick[i] = list } }
         StickRegionService.shared.load(byStick)
@@ -1401,6 +1821,9 @@ struct Preset: Identifiable, Codable, Hashable {
         }
         touchpadRegions = TouchpadService.shared.allRegions()
         cursorRegions = CursorRegionService.shared.allRegions()
+        screenPixels = ScreenPixelService.shared.allWatches()
+        screenTexts = ScreenTextService.shared.allWatches()
+        voicePhrases = VoicePhraseService.shared.allPhrases()
         // Keys the service does not load (a newer build's, a hand-edited
         // file's) stay as they were, and empty lists are left out.
         let held = Set(StickRegionService.shared.regionsByStick.keys.map { "\($0)" })
@@ -1456,10 +1879,35 @@ struct Preset: Identifiable, Codable, Hashable {
     /// external key/mouse, cursor region, MIDI) don't all silently
     /// collapse to `0` and intermix with buttons in the editor list.
     /// Whether activating this preset produces any output: it has at least
-    /// one binding, or one-stick driving is enabled. Menu-bar activation and
-    /// the engine both gate on this, so a pure drive preset stays reachable.
-    var isRunnable: Bool {
+    /// one binding, one-stick driving is enabled, or it changes how the
+    /// mouse wheel or trackpad scrolls. Menu-bar activation and the engine
+    /// both gate on this, so a pure drive or scroll preset stays reachable.
+    var isRunnable: Bool { hasMappings || shapesScrolling || shapesPointer }
+
+    /// At least one row, or one-stick driving.
+    var hasMappings: Bool {
         joysticks.contains { !$0.bindings.isEmpty } || driveConfig?.enabled == true
+    }
+
+    /// Scroll direction, Smooth scrolling or Scroll speed reaches the mouse
+    /// wheel or trackpad, as MappingEngine.applyScrollStyle hands them on.
+    /// Only in these apps alone does nothing, so it does not count.
+    var shapesScrolling: Bool {
+        let a = automation
+        let reverse = (a.scrollReverseVertical == true || a.scrollReverseHorizontal == true)
+            && (a.scrollReverseSkipsMouse != true || a.scrollReverseTrackpad == true)
+        let smooth = a.smoothScrolling == true && a.smoothScrollSkipsMouse != true
+        let speed = a.scrollMultiplier != 1
+            && (a.scrollSpeedIncludesMouse == true || a.scrollSpeedIncludesTrackpad == true)
+        return reverse || smooth || speed
+    }
+
+    /// The preset changes the speed of the Mac's own mouse and trackpad.
+    var shapesPointer: Bool {
+        let a = automation
+        return (a.pointerSpeedIncludesMouse == true && a.sensitivityMultiplier != 1)
+            || a.pointerReverseHorizontal == true || a.pointerReverseVertical == true
+            || (a.pointerSteadying ?? 0) > 0
     }
 
     mutating func sortBindings() {
@@ -1498,7 +1946,7 @@ struct Preset: Identifiable, Codable, Hashable {
             }
         case .touchpad:
             // Clamped: a hostile file's huge finger number must not overflow.
-            return min(max(e.touchpadFinger ?? 0, 0), 9) * 6 + (e.touchpadAxis == .y ? 3 : 0) + dir
+            return min(max(e.touchpadFinger ?? e.index, 0), 9) * 6 + (e.touchpadAxis == .y ? 3 : 0) + dir
         default:
             return dir
         }
@@ -1518,8 +1966,13 @@ struct Preset: Identifiable, Codable, Hashable {
         case .extKey:          return 7
         case .extMouse:        return 8
         case .cursorRegion:    return 9
+        case .screenPixel:     return 9
+        case .screenText:      return 9
+        case .voicePhrase:     return 13
         case .stickRegion:     return 10
         case .stickGesture:    return 10
+        case .buttonSequence:  return 10
+        case .keySequence:     return 7
         case .midi:            return 11
         case .chassisTap:      return 12
         }
@@ -1648,14 +2101,15 @@ extension Preset {
     /// output that posts a key, click, pointer move, scroll, or typed text
     /// (row, hold, double-tap, and macro outputs alike, and the system
     /// actions that work by posting a key), any Mac keyboard or mouse
-    /// input, which is read through the same permission, and drive mode.
+    /// input, which is read through the same permission, drive mode, and
+    /// a scroll style.
     var needsAccessibility: Bool {
         // Mute writes the audio device directly, as the volume steps do.
         let quiet: Set<SystemActionKind> = [.openApp, .openURL, .runShortcut, .volumeUp, .volumeDown, .muteToggle,
                                             .missionControl, .launchpad]
         let postsEvents = allOutputs.contains { output in
             switch output.type {
-            case .key, .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep, .typeText:
+            case .key, .mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep, .mouseStep, .typeText:
                 return true
             case .systemAction:
                 return !(output.systemActionKind.map(quiet.contains) ?? true)
@@ -1666,10 +2120,11 @@ extension Preset {
                 return false
             }
         }
-        if postsEvents || driveConfig?.enabled == true { return true }
+        // Shaping the real wheel and trackpad runs through an event tap.
+        if postsEvents || driveConfig?.enabled == true || shapesScrolling || shapesPointer { return true }
         return joysticks.contains { group in
             group.bindings.contains { row in
-                ([row.input] + row.modifiers).contains { $0.type == .extKey || $0.type == .extMouse }
+                ([row.input] + row.modifiers).contains { $0.type == .extKey || $0.type == .extMouse || $0.type == .keySequence }
             }
         }
     }
@@ -1728,6 +2183,8 @@ extension Preset {
         }
         if automation.sensitivityMultiplier != 1 { parts.append(String(format: String(localized: "sets pointer speed to %.2fx"), locale: .current, automation.sensitivityMultiplier)) }
         if automation.scrollMultiplier != 1 { parts.append(String(format: String(localized: "sets scroll speed to %.2fx"), locale: .current, automation.scrollMultiplier)) }
+        if automation.scrollReverseVertical == true || automation.scrollReverseHorizontal == true { parts.append(String(localized: "reverses its scrolling")) }
+        if automation.smoothScrolling == true { parts.append(String(localized: "smooths its scrolling")) }
         if driveConfig?.enabled == true { parts.append(String(localized: "turns on drive mode, which holds keys from a stick")) }
         guard !parts.isEmpty else { return nil }
         let list = LocalizedList.and(parts)
@@ -1745,6 +2202,8 @@ extension Preset {
     func withoutDisplayPins() -> Preset {
         var p = self
         p.cursorRegions = p.cursorRegions.map { var r = $0; r.display = nil; return r }
+        p.screenPixels = p.screenPixels.map { var w = $0; w.display = nil; return w }
+        p.screenTexts = p.screenTexts.map { var w = $0; w.display = nil; return w }
         return p
     }
 
@@ -1754,8 +2213,11 @@ extension Preset {
         // held the main thread.
         for g in p.joysticks.indices {
             for r in p.joysticks[g].bindings.indices {
+                // The parameter of Open App, Open URL and Run Shortcut rides
+                // in the same field and has no use past the limit either.
                 func capped(_ o: OutputAction) -> OutputAction {
-                    guard o.type == .typeText, let t = o.text, t.count > Self.importTextLimit else { return o }
+                    guard o.type == .typeText || o.type == .systemAction,
+                          let t = o.text, t.count > Self.importTextLimit else { return o }
                     var c = o
                     c.text = String(t.prefix(Self.importTextLimit))
                     return c
@@ -1765,10 +2227,12 @@ extension Preset {
                 row.holdOutputs = row.holdOutputs?.map(capped)
                 row.doubleTapOutputs = row.doubleTapOutputs?.map(capped)
                 row.tripleTapOutputs = row.tripleTapOutputs?.map(capped)
-                row.macroSteps = row.macroSteps?.map { var s = $0; s.action = capped(s.action); return s }
+                row.macroSteps = row.macroSteps?.map { var s = $0.clamped(); s.action = capped(s.action); return s }
                 p.joysticks[g].bindings[r] = row
             }
         }
+        // Names, tags, sections and notes likewise.
+        p.capTextLengths()
         if removingPointerSettings {
             // Hide, confine and recenter the pointer, its speed, and drive
             // mode act on the whole Mac as soon as the preset starts.
@@ -1777,6 +2241,19 @@ extension Preset {
             p.automation.hideCursorWhileActive = false
             p.automation.sensitivityMultiplier = 1
             p.automation.scrollMultiplier = 1
+            p.automation.scrollReverseVertical = nil
+            p.automation.scrollReverseHorizontal = nil
+            p.automation.smoothScrolling = nil
+            p.automation.scrollReverseTrackpad = nil
+            p.automation.scrollReverseSkipsMouse = nil
+            p.automation.smoothScrollSkipsMouse = nil
+            p.automation.scrollSpeedIncludesMouse = nil
+            p.automation.scrollSpeedIncludesTrackpad = nil
+            p.automation.pointerSpeedIncludesMouse = nil
+            p.automation.pointerReverseHorizontal = nil
+            p.automation.pointerReverseVertical = nil
+            p.automation.pointerSteadying = nil
+            p.automation.smoothScrollMs = nil
             p.driveConfig?.enabled = false
         }
         p.isActive = false
@@ -1787,6 +2264,8 @@ extension Preset {
         p.automation.launchAppPath = ""
         p.automation.launchURL = ""
         p.automation.autoActivateBundleIDs = nil
+        p.automation.onlyInListedApps = nil
+        p.automation.autoActivateControllers = nil
         // Nor the sharer's own system-wide shortcut: registered here unseen,
         // it took that chord from every app (a Command V one stopped paste).
         p.activateHotKey = nil
@@ -2030,13 +2509,39 @@ enum ControllerType: String, CaseIterable, Identifiable {
                             .flatMap(InputEvent.parse) ?? modifier
                     })
                     newBindings.append(moved)
+                } else if binding.input.type == .buttonSequence, let steps = binding.input.sequenceSteps {
+                    // A button sequence's steps are button numbers: each
+                    // moves as a button row would, or Xbox Down, Down, A
+                    // ended in Switch B.
+                    var moved = binding
+                    moved.input.sequenceSteps = steps.map { n in
+                        let button = InputEvent(type: .button, index: n).serialized
+                        return reverseSource[button].flatMap { destMap[$0] }.flatMap(InputEvent.parse)
+                            .flatMap { $0.type == .button ? $0.index : nil } ?? n
+                    }
+                    moved.setModifiers(binding.modifiers.map { modifier in
+                        reverseSource[modifier.serialized]
+                            .flatMap { destMap[$0] }
+                            .flatMap(InputEvent.parse) ?? modifier
+                    })
+                    newBindings.append(moved)
                 } else {
-                    // Keep unmapped bindings as-is
-                    newBindings.append(binding)
+                    // Its own input stays, but a chord on a face button moves:
+                    // a gyro row held on Xbox A kept btn 0, Switch B.
+                    var moved = binding
+                    moved.setModifiers(binding.modifiers.map { modifier in
+                        reverseSource[modifier.serialized]
+                            .flatMap { destMap[$0] }
+                            .flatMap(InputEvent.parse) ?? modifier
+                    })
+                    newBindings.append(moved)
                 }
             }
             converted.joysticks[i].bindings = newBindings
         }
+        // Named and drawn as the new pad: the editor's convert kept the old
+        // family, so a moved Switch A read as Xbox B. The sidebar did this.
+        if converted.buttonFamily != nil { converted.buttonFamily = destination.buttonFamily }
 
         return converted
     }
@@ -2092,7 +2597,9 @@ struct PresetGroup: Identifiable, Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decode(UUID.self, forKey: .id)
         self.name = try c.decode(String.self, forKey: .name)
-        self.sortOrder = (try? c.decode(Int.self, forKey: .sortOrder)) ?? 0
+        // Held to a range: the store adds and subtracts one to order
+        // siblings, and Int.max from a hand-edited file trapped every save.
+        self.sortOrder = ((try? c.decode(Int.self, forKey: .sortOrder)) ?? 0).clamped(Preset.sortOrderRange)
         self.isExpanded = (try? c.decode(Bool.self, forKey: .isExpanded)) ?? true
         self.color = try? c.decode(String.self, forKey: .color)
         self.parentID = try? c.decode(UUID.self, forKey: .parentID)
@@ -2139,6 +2646,28 @@ extension OutputAction {
     }
 }
 
+extension MacroStep {
+    /// Every number of a step in the range the editor offers: the action's
+    /// values, wait and hold 0 to 30 s, scroll lines 1 to 100, a screen
+    /// watch's timeout 100 ms to 60 s. Shared by the import, the file
+    /// check and the macro text parser.
+    static let waitRange = 0...30_000
+    static let countRange = 1...100
+    static let timeoutRange = 100...60_000
+
+    func clamped() -> MacroStep {
+        var s = self
+        s.action = s.action.clampedValues()
+        s.delayMs = s.delayMs.clamped(Self.waitRange)
+        s.holdMs = s.holdMs.clamped(Self.waitRange)
+        s.count = s.count?.clamped(Self.countRange)
+        s.timeoutMs = s.timeoutMs?.clamped(Self.timeoutRange)
+        // Modifier keys are HID codes; anything else from a file is dropped.
+        s.modifiers = s.modifiers.map { $0.filter { (0...0xFFFF).contains($0) } }
+        return s
+    }
+}
+
 extension InputEvent {
     /// Every number in a range nothing downstream can trap on.
     func clampedValues() -> InputEvent {
@@ -2149,6 +2678,12 @@ extension InputEvent {
         e.midiChannel = e.midiChannel?.clamped(1...16)
         e.midiTurnStep = e.midiTurnStep?.clamped(1...32)
         if let steps = e.gestureSteps { e.gestureSteps = Array(steps.prefix(GestureStep.maxSteps)) }
+        if let steps = e.sequenceSteps {
+            // Buttons and hat codes stop at 255; key codes run past it
+            // (media keys, Globe), the ceiling the parser uses.
+            let top = e.type == .keySequence ? 0xFFFF : 255
+            e.sequenceSteps = Array(steps.prefix(InputEvent.maxSequenceSteps)).map { $0.clamped(0...top) }
+        }
         return e
     }
 }
@@ -2187,6 +2722,59 @@ extension Preset {
         return speed.clamped(lightBarRainbowSpeedRange)
     }
 
+    /// Sibling order values a file may carry; see clampInPlace().
+    static let sortOrderRange = -1_000_000...1_000_000
+
+    /// Characters a name, tag, group name or row section may hold; a notes
+    /// box or row note holds more. Longer text is cut, not refused.
+    static let labelLengthLimit = 300
+    static let notesLengthLimit = 5_000
+    /// The ceilings a file read from the library is held to. 1.8 had no
+    /// limits, so these sit far above anything a person writes and only
+    /// stop a damaged or hostile file from holding the sidebar or the
+    /// editor; the limits above apply to an import, which is someone
+    /// else's file. The next save would otherwise have kept the cut.
+    static let labelLoadCeiling = 2_000
+    static let notesLoadCeiling = 100_000
+    static let macroStepsLoadCeiling = 2_000
+
+    /// Cuts every label and note to its limit, so a file with megabytes in
+    /// a name cannot hold the sidebar or the editor. Applied on decode, with
+    /// the load ceilings, and on import, with the limits.
+    mutating func capTextLengths(label labelLimit: Int = Preset.labelLengthLimit,
+                                 notes notesLimit: Int = Preset.notesLengthLimit) {
+        func cap(_ s: String, _ limit: Int) -> String {
+            s.count > limit ? String(s.prefix(limit)) : s
+        }
+        name = cap(name, labelLimit)
+        tag = cap(tag, labelLimit)
+        notes = cap(notes, notesLimit)
+        // Controller names are matched like a group's pinned name.
+        automation.autoActivateControllers = automation.autoActivateControllers.map {
+            Array($0.prefix(16)).map { cap($0, labelLimit) }
+        }
+        for g in joysticks.indices {
+            joysticks[g].tag = cap(joysticks[g].tag, labelLimit)
+            joysticks[g].customName = joysticks[g].customName.map { cap($0, labelLimit) }
+            for r in joysticks[g].bindings.indices {
+                joysticks[g].bindings[r].section = joysticks[g].bindings[r].section.map { cap($0, labelLimit) }
+                joysticks[g].bindings[r].note = joysticks[g].bindings[r].note.map { cap($0, notesLimit) }
+                joysticks[g].bindings[r].speechText = joysticks[g].bindings[r].speechText.map { cap($0, labelLimit) }
+            }
+        }
+        for i in screenPixels.indices {
+            screenPixels[i].name = cap(screenPixels[i].name, labelLimit)
+        }
+        for i in screenTexts.indices {
+            screenTexts[i].name = cap(screenTexts[i].name, labelLimit)
+            screenTexts[i].text = cap(screenTexts[i].text, labelLimit)
+        }
+        for i in voicePhrases.indices {
+            voicePhrases[i].name = cap(voicePhrases[i].name, labelLimit)
+            voicePhrases[i].phrase = cap(voicePhrases[i].phrase, labelLimit)
+        }
+    }
+
     mutating func clampInPlace() {
         func row(_ b: BindingModel) -> BindingModel {
             var b = b
@@ -2201,7 +2789,10 @@ extension Preset {
             // row label and the input names.
             b.input = b.input.clampedValues()
             b.modifierInput = b.modifierInput?.clampedValues()
-            b.extraModifierInputs = b.extraModifierInputs?.map { $0.clampedValues() }
+            // The editor allows three held controls; a file with hundreds
+            // was evaluated in full on every poll.
+            b.extraModifierInputs = b.extraModifierInputs.map { Array($0.prefix(BindingModel.maxModifiers - 1)).map { $0.clampedValues() } }
+            if b.extraModifierInputs?.isEmpty == true { b.extraModifierInputs = nil }
             b.deadzone = f(b.deadzone, 0...0.95)
             b.outerDeadzone = f(b.outerDeadzone, 0.05...1)
             b.hapticIntensity = f(b.hapticIntensity, 0...1)
@@ -2209,7 +2800,8 @@ extension Preset {
             b.turboIntervalMs = b.turboIntervalMs?.clamped(1...60_000)
             b.turboJitterMs = b.turboJitterMs?.clamped(0...10_000)
             b.turboMaxCount = b.turboMaxCount?.clamped(0...100_000)
-            b.repeatCount = b.repeatCount?.clamped(0...1000)
+            // The editor and Help say 100 passes, and the engine plays at most that.
+            b.repeatCount = b.repeatCount?.clamped(0...100)
             b.repeatDelayMs = b.repeatDelayMs?.clamped(0...60_000)
             b.rampMs = b.rampMs?.clamped(0...10_000)
             b.hapticDurationMs = b.hapticDurationMs?.clamped(0...10_000)
@@ -2218,29 +2810,39 @@ extension Preset {
             b.gestureReach = b.gestureReach.map { finite($0, 0.3...1, 0.8) }
             b.gestureWindowMs = b.gestureWindowMs?.clamped(150...3000)
             b.gestureFlickMs = b.gestureFlickMs?.clamped(0...3000)
+            b.macroSpeed = b.macroSpeed.map { finite($0, 0.25...4, 1) }
+            b.macroJitterPercent = b.macroJitterPercent?.clamped(0...50)
             b.outputs = b.outputs.map { $0.clampedValues() }
             b.holdOutputs = b.holdOutputs?.map { $0.clampedValues() }
             b.doubleTapOutputs = b.doubleTapOutputs?.map { $0.clampedValues() }
             b.tripleTapOutputs = b.tripleTapOutputs?.map { $0.clampedValues() }
-            b.macroSteps = b.macroSteps?.map { step in
-                var s = step
-                s.action = s.action.clampedValues()
-                s.delayMs = s.delayMs.clamped(0...30_000)
-                s.holdMs = s.holdMs.clamped(0...30_000)
-                return s
-            }
+            // The editor, the recorder and macro text make at most
+            // MacroRecording.maxSteps steps; a longer macro from 1.8, which
+            // had no limit, is kept and plays in full. Only a damaged file's
+            // runaway list is cut.
+            b.macroSteps = b.macroSteps.map { Array($0.prefix(Preset.macroStepsLoadCeiling)).map { $0.clamped() } }
             return b
         }
         for g in joysticks.indices { joysticks[g].bindings = joysticks[g].bindings.map(row) }
         touchpadRegions = touchpadRegions.map { $0.clampedValues() }
         cursorRegions = cursorRegions.map { $0.clampedValues() }
+        screenPixels = Array(screenPixels.prefix(ScreenPixelWatch.maxWatches)).map { $0.clampedValues() }
+        screenTexts = Array(screenTexts.prefix(ScreenTextWatch.maxWatches)).map { $0.clampedValues() }
+        voicePhrases = Array(voicePhrases.prefix(VoicePhrase.maxPhrases))
         stickRegions = stickRegions.mapValues { $0.map { $0.clampedValues() } }
         automation.confineBufferPx = finite(automation.confineBufferPx, 1...200, 24)
         automation.autoRecenterIntervalMs = finite(automation.autoRecenterIntervalMs, 16...60_000, 500)
         automation.sensitivityMultiplier = finite(automation.sensitivityMultiplier, 0.05...20, 1)
         automation.scrollMultiplier = finite(automation.scrollMultiplier, 0.05...20, 1)
+        if let ms = automation.smoothScrollMs {
+            automation.smoothScrollMs = finite(ms, 30...1000, PresetAutomation.defaultSmoothScrollMs)
+        }
         lightBarBrightness = lightBarBrightness?.clamped(0...255)
         lightBarRainbowSpeed = Self.clampedRainbowSpeed(lightBarRainbowSpeed)
+        // The store adds and subtracts one to order siblings; Int.max from a
+        // backup or hand-edited file trapped every later save.
+        sortOrder = sortOrder?.clamped(Self.sortOrderRange)
+        capTextLengths(label: Self.labelLoadCeiling, notes: Self.notesLoadCeiling)
         if var d = driveConfig {
             d.slot = d.slot.clamped(0...31)
             d.steerAxis = d.steerAxis.clamped(0...31)
@@ -2370,4 +2972,13 @@ enum MotionSetup: CaseIterable, Identifiable {
 /// picked on, and which setup.
 enum MotionSetupAction {
     @MainActor static var perform: ((UUID, MotionSetup) -> Void)?
+}
+
+/// One field of the wrong type (a hand edit, a newer build's reshape) falls
+/// back to its own default: a strict decode threw out the whole automation
+/// or drive block, and the next save erased it.
+extension KeyedDecodingContainer {
+    func lenient<T: Decodable>(_ type: T.Type, _ key: Key) -> T? {
+        (try? decodeIfPresent(type, forKey: key)) ?? nil
+    }
 }

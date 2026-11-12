@@ -13,7 +13,7 @@ struct AccessProfilesChip: View {
     let state: Service.ProfileState
     @Binding var isPresented: Bool
     /// Makes a profile active; the second argument reports the outcome.
-    let onUse: (Int, @escaping (Result<Void, Service.ProfileError>) -> Void) -> Void
+    let onUse: (Int, @escaping @MainActor @Sendable (Result<Void, Service.ProfileError>) -> Void) -> Void
     let onEdit: (Service.Profile) -> Void
     let onRefresh: () -> Void
 
@@ -57,7 +57,7 @@ struct AccessProfilesChip: View {
 struct AccessProfilesPopover: View {
     typealias Service = AccessControllerPortService
     let state: Service.ProfileState
-    let onUse: (Int, @escaping (Result<Void, Service.ProfileError>) -> Void) -> Void
+    let onUse: (Int, @escaping @MainActor @Sendable (Result<Void, Service.ProfileError>) -> Void) -> Void
     let onEdit: (Service.Profile) -> Void
     let onRefresh: () -> Void
     @State private var message: String?
@@ -186,12 +186,18 @@ struct AccessProfilesPopover: View {
 struct AccessProfileEditorPanel: View {
     typealias Service = AccessControllerPortService
     @Binding var profile: Service.Profile
+    /// The profile as read from the controller; nil for one the app made up.
+    var original: Service.Profile? = nil
     /// The drawing's control id of the row being looked at.
     @Binding var selection: String?
     let saving: Bool
     let error: String?
     let onSave: () -> Void
     let onCancel: () -> Void
+    /// Cancel with edits asks first, as the editor's Cancel does.
+    @State private var confirmingCancel = false
+
+    private var hasEdits: Bool { original.map { $0 != profile } ?? true }
 
     /// The drawing's control for a button slot (1...10) and a port (1...4).
     static func controlID(slot: Int) -> String { slot <= 8 ? "socket\(slot)" : slot == 9 ? "center" : "stick" }
@@ -210,7 +216,9 @@ struct AccessProfileEditorPanel: View {
             TextField("Profile name", text: $profile.name)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: profile.name) { _, new in
-                    if new.count > 39 { profile.name = String(new.prefix(39)) }
+                    // As the controller stores it, so what is typed is
+                    // what is saved.
+                    if new.utf16.count > Service.nameUnitLimit { profile.name = Service.storableName(new) }
                 }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -263,11 +271,20 @@ struct AccessProfileEditorPanel: View {
             HStack {
                 if saving { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel", action: onCancel)
+                Button("Cancel") {
+                    if hasEdits { confirmingCancel = true } else { onCancel() }
+                }
                     .keyboardShortcut(.cancelAction)
+                    .confirmationDialog("Save the changes to \u{201C}\(profile.name.isEmpty ? String(localized: "Profile \(profile.number)") : profile.name)\u{201D}?",
+                                        isPresented: $confirmingCancel, titleVisibility: .visible) {
+                        Button("Save", action: onSave)
+                        Button("Don\u{2019}t Save", role: .destructive, action: onCancel)
+                        Button("Keep Editing", role: .cancel) {}
+                    }
+                // Not the default button: Return in the name field wrote
+                // to the controller. Nothing to write until something changed.
                 Button("Save to Controller", action: onSave)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(saving)
+                    .disabled(saving || !hasEdits)
             }
         }
         .padding(12)
@@ -310,6 +327,8 @@ struct AccessProfileEditorPanel: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.accentColor : Color.clear, lineWidth: 1.5))
             .contentShape(Rectangle())
             .onTapGesture { selection = id }
+            // A tap gesture is nothing to VoiceOver or Switch Control.
+            .accessibilityAction(named: Text("Select")) { selection = id }
     }
 
     @ViewBuilder
@@ -468,7 +487,7 @@ struct EdgeProfilesChip: View {
                         Text("\(p.slot.name): \(p.assigned ? (p.name.isEmpty ? String(localized: "Unnamed") : p.name) : String(localized: "Empty"))")
                             .font(.callout)
                         if p.assigned {
-                            Text(p.remaps.isEmpty ? String(localized: "No buttons remapped") : p.remaps.joined(separator: ", "))
+                            Text(p.shownRemaps.isEmpty ? String(localized: "No buttons remapped") : p.shownRemaps.joined(separator: ", "))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -479,5 +498,78 @@ struct EdgeProfilesChip: View {
             .padding(14)
             .frame(width: 340)
         }
+    }
+}
+
+/// The caps on an Access controller, beside its Profile chip: which cap is
+/// on each socket and on the stick, so the drawing looks like the
+/// controller on the desk. Kept on this Mac for this controller; the
+/// controller itself never reports its caps.
+struct AccessCapsMenu: View {
+    let unit: String?
+    private var store: AccessCapStore { .shared }
+
+    var body: some View {
+        let caps = store.caps(for: unit)
+        Menu {
+            ForEach(1...8, id: \.self) { socket in
+                Self.socketPicker(socket, caps: caps, unit: unit)
+            }
+            Self.stickPicker(caps: caps, unit: unit)
+            Divider()
+            Button("Pillow on Every Socket, Dome on the Stick, No Tags") { store.set(AccessCapSet(), for: unit) }
+                .disabled(caps.isDefault)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "circle.grid.cross")
+                    .font(.caption)
+                Text("Caps")
+                    .font(.caption.weight(.medium))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
+        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+        .help(String(localized: "Pick the cap on each socket and on the stick, so the drawing matches your controller"))
+        .accessibilityLabel("Controller caps")
+    }
+
+    /// One socket's cap and tag, as a submenu: used here and on the
+    /// socket's own right-click menu.
+    @MainActor @ViewBuilder
+    static func socketPicker(_ socket: Int, caps: AccessCapSet, unit: String?) -> some View {
+        let covered = caps.covered.contains(socket)
+        Menu(covered ? String(localized: "Socket \(socket): under the wide flat cap")
+             : String(localized: "Socket \(socket): \(caps.cap(socket: socket).name)")) {
+            Picker(selection: Binding(get: { caps.cap(socket: socket) },
+                                      set: { AccessCapStore.shared.setSocket(socket, to: $0, for: unit) })) {
+                ForEach(AccessButtonCap.allCases, id: \.self) { cap in
+                    Text(cap == .wideFlat ? String(localized: "Wide flat (sockets \(socket) and \(AccessCapSet.next(socket)))") : cap.name)
+                        .tag(cap)
+                }
+            } label: { Text("Cap") }
+            .pickerStyle(.inline)
+            Picker(selection: Binding(get: { caps.tags[socket] ?? -1 },
+                                      set: { AccessCapStore.shared.setTag(socket, to: $0 < 0 ? nil : $0, for: unit) })) {
+                Text("As the profile sets it").tag(-1)
+                ForEach(1...18, id: \.self) { code in
+                    Text(AccessControllerPortService.Profile.actionName(code) ?? String(code)).tag(code)
+                }
+            } label: { Text("Tag") }
+            .pickerStyle(.menu)
+        }
+    }
+
+    @MainActor @ViewBuilder
+    static func stickPicker(caps: AccessCapSet, unit: String?) -> some View {
+        Picker(selection: Binding(get: { caps.stick },
+                                  set: { AccessCapStore.shared.setStick($0, for: unit) })) {
+            ForEach(AccessStickCap.allCases, id: \.self) { Text($0.name).tag($0) }
+        } label: {
+            Text("Stick: \(caps.stick.name)")
+        }
+        .pickerStyle(.menu)
     }
 }

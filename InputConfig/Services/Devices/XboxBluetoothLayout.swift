@@ -24,7 +24,9 @@ enum XboxBluetoothLayout {
     /// One S (02E0 Windows mode, 02FD Linux mode), Elite 2 (0B05, 0B22),
     /// Adaptive (0B0C), Series X|S (0B13, 0B20), 0B21 Adaptive BLE.
     static let productIDs: Set<Int32> = [0x02E0, 0x02FD, 0x0B05, 0x0B0C, 0x0B13, 0x0B20, 0x0B21, 0x0B22]
-    static let shareProductIDs: Set<Int32> = [0x0B13, 0x0B20, 0x0B22]
+    /// Only the Series X|S has Share: SDL_joystick.c lists 0B20 (One S BLE)
+    /// and 0B22 (Elite 2 BLE) among the old pads without it.
+    static let shareProductIDs: Set<Int32> = [0x0B13]
     static let eliteProductIDs: Set<Int32> = [0x0B05, 0x0B22]
 
     static func isXboxBluetooth(vendorID vid: Int32, productID pid: Int32) -> Bool {

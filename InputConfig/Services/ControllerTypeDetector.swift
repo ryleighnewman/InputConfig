@@ -148,8 +148,11 @@ enum ControllerTypeDetector {
     /// identities real pads present.
     static func detect(category: String, vendor: String, profile: GamepadProfile) -> ControllerBrand {
         let named = brand(fromName: "\(vendor.lowercased()) \(category.lowercased())")
-        // 8BitDo, Nintendo and PlayStation names decide first.
-        if let named, named != .xbox, named != .stadia { return named }
+        // 8BitDo, Nintendo and PlayStation names decide first. Not a
+        // "Pro Controller" that GameController reads as a Sony pad (Nacon's
+        // Revolution Pro Controller): the profile class is the stronger fact.
+        if let named, named != .xbox, named != .stadia,
+           !(named == .switchPro && (profile == .dualSense || profile == .dualShock)) { return named }
 
         // By profile as well as name: GameController models the PlayStation
         // Access Controller (and any pad whose name says neither) through
@@ -273,7 +276,18 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
 
     static let defaultsKey = "InputConfig.faceLetters"
 
-    static var current: FaceLetters {
+    /// Settings' Face button names. Read through a cache: every button
+    /// label asks (each binding row, the Live Visualizer per frame), and a
+    /// defaults read per label was most of what a label cost. The cache is
+    /// dropped on every defaults change in this process, on the writing
+    /// thread before the write returns, so a view that re-renders for the
+    /// change (the @AppStorage on defaultsKey in the rows, the visualizer
+    /// and Settings) reads the new choice.
+    static var current: FaceLetters { FaceLettersCache.shared.value }
+
+    /// The choice as stored, read from defaults each time: what `current`
+    /// caches, and what the bench compares it with.
+    static var stored: FaceLetters {
         FaceLetters(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .automatic
     }
 
@@ -352,5 +366,50 @@ enum FaceLetters: String, CaseIterable, Identifiable, Codable {
             }
         }
         return index < 4 ? ButtonNames.combined[index] : nil
+    }
+}
+
+/// FaceLetters.current's cache. Safe from any thread: the lock guards the
+/// value and a generation count, and defaults are never read while the lock
+/// is held, so a write on another thread that drops the cache cannot wait on
+/// a read in progress. A read that raced a write does not keep its value.
+private final class FaceLettersCache: @unchecked Sendable {
+    static let shared = FaceLettersCache()
+
+    private let lock = NSLock()
+    private var cached: FaceLetters?
+    private var generation: UInt64 = 0
+    private var observer: NSObjectProtocol?
+
+    private init() {
+        // queue: nil runs the block on the thread that wrote, before the
+        // write returns: a render the write schedules finds the cache empty.
+        observer = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.invalidate()
+        }
+    }
+
+    var value: FaceLetters {
+        lock.lock()
+        if let cached {
+            lock.unlock()
+            return cached
+        }
+        let seen = generation
+        lock.unlock()
+        let read = FaceLetters.stored
+        lock.lock()
+        if generation == seen { cached = read }
+        lock.unlock()
+        return read
+    }
+
+    func invalidate() {
+        lock.lock()
+        cached = nil
+        generation &+= 1
+        lock.unlock()
     }
 }

@@ -34,6 +34,12 @@ import AppKit
 @MainActor
 final class CrashRecoveryService: ObservableObject {
     static let shared = CrashRecoveryService()
+    /// Posted by Siri's Stop Preset: the restart countdown after a crash
+    /// counts it as Not Now, as it does an emergency stop.
+    nonisolated static let declineRestartNotification = Notification.Name("InputConfig.recovery.declineRestart")
+    /// The name of the preset the restart countdown is offering, while it
+    /// is up, so Stop Preset can say what it kept off.
+    var restartOffered: String?
 
     /// True if the previous session ended abnormally and we are about
     /// to restore (or have just restored) its active preset. The view
@@ -66,7 +72,7 @@ final class CrashRecoveryService: ObservableObject {
         let stored = (UserDefaults.standard.object(forKey: Self.sessionRestorePrefKey) as? Bool) ?? true
         if stored != sessionRestoreEnabled { sessionRestoreEnabled = stored }
     }
-    nonisolated private static let lastFreezeKey = "InputConfig.recovery.lastFreezeAt"
+    nonisolated static let lastFreezeKey = "InputConfig.recovery.lastFreezeAt"
 
     /// Window during which a second crash will NOT trigger another
     /// auto-restore. 90 seconds is long enough to weed out the case
@@ -113,11 +119,13 @@ final class CrashRecoveryService: ObservableObject {
         // Another copy still running (it quits this one at launch): its
         // record is live, not a crash, and writing ours over it would make
         // that copy's next launch look like a crash, or hide a real one.
+        // pid_t(exactly:): a damaged record's number past Int32 trapped
+        // here on every launch, before the record was rewritten.
         if let other = previous?.processID, other != Int(ProcessInfo.processInfo.processIdentifier),
-           other > 0,
+           let pid = pid_t(exactly: other), pid > 0,
            // Not kill(pid, 0): the sandbox answers EPERM for another
            // process, live or not, so that probe never saw the other copy.
-           NSRunningApplication(processIdentifier: pid_t(other))?.bundleIdentifier == Bundle.main.bundleIdentifier {
+           NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == Bundle.main.bundleIdentifier {
             secondCopy = true
             return
         }
@@ -151,6 +159,11 @@ final class CrashRecoveryService: ObservableObject {
     /// recovery file always reflects the latest "wanted" state.
     func recordActivePreset(_ presetID: UUID?) {
         currentSession.activePresetID = presetID
+        // Auto-switch never starts the preset loop protection kept off, so
+        // this start was the user's own: it is theirs again from here, and
+        // auto-switch may bring it back. A crash inside the loop window
+        // still counts as the loop (lastRecoveryAttempt is carried over).
+        if let presetID, presetID == skippedLoopPresetID { skippedLoopPresetID = nil }
         writeSentinel()
     }
 
@@ -209,11 +222,16 @@ final class CrashRecoveryService: ObservableObject {
         // very recently and ended up here AGAIN, the restored state is
         // probably the cause. Bail out for this launch so the user can
         // start clean and we don't ping-pong.
-        if let lastAttempt = prev.lastRecoveryAttempt {
+        // A sane stamp only: a damaged one far in the future made a huge
+        // negative elapsed, and Int() of it trapped on every launch.
+        if let lastAttempt = prev.lastRecoveryAttempt, lastAttempt.isFinite {
             let elapsed = Date().timeIntervalSince1970 - lastAttempt
-            if elapsed < recoveryLoopWindow {
-                NSLog("CrashRecoveryService: suppressing recovery (loop within \(Int(elapsed))s)")
+            if elapsed >= 0, elapsed < recoveryLoopWindow {
+                NSLog("CrashRecoveryService: suppressing recovery (loop within \(Int(elapsed.rounded()))s)")
                 skippedLoopPresetID = presetID
+                // Carried into this session's record too, so a third crash
+                // inside the window is still a loop and not a fresh start.
+                currentSession.lastRecoveryAttempt = lastAttempt
                 return
             }
         }
@@ -229,8 +247,19 @@ final class CrashRecoveryService: ObservableObject {
     /// from here is the loop the protection is for.
     func markRestarted() {
         currentSession.lastRecoveryAttempt = Date().timeIntervalSince1970
+        skippedLoopPresetID = nil
+        restartMarked = true
         writeSentinel()
     }
+
+    /// The first start after a recovered launch only: a watcher start
+    /// hours later stamped the loop clock again, and a crash after it was
+    /// called a loop and its preset refused.
+    func markRestartedOnce() {
+        guard didRecoverPreviousSession, !restartMarked else { return }
+        markRestarted()
+    }
+    private var restartMarked = false
 
     @objc private func handleWillTerminate() {
         currentSession.cleanShutdown = true

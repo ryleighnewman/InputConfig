@@ -47,9 +47,28 @@ final class LoginItemService: ObservableObject {
             refresh()
             // Waiting for approval in Login Items: the hint with its button
             // says what to do, not the raw error.
-            lastError = needsApproval ? nil : error.localizedDescription
+            lastError = needsApproval ? nil : Self.plainMessage(for: error)
             return false
         }
+    }
+
+    /// A sentence for the errors SMAppService gives most, instead of its
+    /// own wording ("The operation couldn't be completed", an error code).
+    /// Registering only works from the Applications folder: anywhere else
+    /// (Downloads, a disk image, a translocated copy) macOS refuses with
+    /// an internal failure, a signature error, or "operation not permitted".
+    private static func plainMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        let path = Bundle.main.bundleURL.standardizedFileURL.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let outsideApplications = !path.hasPrefix("/Applications/") && !path.hasPrefix(home + "/Applications/")
+        let refused = (nsError.domain == "SMAppServiceErrorDomain"
+                       && [Int(kSMErrorInternalFailure), Int(kSMErrorInvalidSignature), Int(kSMErrorToolNotValid)].contains(nsError.code))
+            || (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(EPERM))
+        if outsideApplications || refused {
+            return String(localized: "Move InputConfig to the Applications folder and try again.")
+        }
+        return error.localizedDescription
     }
 
     /// Refresh the in-memory status from the system. Useful to call when

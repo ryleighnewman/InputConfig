@@ -14,7 +14,7 @@ import AppKit
 /// it). Entries are batched and published on the main thread at 5 Hz so the
 /// UI never re-renders per input event.
 final class ActivityLog: ObservableObject, @unchecked Sendable {
-    nonisolated(unsafe) static let shared = ActivityLog()
+    static let shared = ActivityLog()
 
     enum Level: Int, Comparable, Sendable {
         case info, event, warning, error

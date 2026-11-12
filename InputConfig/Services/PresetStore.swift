@@ -1,11 +1,88 @@
 import Foundation
+import Combine
 import SwiftUI
 import AppKit
 
 /// Manages loading, saving, and organizing presets
 @MainActor
 class PresetStore: ObservableObject {
-    @Published var presets: [Preset] = []
+    @Published var presets: [Preset] = [] {
+        // Siri's "Start <preset> in InputConfig" knows the names only once
+        // told; every save, rename, delete and put back lands here.
+        didSet {
+            // The values shown are dropped on every set; the order behind
+            // them only when something it is sorted or filtered by changed.
+            // A save, a start or a stop wrote one element and refiltered and
+            // resorted every folder on the next render.
+            presetsInValues.removeAll(keepingCapacity: true)
+            favoriteValues = nil
+            let keys = Self.sidebarKeys(presets, sort: sidebarSort)
+            if keys != sidebarKeys {
+                // Only what Siri shows: a start or stop changes no name, and
+                // re-donating every preset a second later on each app switch
+                // was wasted work. The shown name is the name's translation,
+                // so the names stand in for it.
+                if !sidebarKeys.elementsEqual(keys, by: { $0.id == $1.id && $0.name == $1.name && $0.groupID == $1.groupID }) {
+                    AppShortcutsRefresh.schedule()
+                }
+                sidebarKeys = keys
+                presetsInOrder.removeAll(keepingCapacity: true)
+                favoriteOrder = nil
+            }
+        }
+    }
+
+    // MARK: - Sidebar caches
+
+    /// `presets(in:)` and `subgroups(of:)` (nil: the top level) are asked
+    /// once per folder per sidebar render, each filtering and sorting the
+    /// whole list; the answers are kept until anything they read changes.
+    /// A folder's order is kept as indices into `presets`, valid while
+    /// `sidebarKeys` (every preset's id, folder, place, name and the date
+    /// the sort reads, in array order) stays the same; the values are
+    /// taken from `presets` again after every set. Folders depend on
+    /// `groups` and `sidebarSort` only. All of it is dropped whenever
+    /// `groups` or `sidebarSort` is set; the keys follow `presets` and
+    /// `sidebarSort`.
+    private var presetsInOrder: [UUID?: [Int]] = [:]
+    private var presetsInValues: [UUID?: [Preset]] = [:]
+    private var subgroupsCache: [UUID?: [PresetGroup]] = [:]
+    /// The starred presets by name, as indices into `presets`, and their values.
+    private var favoriteOrder: [Int]?
+    private var favoriteValues: [Preset]?
+    private var sidebarKeys: [SidebarKey] = []
+
+    /// What a preset's place in the sidebar depends on.
+    struct SidebarKey: Equatable {
+        let id: UUID
+        let groupID: UUID?
+        let sortOrder: Int?
+        let name: String
+        /// The date the sort reads: modified when sorted by it or not yet
+        /// placed by hand, created when sorted by it, else none.
+        let date: Date?
+    }
+
+    static func sidebarKeys(_ list: [Preset], sort: SidebarSort) -> [SidebarKey] {
+        list.map { p in
+            let date: Date?
+            switch sort {
+            case .recentlyEdited: date = p.modifiedAt
+            case .recentlyCreated: date = p.createdAt
+            case .manual: date = p.sortOrder == nil ? p.modifiedAt : nil
+            case .nameAscending, .nameDescending: date = nil
+            }
+            return SidebarKey(id: p.id, groupID: p.groupID, sortOrder: p.sortOrder, name: p.name, date: date)
+        }
+    }
+
+    private func invalidateSidebarCaches() {
+        presetsInOrder.removeAll(keepingCapacity: true)
+        presetsInValues.removeAll(keepingCapacity: true)
+        subgroupsCache.removeAll(keepingCapacity: true)
+        favoriteOrder = nil
+        favoriteValues = nil
+    }
     @Published var activePresetId: UUID?
 
     /// The most recently activated preset, persisted across launches so the
@@ -66,7 +143,9 @@ class PresetStore: ObservableObject {
     /// `groups.json` file next to the presets. Presets reference a group
     /// by `groupID`; a preset whose `groupID` is nil or unknown shows in
     /// the default "Ungrouped" section.
-    @Published var groups: [PresetGroup] = []
+    @Published var groups: [PresetGroup] = [] {
+        didSet { invalidateSidebarCaches() }
+    }
 
     // MARK: - Favorites
 
@@ -79,7 +158,9 @@ class PresetStore: ObservableObject {
     /// someone's favorites into another library.
     @Published private(set) var favoriteIDs: Set<UUID> = Set(
         (UserDefaults.standard.stringArray(forKey: PresetStore.favoritesKey) ?? []).compactMap(UUID.init)
-    )
+    ) {
+        didSet { favoriteOrder = nil; favoriteValues = nil }
+    }
 
     /// Show only the starred presets, in the sidebar and the menu bar list.
     @Published var showFavoritesOnly: Bool = UserDefaults.standard.bool(forKey: PresetStore.favoritesOnlyKey) {
@@ -92,19 +173,48 @@ class PresetStore: ObservableObject {
     /// the menu bar list and preset cycling. Nothing is deleted: turning it
     /// off shows them again, and a starred one stays under Favorites.
     @Published var hideBuiltInPresets: Bool = UserDefaults.standard.bool(forKey: PresetStore.hideBuiltInKey) {
-        didSet { UserDefaults.standard.set(hideBuiltInPresets, forKey: Self.hideBuiltInKey) }
+        didSet {
+            UserDefaults.standard.set(hideBuiltInPresets, forKey: Self.hideBuiltInKey)
+            // Siri's preset names leave them out while they are hidden.
+            AppShortcutsRefresh.schedule()
+        }
+    }
+
+    /// Every folder as its path ("Games / Favorites"), sorted, leaving out
+    /// built-in folders while they are hidden.
+    func folderPathChoices() -> [(id: UUID, path: String)] {
+        let byID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
+        func path(_ g: PresetGroup) -> String {
+            var parts = [ShippedText.t(g.name)]
+            var cursor = g.parentID
+            var hops = 0
+            while let pid = cursor, let parent = byID[pid], hops < 8 {
+                parts.insert(ShippedText.t(parent.name), at: 0)
+                cursor = parent.parentID
+                hops += 1
+            }
+            return parts.joined(separator: " / ")
+        }
+        return groups
+            .filter { !(hideBuiltInPresets && isInBuiltInFolder($0.id)) }
+            .map { ($0.id, path($0)) }
+            .sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
     }
 
     /// Whether a folder is one of the shipped ones or inside one.
     func isInBuiltInFolder(_ groupID: UUID?) -> Bool {
+        // The root of the chain decides, as the sidebar shows it: a built-in
+        // folder moved into a user folder is the user's, and stayed in the
+        // sidebar while search, Siri and the menu bar dropped it.
         var id = groupID
         var seen: Set<UUID> = []
+        var root: PresetGroup?
         while let current = id, seen.insert(current).inserted,
               let group = groups.first(where: { $0.id == current }) {
-            if group.isBuiltIn { return true }
+            root = group
             id = group.parentID
         }
-        return false
+        return root?.isBuiltIn ?? false
     }
 
     /// A built-in preset the user has chosen not to see.
@@ -141,18 +251,30 @@ class PresetStore: ObservableObject {
     }
     @Published var sidebarSort: SidebarSort =
         SidebarSort(rawValue: UserDefaults.standard.string(forKey: PresetStore.sidebarSortKey) ?? "") ?? PresetStore.defaultSidebarSort {
-        didSet { UserDefaults.standard.set(sidebarSort.rawValue, forKey: Self.sidebarSortKey) }
+        didSet {
+            invalidateSidebarCaches()
+            // The dates in the keys are the ones the new sort reads.
+            sidebarKeys = Self.sidebarKeys(presets, sort: sidebarSort)
+            UserDefaults.standard.set(sidebarSort.rawValue, forKey: Self.sidebarSortKey)
+        }
     }
 
     /// Presets in the sidebar's order.
     func inSidebarOrder(_ list: [Preset]) -> [Preset] {
+        list.sorted(by: sidebarPrecedes)
+    }
+
+    /// Whether `a` comes before `b` in the sidebar's order. One comparison
+    /// for every sort, so a list of presets and a list of their indices
+    /// sort the same way.
+    private func sidebarPrecedes(_ a: Preset, _ b: Preset) -> Bool {
         func byName(_ a: Preset, _ b: Preset) -> Bool { a.shownName.localizedStandardCompare(b.shownName) == .orderedAscending }
         switch sidebarSort {
-        case .manual: return Self.inDisplayOrder(list)
-        case .nameAscending: return list.sorted(by: byName)
-        case .nameDescending: return list.sorted { byName($1, $0) }
-        case .recentlyEdited: return list.sorted { $0.modifiedAt != $1.modifiedAt ? $0.modifiedAt > $1.modifiedAt : byName($0, $1) }
-        case .recentlyCreated: return list.sorted { $0.createdAt != $1.createdAt ? $0.createdAt > $1.createdAt : byName($0, $1) }
+        case .manual: return Self.displayPrecedes(a, b)
+        case .nameAscending: return byName(a, b)
+        case .nameDescending: return byName(b, a)
+        case .recentlyEdited: return a.modifiedAt != b.modifiedAt ? a.modifiedAt > b.modifiedAt : byName(a, b)
+        case .recentlyCreated: return a.createdAt != b.createdAt ? a.createdAt > b.createdAt : byName(a, b)
         }
     }
 
@@ -180,11 +302,14 @@ class PresetStore: ObservableObject {
         let shownSubs = Dictionary(grouping: groups.filter { $0.parentID != nil }, by: { $0.parentID! })
             .mapValues { inSidebarOrder($0) }
         sidebarSort = .manual
+        // Changed as a local copy and published once below: each element
+        // write published the whole list.
+        var reordered = presets
         for list in shownPresets.values {
             for (i, p) in list.enumerated() {
-                guard let idx = presets.firstIndex(where: { $0.id == p.id }), presets[idx].sortOrder != i else { continue }
-                presets[idx].sortOrder = i
-                savePresetToDisk(presets[idx])
+                guard let idx = reordered.firstIndex(where: { $0.id == p.id }), reordered[idx].sortOrder != i else { continue }
+                reordered[idx].sortOrder = i
+                savePresetToDisk(reordered[idx])
             }
         }
         for list in [shownTop] + Array(shownSubs.values) {
@@ -192,7 +317,7 @@ class PresetStore: ObservableObject {
                 if let idx = groups.firstIndex(where: { $0.id == g.id }) { groups[idx].sortOrder = i }
             }
         }
-        presets = Self.inDisplayOrder(presets)
+        presets = Self.inDisplayOrder(reordered)
         saveGroups()
     }
 
@@ -203,6 +328,9 @@ class PresetStore: ObservableObject {
         let d = UserDefaults.standard
         favoriteIDs = Set((d.stringArray(forKey: Self.favoritesKey) ?? []).compactMap(UUID.init))
         showFavoritesOnly = d.bool(forKey: Self.favoritesOnlyKey) && !favoriteIDs.isEmpty
+        recentPresetIDs = (d.stringArray(forKey: Self.recentKey) ?? []).compactMap(UUID.init)
+        hideBuiltInPresets = d.bool(forKey: Self.hideBuiltInKey)
+        sidebarSort = SidebarSort(rawValue: d.string(forKey: Self.sidebarSortKey) ?? "") ?? Self.defaultSidebarSort
     }
 
     /// Stars of presets deleted for good.
@@ -215,6 +343,36 @@ class PresetStore: ObservableObject {
         if favoriteIDs.isEmpty { showFavoritesOnly = false }
     }
 
+    /// Per-preset records in UserDefaults (imports not yet reviewed, pointer
+    /// warnings seen, rows as they were before 1.6) of presets deleted for
+    /// good; they piled up forever otherwise. Call once the library and
+    /// the trash no longer hold the preset.
+    /// Ids read from preset files that did not load this launch.
+    private var unreadableIDs: Set<String> = []
+
+    private func pruneDefaultsRecords() {
+        let keep = Set(presets.map(\.id.uuidString))
+            .union(unreadableIDs)
+            .union(recentlyDeleted.map(\.preset.id.uuidString))
+            .union(deletedFolders.flatMap { $0.presets.map(\.id.uuidString) })
+        let d = UserDefaults.standard
+        // Also the backup marks a Put Back reads, and the presets still to
+        // offer when a Switch or 8BitDo pad connects.
+        let listKeys = [Self.unreviewedKey, Self.trashBefore16Key, Self.trashFrom16Key,
+                        Self.trashBefore17Key, Self.trashFrom17Key]
+            + LegacyRowCheck.Kind.allCases.map(\.pendingKey) + LegacyRowCheck.Kind.allCases.map(\.offeredKey)
+        for key in listKeys {
+            guard let ids = d.stringArray(forKey: key) else { continue }
+            let kept = ids.filter { keep.contains($0) }
+            if kept.count != ids.count { d.set(kept, forKey: key) }
+        }
+        for key in [Self.restrictionWarningKey, LegacyRowCheck.rowsKey] {
+            guard let records = d.dictionary(forKey: key) else { continue }
+            let kept = records.filter { keep.contains($0.key) }
+            if kept.count != records.count { d.set(kept, forKey: key) }
+        }
+    }
+
     func toggleFavorite(_ preset: Preset) {
         if favoriteIDs.contains(preset.id) { favoriteIDs.remove(preset.id) } else { favoriteIDs.insert(preset.id) }
         UserDefaults.standard.set(favoriteIDs.map(\.uuidString).sorted(), forKey: Self.favoritesKey)
@@ -223,14 +381,30 @@ class PresetStore: ObservableObject {
         if favoriteIDs.isEmpty { showFavoritesOnly = false }
     }
 
-    /// The starred presets that still exist, by name.
+    /// The starred presets that still exist, by name. Kept: the sidebar
+    /// asks for it several times per render, and it filtered and sorted
+    /// the whole list each time.
     var favoritePresets: [Preset] {
-        presets.filter { favoriteIDs.contains($0.id) }
-            .sorted { $0.shownName.localizedStandardCompare($1.shownName) == .orderedAscending }
+        if let values = favoriteValues { return values }
+        let order = favoriteOrder ?? presets.indices.filter { favoriteIDs.contains(presets[$0].id) }
+            .sorted { presets[$0].shownName.localizedStandardCompare(presets[$1].shownName) == .orderedAscending }
+        favoriteOrder = order
+        let values = order.map { presets[$0] }
+        favoriteValues = values
+        return values
     }
 
     private let presetsDirectory: URL
     private let groupsFile: URL
+
+    /// Goes up on every change the store publishes, whatever it is. The
+    /// sidebar's rows are rebuilt only when this or their own key moves
+    /// (SidebarRows), so a change to anything here still reaches them
+    /// without the rows observing the store themselves. Not published.
+    /// Counted from a nonisolated closure on a nonisolated count, so the
+    /// counter can never trap whichever thread a change came from.
+    nonisolated(unsafe) private(set) var publishCount = 0
+    private var publishCounter: AnyCancellable?
 
     init() {
         // The default is settled once and kept: a new library's first launch
@@ -247,9 +421,12 @@ class PresetStore: ObservableObject {
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: presetsDirectory, withIntermediateDirectories: true)
 
-        loadPresets()
-        loadGroups()
-        loadTrash()
+        LaunchSignpost.measure("PresetStore.load") {
+            loadPresets()
+            loadGroups()
+            loadTrash()
+        }
+        publishCounter = objectWillChange.sink { @Sendable [weak self] _ in self?.publishCount &+= 1 }
     }
 
     // MARK: - Groups
@@ -378,7 +555,7 @@ class PresetStore: ObservableObject {
             // inside a main-queue block holds the queue, so the Emergency
             // Stop shortcut and timed key and click releases wait behind it
             // (the same fix as the quit and crash-restore alerts).
-            RunLoop.main.perform(inModes: [.default]) { MainActor.assumeIsolated { warnSaveFailed(what) } }
+            RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { warnSaveFailed(what) } }
         }
     }
 
@@ -428,6 +605,17 @@ class PresetStore: ObservableObject {
     /// Once a session: the Mac could not save, the app keeps trying.
     @MainActor private static func warnSaveFailed(_ what: String) {
         guard !warnedSaveFailed else { return }
+        // Not over another alert: stacked on the quit's own Could Not Save it
+        // said the same thing twice, and the restart countdown was left
+        // waiting under it. Said when that one is answered, if it still holds.
+        if NSApp.modalWindow != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                RunLoop.main.perform(inModes: [.common]) {
+                    MainActor.assumeIsolated { if unwrittenCount > 0 { warnSaveFailed(what) } }
+                }
+            }
+            return
+        }
         warnedSaveFailed = true
         let alert = NSAlert()
         alert.messageText = String(localized: "InputConfig Could Not Save")
@@ -449,7 +637,7 @@ class PresetStore: ObservableObject {
         // ever orders siblings (every query filters by parent first), so a
         // sibling-relative min-1 is safe and avoids renumbering the rest.
         let minOrder = groups.filter { $0.parentID == parentID }.map(\.sortOrder).min() ?? 1
-        let group = PresetGroup(name: name, sortOrder: minOrder - 1, parentID: parentID)
+        let group = PresetGroup(name: name, sortOrder: max(Preset.sortOrderRange.lowerBound, minOrder - 1), parentID: parentID)
         groups.append(group)
         saveGroups()
 
@@ -484,18 +672,6 @@ class PresetStore: ObservableObject {
         saveGroups()
     }
 
-    /// Drag-reorder support for the sidebar's group list. SwiftUI's `.onMove`
-    /// hands us source indices and a destination; we mirror that into the
-    /// groups array and rewrite `sortOrder` so the new order survives a
-    /// restart.
-    func moveGroups(fromOffsets source: IndexSet, toOffset destination: Int) {
-        let valid = IndexSet(source.filter { $0 >= 0 && $0 < groups.count })
-        guard !valid.isEmpty else { return }
-        groups.move(fromOffsets: valid, toOffset: min(max(destination, 0), groups.count))
-        normalizeGroupOrder()
-        saveGroups()
-    }
-
     /// Rewrite `sortOrder` to match the current in-memory order, 0...N-1.
     /// Called after any reorder so future loads come back in the right order.
     private func normalizeGroupOrder() {
@@ -514,8 +690,11 @@ class PresetStore: ObservableObject {
     private func groupSubtree(_ root: PresetGroup) -> [PresetGroup] {
         var subtree = [root]
         var queue = [root.id]
+        // A parent loop on disk (repairGroups clears one at load, but not
+        // one made since) would otherwise walk forever.
+        var visited: Set<UUID> = [root.id]
         while let parent = queue.popLast() {
-            for child in groups where child.parentID == parent {
+            for child in groups where child.parentID == parent && visited.insert(child.id).inserted {
                 subtree.append(child)
                 queue.append(child.id)
             }
@@ -550,7 +729,10 @@ class PresetStore: ObservableObject {
         // a full disk or a bad encode meant every preset in the folder was
         // gone with nothing to put back. If the copy cannot be written the
         // folder stays where it is and the user is told.
-        let entry = DeletedFolder(id: root.id, name: root.name, deletedAt: Date(),
+        // Its own id, not the folder's: a folder a backup restore brought
+        // back while its Trash copy stayed, deleted again, overwrote that
+        // copy and made two entries with one id.
+        let entry = DeletedFolder(id: UUID(), name: root.name, deletedAt: Date(),
                                   groups: subtree, presets: inside)
         guard writeDeletedFolder(entry) else {
             ActivityLog.shared.error("Presets", "Could not move folder \(root.name) to the trash: the trash copy could not be written, so nothing was deleted")
@@ -586,11 +768,13 @@ class PresetStore: ObservableObject {
     /// `trash/folders/`.
     @Published var deletedFolders: [DeletedFolder] = []
 
-    private var trashFoldersDirectory: URL {
+    /// Made once; the three trash and version folders used to be created
+    /// again on every access.
+    private lazy var trashFoldersDirectory: URL = {
         let dir = trashDirectory.appendingPathComponent("folders", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
     private func deletedFolderFile(_ entry: DeletedFolder) -> URL {
         trashFoldersDirectory.appendingPathComponent("\(entry.id.uuidString).json")
@@ -616,10 +800,13 @@ class PresetStore: ObservableObject {
     private func loadDeletedFolders() {
         guard let files = try? FileManager.default.contentsOfDirectory(at: trashFoldersDirectory, includingPropertiesForKeys: nil) else { return }
         var loaded: [DeletedFolder] = []
-        for url in files where url.pathExtension == "json" {
-            if let data = try? Data(contentsOf: url),
-               let entry = try? JSONDecoder().decode(DeletedFolder.self, from: data) {
-                loaded.append(entry)
+        let jsonFiles = files.filter { $0.pathExtension == "json" }
+        let decoded = Self.decodeFiles(jsonFiles) { try $0.decode(DeletedFolder.self, from: $1) }
+        for (url, read) in zip(jsonFiles, decoded) {
+            do {
+                loaded.append(try read.result.get())
+            } catch {
+                NSLog("PresetStore.loadDeletedFolders: skipping \(url.lastPathComponent): \(error)")
             }
         }
         deletedFolders = loaded.sorted { $0.deletedAt > $1.deletedAt }
@@ -674,7 +861,7 @@ class PresetStore: ObservableObject {
             if takeDeletedBefore17(entry.deletedAt, id: back.id) { _ = Self.stopGameCursorGuards(&back) }
             back.isActive = false
             clearConflictingHotKey(&back)
-            savePreset(back)
+            savePreset(back, skipSnapshot: true)
         }
         ActivityLog.shared.post(.event, "Presets", "Folder \(entry.name) put back")
     }
@@ -688,6 +875,7 @@ class PresetStore: ObservableObject {
         let live = Set(presets.map(\.id))
         let ids = entry.presets.map(\.id).filter { !live.contains($0) }
         Self.ioQueue.async { for id in ids { self.removeVersions(of: id) } }
+        pruneDefaultsRecords()
         noteIfEmptiedOnPurpose()
     }
 
@@ -732,7 +920,16 @@ class PresetStore: ObservableObject {
 
     /// Top-level folders (no parent), in display order.
     var topLevelGroups: [PresetGroup] {
-        inSidebarOrder(groups.filter { $0.parentID == nil })
+        orderedGroups(under: nil)
+    }
+
+    /// Child folders of `parentID` (nil: the top level), in display order,
+    /// from the cache when it already holds them.
+    private func orderedGroups(under parentID: UUID?) -> [PresetGroup] {
+        if let cached = subgroupsCache[parentID] { return cached }
+        let ordered = inSidebarOrder(groups.filter { $0.parentID == parentID })
+        subgroupsCache[parentID] = ordered
+        return ordered
     }
 
     /// The user's own top-level folders, listed under My Presets.
@@ -748,7 +945,11 @@ class PresetStore: ObservableObject {
         var subset = builtIn ? builtInTopLevelGroups : userTopLevelGroups
         let valid = IndexSet(source.filter { $0 >= 0 && $0 < subset.count })
         guard !valid.isEmpty else { return }
-        let slots = subset.map(\.sortOrder).sorted()
+        // Two folders on one number (a folder put back from the Trash onto a
+        // number a new folder took): the move swapped equal numbers and said
+        // it moved. Dense numbers first, in the order shown.
+        var slots = subset.map(\.sortOrder).sorted()
+        if Set(slots).count != slots.count { slots = Array(slots[0]..<(slots[0] + slots.count)) }
         subset.move(fromOffsets: valid, toOffset: min(max(destination, 0), subset.count))
         for (i, g) in subset.enumerated() {
             if let idx = groups.firstIndex(where: { $0.id == g.id }) {
@@ -774,7 +975,7 @@ class PresetStore: ObservableObject {
 
     /// Direct child folders of the given folder, in display order.
     func subgroups(of parentID: UUID) -> [PresetGroup] {
-        inSidebarOrder(groups.filter { $0.parentID == parentID })
+        orderedGroups(under: parentID)
     }
 
     /// True if `candidate` is `ancestor` itself or nested anywhere beneath it.
@@ -798,11 +999,13 @@ class PresetStore: ObservableObject {
             if isGroup(parentID, descendantOfOrEqualTo: groupID) { return }
         }
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        // Moved where it already is: nothing to do (it jumped in the order).
+        guard groups[index].parentID != parentID else { return }
         groups[index].parentID = parentID
         // Drop it at the top of its new sibling set.
         let minOrder = groups.filter { $0.parentID == parentID && $0.id != groupID }
             .map(\.sortOrder).min() ?? 1
-        groups[index].sortOrder = minOrder - 1
+        groups[index].sortOrder = max(Preset.sortOrderRange.lowerBound, minOrder - 1)
         saveGroups()
     }
 
@@ -838,12 +1041,15 @@ class PresetStore: ObservableObject {
     /// `sortOrder` values stay dense.
     func movePreset(_ presetID: UUID, toPositionOf targetID: UUID) {
         guard presetID != targetID,
-              let dragIdx = presets.firstIndex(where: { $0.id == presetID }),
-              let target = presets.first(where: { $0.id == targetID }) else { return }
+              presets.contains(where: { $0.id == presetID }),
+              presets.contains(where: { $0.id == targetID }) else { return }
 
         // A drop in a sorted list makes what is on screen the manual order
         // first, as Move Up does; otherwise the row snapped back by name.
+        // The indices are taken after it: the switch re-sorts the array.
         switchToManualKeepingOrder()
+        guard let dragIdx = presets.firstIndex(where: { $0.id == presetID }),
+              let target = presets.first(where: { $0.id == targetID }) else { return }
         let sourceGroup = presets[dragIdx].groupID
         let destGroup = target.groupID
 
@@ -856,30 +1062,35 @@ class PresetStore: ObservableObject {
         var destList = current.filter { $0.id != presetID }
         let targetAt = destList.firstIndex(where: { $0.id == targetID }) ?? destList.count
         let insertAt = movingDown ? min(targetAt + 1, destList.count) : targetAt
-        presets[dragIdx].groupID = destGroup
-        destList.insert(presets[dragIdx], at: insertAt)
+        // Changed as a local copy and published once below: each element
+        // write published the whole list and dropped the sidebar caches.
+        var list = presets
+        list[dragIdx].groupID = destGroup
+        destList.insert(list[dragIdx], at: insertAt)
 
-        renumber(destList)
+        renumber(destList, in: &list)
         if sourceGroup != destGroup {
-            renumber(presets(in: sourceGroup).filter { $0.id != presetID })
+            // The source folder as `presets(in:)` lists it, from the copy.
+            let source = inSidebarOrder(list.indices.filter(isMember(of: sourceGroup, in: list)).map { list[$0] })
+            renumber(source.filter { $0.id != presetID }, in: &list)
             // Its new folder is saved even when its number stayed the same,
             // which renumber skips: the move was lost on relaunch.
-            if let idx = presets.firstIndex(where: { $0.id == presetID }) {
-                savePresetToDisk(presets[idx])
+            if let idx = list.firstIndex(where: { $0.id == presetID }) {
+                savePresetToDisk(list[idx])
             }
         }
-        presets = Self.inDisplayOrder(presets)
+        presets = Self.inDisplayOrder(list)
     }
 
     /// Write 0..n-1 into the given presets' sortOrder and persist the ones
     /// that actually changed. Never goes through `savePreset`, which would
     /// stamp modifiedAt and make a drag look like an edit.
-    private func renumber(_ ordered: [Preset]) {
+    private func renumber(_ ordered: [Preset], in list: inout [Preset]) {
         for (i, m) in ordered.enumerated() {
-            guard let idx = presets.firstIndex(where: { $0.id == m.id }) else { continue }
-            if presets[idx].sortOrder != i || presets[idx].groupID != m.groupID {
-                presets[idx].sortOrder = i
-                savePresetToDisk(presets[idx])
+            guard let idx = list.firstIndex(where: { $0.id == m.id }) else { continue }
+            if list[idx].sortOrder != i || list[idx].groupID != m.groupID {
+                list[idx].sortOrder = i
+                savePresetToDisk(list[idx])
             }
         }
     }
@@ -895,17 +1106,30 @@ class PresetStore: ObservableObject {
     /// ungrouped presets if groupID is nil). Maintains the sort order of
     /// `presets` so the sidebar stays stable when groups change.
     func presets(in groupID: UUID?) -> [Preset] {
-        let members: [Preset]
-        if let groupID = groupID {
-            members = presets.filter { $0.groupID == groupID }
-        } else {
-            // Ungrouped or referencing a group that no longer exists
-            let validIDs = Set(groups.map(\.id))
-            members = presets.filter { p in
-                p.groupID == nil || !validIDs.contains(p.groupID!)
-            }
+        if let cached = presetsInValues[groupID] { return cached }
+        let order = presetsInOrder[groupID] ?? presets.indices.filter(isMember(of: groupID))
+            .sorted { sidebarPrecedes(presets[$0], presets[$1]) }
+        presetsInOrder[groupID] = order
+        let values = order.map { presets[$0] }
+        presetsInValues[groupID] = values
+        return values
+    }
+
+    /// Whether the preset at an index of `presets` is listed in that folder
+    /// (nil: ungrouped, or in a folder that no longer exists).
+    private func isMember(of groupID: UUID?, in list: [Preset]? = nil) -> (Int) -> Bool {
+        let list = list ?? presets
+        if let groupID {
+            return { list[$0].groupID == groupID }
         }
-        return inSidebarOrder(members)
+        let validIDs = Set(groups.map(\.id))
+        return { list[$0].groupID.map { !validIDs.contains($0) } ?? true }
+    }
+
+    /// `presets(in:)` worked out again, for the Test Bench to hold the
+    /// cached answer against.
+    func presetsUncached(in groupID: UUID?) -> [Preset] {
+        inSidebarOrder(presets.indices.filter(isMember(of: groupID)).map { presets[$0] })
     }
 
     /// Reorder presets WITHIN one container: a folder, or the ungrouped list
@@ -924,18 +1148,46 @@ class PresetStore: ObservableObject {
         guard !valid.isEmpty else { return }
         visible.move(fromOffsets: valid, toOffset: min(max(destination, 0), visible.count))
 
+        // A local copy, published once (see movePreset).
+        var list = presets
         for (i, m) in visible.enumerated() {
-            guard let idx = presets.firstIndex(where: { $0.id == m.id }) else { continue }
-            guard presets[idx].sortOrder != i else { continue }
-            presets[idx].sortOrder = i
+            guard let idx = list.firstIndex(where: { $0.id == m.id }) else { continue }
+            guard list[idx].sortOrder != i else { continue }
+            list[idx].sortOrder = i
             // Deliberately NOT savePreset(): that stamps modifiedAt, which
             // would make "I dragged a row" look like "I edited the preset".
-            savePresetToDisk(presets[idx])
+            savePresetToDisk(list[idx])
         }
-        presets = Self.inDisplayOrder(presets)
+        presets = Self.inDisplayOrder(list)
     }
 
     // MARK: - Loading
+
+    /// Reads and decodes every file at once, a file per thread, and hands
+    /// the results back in the files' order, so what is done with them
+    /// after (on main) sees them as the one-at-a-time read did. `decode`
+    /// touches no store state, and the rows a file drops or keeps raw are
+    /// counted in that file's own RowDecodeCounts, never in the statics.
+    nonisolated static func decodeFiles<T>(_ urls: [URL],
+                                           _ decode: @escaping @Sendable (JSONDecoder, Data) throws -> T) -> [PresetFileDecode<T>] {
+        let slots = PresetDecodeSlots<T>(count: urls.count)
+        DispatchQueue.concurrentPerform(iterations: urls.count) { i in
+            let counts = RowDecodeCounts()
+            let data = try? Data(contentsOf: urls[i])
+            let result = Result<T, Error> {
+                // Read again when the first read failed, for its error.
+                let bytes = try data ?? Data(contentsOf: urls[i])
+                let decoder = JSONDecoder()
+                decoder.userInfo[RowDecodeCounts.key] = counts
+                return try decode(decoder, bytes)
+            }
+            slots.lock.lock()
+            slots.items[i] = PresetFileDecode(data: data, result: result, counts: counts)
+            slots.lock.unlock()
+        }
+        // concurrentPerform returns once every iteration has: each slot is set.
+        return slots.items.map { $0! }
+    }
 
     func loadPresets() {
         var loaded: [Preset] = []
@@ -946,19 +1198,25 @@ class PresetStore: ObservableObject {
         var lossy: [String] = []
         var kept = 0
         var fileOf: [UUID: [URL]] = [:]
-        if let files = try? FileManager.default.contentsOfDirectory(at: presetsDirectory, includingPropertiesForKeys: nil) {
-            for file in files where file.pathExtension == "json" {
+        var droppedRows = 0
+        if let listed = try? FileManager.default.contentsOfDirectory(at: presetsDirectory, includingPropertiesForKeys: nil) {
+            let files = listed.filter { $0.pathExtension == "json" }
+            // Read and decoded on every core while main waits, then taken in
+            // the listed order exactly as before: one file at a time on main
+            // was most of launch before the window.
+            let decoded = Self.decodeFiles(files) { try $0.decode(Preset.self, from: $1) }
+            for (file, read) in zip(files, decoded) {
+                // A file that failed partway still counted its rows, as the
+                // shared counter did.
+                droppedRows += read.counts.dropped
                 do {
-                    let data = try Data(contentsOf: file)
-                    let droppedBefore = JoystickMapping.droppedRowsDuringDecode
-                    let keptBefore = JoystickMapping.keptRowsDuringDecode
-                    var preset = try JSONDecoder().decode(Preset.self, from: data)
+                    var preset = try read.result.get()
                     // The file's real name, not the one written inside it:
                     // a stale inner name pointed saves and deletes at a
                     // different file, and a deleted preset came back.
                     preset.filename = file.lastPathComponent
-                    kept += JoystickMapping.keptRowsDuringDecode - keptBefore
-                    if JoystickMapping.droppedRowsDuringDecode > droppedBefore {
+                    kept += read.counts.kept
+                    if read.counts.dropped > 0 {
                         // Rows even raw JSON could not hold: keep the file as
                         // it is before any save here rewrites it.
                         let backup = file.appendingPathExtension("bak")
@@ -974,6 +1232,12 @@ class PresetStore: ObservableObject {
                     // schema-mismatched file is diagnosable rather than vanishing.
                     NSLog("PresetStore.loadPresets: skipping \(file.lastPathComponent): \(error)")
                     unreadable.append(file.lastPathComponent)
+                    // Its id, if that much reads: the preset's records (an
+                    // import not yet reviewed) are kept for when it reads again.
+                    struct IDOnly: Decodable { let id: UUID }
+                    if let data = read.data, let only = try? JSONDecoder().decode(IDOnly.self, from: data) {
+                        unreadableIDs.insert(only.id.uuidString)
+                    }
                 }
             }
         }
@@ -983,7 +1247,7 @@ class PresetStore: ObservableObject {
         if !unreadable.isEmpty {
             ActivityLog.shared.error("Presets", "\(unreadable.count) preset file\(unreadable.count == 1 ? "" : "s") could not be read and \(unreadable.count == 1 ? "was" : "were") left in place: \(unreadable.joined(separator: ", "))")
         }
-        let dropped = JoystickMapping.droppedRowsDuringDecode
+        let dropped = droppedRows
         if dropped > 0 {
             ActivityLog.shared.warning("Presets", "\(dropped) binding row\(dropped == 1 ? "" : "s") could not be read in \(lossy.joined(separator: ", ")); the original file\(lossy.count == 1 ? " is" : "s are") kept beside it with .bak added")
             JoystickMapping.droppedRowsDuringDecode = 0
@@ -1074,17 +1338,19 @@ class PresetStore: ObservableObject {
     /// Sort by explicit position, then by recency for anything not yet placed.
     /// Ties break on name so the result is deterministic.
     static func inDisplayOrder(_ list: [Preset]) -> [Preset] {
-        list.sorted { a, b in
-            switch (a.sortOrder, b.sortOrder) {
-            case let (x?, y?):
-                if x != y { return x < y }
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            case (nil, _?):  return false      // unplaced sinks below placed
-            case (_?, nil):  return true
-            default:
-                if a.modifiedAt != b.modifiedAt { return a.modifiedAt > b.modifiedAt }
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
+        list.sorted(by: displayPrecedes)
+    }
+
+    static func displayPrecedes(_ a: Preset, _ b: Preset) -> Bool {
+        switch (a.sortOrder, b.sortOrder) {
+        case let (x?, y?):
+            if x != y { return x < y }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        case (nil, _?):  return false      // unplaced sinks below placed
+        case (_?, nil):  return true
+        default:
+            if a.modifiedAt != b.modifiedAt { return a.modifiedAt > b.modifiedAt }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
     }
 
@@ -1121,12 +1387,25 @@ class PresetStore: ObservableObject {
     func restoreBuiltInPresets() -> Int {
         let defaults = UserDefaults.standard
         defaults.set(false, forKey: Self.emptiedOnPurposeKey)
-        // One in the Trash counts as there: restored as well, Put Back then
-        // left two copies.
-        let have = Set(presets.map(\.name) + recentlyDeleted.map(\.preset.name)
-                       + deletedFolders.flatMap { $0.presets.map(\.name) })
+        // One in the Trash is put back from there, as Help says the button
+        // does (a fresh copy beside it would have left two after Put Back).
+        let builtIn = Set(ExamplePresets.all.map(\.name))
+        var putBack = 0
+        // Folders first: a single built-in put back while its trashed folder
+        // was still away lost its folder and landed in My Presets.
+        for folder in deletedFolders where folder.presets.contains(where: { trashed in builtIn.contains(trashed.name) && !presets.contains(where: { $0.name == trashed.name }) }) {
+            putBack += folder.presets.filter { builtIn.contains($0.name) }.count
+            restoreDeletedFolder(folder)
+        }
+        for entry in recentlyDeleted where builtIn.contains(entry.preset.name) && !presets.contains(where: { $0.name == entry.preset.name }) {
+            if restoreDeleted(entry) { putBack += 1 }
+        }
+        let have = Set(presets.map(\.name))
         let missing = ExamplePresets.all.map(\.name).filter { !have.contains($0) }
-        guard !missing.isEmpty else { return 0 }
+        guard !missing.isEmpty else {
+            if putBack > 0 { ActivityLog.shared.info("Presets", "Put back \(putBack) built-in preset\(putBack == 1 ? "" : "s") from the Trash") }
+            return putBack
+        }
         let ledgerKey = "InputConfig.seededExampleNames.v1"
         var ledger = Set(defaults.stringArray(forKey: ledgerKey) ?? [])
         ledger.subtract(missing)
@@ -1137,8 +1416,8 @@ class PresetStore: ObservableObject {
         defaults.set(false, forKey: "InputConfig.seededExampleGroups.v1")
         defaults.removeObject(forKey: "InputConfig.lastExampleSeedBuild")
         reseedExamplePresets()
-        ActivityLog.shared.info("Presets", "Restored \(missing.count) built-in preset\(missing.count == 1 ? "" : "s")")
-        return missing.count
+        ActivityLog.shared.info("Presets", "Restored \(missing.count + putBack) built-in preset\(missing.count + putBack == 1 ? "" : "s")")
+        return missing.count + putBack
     }
 
     /// At launch: an empty library with nothing in the Trash lost its files
@@ -1245,13 +1524,13 @@ class PresetStore: ObservableObject {
         // have that exact text (never edited) get the short 1.5 version.
         let ankiTrimKey = "InputConfig.trimmedAnkiNotes.v1"
         if !defaults.bool(forKey: ankiTrimKey) {
-            for i in presets.indices where presets[i].name == "Anki"
-                && presets[i].notes.hasPrefix("Anki from a controller.") {
+            upgradePresets { p in
+                guard p.name == "Anki", p.notes.hasPrefix("Anki from a controller.") else { return false }
                 let fresh = ExamplePresets.anki
-                presets[i].notes = fresh.notes
-                presets[i].tag = fresh.tag
-                if presets[i].joysticks.count == 1 { presets[i].joysticks[0].tag = fresh.joysticks[0].tag }
-                savePresetToDisk(presets[i])
+                p.notes = fresh.notes
+                p.tag = fresh.tag
+                if p.joysticks.count == 1 { p.joysticks[0].tag = fresh.joysticks[0].tag }
+                return true
             }
             defaults.set(true, forKey: ankiTrimKey)
         }
@@ -1312,6 +1591,8 @@ class PresetStore: ObservableObject {
                     ExamplePresets.fillShippedNotes(&copy)
                     ExamplePresets.fillShippedSections(&copy)
                     ExamplePresets.fillButtonFamily(&copy)
+                    // Seeded with this version's rows: its updates are had.
+                    BuiltInUpdate.markSeen(BuiltInUpdate.ids(for: copy.name), on: &copy)
                     savePreset(copy)
                 }
                 seededNames.insert(example.name)
@@ -1326,9 +1607,10 @@ class PresetStore: ObservableObject {
         // moved to the right stick press (see `upgradeDesktopNavigation`).
         let desktopNavKey = "InputConfig.desktopNavigationAClicks.v1"
         if !defaults.bool(forKey: desktopNavKey) {
-            for i in presets.indices where Self.upgradeDesktopNavigation(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Updated \(presets[i].name) for 1.6: A now clicks, and Select All moved to the right stick press")
+            upgradePresets { p in
+                guard Self.upgradeDesktopNavigation(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Updated \(p.name) for 1.6: A now clicks, and Select All moved to the right stick press")
+                return true
             }
             defaults.set(true, forKey: desktopNavKey)
         }
@@ -1340,9 +1622,10 @@ class PresetStore: ObservableObject {
             defaults.set(Date().timeIntervalSince1970, forKey: Self.first17LaunchKey)
         }
         if !defaults.bool(forKey: cursorGuardsKey) {
-            for i in presets.indices where Self.stopGameCursorGuards(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Updated \(presets[i].name) for 1.7: the pointer is no longer recentered or hidden; the game does both itself")
+            upgradePresets { p in
+                guard Self.stopGameCursorGuards(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Updated \(p.name) for 1.7: the pointer is no longer recentered or hidden; the game does both itself")
+                return true
             }
             defaults.set(true, forKey: cursorGuardsKey)
         }
@@ -1352,19 +1635,25 @@ class PresetStore: ObservableObject {
         // people to a Settings tab that does not exist). Notes the person
         // wrote, and row notes, are left alone.
         // v2: Tap the Mac's notes gained which MacBooks it works on.
-        let notes17Key = "InputConfig.shippedNotes17.v2"
+        // v3 (1.9): Toggle Mode names the rows that vibrate, and Access
+        // Controller's PS button is read; 1.7 and 1.8 libraries had v2 set.
+        let notes17Key = "InputConfig.shippedNotes17.v3"
         if !defaults.bool(forKey: notes17Key) {
-            for i in presets.indices {
-                let name = presets[i].name
+            upgradePresets { p in
+                let name = p.name
                 // Only the text this one-shot is for: a 1.5 note on a copy
                 // whose rows were changed still describes that copy, and the
                 // new text named buttons it does not have.
+                // And only on the rows the text describes: a 1.6 Macros &
+                // Turbo has neither X nor the sequence the 1.9 text names.
                 guard ExamplePresets.groupAssignments[name] != nil, let current = ExamplePresets.presetNotes[name],
-                      ExamplePresets.isSupersededNotes(presets[i].notes, for: name),
-                      presets[i].notes.trimmingCharacters(in: .whitespacesAndNewlines) != current.trimmingCharacters(in: .whitespacesAndNewlines)
-                else { continue }
-                presets[i].notes = current
-                savePresetToDisk(presets[i])
+                      let example = ExamplePresets.byName[name],
+                      Self.matchesShipped(p, example, builtInFolder: p.groupID, exact: true),
+                      ExamplePresets.isSupersededNotes(p.notes, for: name),
+                      p.notes.trimmingCharacters(in: .whitespacesAndNewlines) != current.trimmingCharacters(in: .whitespacesAndNewlines)
+                else { return false }
+                p.notes = current
+                return true
             }
             defaults.set(true, forKey: notes17Key)
         }
@@ -1372,9 +1661,10 @@ class PresetStore: ObservableObject {
         // One-shot, 1.6: the mouse side buttons' keys (see `upgradeSideButtonKeys`).
         let sideButtonsKey = "InputConfig.sideButtonBrackets.v1"
         if !defaults.bool(forKey: sideButtonsKey) {
-            for i in presets.indices where Self.upgradeSideButtonKeys(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Updated \(presets[i].name) for 1.6: the side buttons send Command [ and ] for Back and Forward")
+            upgradePresets { p in
+                guard Self.upgradeSideButtonKeys(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Updated \(p.name) for 1.6: the side buttons send Command [ and ] for Back and Forward")
+                return true
             }
             defaults.set(true, forKey: sideButtonsKey)
         }
@@ -1383,9 +1673,10 @@ class PresetStore: ObservableObject {
         // `blockSideButtons`).
         let sideBlockKey = "InputConfig.sideButtonBlock.v1"
         if !defaults.bool(forKey: sideBlockKey) {
-            for i in presets.indices where Self.blockSideButtons(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Updated \(presets[i].name) for 1.6: the side buttons no longer also do their own action")
+            upgradePresets { p in
+                guard Self.blockSideButtons(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Updated \(p.name) for 1.6: the side buttons no longer also do their own action")
+                return true
             }
             defaults.set(true, forKey: sideBlockKey)
         }
@@ -1393,9 +1684,10 @@ class PresetStore: ObservableObject {
         // One-shot, 1.6: the built-in row fixes (see `upgradeShippedRows16`).
         let rowFixesKey = "InputConfig.builtInRowFixes16.v1"
         if !defaults.bool(forKey: rowFixesKey) {
-            for i in presets.indices where Self.upgradeShippedRows16(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Updated \(presets[i].name) for 1.6: its rows match the 1.6 built-in (see What's New)")
+            upgradePresets { p in
+                guard Self.upgradeShippedRows16(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Updated \(p.name) for 1.6: its rows match the 1.6 built-in (see What's New)")
+                return true
             }
             defaults.set(true, forKey: rowFixesKey)
         }
@@ -1403,10 +1695,10 @@ class PresetStore: ObservableObject {
         // 1.5 notes text on untouched built-ins (the 1.6 text replaces it).
         let rowFixes2Key = "InputConfig.builtInRowFixes16.v2"
         if !defaults.bool(forKey: rowFixes2Key) {
-            for i in presets.indices {
-                var changed = Self.upgradeShippedRows16(&presets[i])
-                if Self.refreshShippedNotes(&presets[i]) { changed = true }
-                if changed { savePresetToDisk(presets[i]) }
+            upgradePresets { p in
+                var changed = Self.upgradeShippedRows16(&p)
+                if Self.refreshShippedNotes(&p) { changed = true }
+                return changed
             }
             defaults.set(true, forKey: rowFixes2Key)
         }
@@ -1416,9 +1708,10 @@ class PresetStore: ObservableObject {
         // With the sign fixed, that switch would turn driving backward again.
         let throttleKey = "InputConfig.driveThrottleSign16.v1"
         if !defaults.bool(forKey: throttleKey) {
-            for i in presets.indices where Self.clearThrottleWorkaround(&presets[i]) {
-                savePresetToDisk(presets[i])
-                ActivityLog.shared.info("Presets", "Turned off Invert throttle in \(presets[i].name): 1.6 fixed the direction it worked around")
+            upgradePresets { p in
+                guard Self.clearThrottleWorkaround(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Turned off Invert throttle in \(p.name): 1.6 fixed the direction it worked around")
+                return true
             }
             defaults.set(true, forKey: throttleKey)
         }
@@ -1429,9 +1722,7 @@ class PresetStore: ObservableObject {
         // shipped name, so a renamed copy is left alone.
         let familiesKey = "InputConfig.presetButtonFamilies.v1"
         if !defaults.bool(forKey: familiesKey) {
-            for i in presets.indices where ExamplePresets.fillButtonFamily(&presets[i]) {
-                savePresetToDisk(presets[i])
-            }
+            upgradePresets { ExamplePresets.fillButtonFamily(&$0) }
             defaults.set(true, forKey: familiesKey)
         }
         // The Steam Controller presets name their buttons as Steam
@@ -1439,10 +1730,11 @@ class PresetStore: ObservableObject {
         // names it was given before takes its own.
         let steamFamiliesKey = "InputConfig.presetButtonFamilies.v2"
         if !defaults.bool(forKey: steamFamiliesKey) {
-            for i in presets.indices where presets[i].buttonFamily == .xbox
-                && (presets[i].name == "Steam Controller" || presets[i].name == "Steam Controller (2026)") {
-                presets[i].buttonFamily = ExamplePresets.buttonFamilies[presets[i].name]
-                savePresetToDisk(presets[i])
+            upgradePresets { p in
+                guard p.buttonFamily == .xbox,
+                      p.name == "Steam Controller" || p.name == "Steam Controller (2026)" else { return false }
+                p.buttonFamily = ExamplePresets.buttonFamilies[p.name]
+                return true
             }
             defaults.set(true, forKey: steamFamiliesKey)
         }
@@ -1454,15 +1746,15 @@ class PresetStore: ObservableObject {
         // no family yet.
         let steamTargetKey = "InputConfig.presetButtonFamilies.v3"
         if !defaults.bool(forKey: steamTargetKey) {
-            for i in presets.indices {
-                var changed = ExamplePresets.familiedIn16v3.contains(presets[i].name)
-                    && ExamplePresets.fillButtonFamily(&presets[i])
-                changed = ExamplePresets.fillSteamTarget(&presets[i]) || changed
-                changed = ExamplePresets.refreshSteamSections(&presets[i]) || changed
+            upgradePresets { p in
+                var changed = ExamplePresets.familiedIn16v3.contains(p.name)
+                    && ExamplePresets.fillButtonFamily(&p)
+                changed = ExamplePresets.fillSteamTarget(&p) || changed
+                changed = ExamplePresets.refreshSteamSections(&p) || changed
                 // The notes pass above could not match a Steam copy until
                 // its target was set here.
-                changed = Self.refreshShippedNotes(&presets[i]) || changed
-                if changed { savePresetToDisk(presets[i]) }
+                changed = Self.refreshShippedNotes(&p) || changed
+                return changed
             }
             defaults.set(true, forKey: steamTargetKey)
         }
@@ -1476,12 +1768,11 @@ class PresetStore: ObservableObject {
         // which was always written by position.
         let nintendoKey = "InputConfig.nintendoFacePositions.v1"
         if !defaults.bool(forKey: nintendoKey) {
-            let shipped = Set(ExamplePresets.all.map(\.name))
-            for i in presets.indices where !shipped.contains(presets[i].name) {
-                if Self.swapNintendoFaceRows(&presets[i]) {
-                    savePresetToDisk(presets[i])
-                    ActivityLog.shared.info("Presets", "Kept \(presets[i].name)'s Switch face buttons on the same buttons: 1.6 numbers them by position")
-                }
+            let shipped = Set(ExamplePresets.byName.keys)
+            upgradePresets { p in
+                guard !shipped.contains(p.name), Self.swapNintendoFaceRows(&p) else { return false }
+                ActivityLog.shared.info("Presets", "Kept \(p.name)'s Switch face buttons on the same buttons: 1.6 numbers them by position")
+                return true
             }
             defaults.set(true, forKey: nintendoKey)
         }
@@ -1495,19 +1786,19 @@ class PresetStore: ObservableObject {
         // Again in 1.7, for the Touchpad Zones wording (zones became regions).
         let rowNotesKey = "InputConfig.builtInRowNotes17.v1"
         if !defaults.bool(forKey: rowNotesKey) {
-            for i in presets.indices {
-                let rows = Self.refreshShippedRowNotes(&presets[i])
-                let notes = Self.refreshShippedNotes(&presets[i])
-                let tags = Self.refreshShippedTags(&presets[i])
-                let sections = Self.renameShippedZonesSection(&presets[i])
-                if rows || notes || tags || sections { savePresetToDisk(presets[i]) }
+            upgradePresets { p in
+                let rows = Self.refreshShippedRowNotes(&p)
+                let notes = Self.refreshShippedNotes(&p)
+                let tags = Self.refreshShippedTags(&p)
+                let sections = Self.renameShippedZonesSection(&p)
+                return rows || notes || tags || sections
             }
             defaults.set(true, forKey: rowNotesKey)
         }
         // One-shot, 1.6: descriptions 1.5 shipped that 1.6 reworded.
         let tagsKey = "InputConfig.builtInTags16.v1"
         if !defaults.bool(forKey: tagsKey) {
-            for i in presets.indices where Self.refreshShippedTags(&presets[i]) { savePresetToDisk(presets[i]) }
+            upgradePresets { Self.refreshShippedTags(&$0) }
             defaults.set(true, forKey: tagsKey)
         }
         if defaults.object(forKey: Self.first16LaunchKey) == nil { defaults.set(Date(), forKey: Self.first16LaunchKey) }
@@ -1522,20 +1813,20 @@ class PresetStore: ObservableObject {
         // 20 and 21. Rows scanned from an 8BitDo pad move with them.
         let eightBitDoKey = "InputConfig.eightBitDoBackButtons.v1"
         if !defaults.bool(forKey: eightBitDoKey) {
-            for i in presets.indices {
+            upgradePresets { p in
                 var changed = false
-                for g in presets[i].joysticks.indices {
-                    let print = (presets[i].joysticks[g].deviceFingerprint ?? "").lowercased()
+                for g in p.joysticks.indices {
+                    let print = (p.joysticks[g].deviceFingerprint ?? "").lowercased()
                     guard print.hasPrefix("gc:"), print.contains("8bitdo") else { continue }
-                    for r in presets[i].joysticks[g].bindings.indices {
-                        let input = presets[i].joysticks[g].bindings[r].input
+                    for r in p.joysticks[g].bindings.indices {
+                        let input = p.joysticks[g].bindings[r].input
                         if input.type == .button, input.index == 20 || input.index == 21 {
-                            presets[i].joysticks[g].bindings[r].input.index = input.index - 4
+                            p.joysticks[g].bindings[r].input.index = input.index - 4
                             changed = true
                         }
                     }
                 }
-                if changed { savePresetToDisk(presets[i]) }
+                return changed
             }
             defaults.set(true, forKey: eightBitDoKey)
         }
@@ -1563,6 +1854,23 @@ class PresetStore: ObservableObject {
             defaults.set(true, forKey: keyboardDeckKey)
         }
 
+        // One-shot, 1.9: Tap the Mac leaves the built-in presets, since macOS
+        // 27's sandbox cannot switch the motion sensor on. As Keyboard Deck
+        // above: a copy still as shipped goes to the Trash, where it can be
+        // put back; the preset in use, and anyone's own, stays.
+        let tapTheMacKey = "InputConfig.retiredTapTheMac.v1"
+        if !defaults.bool(forKey: tapTheMacKey) {
+            for p in presets where Self.isUntouchedTapTheMac(p) {
+                if p.id == lastActivatedPresetId {
+                    ActivityLog.shared.info("Presets", "Tap the Mac is retired in 1.9 but kept, since it is the preset you use")
+                    continue
+                }
+                deletePreset(p)
+                ActivityLog.shared.info("Presets", "Tap the Mac is retired in 1.9 and moved to the Trash, where it can be put back")
+            }
+            defaults.set(true, forKey: tapTheMacKey)
+        }
+
         // One-shot: shipped presets used to arrive with no notes and no row
         // notes, so the layout had to be worked out from the key codes. Fill
         // in the shipped text wherever an installed copy still has none;
@@ -1576,8 +1884,7 @@ class PresetStore: ObservableObject {
             // and Web Browsing sent Command comma and Command period where
             // the bracket keys were meant. Edited copies do not match and
             // are left alone.
-            for i in presets.indices {
-                let p = presets[i]
+            upgradePresets { p in
                 let codes = Set(p.joysticks.flatMap { $0.bindings.flatMap { $0.outputs.compactMap(\.keyCode) } })
                 let fresh: Preset?
                 if p.name == "Media Controller", !codes.isDisjoint(with: [232, 233, 234, 235, 237, 238, 128, 129, 130, 131]) {
@@ -1587,16 +1894,13 @@ class PresetStore: ObservableObject {
                 } else {
                     fresh = nil
                 }
-                if let fresh {
-                    presets[i].joysticks = fresh.joysticks
-                    presets[i].tag = fresh.tag
-                    savePresetToDisk(presets[i])
-                }
+                guard let fresh else { return false }
+                p.joysticks = fresh.joysticks
+                p.tag = fresh.tag
+                return true
             }
-            for i in presets.indices where ExamplePresets.groupAssignments[presets[i].name] != nil {
-                if ExamplePresets.fillShippedNotes(&presets[i]) {
-                    savePresetToDisk(presets[i])
-                }
+            upgradePresets { p in
+                ExamplePresets.groupAssignments[p.name] != nil && ExamplePresets.fillShippedNotes(&p)
             }
             defaults.set(true, forKey: notesKey)
         }
@@ -1605,11 +1909,7 @@ class PresetStore: ObservableObject {
         // never filled in. A copy still holding that exact line gets them.
         let ankiNotesKey = "InputConfig.ankiShippedNotes.v1"
         if !defaults.bool(forKey: ankiNotesKey) {
-            for i in presets.indices where presets[i].name == "Anki" {
-                if ExamplePresets.fillShippedNotes(&presets[i]) {
-                    savePresetToDisk(presets[i])
-                }
-            }
+            upgradePresets { p in p.name == "Anki" && ExamplePresets.fillShippedNotes(&p) }
             defaults.set(true, forKey: ankiNotesKey)
         }
 
@@ -1619,10 +1919,8 @@ class PresetStore: ObservableObject {
         // user organized themselves stays as they left it.
         let sectionsKey = "InputConfig.shippedSectionsFilled.v1"
         if !defaults.bool(forKey: sectionsKey) {
-            for i in presets.indices where ExamplePresets.groupAssignments[presets[i].name] != nil {
-                if ExamplePresets.fillShippedSections(&presets[i]) {
-                    savePresetToDisk(presets[i])
-                }
+            upgradePresets { p in
+                ExamplePresets.groupAssignments[p.name] != nil && ExamplePresets.fillShippedSections(&p)
             }
             defaults.set(true, forKey: sectionsKey)
         }
@@ -1636,24 +1934,24 @@ class PresetStore: ObservableObject {
             let legacyTouchpad = TouchpadService.legacyAppWideRegions()
             let legacyCursor = CursorRegionService.legacyAppWideRegions()
             let legacyStick = StickRegionService.legacyAppWideRegions()
-            for i in presets.indices {
-                let refs = presets[i].referencedRegionIDs
+            upgradePresets { p in
+                let refs = p.referencedRegionIDs
                 var changed = false
                 for r in legacyTouchpad where refs.touchpad.contains(r.id)
-                    && !presets[i].touchpadRegions.contains(where: { $0.id == r.id }) {
-                    presets[i].touchpadRegions.append(r); changed = true
+                    && !p.touchpadRegions.contains(where: { $0.id == r.id }) {
+                    p.touchpadRegions.append(r); changed = true
                 }
                 for r in legacyCursor where refs.cursor.contains(r.id)
-                    && !presets[i].cursorRegions.contains(where: { $0.id == r.id }) {
-                    presets[i].cursorRegions.append(r); changed = true
+                    && !p.cursorRegions.contains(where: { $0.id == r.id }) {
+                    p.cursorRegions.append(r); changed = true
                 }
                 for (stick, list) in legacyStick {
                     for r in list where refs.stick.contains(r.id)
-                        && !(presets[i].stickRegions["\(stick)"] ?? []).contains(where: { $0.id == r.id }) {
-                        presets[i].stickRegions["\(stick)", default: []].append(r); changed = true
+                        && !(p.stickRegions["\(stick)"] ?? []).contains(where: { $0.id == r.id }) {
+                        p.stickRegions["\(stick)", default: []].append(r); changed = true
                     }
                 }
-                if changed { savePresetToDisk(presets[i]) }
+                return changed
             }
             defaults.set(true, forKey: regionsKey)
         }
@@ -1665,23 +1963,55 @@ class PresetStore: ObservableObject {
         // rebuilt with fresh ids). A preset the user moved into a different,
         // still-valid folder is left exactly where they put it.
         let validGroupIDs = Set(groups.map { $0.id })
-        for index in presets.indices {
-            guard let groupName = ExamplePresets.groupAssignments[presets[index].name],
-                  let groupID = groupIDsByName[groupName] else { continue }
+        upgradePresets { p in
+            guard let groupName = ExamplePresets.groupAssignments[p.name],
+                  let groupID = groupIDsByName[groupName] else { return false }
             // Only a dangling folder id. No folder at all is the user's
             // choice (Remove from Group), which this used to undo on every
             // launch.
-            if let current = presets[index].groupID, !validGroupIDs.contains(current) {
-                presets[index].groupID = groupID
-                savePresetToDisk(presets[index])
-            }
+            guard let current = p.groupID, !validGroupIDs.contains(current) else { return false }
+            p.groupID = groupID
+            return true
         }
+    }
+
+    /// A one-shot pass over every preset: `upgrade` returns true for one it
+    /// changed, and that one is rewritten on disk. The list is published
+    /// once at the end; each element write used to publish the whole list,
+    /// and everything listening (the hotkeys, Siri) ran once per preset.
+    private func upgradePresets(_ upgrade: (inout Preset) -> Bool) {
+        var list = presets
+        var changed = false
+        for i in list.indices where upgrade(&list[i]) {
+            savePresetToDisk(list[i])
+            changed = true
+        }
+        if changed { presets = list }
     }
 
     // MARK: - Saving
 
     /// Block until every queued preset write and delete has run. For quit.
-    static func flushPendingWrites() { ioQueue.sync {} }
+    /// `retryFailed` also gives each failed write one more try now; off
+    /// for Put Back, which only needs the queued trash move finished and
+    /// should not stall the main thread on a disk that keeps refusing.
+    /// Files still unwritten after their retries (a full disk), for Quit.
+    static var unwrittenCount: Int {
+        failedLock.lock(); defer { failedLock.unlock() }
+        return failedWrites.count
+    }
+
+    static func flushPendingWrites(retryFailed: Bool = true) {
+        ioQueue.sync {}
+        guard retryFailed else { return }
+        // A write still waiting for its 30 second retry would be lost with
+        // the quit; one more try now, under the lock the retry holds.
+        failedLock.lock()
+        defer { failedLock.unlock() }
+        for (url, entry) in failedWrites where (try? entry.data.write(to: url, options: .atomic)) != nil {
+            failedWrites[url] = nil
+        }
+    }
 
     /// Save to disk only (no array update)
     /// Shared serial queue for all disk I/O so JSON encoding and file
@@ -1701,7 +2031,7 @@ class PresetStore: ObservableObject {
     // the background ioQueue too; writeGenLock serializes all access, so the
     // manual synchronization is sound and we opt out of actor/Sendable checks.
     nonisolated(unsafe) private var writeGeneration: [UUID: Int] = [:]
-    nonisolated(unsafe) private let writeGenLock = NSLock()
+    private let writeGenLock = NSLock()
 
     /// Rewrite a preset's file without it counting as an edit: reorders
     /// and upgrade migrations keep the preset's modified date, so they do
@@ -1725,9 +2055,15 @@ class PresetStore: ObservableObject {
     /// listens so an edit to the RUNNING preset takes effect immediately.
     static let presetSavedNotification = Notification.Name("InputConfig.PresetSaved")
 
-    func savePreset(_ preset: Preset, forceSnapshot: Bool = false) {
+    /// `skipSnapshot`: the file on disk is already this preset (Put Back
+    /// just restored it), so keeping it as a version would push a real
+    /// earlier one out of the history.
+    /// `keepDate`: a write that is not an edit (the tour putting a slot
+    /// type back) keeps the preset's date, so it does not float to the top
+    /// of Recently Edited.
+    func savePreset(_ preset: Preset, forceSnapshot: Bool = false, skipSnapshot: Bool = false, keepDate: Bool = false) {
         var mutable = preset
-        mutable.modifiedAt = Date()
+        if !keepDate { mutable.modifiedAt = Date() }
         // A preset that has never been placed (freshly seeded example, or one
         // the user just created) goes to the end of its own container. Without
         // this, new presets keep a nil sortOrder and fall back to
@@ -1790,7 +2126,10 @@ class PresetStore: ObservableObject {
             //    10). Skip the snapshot when the newest existing snapshot is only
             //    seconds old, so an editing burst leaves at most one checkpoint.
             //    The new state itself is always written below, so no edit is lost.
-            if let priorData = try? Data(contentsOf: priorFile) {
+            // Words only (a note or a name being typed) never snapshots, so
+            // it reads no prior file and lists no folder: every keystroke
+            // on the page did both before deciding not to.
+            if !skipSnapshot, forceSnapshot || !wordsOnly, let priorData = try? Data(contentsOf: priorFile) {
                 let newestSnapshotAge: TimeInterval = {
                     guard let existing = try? FileManager.default.contentsOfDirectory(
                         at: snapshotDir, includingPropertiesForKeys: [.contentModificationDateKey]),
@@ -1800,7 +2139,7 @@ class PresetStore: ObservableObject {
                     }.max() ?? .distantPast
                     return Date().timeIntervalSince(newest)
                 }()
-                if forceSnapshot || (newestSnapshotAge >= 3.0 && !wordsOnly) {
+                if forceSnapshot || newestSnapshotAge >= 3.0 {
                     try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
                     // Milliseconds: two forced snapshots in one second
                     // used to share a name, and the second replaced the first.
@@ -1852,35 +2191,68 @@ class PresetStore: ObservableObject {
     nonisolated static let versionsChangedNotification = Notification.Name("InputConfig.presetVersionsChanged")
 
     /// Directory holding per-preset snapshots: `versions/<presetID>/<unix>.json`.
-    private var versionsDirectory: URL {
+    private lazy var versionsDirectory: URL = {
         let dir = presetsDirectory.deletingLastPathComponent().appendingPathComponent("versions", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
-    /// One historical snapshot of a preset. The `Preset` value is the parsed
-    /// content of the snapshot file; `savedAt` is its file modification date.
-    struct PresetVersion: Identifiable {
+    /// One historical snapshot of a preset: its file, its file modification
+    /// date and how many bindings it holds, which is all the list shows.
+    /// The content is read again from the file on Revert; every decoded
+    /// snapshot of every preset visited was kept for the app's life.
+    /// Equatable, so the page's list is written only when it changed.
+    struct PresetVersion: Identifiable, Equatable {
         var id: URL { fileURL }
         let fileURL: URL
         let savedAt: Date
-        let preset: Preset
+        let bindingCount: Int
     }
 
     /// List the most-recent-first snapshots of a preset's file, newest first.
+    /// Snapshots already decoded, by file. A snapshot never changes once
+    /// written (a prune removes it), so a file seen before with the same
+    /// modification date is handed back as it was: the preset page asked
+    /// for the list on every switch and decoded every snapshot again.
+    /// Only files that decode are listed, as before.
+    private var decodedVersions: [URL: PresetVersion] = [:]
+
     func versions(for preset: Preset) -> [PresetVersion] {
-        let dir = versionsDirectory.appendingPathComponent(preset.id.uuidString)
+        versions(forID: preset.id)
+    }
+
+    /// The same, by the preset's id, which is all the list is keyed on.
+    func versions(forID id: UUID) -> [PresetVersion] {
+        let dir = versionsDirectory.appendingPathComponent(id.uuidString)
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else {
             return []
         }
         var out: [PresetVersion] = []
+        var seen: Set<URL> = []
         for url in files {
-            guard let data = try? Data(contentsOf: url),
-                  let p = try? JSONDecoder().decode(Preset.self, from: data) else { continue }
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            out.append(PresetVersion(fileURL: url, savedAt: date, preset: p))
+            seen.insert(url)
+            if let cached = decodedVersions[url], cached.savedAt == date {
+                out.append(cached)
+                continue
+            }
+            guard let p = Self.decodeVersion(at: url) else { continue }
+            let version = PresetVersion(fileURL: url, savedAt: date,
+                                        bindingCount: p.joysticks.reduce(0) { $0 + $1.bindings.count })
+            decodedVersions[url] = version
+            out.append(version)
+        }
+        // Pruned or reverted snapshots of this preset leave the cache.
+        for url in decodedVersions.keys where url.deletingLastPathComponent() == dir && !seen.contains(url) {
+            decodedVersions[url] = nil
         }
         return out.sorted { $0.savedAt > $1.savedAt }
+    }
+
+    /// A snapshot file's content, nil when it does not read.
+    private static func decodeVersion(at url: URL) -> Preset? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Preset.self, from: data)
     }
 
     /// Restore a snapshot: write its content over the current preset file
@@ -1888,13 +2260,34 @@ class PresetStore: ObservableObject {
     /// itself snapshotted first (via the usual savePreset path) so a revert
     /// is reversible. We preserve the existing preset's UUID / filename so
     /// the sidebar selection and on-disk identity stay stable.
+    /// A copy from before 1.5 (in the Trash, or an old version) refers to
+    /// the app-wide zones of that time, handed to the presets of the day
+    /// by a one-shot it missed.
+    private static func adoptOldRegions(_ preset: inout Preset) {
+        _ = preset.adoptLegacyRegions(touchpad: TouchpadService.legacyAppWideRegions(),
+                                      cursor: CursorRegionService.legacyAppWideRegions(),
+                                      stick: StickRegionService.legacyAppWideRegions())
+    }
+
     func revertPreset(_ preset: Preset, to version: PresetVersion) {
+        // The snapshot as the list read it. One pruned since the list was
+        // read (the oldest, right after a save) is gone: the list is read
+        // again so its row goes too.
+        guard let snapshot = Self.decodeVersion(at: version.fileURL) else {
+            NotificationCenter.default.post(name: Self.versionsChangedNotification, object: preset.id)
+            // Not silent: the row goes from the list, and a beep says nothing
+            // changed. A spoken line waits for a translated string.
+            NSSound.beep()
+            ActivityLog.shared.warning("Presets", "Revert of \(preset.name): the version was pruned, nothing changed")
+            return
+        }
         // Restore the FULL snapshot (light, notes, automation, cursor flags,
         // every field) instead of a lossy memberwise init, keeping the live
         // preset's identity so it stays the same sidebar entry.
-        var restored = version.preset
+        var restored = snapshot
+        Self.adoptOldRegions(&restored)
         // Before 1.6 only: format 3 changed nothing those upgrades fix.
-        let old = version.preset.writtenByFormatVersion < 2
+        let old = snapshot.writtenByFormatVersion < 2
         restored.filename = preset.filename
         restored.isActive = preset.isActive
         // savePreset will set modifiedAt; preserve createdAt from the live
@@ -1944,7 +2337,7 @@ class PresetStore: ObservableObject {
         // The newest preset goes to the top of My Presets, where the New
         // Preset button is, so it is never hidden below the built-ins.
         let minOrder = presets(in: nil).compactMap(\.sortOrder).min() ?? 1
-        preset.sortOrder = minOrder - 1
+        preset.sortOrder = max(Preset.sortOrderRange.lowerBound, minOrder - 1)
         savePreset(preset)
         return preset
     }
@@ -1966,12 +2359,12 @@ class PresetStore: ObservableObject {
     /// On-disk directory where deleted presets are parked. Sibling of
     /// `presets/` so the user can find both in the same Application
     /// Support folder.
-    private var trashDirectory: URL {
+    private lazy var trashDirectory: URL = {
         let dir = presetsDirectory.deletingLastPathComponent()
             .appendingPathComponent("trash", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
+    }()
 
     func deletePreset(_ preset: Preset) {
         if preset.id == activePresetId {
@@ -1996,6 +2389,8 @@ class PresetStore: ObservableObject {
         let source = presetsDirectory.appendingPathComponent(preset.filename)
         let dest = trashDirectory.appendingPathComponent(preset.filename)
         cancelPendingWrites(for: preset.id, file: source)
+        let id = preset.id
+        movingToTrash[id] = preset
         Self.ioQueue.async {
             // If the destination already exists (re-deleted preset), remove
             // the old copy first so the move can succeed.
@@ -2003,11 +2398,17 @@ class PresetStore: ObservableObject {
             // The preset as it is now, not the file on disk: the newest
             // write was just called off, so the file could be an older save,
             // and Put Back after a relaunch returned that.
+            let inTrash: Bool
             if let data = try? JSONEncoder().encode(preset), (try? data.write(to: dest, options: .atomic)) != nil {
                 try? FileManager.default.removeItem(at: source)
+                inTrash = true
             } else {
-                try? FileManager.default.moveItem(at: source, to: dest)
+                inTrash = (try? FileManager.default.moveItem(at: source, to: dest)) != nil
             }
+            // Neither made it: the preset stays in the library rather than
+            // showing in the Trash with nothing to put back.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.trashWriteFinished(id, landed: inTrash) } }
+            guard inTrash else { return }
             // The deletion date, which Recently Deleted reads back at launch.
             try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: dest.path)
         }
@@ -2016,11 +2417,34 @@ class PresetStore: ObservableObject {
         pruneTrash()
     }
 
+    /// Presets on their way into the Trash, by id, until the trash copy is
+    /// written: one whose copy could not be written goes back from here.
+    private var movingToTrash: [UUID: Preset] = [:]
+
+    /// The trash copy could not be written: the preset goes back where it
+    /// was, and its file is written again in case the move took it.
+    private func trashWriteFinished(_ id: UUID, landed: Bool) {
+        guard let preset = movingToTrash.removeValue(forKey: id), !landed else { return }
+        recentlyDeleted.removeAll { $0.preset.id == id }
+        guard !presets.contains(where: { $0.id == id }) else { return }
+        ActivityLog.shared.error("Presets", "Could not move \u{201C}\(preset.name)\u{201D} to the Trash: the trash copy could not be written, so it was not deleted")
+        presets = Self.inDisplayOrder(presets + [preset])
+        savePresetToDisk(preset)
+    }
+
     /// Cap on how many deleted presets stay in Recently Deleted. Older entries
     /// are pruned (and their on-disk trash file removed) so heavy create/delete
     /// or import churn can't grow the trash folder or this @Published list
     /// without bound. Mirrors the 10-snapshot cap on per-preset version history.
     private static let trashCap = 60
+
+    /// A failed write still waiting to land at this file is called off: a
+    /// Trash entry deleted for good came back when its retry landed.
+    nonisolated static func dropFailedWrite(at url: URL) {
+        failedLock.lock()
+        failedWrites[url] = nil
+        failedLock.unlock()
+    }
 
     private func pruneTrash() {
         guard recentlyDeleted.count > Self.trashCap else { return }
@@ -2032,6 +2456,7 @@ class PresetStore: ObservableObject {
         ActivityLog.shared.info("Presets", "The Trash keeps the last \(Self.trashCap) presets; deleted for good: " + dropped.joined(separator: ", "))
         for entry in recentlyDeleted[Self.trashCap...] {
             let file = trashDirectory.appendingPathComponent(entry.preset.filename)
+            Self.dropFailedWrite(at: file)
             let id = entry.preset.id
             let keepVersions = kept.contains(id)
             Self.ioQueue.async {
@@ -2039,7 +2464,9 @@ class PresetStore: ObservableObject {
                 if !keepVersions { self.removeVersions(of: id) }
             }
         }
+        forgetStars(recentlyDeleted[Self.trashCap...].map(\.preset.id))
         recentlyDeleted.removeLast(recentlyDeleted.count - Self.trashCap)
+        pruneDefaultsRecords()
     }
 
     /// Permanent delete: skip the trash + Recently Deleted buffer.
@@ -2058,6 +2485,7 @@ class PresetStore: ObservableObject {
             try? FileManager.default.removeItem(at: source)
             self.removeVersions(of: preset.id)
         }
+        pruneDefaultsRecords()
     }
 
     /// Make any write still queued for this preset skip itself.
@@ -2089,7 +2517,7 @@ class PresetStore: ObservableObject {
         // A queued move into the trash finishes first, or putting a preset
         // back right after deleting it found no trash file yet and the late
         // move then took the restored file away again.
-        Self.flushPendingWrites()
+        Self.flushPendingWrites(retryFailed: false)
         // Already live again (a backup restore brought it back): leave the
         // live one alone rather than overwrite it with the trash copy.
         if presets.contains(where: { $0.id == entry.preset.id }) {
@@ -2099,6 +2527,8 @@ class PresetStore: ObservableObject {
 
         let trashed = trashDirectory.appendingPathComponent(entry.preset.filename)
         let restored = presetsDirectory.appendingPathComponent(entry.preset.filename)
+        // A retry still owed for a backup's trash file would bring it back.
+        Self.dropFailedWrite(at: trashed)
         if FileManager.default.fileExists(atPath: trashed.path) {
             try? FileManager.default.removeItem(at: restored)
             try? FileManager.default.moveItem(at: trashed, to: restored)
@@ -2115,9 +2545,12 @@ class PresetStore: ObservableObject {
         if takeDeletedBefore16(entry.deletedAt, id: back.id) { back = upgradedFromBefore16(back) }
         // Deleted before 1.7 ran, it missed the one-shot cursor change.
         if takeDeletedBefore17(entry.deletedAt, id: back.id) { _ = Self.stopGameCursorGuards(&back) }
+        Self.adoptOldRegions(&back)
         back.isActive = false
         clearConflictingHotKey(&back)
-        savePreset(back)
+        // The file just moved back is this preset: kept as a version, it
+        // pushed a real earlier one out of the history.
+        savePreset(back, skipSnapshot: true)
         return true
     }
 
@@ -2128,6 +2561,7 @@ class PresetStore: ObservableObject {
         recentlyDeleted.removeAll { $0.id == entry.id }
         forgetStars([entry.preset.id])
         let url = trashDirectory.appendingPathComponent(entry.preset.filename)
+        Self.dropFailedWrite(at: url)
         let id = entry.preset.id
         // The same preset can be live again (a backup restore); its version
         // history is then the live preset's and stays.
@@ -2137,6 +2571,7 @@ class PresetStore: ObservableObject {
             try? FileManager.default.removeItem(at: url)
             if !live { self.removeVersions(of: id) }
         }
+        pruneDefaultsRecords()
         noteIfEmptiedOnPurpose()
     }
 
@@ -2153,13 +2588,17 @@ class PresetStore: ObservableObject {
             .filter { !live.contains($0) }
         Self.ioQueue.async { for id in ids { self.removeVersions(of: id) } }
         forgetStars(ids)
+        // Only the files of the entries shown: one the launch could not read
+        // (logged then) is left where it is rather than thrown out unseen.
+        let files = deletedFolders.map { deletedFolderFile($0) }
+            + recentlyDeleted.map { trashDirectory.appendingPathComponent($0.preset.filename) }
         recentlyDeleted.removeAll()
         deletedFolders.removeAll()
-        try? FileManager.default.removeItem(at: trashFoldersDirectory)
-        if let files = try? FileManager.default.contentsOfDirectory(at: trashDirectory,
-                                                                     includingPropertiesForKeys: nil) {
-            for f in files { try? FileManager.default.removeItem(at: f) }
+        for f in files {
+            Self.dropFailedWrite(at: f)
+            try? FileManager.default.removeItem(at: f)
         }
+        pruneDefaultsRecords()
         noteIfEmptiedOnPurpose()
     }
 
@@ -2178,12 +2617,12 @@ class PresetStore: ObservableObject {
         // Still inside a folder in the Trash here: not a second, loose copy.
         if deletedFolders.contains(where: { $0.presets.contains { $0.id == preset.id } }) { return }
         let target = trashDirectory.appendingPathComponent(preset.filename)
-        if let data = try? JSONEncoder().encode(preset) {
-            try? data.write(to: target, options: .atomic)
-            // Keep the original deletion date, which Recently Deleted
-            // reads back from the file at launch.
-            try? FileManager.default.setAttributes([.modificationDate: deletedAt], ofItemAtPath: target.path)
-        }
+        // Through the same write as a live preset: a failure is retried and
+        // said, where a silent one left the entry gone at the next launch.
+        Self.write(try? JSONEncoder().encode(preset), to: target, what: preset.shownName)
+        // Keep the original deletion date, which Recently Deleted
+        // reads back from the file at launch.
+        try? FileManager.default.setAttributes([.modificationDate: deletedAt], ofItemAtPath: target.path)
         // In date order, newest first, so pruning past the cap drops the
         // oldest, not this Mac's newer entries.
         let entry = DeletedPreset(preset: preset, deletedAt: deletedAt)
@@ -2232,8 +2671,8 @@ class PresetStore: ObservableObject {
     @discardableResult
     static func refreshShippedRowNotes(_ p: inout Preset) -> Bool {
         guard let old = ExamplePresets.rowNotes15[p.name],
-              var example = ExamplePresets.all.first(where: { $0.name == p.name }),
-              matchesShipped(p, example, builtInFolder: p.groupID) else { return false }
+              var example = ExamplePresets.byName[p.name],
+              matchesShipped(p, example, builtInFolder: p.groupID, exact: true) else { return false }
         ExamplePresets.fillShippedNotes(&example)
         var fresh: [String: String] = [:]
         for row in example.joysticks.flatMap(\.bindings) { if let n = row.note { fresh[row.input.serialized] = n } }
@@ -2348,7 +2787,7 @@ class PresetStore: ObservableObject {
     /// The Touchpad Zones heading 1.6 named "Zones", on an untouched copy.
     static func renameShippedZonesSection(_ p: inout Preset) -> Bool {
         guard p.name == "Touchpad Zones",
-              let example = ExamplePresets.all.first(where: { $0.name == p.name }),
+              let example = ExamplePresets.byName[p.name],
               matchesShipped(p, example, builtInFolder: p.groupID) else { return false }
         var changed = false
         for g in p.joysticks.indices {
@@ -2361,12 +2800,20 @@ class PresetStore: ObservableObject {
     }
 
     static func refreshShippedTags(_ p: inout Preset) -> Bool {
-        guard let old = ExamplePresets.tags15[p.name],
-              let example = ExamplePresets.all.first(where: { $0.name == p.name }) else { return false }
+        // Not while an update is still on offer: the tag names its rows. A
+        // declined one (or one the copy had and lost) is not on offer.
+        guard BuiltInUpdate.offers(for: p).isEmpty,
+              let old = ExamplePresets.tags15[p.name],
+              let example = ExamplePresets.byName[p.name] else { return false }
         var changed = false
-        if p.tag == old.preset, example.tag != old.preset { p.tag = example.tag; changed = true }
+        // 1.5 shipped British spellings, which the pass over the catalog
+        // changed in the list above: compared as the notes are.
+        func same(_ a: String, _ b: String) -> Bool {
+            a.replacingOccurrences(of: "centre", with: "center") == b.replacingOccurrences(of: "centre", with: "center")
+        }
+        if same(p.tag, old.preset), example.tag != old.preset { p.tag = example.tag; changed = true }
         for g in p.joysticks.indices where g < old.groups.count && g < example.joysticks.count {
-            if p.joysticks[g].tag == old.groups[g], example.joysticks[g].tag != old.groups[g] {
+            if same(p.joysticks[g].tag, old.groups[g]), example.joysticks[g].tag != old.groups[g] {
                 p.joysticks[g].tag = example.joysticks[g].tag
                 changed = true
             }
@@ -2383,8 +2830,8 @@ class PresetStore: ObservableObject {
         let notes = p.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !notes.isEmpty, ExamplePresets.isShippedNotes(notes, for: p.name),
               let text = ExamplePresets.presetNotes[p.name], notes != text,
-              let example = ExamplePresets.all.first(where: { $0.name == p.name }),
-              matchesShipped(p, example, builtInFolder: p.groupID) else { return false }
+              let example = ExamplePresets.byName[p.name],
+              matchesShipped(p, example, builtInFolder: p.groupID, exact: true) else { return false }
         p.notes = text
         return true
     }
@@ -2421,7 +2868,7 @@ class PresetStore: ObservableObject {
 
     static func upgradeDesktopNavigation(_ p: inout Preset) -> Bool {
         guard p.name == "Desktop Navigation", p.joysticks.count == 1,
-              let fresh = ExamplePresets.all.first(where: { $0.name == "Desktop Navigation" }) else { return false }
+              let fresh = ExamplePresets.byName["Desktop Navigation"] else { return false }
         func signature(_ p: Preset) -> [String: String] {
             var sig: [String: String] = [:]
             for group in p.joysticks {
@@ -2588,7 +3035,7 @@ class PresetStore: ObservableObject {
         ]
         func outputs(_ list: [OutputAction]) -> [String] { list.map(\.serialized) }
         guard let old = table[preset.name],
-              let fresh = ExamplePresets.all.first(where: { $0.name == preset.name }),
+              let fresh = ExamplePresets.byName[preset.name],
               fresh.joysticks.count == 1, preset.joysticks.count == 1 else { return false }
         let name = preset.name
         var rows = preset.joysticks[0].bindings
@@ -2633,6 +3080,19 @@ class PresetStore: ObservableObject {
             preset.notes = text
         }
         return true
+    }
+
+    /// Tap the Mac as it shipped: its name, and the two taps on Mission
+    /// Control and Dictation with nothing added.
+    nonisolated static func isUntouchedTapTheMac(_ p: Preset) -> Bool {
+        guard p.name == "Tap the Mac", p.joysticks.count == 1 else { return false }
+        let rows = p.joysticks[0].bindings
+        guard rows.count == 2 else { return false }
+        func matches(_ row: BindingModel, taps: Int, _ kind: SystemActionKind) -> Bool {
+            row.input.type == .chassisTap && row.input.index == taps && row.outputs.count == 1
+                && row.outputs[0].type == .systemAction && row.outputs[0].systemActionKind == kind
+        }
+        return matches(rows[0], taps: 2, .missionControl) && matches(rows[1], taps: 3, .startDictation)
     }
 
     /// True when `p` is the shipped `example` with nothing of the user's in
@@ -2696,7 +3156,7 @@ class PresetStore: ObservableObject {
                 && (group.tag.isEmpty || group.tag == "The Mac's keyboard: seven spare function keys, each a system function")
                 && group.customName == nil
                 && group.inputKind == .auto
-                && p.touchpadRegions.isEmpty && p.cursorRegions.isEmpty && p.stickRegions.isEmpty
+                && p.touchpadRegions.isEmpty && p.cursorRegions.isEmpty && p.stickRegions.isEmpty && p.screenPixels.isEmpty && p.screenTexts.isEmpty && p.voicePhrases.isEmpty
                 && p.driveConfig == nil
                 && (p.groupID == nil || p.groupID == builtInFolder)
         }
@@ -2783,7 +3243,7 @@ class PresetStore: ObservableObject {
         }
         var older: [Preset] = []
         for p in presets {
-            guard let example = ExamplePresets.all.first(where: { $0.name == p.name }) else { older.append(p); continue }
+            guard let example = ExamplePresets.byName[p.name] else { older.append(p); continue }
             if matchesShipped(p, example, builtInFolder: p.groupID) { continue }
             let shippedRows = Set(example.joysticks.flatMap(\.bindings).map(sig))
             var q = p
@@ -2793,7 +3253,9 @@ class PresetStore: ObservableObject {
         LegacyRowCheck.rememberOlder(older)
     }
 
-    static func matchesShipped(_ p: Preset, _ example: Preset, builtInFolder: UUID?) -> Bool {
+    /// `exact`: the rows as they stand, for text that describes them (a
+    /// copy still waiting for an update lacks what the new text names).
+    static func matchesShipped(_ p: Preset, _ example: Preset, builtInFolder: UUID?, exact: Bool = false) -> Bool {
         if let g = p.groupID, g != builtInFolder { return false }
         let notes = p.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         // Notes this app wrote, in 1.6 or an earlier version, count as
@@ -2801,11 +3263,25 @@ class PresetStore: ObservableObject {
         // untouched 1.5 copies came back "(from backup)".
         if !notes.isEmpty, !ExamplePresets.isShippedNotes(notes, for: p.name) { return false }
         guard let a = comparable(p), let b = comparable(example) else { return false }
-        return a == b
+        if a == b { return true }
+        // An untouched copy from before a row update this version offers
+        // (1.8's Macros & Turbo, without X and the sequence) matches once
+        // the update is applied, or a backup restore added a second copy.
+        // Only a file from before the rows existed: one written since and
+        // without them had them deleted, and that edit is the person's.
+        guard !exact else { return false }
+        var updated = p
+        // Not an update the copy already had: its rows deleted since are an edit.
+        let pending = BuiltInUpdate.all.filter { $0.presetName == p.name && !$0.isApplied(p) && !$0.seen(by: p) }
+        guard !pending.isEmpty else { return false }
+        for u in pending {
+            for (key, list) in u.apply(&updated) { updated.stickRegions["\(key)", default: []] += list }
+        }
+        return comparable(updated) == b
     }
 
     private static func comparable(_ p: Preset) -> NSDictionary? {
-        let ignored: Set<String> = ["id", "filename", "isActive", "createdAt", "modifiedAt", "sortOrder",
+        let ignored: Set<String> = ["id", "filename", "isActive", "createdAt", "modifiedAt", "sortOrder", "seenUpdates",
                                     // A collapsed group is view state, as in the editor.
                                     "isExpanded",
                                     "formatVersion", "groupID", "notes", "note", "section", "buttonFamily",
@@ -2844,12 +3320,32 @@ class PresetStore: ObservableObject {
         return dict as NSDictionary
     }
 
-    /// A preset's rows as input and output text, for telling an untouched
-    /// built-in copy from an edited one. Used by the tests.
-    static func layoutSignature(_ p: Preset) -> [String] {
-        p.joysticks.flatMap { group in
-            group.bindings.map { $0.input.serialized + "=" + $0.outputs.map(\.serialized).joined(separator: "|") }
-        }.sorted()
+    /// A backup is a file from elsewhere too: its typed text gets the cap
+    /// an import gets (the same cut as `Preset.sanitizedForImport`), since
+    /// posting a huge one held the main thread. The rest of that
+    /// sanitizing is not run on a backup: its openers, auto-switch apps,
+    /// shortcut, device fingerprints and order are the user's own, kept,
+    /// and the openers and shortcut are reported and marked for review
+    /// below.
+    static func capTypedText(_ p: inout Preset) {
+        func capped(_ o: OutputAction) -> OutputAction {
+            guard o.type == .typeText || o.type == .systemAction,
+                  let t = o.text, t.count > Preset.importTextLimit else { return o }
+            var c = o
+            c.text = String(t.prefix(Preset.importTextLimit))
+            return c
+        }
+        for g in p.joysticks.indices {
+            for r in p.joysticks[g].bindings.indices {
+                var row = p.joysticks[g].bindings[r]
+                row.outputs = row.outputs.map(capped)
+                row.holdOutputs = row.holdOutputs?.map(capped)
+                row.doubleTapOutputs = row.doubleTapOutputs?.map(capped)
+                row.tripleTapOutputs = row.tripleTapOutputs?.map(capped)
+                row.macroSteps = row.macroSteps?.map { var s = $0; s.action = capped(s.action); return s }
+                p.joysticks[g].bindings[r] = row
+            }
+        }
     }
 
     /// Restore presets, folders, and trash from a backup.
@@ -2890,10 +3386,7 @@ class PresetStore: ObservableObject {
         // A backup's folder whose parent is not in the library or the backup.
         if !addedGroupIDs.isEmpty { repairGroups(); saveGroups() }
 
-        var shipped: [String: Preset] = [:]
-        for example in ExamplePresets.all where shipped[example.name] == nil {
-            shipped[example.name] = example
-        }
+        let shipped = ExamplePresets.byName
         // The built-in folder a shipped preset belongs in, on this Mac.
         func builtInFolder(for name: String) -> UUID? {
             guard let folder = ExamplePresets.groupAssignments[name] else { return nil }
@@ -2904,7 +3397,7 @@ class PresetStore: ObservableObject {
         // otherwise a restore added a second "Minecraft".
         func withUpdates(_ p: Preset) -> Preset {
             var copy = p
-            for u in BuiltInUpdate.all where u.presetName == p.name && !u.isApplied(p) {
+            for u in BuiltInUpdate.all where u.presetName == p.name && !u.isApplied(p) && !u.seen(by: p) {
                 for (key, list) in u.apply(&copy) { copy.stickRegions["\(key)", default: []] += list }
             }
             return copy
@@ -2938,6 +3431,7 @@ class PresetStore: ObservableObject {
                     // Untrusted file: a safe name, as every other restore path.
                     preset.filename = Preset.generateFilename()
                     preset.isActive = false
+                    Self.capTypedText(&preset)
                     restoreTrashFromBackup(preset: preset, deletedAt: Date())
                     summary.trashAdded += 1
                 }
@@ -3031,15 +3525,13 @@ class PresetStore: ObservableObject {
             // its first start from its page, as an import does: the summary
             // asks for a check, and a shortcut or auto-switch could start it
             // before that.
-            if !preset.automation.launchAppPath.isEmpty || !preset.automation.launchURL.isEmpty
-                || !(preset.automation.autoActivateBundleIDs ?? []).isEmpty || !preset.automationOutputs.isEmpty
-                || preset.activateHotKey != nil {
+            if Self.needsFirstStartReview(preset) {
                 markUnreviewedImport(preset.id)
             }
         }
-        for var preset in toAdd {
-            // Activate Preset targets that named a skipped duplicate follow
-            // it to the copy that was kept.
+        // Activate Preset targets that named a skipped duplicate follow it
+        // to the copy that was kept.
+        func remapTargets(_ preset: inout Preset) {
             for g in preset.joysticks.indices {
                 for r in preset.joysticks[g].bindings.indices {
                     func remap(_ list: [OutputAction]) -> [OutputAction] {
@@ -3057,11 +3549,15 @@ class PresetStore: ObservableObject {
                     preset.joysticks[g].bindings[r] = row
                 }
             }
+        }
+        for var preset in toAdd {
+            remapTargets(&preset)
             // Untrusted file: a safe on-disk name, never marked running, no
             // shortcut that clashes, and out-of-range values clamped.
             preset.filename = Preset.generateFilename()
             preset.isActive = false
             preset = preset.clampedValues()
+            Self.capTypedText(&preset)
             // Against other presets only; the Emergency Stop is checked
             // once the backup's own stop chord is restored.
             clearConflictingHotKey(&preset, againstStop: false)
@@ -3077,7 +3573,14 @@ class PresetStore: ObservableObject {
             var p = snap.preset
             p.filename = Preset.generateFilename()
             p.isActive = false
+            // Its folder as this Mac names it, as a live preset's is above.
+            if let gid = p.groupID, let mapped = groupMap[gid] { p.groupID = mapped }
+            remapTargets(&p)
+            Self.capTypedText(&p)
             restoreTrashFromBackup(preset: p, deletedAt: snap.deletedAt)
+            // Put Back later is a first start too: its shortcut or app switch
+            // started it at once and it could open things unasked.
+            if Self.needsFirstStartReview(p) { markUnreviewedImport(p.id) }
             // Sorted by its own history, not this Mac's dates: from a 1.5
             // backup it is owed the 1.6 upgrades; from a 1.6 backup, only if
             // it was deleted before 1.6 first ran on the Mac that made it.
@@ -3128,9 +3631,17 @@ class PresetStore: ObservableObject {
             return
         }
         var loaded: [DeletedPreset] = []
-        for url in files where url.pathExtension.lowercased() == "json" {
-            guard let data = try? Data(contentsOf: url),
-                  var preset = try? JSONDecoder().decode(Preset.self, from: data) else { continue }
+        // All at once off main, taken in the listed order (see loadPresets).
+        let jsonFiles = files.filter { $0.pathExtension.lowercased() == "json" }
+        let decoded = Self.decodeFiles(jsonFiles) { try $0.decode(Preset.self, from: $1) }
+        for (url, read) in zip(jsonFiles, decoded) {
+            var preset: Preset
+            do {
+                preset = try read.result.get()
+            } catch {
+                NSLog("PresetStore.loadTrash: skipping \(url.lastPathComponent): \(error)")
+                continue
+            }
             // The file's real name, as loadPresets() does: a renamed or copied
             // trash file must restore and delete by the name it has on disk.
             preset.filename = url.lastPathComponent
@@ -3138,8 +3649,10 @@ class PresetStore: ObservableObject {
             loaded.append(DeletedPreset(preset: preset, deletedAt: date))
         }
         recentlyDeleted = loaded.sorted { $0.deletedAt > $1.deletedAt }
-        pruneTrash()
+        // Folders first: the prune keeps the version history of a preset
+        // that is in a trashed folder, and only knows it once they are loaded.
         loadDeletedFolders()
+        pruneTrash()
     }
 
     func duplicatePreset(_ preset: Preset) -> Preset {
@@ -3156,6 +3669,7 @@ class PresetStore: ObservableObject {
         // list, took both over from the original until the next launch.
         copy.activateHotKey = nil
         copy.automation.autoActivateBundleIDs = nil
+        copy.automation.autoActivateControllers = nil
         if let data = try? JSONEncoder().encode(copy),
            var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             dict["id"] = UUID().uuidString
@@ -3240,6 +3754,38 @@ class PresetStore: ObservableObject {
     /// (which the user can rename before confirming) or a parse error
     /// (which the sheet shows verbatim). The URL is kept for re-read /
     /// "Show in Finder" actions.
+    /// The sidebar's Import and a file dropped on the Dock both come here:
+    /// a text file that is a macro, not a preset, gets its own message in
+    /// the review sheet, and the rest go to the importer.
+    func previewImportsOrMacroText(from urls: [URL]) {
+        var presetURLs: [URL] = []
+        for url in urls {
+            if Self.isMacroTextFile(url) {
+                importReviewQueue.append(ImportPreview(
+                    url: url, filename: url.lastPathComponent,
+                    nameDraft: (url.lastPathComponent as NSString).deletingPathExtension,
+                    preset: nil,
+                    errorMessage: String(localized: "This is a macro, not a preset. Open a row, switch Show steps as to Text and paste it.")))
+            } else {
+                presetURLs.append(url)
+            }
+        }
+        if !presetURLs.isEmpty { previewImports(from: presetURLs) }
+    }
+
+    /// A readable text file whose first lines are macro text (never JSON,
+    /// which stays a preset file).
+    private static func isMacroTextFile(_ url: URL) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size > 0, size <= PresetStore.maxImportBytes,
+              let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        guard let first = text.first(where: { !$0.isWhitespace }), first != "{", first != "[" else { return false }
+        return MacroText.looksLikeMacro(text)
+    }
+
     struct ImportPreview: Identifiable {
         let id = UUID()
         let url: URL
@@ -3278,6 +3824,11 @@ class PresetStore: ObservableObject {
                 parts.append(apps == 1 ? String(localized: "switching to it when its app comes to the front")
                              : String(localized: "switching to it when its \(apps) apps come to the front"))
             }
+            let pads = p.automation.autoActivateControllers?.count ?? 0
+            if pads > 0 {
+                parts.append(pads == 1 ? String(localized: "switching to it when its controller connects")
+                             : String(localized: "switching to it when one of its \(pads) controllers connects"))
+            }
             if !p.automation.launchAppPath.isEmpty || !p.automation.launchURL.isEmpty {
                 parts.append(String(localized: "the app or website it opens when started"))
             }
@@ -3302,12 +3853,33 @@ class PresetStore: ObservableObject {
         var pointerLine: String? { preset?.importPointerLine }
     }
 
-    nonisolated static func reviewLines(for p: Preset) -> [String] {
+    /// The keys a preset holds back go first, then `pointer` (the first
+    /// start's pointer line), as the alert shows twelve lines and cut the
+    /// two that reach every app.
+    nonisolated static func reviewLines(for p: Preset, pointer: String? = nil) -> [String] {
+        var first: [String] = []
+        // Typing in every app does only the rows' outputs from the first
+        // start. A key held back only with its chord is named with it.
+        let chords = MappingEngine.keyBlockChords(in: p)
+        let held = chords.keys.sorted().flatMap { code -> [String] in
+            let key = KeyCodeMap.name(for: code)
+            // Every chord row on the key, or the key alone when any row
+            // holds it back on every press.
+            guard let lists = chords[code], !lists.contains(where: \.isEmpty) else { return [key] }
+            return lists.map { chord in
+                chord.allSatisfy({ $0.type == .extKey })
+                    ? (chord.map { KeyCodeMap.name(for: $0.index) } + [key]).joined(separator: " + ") : key
+            }
+        }
+        if !held.isEmpty {
+            first.append(String(localized: "Holds back these keys from other apps: \(ListFormatter.localizedString(byJoining: held))"))
+        }
+        if let pointer { first.append(pointer) }
         var lines = p.automationOutputs.map(\.importReviewLine)
         if p.hasCommandSpaceChord { lines.append(String(localized: "Opens Spotlight with Command Space")) }
         lines += p.allOutputs.filter(\.isNotableOnImport).map(\.importReviewLine)
         lines += p.importMacroLines
-        return lines
+        return first + lines
     }
 
     // MARK: - Imported presets not yet started
@@ -3316,6 +3888,15 @@ class PresetStore: ObservableObject {
     /// first and says what the preset does, so a shared file cannot type or
     /// open things on its first press without its new owner having looked.
     static let unreviewedKey = "InputConfig.unreviewedImports"
+
+    /// A preset that opens things or starts itself (a system-wide shortcut,
+    /// auto-switch) waits for its first start from its page after a restore.
+    static func needsFirstStartReview(_ preset: Preset) -> Bool {
+        !preset.automation.launchAppPath.isEmpty || !preset.automation.launchURL.isEmpty
+            || !(preset.automation.autoActivateBundleIDs ?? []).isEmpty || !preset.automationOutputs.isEmpty
+            || !(preset.automation.autoActivateControllers ?? []).isEmpty
+            || preset.activateHotKey != nil
+    }
 
     func markUnreviewedImport(_ id: UUID) {
         var ids = Set(UserDefaults.standard.stringArray(forKey: Self.unreviewedKey) ?? [])
@@ -3345,7 +3926,7 @@ class PresetStore: ObservableObject {
             StatusHUD.shared.show(said, seconds: 8)
             return false
         }
-        let lines = Self.reviewLines(for: preset) + [preset.importPointerLine].compactMap { $0 }
+        let lines = Self.reviewLines(for: preset, pointer: preset.importPointerLine)
         let alert = NSAlert()
         alert.messageText = String(localized: "Start \(preset.shownName)?")
         alert.informativeText = String(localized: "You imported this preset and have not started it before. ")
@@ -3429,7 +4010,8 @@ class PresetStore: ObservableObject {
         }
         for group in preset.joysticks {
             for b in group.bindings where b.outputs.contains(where: { $0.type == .appAction && $0.appActionKind == .emergencyStop }) {
-                let name = ButtonNames.inputName(b.input, family: preset.buttonFamily)
+                // The whole chord: "Press R1" for an L1 + R1 row did nothing.
+                let name = (b.modifiers + [b.input]).map { ButtonNames.inputName($0, family: preset.buttonFamily) }.joined(separator: " + ")
                 lines.append(String(localized: "Press \(name), this preset's Emergency Stop row"))
             }
         }
@@ -3478,7 +4060,8 @@ class PresetStore: ObservableObject {
         }
         for group in preset.joysticks {
             for b in group.bindings where b.outputs.contains(where: { $0.type == .appAction && $0.appActionKind == .emergencyStop }) {
-                items.append((ButtonNames.inputName(b.input, family: preset.buttonFamily), String(localized: "This preset's stop row")))
+                items.append(((b.modifiers + [b.input]).map { ButtonNames.inputName($0, family: preset.buttonFamily) }.joined(separator: " + "),
+                              String(localized: "This preset's stop row")))
             }
         }
         items.append((String(localized: "Deactivate"), String(localized: "In InputConfig's window")))
@@ -3669,6 +4252,10 @@ class PresetStore: ObservableObject {
 
     /// Largest file the importer will read.
     static let maxImportBytes = 5 * 1024 * 1024
+    /// A backup holds the whole library with every preset's history and
+    /// regions, so Export writes far more than one preset; this is the
+    /// size past which a file is not a backup at all.
+    static let maxBackupBytes = 64 * 1024 * 1024
 
     /// Commit the user's reviewed selections. Each importable preview is
     /// saved under a fresh identity, made safe for the library (see
@@ -3691,6 +4278,9 @@ class PresetStore: ObservableObject {
             let trimmed = preview.nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty { preset.name = trimmed }
             clearConflictingHotKey(&preset)
+            // A folder from the Mac it came from is no folder here: kept, Move
+            // Up and Down saw no neighbors and a launch moved it unasked.
+            if let g = preset.groupID, !groups.contains(where: { $0.id == g }) { preset.groupID = nil }
             savePreset(preset)
             markUnreviewedImport(preset.id)
             if older { Self.rememberOlderRows([preset]) }
@@ -3764,10 +4354,11 @@ class PresetStore: ObservableObject {
         // apps stay with the original.
         converted.activateHotKey = nil
         converted.automation.autoActivateBundleIDs = nil
+        converted.automation.autoActivateControllers = nil
         converted.name = "\(preset.shownName.withoutRTLMark) (\(destination.displayName))"
         converted.sortOrder = nil
         // Rows moved to the other pad's positions are named that pad's way.
-        if converted.buttonFamily != nil { converted.buttonFamily = destination.buttonFamily }
+        // The family moves in ControllerType.convert, for the editor too.
         savePreset(converted)
         if isUnreviewedImport(preset.id) { markUnreviewedImport(converted.id) }
         return converted
@@ -3837,4 +4428,22 @@ struct RestrictionWarningPanel: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(fullText)
     }
+}
+
+/// One file read and decoded by PresetStore.decodeFiles.
+struct PresetFileDecode<T> {
+    /// The bytes, when the file could be read.
+    let data: Data?
+    let result: Result<T, Error>
+    /// Rows the decode dropped or kept raw.
+    let counts: RowDecodeCounts
+}
+
+/// PresetStore.decodeFiles' results, one slot per file. Each slot is written
+/// once, under `lock`, by the thread that decoded that file, and read on the
+/// calling thread after concurrentPerform has returned.
+private final class PresetDecodeSlots<T>: @unchecked Sendable {
+    let lock = NSLock()
+    var items: [PresetFileDecode<T>?]
+    init(count: Int) { items = Array(repeating: nil, count: count) }
 }

@@ -21,10 +21,10 @@ struct MotionCalibrationView: View {
     @State private var selectedKey: String?
     @State private var captureInProgress: Bool = false
     @State private var captureRemaining: Double = 0
-    @State private var captureSamples: [SampleVector] = []
     @State private var lastSavedKey: String?
     /// The pad moved during the last full calibration, so nothing was saved.
     @State private var captureMovedKey: String?
+    @State private var captureSilentKey: String?
     /// Two-step calibration flow: first click reveals instructions
     /// (scrolls them into view), second click actually starts the
     /// capture. Prevents accidental calibration with the controller
@@ -34,9 +34,8 @@ struct MotionCalibrationView: View {
     /// controller's gyro rates. Used to drive the 3D gyro model when the
     /// controller doesn't expose absolute attitude, so the model HOLDS
     /// its orientation after motion stops instead of snapping to neutral.
-    @State private var integratedRoll: Float = 0
-    @State private var integratedPitch: Float = 0
-    @State private var integratedYaw: Float = 0
+    /// Off the sheet's own state: as @State, every tick rebuilt the sheet.
+    @StateObject private var integrator = MotionIntegrator()
     /// The active capture timer, retained so it can be invalidated if the view
     /// is dismissed mid-capture (otherwise it kept ticking and persisted an
     /// abandoned calibration).
@@ -55,12 +54,6 @@ struct MotionCalibrationView: View {
     /// The last Re-zero now found the pad moving: said on the row until
     /// the next try, not only to VoiceOver.
     @State private var rezeroMoved = false
-    @State private var tick = 0
-
-    private struct SampleVector {
-        var gx: Float; var gy: Float; var gz: Float
-        var ax: Float; var ay: Float; var az: Float
-    }
 
     private let captureDuration: Double = 2.5
 
@@ -99,6 +92,7 @@ struct MotionCalibrationView: View {
                 selectedKey = MotionCalibrationService.identityKey(for: first.controller)
             }
             controllerService.retainLiveInput("motion calibration")
+            integrator.start { integrate() }
         }
         .onChange(of: listeningForRezeroButton) { _, armed in
             MappingEngine.editorListenerArmed = armed
@@ -106,62 +100,57 @@ struct MotionCalibrationView: View {
         .onDisappear {
             MappingEngine.editorListenerArmed = false
             controllerService.releaseLiveInput("motion calibration")
+            integrator.stop()
             captureTimer?.invalidate()
             captureTimer = nil
             captureInProgress = false
-        }
-        // Tick the integrated orientation at 30 Hz from the currently
-        // selected controller's gyro rates so the 3D model HOLDS its
-        // pose when the controller is still. Paused during capture so
-        // the model stays at flat for the duration of calibration.
-        .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
-            // Follow the controller list: a pad that connects after the
-            // sheet opens, or one whose serial arrives a moment late, is
-            // picked up instead of leaving the sheet on nothing.
-            if selectedControllerEntry == nil, let first = motionCapableControllers.first {
-                selectedKey = MotionCalibrationService.identityKey(for: first.controller)
-            }
-            trackRezero()
-            guard !captureInProgress,
-                  let entry = selectedControllerEntry,
-                  let motion = entry.controller.motion,
-                  motion.hasRotationRate else { return }
-            let dt: Float = 1.0 / 30.0
-            // Use drift-corrected rates so a resting controller's gyro bias
-            // doesn't ramp the model to the +/-90 degree clamp, and apply a
-            // small per-tick leak toward zero so any residual bias decays
-            // instead of accumulating.
-            let key = MotionCalibrationService.identityKey(for: entry.controller)
-            let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
-                x: Float(motion.rotationRate.x),
-                y: Float(motion.rotationRate.y),
-                z: Float(motion.rotationRate.z),
-                forKey: key)
-            // Yaw is the turn about gravity, as the engine and the Live
-            // Visualizer read it; the pad's own Z rate turned the model the
-            // other way here.
-            let slot = controllerService.connectedControllers.firstIndex { $0 === entry.controller }
-            let turn = slot.flatMap { controllerService.currentStates[$0]?.motion[.gyroZ] } ?? -gz
-            integratedPitch = (integratedPitch + gx * dt) * 0.98
-            integratedYaw   = (integratedYaw + turn * dt) * 0.98
-            integratedRoll  = (integratedRoll + gy * dt) * 0.98
-            integratedPitch = max(-(.pi / 2), min(.pi / 2, integratedPitch))
-            integratedYaw   = max(-(.pi / 2), min(.pi / 2, integratedYaw))
-            integratedRoll  = max(-(.pi / 2), min(.pi / 2, integratedRoll))
         }
         // Reset the integrated orientation whenever the user picks a
         // different controller so the model starts from neutral on the
         // new device.
         .onChange(of: selectedKey) { _, key in
-            integratedPitch = 0
-            integratedYaw = 0
-            integratedRoll = 0
+            integrator.reset()
             listeningForRezeroButton = false
             rezeroFlashUntil = nil
             rezeroMoved = false
             rezeroButton = key.flatMap { MotionCalibrationService.shared.rezeroButton(forKey: $0) }
             observedSavedAt = key.flatMap { MotionCalibrationService.shared.calibration(forKey: $0)?.savedAt }
         }
+    }
+
+    /// Ticks the integrated orientation at 30 Hz from the currently
+    /// selected controller's gyro rates so the 3D model HOLDS its pose
+    /// when the controller is still. Paused during capture so the model
+    /// stays at flat for the duration of calibration.
+    private func integrate() {
+        // Follow the controller list: a pad that connects after the
+        // sheet opens, or one whose serial arrives a moment late, is
+        // picked up instead of leaving the sheet on nothing.
+        if selectedControllerEntry == nil, let first = motionCapableControllers.first {
+            selectedKey = MotionCalibrationService.identityKey(for: first.controller)
+        }
+        trackRezero()
+        guard !captureInProgress,
+              let entry = selectedControllerEntry,
+              let motion = entry.controller.motion,
+              motion.hasRotationRate else { return }
+        let dt: Float = 1.0 / 30.0
+        // Use drift-corrected rates so a resting controller's gyro bias
+        // doesn't ramp the model to the +/-90 degree clamp, and apply a
+        // small per-tick leak toward zero so any residual bias decays
+        // instead of accumulating.
+        let key = MotionCalibrationService.identityKey(for: entry.controller)
+        let (gx, gy, gz) = MotionCalibrationService.shared.correctedGyro(
+            x: Float(motion.rotationRate.x),
+            y: Float(motion.rotationRate.y),
+            z: Float(motion.rotationRate.z),
+            forKey: key)
+        // Yaw is the turn about gravity, as the engine and the Live
+        // Visualizer read it; the pad's own Z rate turned the model the
+        // other way here.
+        let slot = controllerService.connectedControllers.firstIndex { $0 === entry.controller }
+        let turn = slot.flatMap { controllerService.currentStates[$0]?.motion[.gyroZ] } ?? -gz
+        integrator.advance(pitchRate: gx, yawRate: turn, rollRate: gy, dt: dt)
     }
 
     // MARK: - Selected controller
@@ -230,19 +219,9 @@ struct MotionCalibrationView: View {
     @ViewBuilder
     private var model: some View {
         if let entry = selectedControllerEntry, let motion = entry.controller.motion {
-            TimelineView(.periodic(from: Date(), by: 1.0 / 30.0)) { _ in
-                let gx = motion.hasRotationRate ? Float(motion.rotationRate.x) : 0
-                let gy = motion.hasRotationRate ? Float(motion.rotationRate.y) : 0
-                let gz = motion.hasRotationRate ? Float(motion.rotationRate.z) : 0
-                let attitude = motion.hasAttitude ? attitudeEuler(motion: motion) : nil
-                GyroVisualizationView(
-                    gyroX: gx, gyroY: gy, gyroZ: gz,
-                    rollAngle: attitude?.roll ?? integratedRoll,
-                    pitchAngle: attitude?.pitch ?? integratedPitch,
-                    yawAngle: attitude?.yaw ?? integratedYaw,
-                    mode: .model
-                )
-            }
+            // Its own view, so the integrator's ticks redraw the model and
+            // not the sheet around it.
+            IntegratedMotionModel(motion: motion, integrator: integrator)
         } else if controllerService.tutorialFakeControllerActive {
             // The tour's controller moves the model too.
             syntheticLiveReadings
@@ -310,15 +289,22 @@ struct MotionCalibrationView: View {
     /// but inline here so the calibration view can drive the gyro
     /// visualization without going through the engine.
     private func attitudeEuler(motion: GCMotion) -> (roll: Float, pitch: Float, yaw: Float) {
+        Self.attitudeEuler(motion: motion)
+    }
+
+    fileprivate static func attitudeEuler(motion: GCMotion) -> (roll: Float, pitch: Float, yaw: Float) {
         guard motion.hasAttitude else { return (0, 0, 0) }
         let q = motion.attitude
         let qx = Float(q.x), qy = Float(q.y), qz = Float(q.z), qw = Float(q.w)
-        let roll  = atan2(2 * (qw * qx + qy * qz),
+        // Named as the gyro path names them: pitch is the turn about the
+        // pad's X axis (nose up positive), roll the turn about Y (right
+        // side down positive), yaw positive for a turn to the right.
+        let pitch = atan2(2 * (qw * qx + qy * qz),
                           1 - 2 * (qx * qx + qy * qy))
-        let pitchArg = 2 * (qw * qy - qz * qx)
-        let pitch = asin(max(-1, min(1, pitchArg)))
-        let yaw   = atan2(2 * (qw * qz + qx * qy),
-                          1 - 2 * (qy * qy + qz * qz))
+        let rollArg = 2 * (qw * qy - qz * qx)
+        let roll  = asin(max(-1, min(1, rollArg)))
+        let yaw   = -atan2(2 * (qw * qz + qx * qy),
+                           1 - 2 * (qy * qy + qz * qz))
         return (roll, pitch, yaw)
     }
 
@@ -330,46 +316,6 @@ struct MotionCalibrationView: View {
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
-    }
-
-    private func sensorRow(label: String,
-                           values: (Float, Float, Float),
-                           scale: Float,
-                           unit: String,
-                           color: Color) -> some View {
-        HStack(spacing: 12) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .frame(width: 42, alignment: .leading)
-                .foregroundStyle(.secondary)
-            sensorAxisCell(axis: "X", value: values.0, scale: scale, unit: unit, color: color)
-            sensorAxisCell(axis: "Y", value: values.1, scale: scale, unit: unit, color: color)
-            sensorAxisCell(axis: "Z", value: values.2, scale: scale, unit: unit, color: color)
-        }
-    }
-
-    private func sensorAxisCell(axis: String,
-                                value: Float,
-                                scale: Float,
-                                unit: String,
-                                color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text(axis)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.hint)
-                    .frame(width: 10, alignment: .leading)
-                Text(String(format: "%+0.2f", locale: .current, value))
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 50, alignment: .trailing)
-                Text(unit)
-                    .font(.caption2)
-                    .foregroundStyle(.hint)
-            }
-            MotionBar(value: value, scale: scale, tint: color)
-                .frame(height: 6)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Re-zero
@@ -466,7 +412,7 @@ struct MotionCalibrationView: View {
                 .frame(minWidth: 120, alignment: .leading)
             Button("Start") { startCapture() }
                 .buttonStyle(.solidCompact)
-                .disabled(selectedKey == nil || captureInProgress)
+                .disabled(selectedKey == nil || captureInProgress || !selectedGyroReports)
             if captureInProgress {
                 ProgressView(value: 1 - (captureRemaining / captureDuration))
                     .frame(maxWidth: 160)
@@ -478,6 +424,9 @@ struct MotionCalibrationView: View {
                     .foregroundStyle(.green)
             } else if let key = captureMovedKey, key == selectedKey {
                 Label("It moved, nothing saved. Rest it flat and start again", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            } else if let key = captureSilentKey, key == selectedKey {
+                Label("The gyroscope is not reporting. Try a wired connection, or re-pair the controller.", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
             } else {
                 Text("rest it flat and untouched for \(captureDuration, specifier: "%.1f") seconds")
@@ -530,7 +479,6 @@ struct MotionCalibrationView: View {
     /// 30 Hz bookkeeping for the re-zero section: assign the button while
     /// listening, and flash a confirmation whenever the stored zero changes.
     private func trackRezero() {
-        tick &+= 1
         guard let key = selectedKey else { return }
         if listeningForRezeroButton, let slot = selectedControllerEntry?.slot {
             let pressed = (controllerService.currentStates[slot]?.buttons ?? [:])
@@ -547,7 +495,10 @@ struct MotionCalibrationView: View {
             observedSavedAt = savedAt
             // A zero that took, from any path, ends an earlier "It moved".
             if savedAt != nil { rezeroMoved = false }
-            if savedAt != nil, !captureInProgress {
+            // Not for the zero drift learning seeds by itself on a resting
+            // pad: nobody pressed anything.
+            if savedAt != nil, !captureInProgress,
+               MotionCalibrationService.shared.calibration(forKey: key)?.seededAutomatically != true {
                 rezeroFlashUntil = Date().addingTimeInterval(2)
                 AccessibilityNotification.Announcement(String(localized: "Motion re-zeroed")).post()
             }
@@ -681,41 +632,57 @@ struct MotionCalibrationView: View {
 
         captureInProgress = true
         captureRemaining = captureDuration
-        captureSamples.removeAll(keepingCapacity: true)
+        integrator.captureSamples.removeAll(keepingCapacity: true)
         lastSavedKey = nil
         captureMovedKey = nil
+        captureSilentKey = nil
+        // A full calibration supersedes a re-zero that moved.
+        rezeroMoved = false
         let hasAccel = motion.hasGravityAndUserAcceleration
         // Snap the 3D model to absolute flat at the start of calibration
         // so the user has a clear visual reference for what "flat" means.
         // The integrator loop (further down) keeps these at zero while
         // captureInProgress is true.
-        integratedRoll = 0
-        integratedPitch = 0
-        integratedYaw = 0
+        integrator.reset()
 
         let start = Date()
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { t in
-            // Sample motion on each tick.
-            let s = SampleVector(
-                gx: motion.hasRotationRate ? Float(motion.rotationRate.x) : 0,
-                gy: motion.hasRotationRate ? Float(motion.rotationRate.y) : 0,
-                gz: motion.hasRotationRate ? Float(motion.rotationRate.z) : 0,
-                ax: hasAccel ? Float(motion.userAcceleration.x) : 0,
-                ay: hasAccel ? Float(motion.userAcceleration.y) : 0,
-                az: hasAccel ? Float(motion.userAcceleration.z) : 0
-            )
-            if [s.gx, s.gy, s.gz, s.ax, s.ay, s.az].allSatisfy(\.isFinite) {
-                captureSamples.append(s)
-            }
-            captureRemaining = max(0, captureDuration - Date().timeIntervalSince(start))
-            if captureRemaining <= 0 {
-                t.invalidate()
-                captureTimer = nil
-                finishCapture(key: key)
+            // The timer is on the main run loop. The controller's motion is
+            // looked up each tick rather than carried into the closure; a
+            // controller that left mid-capture adds no more samples and the
+            // capture still finishes on time.
+            MainActor.assumeIsolated {
+                if let motion = motionCapableControllers.first(where: { MotionCalibrationService.identityKey(for: $0.controller) == key })?.controller.motion {
+                    let s = SampleVector(
+                        gx: motion.hasRotationRate ? Float(motion.rotationRate.x) : 0,
+                        gy: motion.hasRotationRate ? Float(motion.rotationRate.y) : 0,
+                        gz: motion.hasRotationRate ? Float(motion.rotationRate.z) : 0,
+                        ax: hasAccel ? Float(motion.userAcceleration.x) : 0,
+                        ay: hasAccel ? Float(motion.userAcceleration.y) : 0,
+                        az: hasAccel ? Float(motion.userAcceleration.z) : 0
+                    )
+                    if [s.gx, s.gy, s.gz, s.ax, s.ay, s.az].allSatisfy(\.isFinite) {
+                        integrator.captureSamples.append(s)
+                    }
+                }
+                captureRemaining = max(0, captureDuration - Date().timeIntervalSince(start))
+                if captureRemaining <= 0 {
+                    captureTimer?.invalidate()
+                    captureTimer = nil
+                    finishCapture(key: key)
+                }
             }
         }
         captureTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Whether the selected controller's gyro reports at all. A capture
+    /// with no gyro would store zeros and read as calibrated.
+    private var selectedGyroReports: Bool {
+        guard let key = selectedKey,
+              let motion = motionCapableControllers.first(where: { MotionCalibrationService.identityKey(for: $0.controller) == key })?.controller.motion else { return false }
+        return motion.hasRotationRate
     }
 
     private func finishCapture(key: String) {
@@ -723,7 +690,15 @@ struct MotionCalibrationView: View {
             captureInProgress = false
             captureRemaining = 0
         }
-        guard !captureSamples.isEmpty else { return }
+        let captureSamples = integrator.captureSamples
+        // Every gyro sample exactly zero is a gyro that stopped reporting
+        // during the capture, not a perfectly still pad; none at all, a pad
+        // that left.
+        if captureSamples.allSatisfy({ $0.gx == 0 && $0.gy == 0 && $0.gz == 0 }) {
+            captureSilentKey = key
+            AccessibilityNotification.Announcement(String(localized: "The gyroscope is not reporting. Try a wired connection, or re-pair the controller.")).post()
+            return
+        }
         let n = Float(captureSamples.count)
         let gx = captureSamples.map(\.gx).reduce(0, +) / n
         let gy = captureSamples.map(\.gy).reduce(0, +) / n
@@ -755,36 +730,84 @@ struct MotionCalibrationView: View {
     }
 }
 
-/// Tiny bidirectional bar used by the live sensor readout. Center is zero,
-/// the bar fills right for positive values and left for negative, clamped
-/// to ±`scale` so a vigorous shake still stays inside the bar.
-private struct MotionBar: View {
-    let value: Float
-    let scale: Float
-    let tint: Color
+/// One gyro or accelerometer reading taken during a capture.
+private struct SampleVector {
+    var gx: Float; var gy: Float; var gz: Float
+    var ax: Float; var ay: Float; var az: Float
+}
+
+/// The orientation the sheet's 3D model follows when the pad has no
+/// attitude of its own, integrated from its gyro rates on a 30 Hz timer
+/// held here, and the samples a capture collects. Only the model view
+/// observes it, so a tick redraws the model and not the whole sheet.
+@MainActor
+private final class MotionIntegrator: ObservableObject {
+    @Published private(set) var pitch: Float = 0
+    @Published private(set) var yaw: Float = 0
+    @Published private(set) var roll: Float = 0
+    var captureSamples: [SampleVector] = []
+    private var timer: Timer?
+    /// Held here and reached through a weak self, so the timer never
+    /// retains the sheet that owns this object.
+    private var onTick: (@Sendable @MainActor () -> Void)?
+
+    /// The owning sheet releases this on the main thread, where the
+    /// timer was scheduled.
+    deinit { MainActor.assumeIsolated { timer?.invalidate() } }
+
+    /// Runs `onTick` at 30 Hz, on the main thread the timer fires on.
+    func start(_ onTick: @escaping @Sendable @MainActor () -> Void) {
+        timer?.invalidate()
+        self.onTick = onTick
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onTick?() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        onTick = nil
+    }
+
+    /// Use drift-corrected rates so a resting controller's gyro bias
+    /// doesn't ramp the model to the +/-90 degree clamp, and apply a
+    /// small per-tick leak toward zero so any residual bias decays
+    /// instead of accumulating.
+    func advance(pitchRate: Float, yawRate: Float, rollRate: Float, dt: Float) {
+        pitch = max(-(.pi / 2), min(.pi / 2, (pitch + pitchRate * dt) * 0.98))
+        yaw   = max(-(.pi / 2), min(.pi / 2, (yaw + yawRate * dt) * 0.98))
+        roll  = max(-(.pi / 2), min(.pi / 2, (roll + rollRate * dt) * 0.98))
+    }
+
+    func reset() {
+        pitch = 0
+        yaw = 0
+        roll = 0
+    }
+}
+
+/// The 3D model driven by a connected pad: its attitude when it has one,
+/// the integrated gyro otherwise.
+private struct IntegratedMotionModel: View {
+    let motion: GCMotion
+    @ObservedObject var integrator: MotionIntegrator
 
     var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let halfWidth = width / 2
-            let clamped = max(-1, min(1, value / max(scale, 0.0001)))
-            let barWidth = abs(CGFloat(clamped)) * halfWidth
-
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(tint.opacity(0.15))
-
-                Rectangle()
-                    .fill(tint)
-                    .frame(width: barWidth, height: geo.size.height)
-                    .offset(x: clamped >= 0 ? halfWidth : halfWidth - barWidth)
-
-                Rectangle()
-                    .fill(Color.primary.opacity(0.35))
-                    .frame(width: 1)
-                    .offset(x: halfWidth)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 2))
+        TimelineView(.periodic(from: Date(), by: 1.0 / 30.0)) { _ in
+            let gx = motion.hasRotationRate ? Float(motion.rotationRate.x) : 0
+            let gy = motion.hasRotationRate ? Float(motion.rotationRate.y) : 0
+            let gz = motion.hasRotationRate ? Float(motion.rotationRate.z) : 0
+            let attitude = motion.hasAttitude ? MotionCalibrationView.attitudeEuler(motion: motion) : nil
+            GyroVisualizationView(
+                gyroX: gx, gyroY: gy, gyroZ: gz,
+                rollAngle: attitude?.roll ?? integrator.roll,
+                pitchAngle: attitude?.pitch ?? integrator.pitch,
+                yawAngle: attitude?.yaw ?? integrator.yaw,
+                mode: .model
+            )
         }
     }
 }

@@ -23,11 +23,11 @@ import IOBluetooth
 ///      report callback and start parsing. If no profile matches we
 ///      record the device but skip input until we add a descriptor
 ///      parser (see `HIDDescriptorParser`).
-///   3. The input report callback runs on IOKit's runloop thread
-///      (the main runloop in our case). It calls a `nonisolated`
-///      handler that decodes the report off-actor and writes the
-///      resulting state into the lock-protected `RawHIDGamepad`. No
-///      Task/main-actor hop on the hot path.
+///   3. The input report callback runs on the run loop each device is
+///      scheduled on: `RawHIDReportThread`'s, not the main one. It calls
+///      a `nonisolated` handler that decodes the report off-actor and
+///      writes the resulting state into the lock-protected
+///      `RawHIDGamepad`. No Task/main-actor hop on the hot path.
 ///   4. `GameControllerService` polls the published gamepad list each
 ///      half second to slot them in alongside the GCControllers + Steam
 ///      Controller, and queries `state(for:)` from its mapping
@@ -310,6 +310,86 @@ final class RawHIDGamepadService: ObservableObject {
         }
     }
 
+    // MARK: - 8BitDo motors (SDL_hidapi_8bitdo.c)
+
+    /// 8BitDo pads whose motors take output report 0x05 as macOS reads them,
+    /// from SDL's 8BitDo driver (libsdl-org/SDL main, 2026-11-07): the
+    /// Ultimate 2 Wireless in its Bluetooth mode, 2DC8:6012. Only its v1.03
+    /// firmware and later has the motors there; that firmware sends 34 byte
+    /// input reports and v1.02 sends 12, which is how SDL tells them apart,
+    /// so the size of the pad's last report decides here too. The Pro 2,
+    /// Pro 3 and SN30 Pro need a feature report that switches their input
+    /// report to SDL's format first, which would break how this app reads
+    /// them, so they are left alone.
+    nonisolated static let eightBitDoRumbleVendor: Int32 = 0x2DC8
+    nonisolated static let eightBitDoRumbleProducts: [Int32: Int] = [0x6012: 34]
+    nonisolated(unsafe) private var eightBitDoRumbleStop: [UInt64: DispatchWorkItem] = [:]
+
+    /// The 5 byte motor report: ID 0x05, the low and high frequency motors,
+    /// then the trigger motors, which these pads do not have.
+    nonisolated static func eightBitDoRumbleReport(intensity: Float) -> [UInt8] {
+        let level = UInt8(max(0, min(1, intensity)) * 255)
+        return [0x05, level, level, 0x00, 0x00]
+    }
+
+    /// Whether a raw pad's motors can be driven: the model, and its report
+    /// size proving the firmware.
+    nonisolated func canRumbleEightBitDo(gamepadID: UInt64) -> Bool {
+        deviceLookupLock.lock(); defer { deviceLookupLock.unlock() }
+        guard let pad = gamepadsByKey[gamepadID], pad.device != nil, pad.vendorID == Self.eightBitDoRumbleVendor,
+              let minimum = Self.eightBitDoRumbleProducts[pad.productID] else { return false }
+        let longest = lastReports[gamepadID]?.values.map(\.count).max() ?? 0
+        return longest >= minimum
+    }
+
+    /// Both motors at `intensity` (0 to 1) for `durationMs`, then off: a pad
+    /// holds its motors until told otherwise.
+    @discardableResult
+    nonisolated func rumbleEightBitDo(gamepadID: UInt64, intensity: Float, durationMs: Int) -> Bool {
+        guard canRumbleEightBitDo(gamepadID: gamepadID) else { return false }
+        deviceLookupLock.lock()
+        let device = gamepadsByKey[gamepadID]?.device
+        deviceLookupLock.unlock()
+        guard let device else { return false }
+        Self.steam2026Queue.async { [weak self] in
+            guard let self else { return }
+            self.eightBitDoRumbleStop[gamepadID]?.cancel()
+            var on = Self.eightBitDoRumbleReport(intensity: intensity)
+            HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x05, &on, on.count)
+            let stop = DispatchWorkItem { [weak self] in
+                var off = Self.eightBitDoRumbleReport(intensity: 0)
+                HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x05, &off, off.count)
+                self?.eightBitDoRumbleStop[gamepadID] = nil
+            }
+            self.eightBitDoRumbleStop[gamepadID] = stop
+            Self.steam2026Queue.asyncAfter(deadline: .now() + .milliseconds(max(60, durationMs)), execute: stop)
+        }
+        return true
+    }
+
+    /// Stop every 8BitDo buzz now: each pending stop is cancelled and the
+    /// off report written here (a cancelled work item runs nothing when
+    /// performed, which left the motors on after an emergency stop).
+    /// `wait` runs it before returning, for quit, where queued work
+    /// would die with the process and leave the motors on.
+    nonisolated func stopEightBitDoRumble(wait: Bool = false) {
+        let work = { [weak self] in
+            guard let self else { return }
+            for (id, stop) in self.eightBitDoRumbleStop {
+                stop.cancel()
+                self.deviceLookupLock.lock()
+                let device = self.gamepadsByKey[id]?.device
+                self.deviceLookupLock.unlock()
+                if let device {
+                    var off = Self.eightBitDoRumbleReport(intensity: 0)
+                    HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x05, &off, off.count)
+                }
+            }
+            self.eightBitDoRumbleStop.removeAll()
+        }
+        if wait { Self.steam2026Queue.sync(execute: work) } else { Self.steam2026Queue.async(execute: work) }
+    }
+
     /// Stop every rumble now (an emergency stop, a disconnect).
     nonisolated func stopSteamController2026Rumble() {
         Self.steam2026Queue.async { [weak self] in
@@ -349,12 +429,15 @@ final class RawHIDGamepadService: ObservableObject {
         // learned gyro rest or gravity carries over.
         pad.imu.reset()
         if dormant {
-            pad.resetState()
-            // Its saved reports would bring the empty slot back on the next
-            // decode start, then take it away again.
-            deviceLookupLock.lock()
-            lastReports.removeValue(forKey: key)
-            deviceLookupLock.unlock()
+            // Between two reports, as when they arrived on the main thread.
+            RawHIDReportThread.shared.sync {
+                pad.resetState()
+                // Its saved reports would bring the empty slot back on the next
+                // decode start, then take it away again.
+                deviceLookupLock.lock()
+                lastReports.removeValue(forKey: key)
+                deviceLookupLock.unlock()
+            }
             connectedGamepads.removeAll { $0.id == key }
             ActivityLog.shared.info("Devices", "A Steam Controller left the Steam Controller Puck")
         } else {
@@ -420,6 +503,13 @@ final class RawHIDGamepadService: ObservableObject {
     /// throttle, a latched switch or a held hat that sends nothing until it
     /// moves read at rest after every preset switch.
     func setDecodingWanted(_ wanted: Bool, reason: String) {
+        // On the report thread, between two reports, as when the reports
+        // came on the main thread: a live report decoded between the copy of
+        // the saved reports and their replay was overwritten by older bytes.
+        RawHIDReportThread.shared.sync { applyDecodingWanted(wanted, reason: reason) }
+    }
+
+    nonisolated private func applyDecodingWanted(_ wanted: Bool, reason: String) {
         deviceLookupLock.lock()
         let before = !decodeReasons.isEmpty
         if wanted { decodeReasons.insert(reason) } else { decodeReasons.remove(reason) }
@@ -463,25 +553,41 @@ final class RawHIDGamepadService: ObservableObject {
         return key
     }
 
-    /// One report from that transport, through the live dispatcher.
+    /// One report from that transport, through the live dispatcher, on the
+    /// report thread with every other raw pad's: a decode start replays the
+    /// saved reports there, and on the main thread this report could land
+    /// between the copy and the replay.
     func injectExternal(key: UInt64, reportID: UInt32, bytes: [UInt8]) {
+        dispatchOnReportThread(key: key, reportID: reportID, bytes: bytes)
+    }
+
+    /// A report that came some other way than IOKit (a Bluetooth LE pad, the
+    /// replay hook), through the live dispatcher on the report thread:
+    /// queued behind the reports before it, or waited for (`wait`).
+    nonisolated func dispatchOnReportThread(key: UInt64, reportID: UInt32, bytes: [UInt8], wait: Bool = false) {
         guard !bytes.isEmpty else { return }
-        var scratch = bytes
-        scratch.withUnsafeMutableBufferPointer { buffer in
-            guard let base = buffer.baseAddress else { return }
-            dispatch(key: key, reportID: reportID, reportPointer: base, length: CFIndex(buffer.count))
+        let deliver: @Sendable () -> Void = { [self] in
+            var scratch = bytes
+            scratch.withUnsafeMutableBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                self.dispatch(key: key, reportID: reportID, reportPointer: base, length: CFIndex(buffer.count))
+            }
         }
+        if wait { RawHIDReportThread.shared.sync(deliver) } else { RawHIDReportThread.shared.async(deliver) }
     }
 
     /// The pad left (the link closed, or the setting was turned off).
     func detachExternalPad(key: UInt64) {
-        deviceLookupLock.lock()
-        let pad = gamepadsByKey.removeValue(forKey: key)
-        lastReports.removeValue(forKey: key)
-        dormantKeys.remove(key)
-        deviceLookupLock.unlock()
-        pad?.resetState()
-        pad?.imu.reset()
+        // Between two reports, behind any still queued (see injectExternal).
+        RawHIDReportThread.shared.sync {
+            deviceLookupLock.lock()
+            let pad = gamepadsByKey.removeValue(forKey: key)
+            lastReports.removeValue(forKey: key)
+            dormantKeys.remove(key)
+            deviceLookupLock.unlock()
+            pad?.resetState()
+            pad?.imu.reset()
+        }
         connectedGamepads.removeAll { $0.id == key }
     }
 
@@ -500,6 +606,9 @@ final class RawHIDGamepadService: ObservableObject {
     /// Build the IOHIDManager and start observing the bus. Idempotent;
     /// safe to call from app startup.
     func start() {
+        #if DEBUG
+        if GameControllerService.ignoresRealPads { return }
+        #endif
         #if DEBUG
         // A test run reads only its scripted pads, never the Mac's own.
         if TestCapture.inTestRun { return }
@@ -546,23 +655,12 @@ final class RawHIDGamepadService: ObservableObject {
         let matches: [[String: Any]] = [joystickMatch, gamepadMatch, multiAxisMatch, simulationMatch] + steam2026Matches
         IOHIDManagerSetDeviceMatchingMultiple(mgr, matches as CFArray)
 
-        IOHIDManagerScheduleWithRunLoop(mgr,
-                                        CFRunLoopGetMain(),
-                                        CFRunLoopMode.commonModes.rawValue)
-
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        IOHIDManagerRegisterDeviceMatchingCallback(mgr, { context, _, _, device in
-            guard let context = context else { return }
-            let svc = Unmanaged<RawHIDGamepadService>.fromOpaque(context).takeUnretainedValue()
-            Task { @MainActor in svc.handleDeviceAttached(device) }
-        }, selfPtr)
-
-        IOHIDManagerRegisterDeviceRemovalCallback(mgr, { context, _, _, device in
-            guard let context = context else { return }
-            let svc = Unmanaged<RawHIDGamepadService>.fromOpaque(context).takeUnretainedValue()
-            Task { @MainActor in svc.handleDeviceDetached(device) }
-        }, selfPtr)
+        // The manager and every device it finds live on the report thread,
+        // like the Access controller reader; attach and removal still go to
+        // the main actor. Set up there, so IOKit sees one thread.
+        RawHIDReportThread.shared.sync { scheduleManagerOnReportThread(mgr, context: selfPtr) }
 
         // No IOHIDManagerOpen: it opened every matched device, including a
         // composite keyboard or mouse that also lists a gamepad collection,
@@ -588,11 +686,8 @@ final class RawHIDGamepadService: ObservableObject {
                 // keeps its state and its saved reports: a throttle parked at
                 // 70 percent or a latched switch sends nothing until it
                 // moves, and read at rest after every wake.
-                self.deviceLookupLock.lock()
-                let pads = self.allPadsLocked().filter { Self.wakesSilent($0) }
-                for pad in pads { self.lastReports[pad.id] = nil }
-                self.deviceLookupLock.unlock()
-                pads.forEach { $0.resetState() }
+                // Between two reports (see setDecodingWanted).
+                RawHIDReportThread.shared.sync { self.resetSilentPadsAfterWake() }
                 for pad in self.openDevices.values {
                     guard let device = pad.device else { continue }
                     self.sendStartupCommands(device, profile: pad.profile,
@@ -697,12 +792,12 @@ final class RawHIDGamepadService: ObservableObject {
     /// Closing the device while the callback holds a stale pointer is
     /// the classic use-after-free this dance avoids.
     func stop() {
-        deviceLookupLock.lock()
-        deviceToKey.removeAll()
-        gamepadsByKey.removeAll()
-        gameCubePorts.removeAll()
-        gameCubePortSyncPending.removeAll()
-        deviceLookupLock.unlock()
+        let devices = openDevices.values.compactMap(\.device)
+        let buffers = Array(reportBuffers.values)
+        let mgr = manager
+        // On the report thread, between two reports: none is left reading a
+        // buffer being freed or a device being closed.
+        RawHIDReportThread.shared.sync { tearDownOnReportThread(devices: devices, buffers: buffers, manager: mgr) }
         if let gcObserver { NotificationCenter.default.removeObserver(gcObserver) }
         gcObserver = nil
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
@@ -710,27 +805,12 @@ final class RawHIDGamepadService: ObservableObject {
         forcedKeys.removeAll()
         awaitingGameController.removeAll()
 
-        for (_, gamepad) in openDevices {
-            guard let device = gamepad.device else { continue }
-            IOHIDDeviceUnscheduleFromRunLoop(device,
-                                             CFRunLoopGetMain(),
-                                             CFRunLoopMode.commonModes.rawValue)
-            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        }
-        for (_, buf) in reportBuffers { buf.deallocate() }
         reportBuffers.removeAll()
         reportBufferSizes.removeAll()
         openDevices.removeAll()
         connectedGamepads = []
         unidentifiedDevices = []
-
-        if let mgr = manager {
-            IOHIDManagerClose(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
-            IOHIDManagerUnscheduleFromRunLoop(mgr,
-                                              CFRunLoopGetMain(),
-                                              CFRunLoopMode.commonModes.rawValue)
-            manager = nil
-        }
+        manager = nil
     }
 
     /// Read the latest decoded state for a gamepad.
@@ -859,8 +939,20 @@ final class RawHIDGamepadService: ObservableObject {
     /// outside this service's gamepad filter were opened through the
     /// registry's device object, so only the registry sees them go.
     func deviceWentAway(_ device: IOHIDDevice) {
+        // A pad still waiting for Input Monitoring was never opened, so it
+        // is pruned here before the open check sends the rest away.
+        pruneAwaitingInputMonitoring(device)
         guard isOpen(device) else { return }
         handleDeviceDetached(device)
+    }
+
+    /// Forgets a departed device among those waiting for Input Monitoring,
+    /// by its key as well as by object: the registry's device object for
+    /// the same interface is not this service's.
+    private func pruneAwaitingInputMonitoring(_ device: IOHIDDevice) {
+        guard !awaitingInputMonitoring.isEmpty else { return }
+        let key = Self.deviceKey(device)
+        awaitingInputMonitoring = awaitingInputMonitoring.filter { $0.value !== device && $0.key != key }
     }
 
     /// Returns true when the device ended up open and reading.
@@ -928,7 +1020,11 @@ final class RawHIDGamepadService: ObservableObject {
         // its own mode, as Linux and SDL do. It re-attaches under its own
         // product ID moments later and is read then. Once per connection; if
         // it does not come back, it is read as it is.
+        // Opening a wheel that also lists a keyboard collection would raise
+        // the Input Monitoring prompt on plug-in (the gate below); such a
+        // wheel stays in compatibility mode until the person connects it.
         if LogitechWheel.isWheel(vendor: info.vendorID, product: info.productID),
+           !Self.blockedByInputMonitoring(device),
            wheelsSwitched[info.locationID].map({ Date().timeIntervalSince($0) > 30 }) ?? true {
             let bcd = (IOHIDDeviceGetProperty(device, kIOHIDVersionNumberKey as CFString) as? NSNumber)?.intValue ?? 0
             if let switchTo = LogitechWheel.nativeModeCommand(product: info.productID, bcdDevice: bcd) {
@@ -974,6 +1070,12 @@ final class RawHIDGamepadService: ObservableObject {
             product: info.productID,
             transport: info.transport
         )
+        // A pad an existing preset was made on with the earlier numbering
+        // keeps it (the descriptor passes below), so those rows still fire.
+        if profile?.layout == .eightBitDo,
+           HIDDeviceRegistry.keepsLegacyNumbering(vendorID: info.vendorID, productID: info.productID) {
+            profile = nil
+        }
 
         // The 2026 Steam Controller: only its controller interface, not the
         // keyboard and mouse it offers for lizard mode.
@@ -1068,7 +1170,11 @@ final class RawHIDGamepadService: ObservableObject {
         // report (feature 0x03), which names its protocol and kind, and read
         // with the DualShock 4 or third party DualSense layout when it
         // answers. A pad that does not answer goes on to the rows below.
+        // The probe opens the device, so a stick that also lists a keyboard
+        // collection is not probed without Input Monitoring (see the gate
+        // below): opening it would raise the prompt on plug-in.
         if profile == nil, PlayStationCapabilityProbe.shouldProbe(vendorID: info.vendorID, productID: info.productID),
+           !Self.blockedByInputMonitoring(device),
            let caps = PlayStationCapabilityProbe.probe(device, name: info.productName) {
             profile = PlayStationCapabilityProbe.profile(for: caps, vendorID: info.vendorID, productID: info.productID,
                                                          productName: info.productName)
@@ -1198,7 +1304,7 @@ final class RawHIDGamepadService: ObservableObject {
                     productMatches: current.productMatches,
                     layout: .generic(generic),
                     physicalButtonNames: current.identifier.hasPrefix("sdl-")
-                        ? SDLGameControllerDB.buttonNames(count: topButton + 1) : current.physicalButtonNames)
+                        ? SDLGameControllerDB.buttonNames(count: topButton + 1, isXbox: current.vendorID == 0x045E) : current.physicalButtonNames)
             }
         }
 
@@ -1224,7 +1330,10 @@ final class RawHIDGamepadService: ObservableObject {
         var players: [Int: RawHIDGamepad] = [:]
         if case .generic(let mainLayout)? = profile?.layout,
            let descriptor = IOHIDDeviceGetProperty(device, kIOHIDReportDescriptorKey as CFString) as? Data {
-            let playerLayouts = HIDDescriptorParser.playerLayouts(descriptor)
+            // At most 8 players: the ID below shifts 0x10 + n into the top
+            // byte, which wraps past 240 players and collides with the main
+            // pad. Any further player reports are ignored.
+            let playerLayouts = Array(HIDDescriptorParser.playerLayouts(descriptor).prefix(8))
             let playerIDs = Set(playerLayouts.map(\.reportID))
             // A pad matched by its SDL GameControllerDB row: each other
             // player is read with player 1's mapped report under its own
@@ -1291,26 +1400,34 @@ final class RawHIDGamepadService: ObservableObject {
         reportBuffers[info.key] = buffer
         reportBufferSizes[info.key] = bufferSize
 
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        IOHIDDeviceRegisterInputReportCallback(
-            device,
-            buffer,
-            bufferSize,
-            rawHIDInputReportCallback,
-            selfPtr
-        )
-        IOHIDDeviceScheduleWithRunLoop(device,
-                                       CFRunLoopGetMain(),
-                                       CFRunLoopMode.commonModes.rawValue)
-
         // A Puck slot waits for a controller before it is offered as one.
-        if profile?.layout == .steamController2026 && Self.isSteamController2026Dongle(info.productID) {
+        // Marked before the device is scheduled: its reports now arrive on
+        // the report thread at once, not after this function returns.
+        let puckSlot = profile?.layout == .steamController2026 && Self.isSteamController2026Dongle(info.productID)
+        if puckSlot {
             deviceLookupLock.lock()
             dormantKeys.insert(info.key)
             deviceLookupLock.unlock()
-        } else {
-            connectedGamepads.append(gamepad)
         }
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        // On the report thread, where its reports arrive: on the main run
+        // loop each one woke the main thread, up to 1000 a second from an
+        // idle XInput pad.
+        RawHIDReportThread.shared.sync {
+            IOHIDDeviceRegisterInputReportCallback(
+                device,
+                buffer,
+                bufferSize,
+                rawHIDInputReportCallback,
+                selfPtr
+            )
+            IOHIDDeviceScheduleWithRunLoop(device,
+                                           RawHIDReportThread.shared.loop,
+                                           RawHIDReportThread.mode)
+        }
+
+        if !puckSlot { connectedGamepads.append(gamepad) }
         connectedGamepads.append(contentsOf: players.sorted { $0.key < $1.key }.map(\.value))
         unidentifiedDevices.removeAll { $0.id == info.key }
         return true
@@ -1318,7 +1435,7 @@ final class RawHIDGamepadService: ObservableObject {
 
     private func handleDeviceDetached(_ device: IOHIDDevice) {
         // A pad still waiting for Input Monitoring is no longer there to read.
-        awaitingInputMonitoring = awaitingInputMonitoring.filter { $0.value !== device }
+        pruneAwaitingInputMonitoring(device)
         // Resolve the key from the cached table rather than re-reading it
         // from the dying device. IOKit frequently fails property reads for
         // an already-departed USB device, and the old early-return on that
@@ -1330,43 +1447,36 @@ final class RawHIDGamepadService: ObservableObject {
         // The key names one interface connection, so only the entry for the
         // interface that is leaving is cleared: a reconnected pad or the
         // other port of a two-port adapter at the same location is kept.
-        deviceLookupLock.lock()
-        let cachedKey = deviceToKey.removeValue(forKey: ObjectIdentifier(device))
-        let key = cachedKey ?? Self.deviceKey(device)
+        //
+        // On the report thread, between two reports: a report decoded there
+        // after the reset below held the leaving pad's buttons again.
+        var key: UInt64?
         var portIDs: Set<UInt64> = []
-        if let key {
-            // Back to rest before anything still holds them: the slot map is
-            // rebuilt up to half a second later, and a pad unplugged mid-press
-            // read as held until then (a hold fired, turbo kept clicking).
-            let leaving = [gamepadsByKey[key]].compactMap { $0 }
-                + Array((gameCubePorts[key] ?? [:]).values) + Array((playerPads[key] ?? [:]).values)
-            leaving.forEach { $0.resetState(); $0.imu.reset() }
-            gamepadsByKey.removeValue(forKey: key)
-            portIDs = Set((gameCubePorts.removeValue(forKey: key) ?? [:]).values.map(\.id))
-            portIDs.formUnion((playerPads.removeValue(forKey: key) ?? [:]).values.map(\.id))
-            lastReports.removeValue(forKey: key)
-            dormantKeys.remove(key)
-            gameCubePortSyncPending.remove(key)
-            // The same interface may be known under another device object
-            // (this service's and the registry's); drop those too.
-            for (object, value) in deviceToKey where value == key {
-                deviceToKey.removeValue(forKey: object)
-            }
-        }
-        deviceLookupLock.unlock()
+        RawHIDReportThread.shared.sync { (key, portIDs) = forgetLeavingDevice(device) }
 
         guard let key else { return }
 
+        // A Steam Controller 2026 rumble still running would keep writing
+        // report 0x80 to the closed device until its end time.
+        Self.steam2026Queue.async { [weak self] in
+            guard let self, let entry = self.steam2026Rumble.removeValue(forKey: key) else { return }
+            entry.timer.cancel()
+        }
+
         forcedKeys.remove(key)
         awaitingGameController.remove(key)
-        if let gamepad = openDevices.removeValue(forKey: key), let device = gamepad.device {
-            IOHIDDeviceUnscheduleFromRunLoop(device,
-                                             CFRunLoopGetMain(),
-                                             CFRunLoopMode.commonModes.rawValue)
-            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        }
-        if let buf = reportBuffers.removeValue(forKey: key) {
-            buf.deallocate()
+        let closing = openDevices.removeValue(forKey: key)?.device
+        let buf = reportBuffers.removeValue(forKey: key)
+        // On the report thread too: a report in flight there still reads the
+        // buffer, so it is freed only once the device is off that loop.
+        RawHIDReportThread.shared.sync {
+            if let closing {
+                IOHIDDeviceUnscheduleFromRunLoop(closing,
+                                                 RawHIDReportThread.shared.loop,
+                                                 RawHIDReportThread.mode)
+                IOHIDDeviceClose(closing, IOOptionBits(kIOHIDOptionsTypeNone))
+            }
+            buf?.deallocate()
         }
         reportBufferSizes.removeValue(forKey: key)
         connectedGamepads.removeAll { $0.id == key || portIDs.contains($0.id) }
@@ -1467,9 +1577,9 @@ final class RawHIDGamepadService: ObservableObject {
 
     /// Decode a raw HID input report and write the result into the
     /// matching `RawHIDGamepad`. Called from `rawHIDInputReportCallback`
-    /// on the main run loop (the devices are scheduled there, see `adopt`);
-    /// deliberately non-isolated so we don't pay a Task creation cost for
-    /// every report.
+    /// on the report thread (the devices are scheduled there, see
+    /// `handleDeviceAttached`); deliberately non-isolated so we don't pay a
+    /// Task creation cost for every report.
     nonisolated func dispatchReport(deviceRef: IOHIDDevice,
                                     reportID: UInt32,
                                     reportPointer: UnsafeMutablePointer<UInt8>,
@@ -1501,12 +1611,13 @@ final class RawHIDGamepadService: ObservableObject {
         // and hat dictionaries and merged under the pad's lock, about ten
         // allocations and three lock turns per report on the main thread
         // while the pad sat untouched. After the compare an unchanged report
-        // costs the memcmp alone. Only while decoding: the saved report is
-        // what a decode start replays, so the state always matches it.
+        // costs the memcmp alone. The saved report is what a decode start
+        // replays, so the state always matches it. With nothing decoding
+        // the compare still runs, so a changed report can count as use for
+        // the idle disconnect (a game reading the pad while the app sits).
         var unchanged = false
-        if let pad, decoding, !isAdapter, playerPads[key] == nil,
-           Self.stateIsOnlyBytes(pad.profile?.layout),
-           let last = lastReports[key]?[reportID], last.count == length {
+        let bytesOnly = pad.map { !isAdapter && playerPads[key] == nil && Self.stateIsOnlyBytes($0) } ?? false
+        if bytesOnly, let last = lastReports[key]?[reportID], last.count == length {
             unchanged = last.withUnsafeBufferPointer { memcmp($0.baseAddress, reportPointer, length) == 0 }
         }
         // Copied in place, so a steady stream allocates nothing.
@@ -1531,6 +1642,20 @@ final class RawHIDGamepadService: ObservableObject {
         // nothing then.
         guard decoding else {
             if isAdapter { dispatchGameCubePorts(data, key: key, decode: false) }
+            // A changed report while nothing decodes: the idle disconnect
+            // learns of a pad in use, from a decode at most once a second.
+            if bytesOnly, let pad, let profile = pad.profile {
+                ControllerPowerService.shared.noteRawReport(key: key) {
+                    HIDReportDecoder.decode(report: data, profile: profile)
+                }
+            }
+            // A 2026 Steam Controller's state reports too, so a pad played
+            // in a Steam game while nothing here decodes it counts as in use.
+            if let pad = steam2026, let profile = pad.profile, let first = data.first, [0x42, 0x45, 0x47].contains(first) {
+                ControllerPowerService.shared.noteRawReport(key: key) {
+                    HIDReportDecoder.decode(report: data, profile: profile)
+                }
+            }
             // A Puck slot still notices a controller arriving or leaving.
             if let pad = steam2026, let profile = pad.profile, data.first != 0x42, data.first != 0x45, data.first != 0x47 {
                 handleSteam2026Report(data, key: key, gamepad: pad, profile: profile)
@@ -1551,10 +1676,13 @@ final class RawHIDGamepadService: ObservableObject {
     /// reports carry the IMU and a Puck's arrivals) and the GameCube adapter
     /// (its ports are read from every report, and it is excluded by its
     /// IDs at the call site).
-    nonisolated private static func stateIsOnlyBytes(_ layout: ControllerProfile.ReportLayout?) -> Bool {
-        switch layout {
-        case .xinput, .dualShock3, .dualShock4, .dualSenseAlt, .xboxBluetooth, .switch2Pro, .switch2GameCube, .switch2JoyConLeft, .switch2JoyConRight: return true
-        case .generic(let generic): return HIDExtendedLayoutRegistry.extended(for: generic).relativeAxisSlots.isEmpty
+    /// A descriptor pad's relative axes are read from the pad, worked out
+    /// once at attach: they were built again for every report, unchanged
+    /// ones included, about six allocations each.
+    nonisolated private static func stateIsOnlyBytes(_ pad: RawHIDGamepad) -> Bool {
+        switch pad.profile?.layout {
+        case .xinput, .dualShock3, .dualShock4, .dualSenseAlt, .xboxBluetooth, .eightBitDo, .switch2Pro, .switch2GameCube, .switch2JoyConLeft, .switch2JoyConRight: return true
+        case .generic: return pad.relativeAxes.isEmpty
         default: return false
         }
     }
@@ -1802,7 +1930,7 @@ final class RawHIDGamepadService: ObservableObject {
 
 // MARK: - C callback bridge
 
-/// Free function called by IOKit on the runloop thread when a HID
+/// Free function called by IOKit on the report thread when a HID
 /// input report arrives. Hands off to the service's nonisolated
 /// `dispatchReport` so decoding happens immediately without a
 /// main-actor hop.
@@ -1821,6 +1949,79 @@ private func rawHIDInputReportCallback(context: UnsafeMutableRawPointer?,
                        reportID: reportID,
                        reportPointer: report,
                        length: reportLength)
+}
+
+// MARK: - The report thread
+
+/// The thread the raw HID manager and every raw pad are scheduled on, built
+/// like the Access controller reader: a Thread running its own run loop.
+/// On the main run loop each report woke the main thread, up to 1000 a
+/// second from an XInput pad doing nothing, and a changed report was
+/// decoded there; the report path is nonisolated and locked already.
+/// Nothing on this thread waits for the main thread, so the main thread
+/// may wait for it (`sync`).
+final class RawHIDReportThread: @unchecked Sendable {
+    static let shared = RawHIDReportThread()
+
+    /// The run loop mode everything is scheduled in.
+    static var mode: CFString { CFRunLoopMode.defaultMode.rawValue }
+
+    /// Set once in init, before anyone can schedule on it.
+    let loop: CFRunLoop
+
+    private init() {
+        final class Box: @unchecked Sendable { var loop: CFRunLoop? }
+        let box = Box()
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            let loop: CFRunLoop = CFRunLoopGetCurrent()
+            // A source that never fires: with no device scheduled yet (no
+            // pad, or a test run, which opens none) the run loop would
+            // return at once.
+            var context = CFRunLoopSourceContext()
+            if let keepAlive = CFRunLoopSourceCreate(kCFAllocatorDefault, 0, &context) {
+                CFRunLoopAddSource(loop, keepAlive, .defaultMode)
+            }
+            box.loop = loop
+            ready.signal()
+            while true { CFRunLoopRun() }
+        }
+        thread.name = "com.inputconfig.rawhid"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+        ready.wait()
+        loop = box.loop!
+    }
+
+    /// Runs `body` on the report thread, between two reports, and waits
+    /// for it; at once when already there.
+    func sync(_ body: () -> Void) {
+        if CFRunLoopGetCurrent() === loop { body(); return }
+        withoutActuallyEscaping(body) { body in
+            // The run loop lets go of its block some time after the block
+            // returns, which can be after the wait below ends: the body is
+            // held only by the box and dropped before the signal, so it has
+            // not escaped when withoutActuallyEscaping checks (it trapped
+            // with the body captured straight in the block).
+            final class Hold: @unchecked Sendable { var body: (() -> Void)? }
+            let hold = Hold()
+            hold.body = body
+            let done = DispatchSemaphore(value: 0)
+            CFRunLoopPerformBlock(loop, Self.mode) {
+                hold.body?()
+                hold.body = nil
+                done.signal()
+            }
+            CFRunLoopWakeUp(loop)
+            done.wait()
+        }
+    }
+
+    /// Queues `body` behind the reports already waiting.
+    func async(_ body: @escaping @Sendable () -> Void) {
+        CFRunLoopPerformBlock(loop, Self.mode, body)
+        CFRunLoopWakeUp(loop)
+    }
 }
 
 #if DEBUG
@@ -1864,28 +2065,18 @@ extension RawHIDGamepadService {
     /// Removes every synthetic pad, its ports and players, and lets go of
     /// the decoding hold.
     func debugRemoveSyntheticPads() {
-        deviceLookupLock.lock()
-        let keys = gamepadsByKey.keys.filter { Self.isDebugSyntheticKey($0) }
         var ids: Set<UInt64> = []
-        var pads: [RawHIDGamepad] = []
-        for key in keys {
-            ids.insert(key)
-            if let pad = gamepadsByKey.removeValue(forKey: key) { pads.append(pad) }
-            for pad in (gameCubePorts.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
-            for pad in (playerPads.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
-            lastReports.removeValue(forKey: key)
-            dormantKeys.remove(key)
-            gameCubePortSyncPending.remove(key)
-        }
-        deviceLookupLock.unlock()
-        pads.forEach { $0.resetState(); $0.imu.reset() }
+        // On the report thread, behind any replayed report still queued
+        // there, which then finds no pad.
+        RawHIDReportThread.shared.sync { ids = takeSyntheticPads() }
         connectedGamepads.removeAll { ids.contains($0.id) }
         Self.debugReplayActive = false
         setDecodingWanted(false, reason: "replay")
     }
 
     /// Feeds one report to a synthetic pad through the live dispatcher
-    /// (dedupe, decode gate, GameCube ports and all). Main thread only.
+    /// (dedupe, decode gate, GameCube ports and all), on the calling
+    /// thread. The bench compares it with the report thread's result.
     func debugInject(key: UInt64, reportID: UInt32, bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         var scratch = bytes
@@ -1893,6 +2084,12 @@ extension RawHIDGamepadService {
             guard let base = buffer.baseAddress else { return }
             dispatch(key: key, reportID: reportID, reportPointer: base, length: CFIndex(buffer.count))
         }
+    }
+
+    /// A pad by key (a synthetic one, for the bench).
+    func debugPad(key: UInt64) -> RawHIDGamepad? {
+        deviceLookupLock.lock(); defer { deviceLookupLock.unlock() }
+        return gamepadsByKey[key]
     }
 
     /// The profile passes of handleDeviceAttached for a device that is only
@@ -1996,24 +2193,44 @@ extension RawHIDGamepadService {
     /// Bluetooth pad drops its connection, as from System Settings; a wired
     /// one cannot be disconnected by an app, and the line says so.
     func disconnect(gameController controller: GCController) -> DisconnectOutcome {
+        disconnectForIdle(gameController: controller).outcome
+    }
+
+    /// As `disconnect(gameController:)`, also saying which Bluetooth address
+    /// it closed, so the idle disconnect records it without matching the
+    /// controller's name among the paired devices again.
+    func disconnectForIdle(gameController controller: GCController) -> (outcome: DisconnectOutcome, address: String?) {
         let name = controller.vendorName ?? String(localized: "The controller")
         let registry = HIDDeviceRegistry.shared
         // The physical device GameController lists as this controller.
         var interfaces: [IOHIDDevice] = []
         var transport: HIDDeviceRegistry.Transport?
-        for t in HIDDeviceRegistry.Transport.allCases {
-            for entry in registry.entries(on: t) {
-                let devices = registry.devices(for: entry)
-                if devices.contains(where: { listedController(for: $0) === controller }) {
-                    interfaces = devices
-                    transport = t
-                    break
+        // By the pad's own identity first (its unique id or serial): a
+        // match by model name closed the other pad of two of one model.
+        let identity = SonyPadIdentity.of(controller: controller)
+        let sameModel = GCController.controllers().filter { $0.vendorName == controller.vendorName }.count
+        func find(_ mine: ([IOHIDDevice]) -> Bool) {
+            for t in HIDDeviceRegistry.Transport.allCases {
+                for entry in registry.entries(on: t) {
+                    let devices = registry.devices(for: entry)
+                    if mine(devices) {
+                        interfaces = devices
+                        transport = t
+                        return
+                    }
                 }
             }
-            if transport != nil { break }
+        }
+        if let identity { find { $0.contains { SonyPadIdentity.of(device: $0).matches(identity) } } }
+        // An identity whose parts the device side does not share found
+        // nothing: with one pad of the model, GameController's own listing
+        // still tells which device it is.
+        if transport == nil, sameModel == 1 { find { $0.contains { listedController(for: $0) === controller } } }
+        if transport == nil, sameModel > 1 {
+            return (.cannot(String(localized: "\(name) could not be told apart from another controller of the same model, so it was left connected.")), nil)
         }
         if transport == .usb {
-            return .cannot(String(localized: "\(name) is connected by cable. Unplug it to disconnect it."))
+            return (.cannot(String(localized: "\(name) is connected by cable. Unplug it to disconnect it.")), nil)
         }
         return disconnectBluetooth(interfaces: interfaces, name: name)
     }
@@ -2022,17 +2239,39 @@ extension RawHIDGamepadService {
     /// connection; a wired one is no longer read (until it is plugged in
     /// again or connected from InputConfig > Devices).
     func disconnect(gamepad: RawHIDGamepad) -> DisconnectOutcome {
+        disconnectForIdle(gamepad: gamepad).outcome
+    }
+
+    /// As `disconnect(gamepad:)`, also saying which Bluetooth address it
+    /// closed (nil for a wired pad, or one found no other way than released).
+    func disconnectForIdle(gamepad: RawHIDGamepad) -> (outcome: DisconnectOutcome, address: String?) {
+        // A Switch 2 pad over Bluetooth LE is the BLE service's, as the idle
+        // path has it: through the HID registry it failed with a wrong
+        // Bluetooth permission message.
+        if gamepad.transport == "Bluetooth LE", gamepad.id >> 48 == Self.externalKeyBase >> 48 {
+            Switch2BluetoothService.shared.disconnect(key: gamepad.id)
+            return (.disconnected, nil)
+        }
+        // One port of a GameCube adapter, or one player of a multi-player
+        // pad, shares its device with the others: closing it dropped every
+        // other player while saying only this one had gone.
+        if !openDevices.values.contains(where: { $0 === gamepad }),
+           let device = gamepad.device, openDevices.values.contains(where: { $0.device === device }) {
+            return (.cannot(String(localized: "\(gamepad.displayName) is one port of an adapter. Unplug it from the adapter to disconnect it.")), nil)
+        }
         let registry = HIDDeviceRegistry.shared
         let interfaces = HIDDeviceRegistry.Transport.allCases
             .flatMap { registry.entries(on: $0) }
             .map { registry.devices(for: $0) }
             .first { $0.contains { $0 === gamepad.device } } ?? [gamepad.device].compactMap { $0 }
+        // Over Bluetooth the answer is the link's: a link macOS would not
+        // close was released instead, so the pad stayed connected but unread
+        // and the app said it had disconnected. Only a wired pad is released.
         if gamepad.transport.localizedCaseInsensitiveContains("bluetooth") {
-            let outcome = disconnectBluetooth(interfaces: interfaces, name: gamepad.displayName)
-            if case .disconnected = outcome { return outcome }
+            return disconnectBluetooth(interfaces: interfaces, name: gamepad.displayName)
         }
         release(devices: interfaces)
-        return .disconnected
+        return (.disconnected, nil)
     }
 
     private func listedController(for device: IOHIDDevice) -> GCController? {
@@ -2045,9 +2284,12 @@ extension RawHIDGamepadService {
     }
 
     /// Closes the Bluetooth link of the device with these HID interfaces:
-    /// found by the address its HID serial number carries, else by name
-    /// among the connected paired devices.
-    private func disconnectBluetooth(interfaces: [IOHIDDevice], name: String) -> DisconnectOutcome {
+    /// found by the address its HID serial number carries, else by its HID
+    /// product string among the connected paired devices, and only when
+    /// exactly one of them carries that name (two pads of one model would
+    /// otherwise lose whichever came first). `name` is for the log and
+    /// the message. The address returned is the one closed.
+    private func disconnectBluetooth(interfaces: [IOHIDDevice], name: String) -> (outcome: DisconnectOutcome, address: String?) {
         var target: IOBluetoothDevice?
         for device in interfaces {
             guard let serial = IOHIDDeviceGetProperty(device, kIOHIDSerialNumberKey as CFString) as? String else { continue }
@@ -2058,16 +2300,145 @@ extension RawHIDGamepadService {
             }
         }
         if target == nil {
-            let wanted = name.lowercased()
+            let products = Set(interfaces.compactMap {
+                (IOHIDDeviceGetProperty($0, kIOHIDProductKey as CFString) as? String)?.lowercased()
+            }.filter { !$0.isEmpty })
             let paired = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
-            target = paired.first { $0.isConnected() && ($0.name ?? "").lowercased() == wanted }
+            let matches = paired.filter { $0.isConnected() && products.contains(($0.name ?? "").lowercased()) }
+            if matches.count == 1 { target = matches[0] }
         }
         if let target, target.closeConnection() == kIOReturnSuccess {
             ActivityLog.shared.info("Devices", "Disconnected \(name)")
-            return .disconnected
+            return (.disconnected, target.addressString)
         }
         // Disconnecting is the one thing that uses Bluetooth directly, so
         // macOS may have asked about it first; a no there lands here.
-        return .cannot(String(localized: "macOS did not let InputConfig disconnect \(name). If you were asked about Bluetooth, allow InputConfig in System Settings > Privacy & Security > Bluetooth. Or turn the controller off, or disconnect it in System Settings > Bluetooth."))
+        return (.cannot(String(localized: "macOS did not let InputConfig disconnect \(name). If you were asked about Bluetooth, allow InputConfig in System Settings > Privacy & Security > Bluetooth. Or turn the controller off, or disconnect it in System Settings > Bluetooth.")), nil)
     }
+}
+
+/// An IOHIDDevice handed from the report thread to main. IOKit passes each
+/// device to the callback once; the report thread keeps no use of it after
+/// the handoff, so main is its only user from then on.
+struct HIDDeviceHandoff: @unchecked Sendable { let device: IOHIDDevice }
+
+// MARK: - Bodies run on the report thread
+
+/// Each is nonisolated on purpose. A closure written in main actor code and
+/// handed to the standard library (filter, map, forEach) carries a run time
+/// check that it is on the main thread, and traps on the report thread
+/// (seen Nov 5: debugRemoveSyntheticPads). Written here, the closures are
+/// nonisolated and the check is not emitted. Keep report thread bodies here.
+extension RawHIDGamepadService {
+    /// The manager on the report thread, with its attach and removal
+    /// callbacks. Written here, not in start(): IOKit calls them on that
+    /// thread, and callbacks written in main actor code trap there (V2a,
+    /// Nov 5: any pad connected at launch or plugged in quit the app).
+    nonisolated func scheduleManagerOnReportThread(_ mgr: IOHIDManager, context: UnsafeMutableRawPointer) {
+        IOHIDManagerScheduleWithRunLoop(mgr,
+                                        RawHIDReportThread.shared.loop,
+                                        RawHIDReportThread.mode)
+
+        IOHIDManagerRegisterDeviceMatchingCallback(mgr, { context, _, _, device in
+            guard let context = context else { return }
+            let svc = Unmanaged<RawHIDGamepadService>.fromOpaque(context).takeUnretainedValue()
+            let handoff = HIDDeviceHandoff(device: device)
+            Task { @MainActor in svc.handleDeviceAttached(handoff.device) }
+        }, context)
+
+        IOHIDManagerRegisterDeviceRemovalCallback(mgr, { context, _, _, device in
+            guard let context = context else { return }
+            let svc = Unmanaged<RawHIDGamepadService>.fromOpaque(context).takeUnretainedValue()
+            let handoff = HIDDeviceHandoff(device: device)
+            Task { @MainActor in svc.handleDeviceDetached(handoff.device) }
+        }, context)
+    }
+
+    /// After a wake: the pads that wake silent forget their state and
+    /// their saved reports.
+    nonisolated func resetSilentPadsAfterWake() {
+        deviceLookupLock.lock()
+        let pads = allPadsLocked().filter { Self.wakesSilent($0) }
+        for pad in pads { lastReports[pad.id] = nil }
+        deviceLookupLock.unlock()
+        pads.forEach { $0.resetState() }
+    }
+
+    /// stop(): clears the lookup tables, then closes and frees.
+    nonisolated func tearDownOnReportThread(devices: [IOHIDDevice], buffers: [UnsafeMutablePointer<UInt8>],
+                                            manager mgr: IOHIDManager?) {
+        deviceLookupLock.lock()
+        deviceToKey.removeAll()
+        gamepadsByKey.removeAll()
+        gameCubePorts.removeAll()
+        gameCubePortSyncPending.removeAll()
+        deviceLookupLock.unlock()
+
+        for device in devices {
+            IOHIDDeviceUnscheduleFromRunLoop(device,
+                                             RawHIDReportThread.shared.loop,
+                                             RawHIDReportThread.mode)
+            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
+        buffers.forEach { $0.deallocate() }
+
+        if let mgr {
+            IOHIDManagerClose(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+            IOHIDManagerUnscheduleFromRunLoop(mgr,
+                                              RawHIDReportThread.shared.loop,
+                                              RawHIDReportThread.mode)
+        }
+    }
+
+    /// A device leaving: its pads back to rest, its tables cleared. Returns
+    /// its key and the ids of its ports and extra players.
+    nonisolated func forgetLeavingDevice(_ device: IOHIDDevice) -> (UInt64?, Set<UInt64>) {
+        var portIDs: Set<UInt64> = []
+        deviceLookupLock.lock()
+        let cachedKey = deviceToKey.removeValue(forKey: ObjectIdentifier(device))
+        let key = cachedKey ?? Self.deviceKey(device)
+        if let key {
+            // Back to rest before anything still holds them: the slot map is
+            // rebuilt up to half a second later, and a pad unplugged mid-press
+            // read as held until then (a hold fired, turbo kept clicking).
+            let leaving = [gamepadsByKey[key]].compactMap { $0 }
+                + Array((gameCubePorts[key] ?? [:]).values) + Array((playerPads[key] ?? [:]).values)
+            leaving.forEach { $0.resetState(); $0.imu.reset() }
+            gamepadsByKey.removeValue(forKey: key)
+            portIDs = Set((gameCubePorts.removeValue(forKey: key) ?? [:]).values.map(\.id))
+            portIDs.formUnion((playerPads.removeValue(forKey: key) ?? [:]).values.map(\.id))
+            lastReports.removeValue(forKey: key)
+            dormantKeys.remove(key)
+            gameCubePortSyncPending.remove(key)
+            // The same interface may be known under another device object
+            // (this service's and the registry's); drop those too.
+            for (object, value) in deviceToKey where value == key {
+                deviceToKey.removeValue(forKey: object)
+            }
+        }
+        deviceLookupLock.unlock()
+        return (key, portIDs)
+    }
+
+    #if DEBUG
+    /// Every synthetic pad, its ports and players, out of the tables.
+    nonisolated func takeSyntheticPads() -> Set<UInt64> {
+        var ids: Set<UInt64> = []
+        deviceLookupLock.lock()
+        let keys = gamepadsByKey.keys.filter { Self.isDebugSyntheticKey($0) }
+        var pads: [RawHIDGamepad] = []
+        for key in keys {
+            ids.insert(key)
+            if let pad = gamepadsByKey.removeValue(forKey: key) { pads.append(pad) }
+            for pad in (gameCubePorts.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
+            for pad in (playerPads.removeValue(forKey: key) ?? [:]).values { ids.insert(pad.id); pads.append(pad) }
+            lastReports.removeValue(forKey: key)
+            dormantKeys.remove(key)
+            gameCubePortSyncPending.remove(key)
+        }
+        deviceLookupLock.unlock()
+        pads.forEach { $0.resetState(); $0.imu.reset() }
+        return ids
+    }
+    #endif
 }

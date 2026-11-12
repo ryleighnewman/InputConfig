@@ -8,7 +8,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     // creative MIDI output, per-preset automation, and finally usage stats.
     case keyboardMouse
     case controllers
-    case chassisTap
+    case voiceCommands
     case variableSensitivity
     case deadzone
     case stickZones
@@ -40,7 +40,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     /// Stable key used to look up the matching example preset by name.
     var presetKey: String? {
         switch self {
-        case .chassisTap:          return "chassis_tap"
+        case .voiceCommands:       return "voice_commands"
         case .variableSensitivity: return "variable_sensitivity"
         case .deadzone:            return "deadzone"
         case .stickZones:          return "stick_zones"
@@ -121,7 +121,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
         case .modifierHolds:       return String(localized: "Modifier Holds")
         case .holdDoubleTap:       return String(localized: "Hold & Double-Tap")
         case .appAutoSwitch:       return String(localized: "Per-App Auto-Switch")
-        case .chassisTap:          return String(localized: "Tap the Mac")
+        case .voiceCommands:       return String(localized: "Voice Commands")
         case .cursorRegions:       return String(localized: "Cursor Regions")
         }
     }
@@ -129,7 +129,7 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
     /// The order of the cards on the home page, which is the order the
     /// demo sheet's arrows walk through.
     static let tourOrder: [FeatureDemoKind] = [
-        .keyboardMouse, .controllers, .chassisTap, .midiInput, .midi, .systemControl,
+        .keyboardMouse, .controllers, .voiceCommands, .midiInput, .midi, .systemControl,
         .siriShortcuts, .inputRemap, .macTrackpad, .modifierHolds, .variableSensitivity, .deadzone, .stickZones, .toggleMode, .macros,
         .stackedOutputs, .holdDoubleTap, .appAutoSwitch, .autoLaunch, .touchpad, .touchpadRegions, .gyro,
         .cursorRegions, .haptic, .speech, .midiCC, .stats, .lightBar,
@@ -162,17 +162,17 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
         case .variableSensitivity:
             return String(localized: "Trigger pressure and joystick depth scale output speed so light inputs give precise control and full presses accelerate. Three response curves are built in: Linear, Smooth (exponential), and Aggressive (square-root). Pick per binding for how you want triggers and sticks to feel: racing-game throttle vs. FPS aim vs. instant-snap menu navigation.")
         case .stickZones:
-            return String(localized: "Draw regions on a stick, as rectangles or as rings around the center, and bands on a trigger's travel, and each one becomes a button. Pick a region in a stick row's direction menu, beside plus and minus. While the stick is inside a region, that region's row fires and the stick's direction rows wait, unless the region shares the stick. A stick gesture is flicks in order, such as pulling the stick back twice.")
+            return String(localized: "Draw regions on a stick, as rectangles or as rings around the center, and bands on a trigger's travel, and each one becomes a button. Pick a region in a stick row's direction menu, beside plus and minus. While the stick is inside a region, that region's row fires and the stick's direction rows wait, unless the region shares the stick. A stick gesture is flicks in order, such as pulling the stick back twice, and a button sequence, such as Down, Down, A, or a key sequence on the Mac's keyboard is an input the same way.")
         case .deadzone:
             return String(localized: "Set the deadzone, the red ring, to ignore stick drift, and Full push at, the green ring, so you reach full speed without forcing the stick to its edge. Past the green ring the row still works, at full strength. The live ring shows your stick position in real time.")
         case .macros:
-            return String(localized: "Chain keystrokes with custom timing per step, or set Turbo on any button to rapid-fire it at a configurable rate. Steps send keys, shortcuts and mouse buttons.")
+            return String(localized: "Chain steps with their own timing, or set Turbo on any button to rapid-fire it at a configurable rate. Record the steps: press the keys and mouse buttons in another app and each press is a step with the timing you made, clicks where you made them. A step sends a key with its shortcut modifiers, a mouse button, typed text, scrolling or a system function, or waits, moves the pointer, or waits for a screen color or text. Play once from the editor, set a playback speed and random timing, and run a macro until pressed again.")
         case .haptic:
             return String(localized: "Bindings on DualSense and DualSense Edge can fire haptic feedback when they trigger. Pick an intensity per binding so important actions feel bigger.")
         case .speech:
             return String(localized: "Speak a custom phrase out loud when a binding fires, through the Mac's sound output.")
         case .lightBar:
-            return String(localized: "Set the DualSense light bar to a custom color, dim or bright, or run an RGB cycle. Set per preset from the strip at the top of the Live Visualizer; runs through a sandboxed helper that uses Sony's HID color report.")
+            return String(localized: "Set the DualSense light bar to a custom color, dim or bright, or run an RGB cycle. Set per preset from the strip at the top of the Live Visualizer, or for the controller from the sidebar. One switch in Settings leaves the light bar to macOS and other apps instead.")
         case .controllers:
             return String(localized: "DualSense, DualSense Edge, DualShock 4, Xbox One / Series, Switch Pro, Joy-Cons, Stadia, 8BitDo Pro 2 / Ultimate / SN30 Pro+, and any MFi gamepad.")
         case .touchpad:
@@ -188,11 +188,11 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
         case .stackedOutputs:
             return String(localized: "Wire one input to multiple outputs in parallel: a key AND a mouse click AND a MIDI note AND a spoken phrase, all firing simultaneously. Different from a macro (which is a sequence with delays); stacked outputs are simpler to debug and faster to author.")
         case .autoLaunch:
-            return String(localized: "Each preset has its own Automation & Gaming Utilities panel. Activating the preset can auto-launch an app (e.g. Steam, your DAW, a specific game), confine the cursor away from screen edges, auto-recenter it, and hide the system pointer, all turned off when you deactivate. Per-game settings, never global.")
+            return String(localized: "Each preset has its own Utilities panel. Activating the preset can auto-launch an app (e.g. Steam, your DAW, a specific game), confine the cursor away from screen edges, auto-recenter it, and hide the system pointer, all turned off when you deactivate. Per-game settings, never global.")
         case .siriShortcuts:
             return String(localized: "Any input can run any Shortcut from the Shortcuts app, by name: toggle Do Not Disturb, set a smart-home scene, start a timer, log a workout: entire automations on one pad or button. Shortcuts run in the background without stealing focus, and the binding editor lists your installed Shortcuts so there is nothing to type. Open App and Open URL outputs live in the same menu for launching anything else.")
         case .inputRemap:
-            return String(localized: "The Mac's own keyboard is an input, not just an output. Every key binds like a controller button: the letters, the modifiers on each side, the top row's brightness, media, and volume keys, and F13 to F19 on a full-size keyboard. The Live Visualizer draws the keyboard and lights each key as you press it. InputConfig listens alongside macOS, so a key keeps doing what it did; the spare keys are the ones to bind.")
+            return String(localized: "The Mac's own keyboard is an input, not just an output. Every key binds like a controller button: the letters, the modifiers on each side, the top row's brightness, media, and volume keys, and F13 to F19 on a full-size keyboard. The Live Visualizer draws the keyboard and lights each key as you press it. A key keeps doing what it did unless its row blocks the key's own action, so W can become Up Arrow without also typing W.")
         case .macTrackpad:
             return String(localized: "The trackpad and Magic Mouse are inputs too. Clicks, two-finger clicks, the side and middle buttons, scrolling in four directions, a double click, a scroll gesture from the moment fingers touch until momentum stops, and the trackpad's force click all bind to anything. The Live Visualizer draws the mouse and the pad and shows every one of them as it happens.")
         case .modifierHolds:
@@ -200,9 +200,9 @@ enum FeatureDemoKind: String, CaseIterable, Identifiable {
         case .holdDoubleTap:
             return String(localized: "Every binding can carry three actions: press, hold, and double-tap each fire their own outputs, with an adjustable hold threshold and double-tap window per binding. One controller button becomes jump on tap, sprint on hold, and inventory on double-tap.")
         case .appAutoSwitch:
-            return String(localized: "Presets can activate themselves when a chosen app comes to the front: the game preset in the game, the DAW preset in your DAW, the browsing preset everywhere else. Add bundle identifiers in the editor's Automation panel, flip the global toggle in Settings, and InputConfig does the switching for you.")
-        case .chassisTap:
-            return String(localized: "Your MacBook has a motion sensor inside it, and InputConfig can feel you knock on the case. Tap the palm rest or the lid with a fingertip: taps close together count as one gesture, from a single up to a quintuple, and a pause starts a new count. It is the only input that needs no hardware at all, so it works with nothing plugged in. Typing is ignored on purpose, so working at the keyboard never sets it off.") + " " + BindingRowView.tapTheMacDisclaimer
+            return String(localized: "Presets can activate themselves when a chosen app comes to the front: the game preset in the game, the DAW preset in your DAW, the browsing preset everywhere else. Add bundle identifiers in the editor's Utilities panel, flip the global toggle in Settings, and InputConfig does the switching for you.")
+        case .voiceCommands:
+            return String(localized: "No controller needed: say a phrase and InputConfig fires any output. Show your windows, open search, start dictation or read a selection aloud without touching anything. Recognition runs on this Mac when the language allows it, and nothing is recorded or kept.")
         case .cursorRegions:
             return String(localized: "Draw regions on the screen that act as inputs: the cursor entering one can press keys, run macros, or fire any other output. Pair with stick- or gyro-driven cursor movement for dwell-free, gaze-style control, or park hot corners anywhere you like.")
         case .systemControl:
@@ -244,7 +244,11 @@ struct FeatureDemoView: View {
     /// for the Wide Controller Support card.
     var presetForConnectedController: () -> String = { "FPS (PS5 DualSense)" }
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The app's own Reduce Motion too: the slide between showcases ran
+    /// with it on.
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     /// The showcase on screen. Starts at the card that opened the sheet;
     /// the arrows walk the home page's order and wrap around.
@@ -456,7 +460,7 @@ struct FeatureDemoView: View {
         case .modifierHolds:       return .indigo
         case .holdDoubleTap:       return .blue
         case .appAutoSwitch:       return .green
-        case .chassisTap:          return .mint
+        case .voiceCommands:       return .mint
         case .cursorRegions:       return .purple
         }
     }
@@ -489,7 +493,7 @@ struct FeatureDemoView: View {
         case .modifierHolds:       return "command"
         case .holdDoubleTap:       return "hand.tap.fill"
         case .appAutoSwitch:       return "app.connected.to.app.below.fill"
-        case .chassisTap:          return "hand.tap.fill"
+        case .voiceCommands:       return "waveform"
         case .cursorRegions:       return "rectangle.dashed"
         }
     }
@@ -559,7 +563,7 @@ struct FeatureDemoView: View {
             case .modifierHolds:       ModifierHoldsDemo()
             case .holdDoubleTap:       HoldDoubleTapDemo()
             case .appAutoSwitch:       AppAutoSwitchDemo()
-            case .chassisTap:          ChassisTapDemo()
+            case .voiceCommands:       VoiceCommandsDemo()
             case .cursorRegions:       CursorRegionsDemo()
             }
             }
@@ -1125,69 +1129,104 @@ private struct StickZonesDemo: View {
 private struct MacrosDemo: View {
     @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTextScale) private var textScale
     var body: some View {
         TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let cyclePos = t.truncatingRemainder(dividingBy: 2.5)
-
-            let events: [(name: String, at: Double, hold: Double)] = [
-                ("Cmd",  0.0, 0.6),
-                ("C",    0.15, 0.10),
-                ("Tab",  0.6, 0.10),
-                ("Cmd",  0.9, 0.6),
-                ("V",    1.05, 0.10),
-            ]
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Macro: Copy → Switch → Paste")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                GeometryReader { proxy in
-                    ZStack(alignment: .topLeading) {
-                        // Timeline bar
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.secondary.opacity(0.18))
-                            .frame(height: 32)
-                        // Each event as a colored block
-                        ForEach(0..<events.count, id: \.self) { i in
-                            let e = events[i]
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(cyclePos >= e.at && cyclePos < e.at + e.hold
-                                      ? Color.yellow : Color.yellow.opacity(0.35))
-                                .frame(width: CGFloat(e.hold / 2.5) * proxy.size.width,
-                                       height: 32)
-                                .offset(x: CGFloat(e.at / 2.5) * proxy.size.width)
-                                .overlay(
-                                    Text(e.name)
-                                        .font(.caption2.monospaced())
-                                        .offset(x: CGFloat(e.at / 2.5) * proxy.size.width + 4, y: 0),
-                                    alignment: .topLeading
-                                )
-                        }
-                        // Playhead
-                        Rectangle()
-                            .fill(Color.red)
-                            .frame(width: 2, height: 32)
-                            .offset(x: CGFloat(cyclePos / 2.5) * proxy.size.width)
-                    }
-                }
-                .frame(height: 32)
-                Text("Turbo: spacebar at 12 Hz while held")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 3) {
-                    ForEach(0..<24, id: \.self) { i in
-                        // Under three flashes a second: at 12 it flickered
-                        // at 6 Hz, past the photosensitivity limit.
-                        let on = (Int(t * 5) + i) % 2 == 0
-                        Rectangle()
-                            .fill(on ? Color.yellow : Color.yellow.opacity(0.2))
-                            .frame(width: 8, height: 12)
-                    }
-                }
-            }
-            .padding(.horizontal, 18)
+            content(at: context.date.timeIntervalSinceReferenceDate)
         }
+    }
+
+    /// A press on A plays a recorded macro one step at a time; a held RB
+    /// fires Space over and over. The same press, arrow, output story the
+    /// other demos tell.
+    @ViewBuilder
+    private func content(at t: TimeInterval) -> some View {
+        // 4 s cycle: the press, then the four steps in turn, then rest.
+        let cycle = t.truncatingRemainder(dividingBy: 4.0)
+        let pressed = cycle < 0.35
+        let steps: [(icon: String, text: LocalizedStringKey, at: Double)] = [
+            ("cursorarrow.click",   "Click at 420, 300", 0.35),
+            ("character.cursor.ibeam", "Type \u{201C}hello\u{201D}", 1.0),
+            ("clock",               "Wait 300 ms", 1.9),
+            ("command",             "Paste, \u{2318}V", 2.6),
+        ]
+        let current = steps.lastIndex { cycle >= $0.at } ?? -1
+        let playing = cycle >= 0.35 && cycle < 3.3
+        // Everything sits inside the 200 pt surface at any text size: the
+        // rows keep to one line and shrink before they grow past it.
+        HStack(spacing: 16) {
+            inputBlock(label: "Press A", pressed: pressed, tint: .yellow)
+            GradientArrow(active: playing, tint: .yellow)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(0..<steps.count, id: \.self) { i in
+                    stepRow(number: i + 1, icon: steps[i].icon, text: steps[i].text,
+                            lit: playing && i == current, done: playing && i < current)
+                }
+                // Turbo on another button, as one more line of the story:
+                // RB held, Space over and over.
+                HStack(spacing: 8) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 6).fill(Color.yellow.opacity(0.6))
+                        RoundedRectangle(cornerRadius: 6).stroke(Color.yellow, lineWidth: 1.5)
+                        Text(verbatim: "RB")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.primary)
+                    }
+                    .frame(width: 28, height: 24)
+                    .accessibilityLabel("Hold RB")
+                    HStack(spacing: 3) {
+                        ForEach(0..<10, id: \.self) { i in
+                            // Under three flashes a second: at 12 it flickered
+                            // at 6 Hz, past the photosensitivity limit.
+                            let on = (Int(t * 5) + i) % 2 == 0
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(on ? Color.yellow : Color.yellow.opacity(0.2))
+                                .frame(width: 6, height: 12)
+                        }
+                    }
+                    Text("Space")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                .padding(.top, 4)
+                .padding(.leading, 22)
+            }
+            // A fixed column, as the other demos keep: the surface is about
+            // 420 pt wide at the smallest window, so the rows stay short.
+            .frame(width: 210 * columnScale(textScale), alignment: .leading)
+        }
+        .padding(.horizontal, 18)
+        .frame(maxHeight: 200)
+        .animation(.easeInOut(duration: 0.2), value: pressed)
+    }
+
+    /// One recorded step, numbered: the step playing is lit, the ones
+    /// before it stay softly on, the rest wait.
+    @ViewBuilder
+    private func stepRow(number: Int, icon: String, text: LocalizedStringKey, lit: Bool, done: Bool) -> some View {
+        let fill: Color = lit ? Color.yellow.opacity(0.6) : done ? Color.yellow.opacity(0.18) : Color.secondary.opacity(0.12)
+        let stroke: Color = lit ? .yellow : done ? Color.yellow.opacity(0.5) : Color.secondary.opacity(0.35)
+        HStack(spacing: 8) {
+            Text("\(number).")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 16, alignment: .trailing)
+            ZStack {
+                RoundedRectangle(cornerRadius: 6).fill(fill)
+                RoundedRectangle(cornerRadius: 6).stroke(stroke, lineWidth: lit ? 1.5 : 0.5)
+                Image(systemName: icon)
+                    .font(.system(size: 13))
+                    .foregroundStyle(lit ? Color.primary : done ? Color.yellow : Color.secondary)
+            }
+            .frame(width: 28, height: 24)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(lit ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(height: 24)
     }
 }
 
@@ -1203,7 +1242,7 @@ private struct HapticDemo: View {
             // Press cycle: 0.0 idle, 0.5 pressed, ~1.2s burst, then ease out
             let cycle = t.truncatingRemainder(dividingBy: 2.4)
             let pressed = cycle > 0.4 && cycle < 1.6
-            let burst = pressed ? min(1.0, (cycle - 0.4) / 0.15) * max(0, 1.0 - (cycle - 1.4) / 0.2) : 0
+            let burst = pressed ? min(1.0, (cycle - 0.4) / 0.15) * min(1.0, max(0, 1.0 - (cycle - 1.4) / 0.2)) : 0
             let pulse = pressed ? (sin((cycle - 0.4) * 18) + 1) / 2 : 0
 
             HStack(spacing: 14) {
@@ -1889,6 +1928,8 @@ private struct StackedOutputsDemo: View {
             )
         }
         .frame(width: 60, height: 100)
+        // The trunk faces the input block in right-to-left languages too.
+        .flipsForRightToLeftLayoutDirection(true)
     }
 
     @ViewBuilder
@@ -2112,7 +2153,9 @@ private struct MidiCCDemo: View {
             ccBar(label: "CC 1",  hint: "Mod",     value: ccY)
             ccBar(label: "CC 7",  hint: "Volume",  value: ccR)
             ccBar(label: "CC 10", hint: "Pan",     value: ccAngle)
-            ccBar(label: "CC 11", hint: "Express", value: ccX)
+            // MIDI CC 11, Expression: "Express" was translated as express
+            // delivery or "fast" in most languages.
+            ccBar(label: "CC 11", hint: "Expr.", value: ccX)
         }
         .frame(width: 220 * columnScale(textScale))
     }
@@ -2607,64 +2650,64 @@ private struct AppAutoSwitchDemo: View {
 /// fires.
 /// Two taps landing on a MacBook, with the shock rippling out and the counter
 /// ticking over. Loops on a ~3.4 s cycle: tap, tap, gesture recognized, rest.
-private struct ChassisTapDemo: View {
+private struct VoiceCommandsDemo: View {
     @Environment(\.appReduceMotion) private var appReduceMotion
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let spoken: [(phrase: LocalizedStringKey, result: LocalizedStringKey, icon: String)] = [
+        ("show my windows", "Mission Control", "rectangle.3.group"),
+        ("open search", "Spotlight", "magnifyingglass"),
+        ("start dictation", "Dictation", "mic.fill"),
+    ]
     var body: some View {
         TimelineView(.animation(paused: reduceMotion || appReduceMotion)) { context in
             content(at: context.date.timeIntervalSinceReferenceDate)
         }
     }
     @ViewBuilder private func content(at t: TimeInterval) -> some View {
-        let cycle = t.truncatingRemainder(dividingBy: 3.4)
-        // Two strikes, 0.45 s apart, then the gesture resolves.
-        let strikes: [Double] = [0.5, 0.95]
-        let recognized = cycle > 1.5 && cycle < 3.0
-        let count = strikes.filter { cycle >= $0 }.count
+        let paused = reduceMotion || appReduceMotion
+        let span = 3.2
+        let index = paused ? 0 : Int(t / span) % Self.spoken.count
+        let cycle = paused ? 2.2 : t.truncatingRemainder(dividingBy: span)
+        let speaking = cycle > 0.3 && cycle < 1.7
+        let heard = cycle >= 1.7 && cycle < 3.0
+        let item = Self.spoken[index]
         HStack(spacing: 26) {
-            ZStack {
-                // Lid and base, drawn plainly so the ripple is the only motion.
-                VStack(spacing: 2) {
-                    RoundedRectangle(cornerRadius: 5)
-                        .strokeBorder(Color.secondary.opacity(0.55), lineWidth: 1.5)
-                        .frame(width: 118, height: 74)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.secondary.opacity(0.45))
-                        .frame(width: 140, height: 6)
-                }
-                ForEach(Array(strikes.enumerated()), id: \.offset) { _, at in
-                    let age = cycle - at
-                    if age >= 0, age < 0.75 {
-                        let p = age / 0.75
-                        Circle()
-                            .strokeBorder(Color.mint.opacity(1 - p), lineWidth: 2)
-                            .frame(width: 16 + p * 74, height: 16 + p * 74)
-                            .offset(y: 12)
+            VStack(spacing: 10) {
+                // The level meter moves only while words are being said.
+                HStack(alignment: .center, spacing: 4) {
+                    ForEach(0..<9, id: \.self) { bar in
+                        let wave = speaking ? abs(sin(t * 7 + Double(bar) * 0.8)) : 0.06
+                        Capsule()
+                            .fill(speaking ? Color.mint : Color.secondary.opacity(0.4))
+                            .frame(width: 5, height: 8 + wave * 42)
                     }
                 }
-                Image(systemName: "hand.tap.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.mint)
-                    .opacity(strikes.contains { cycle >= $0 && cycle < $0 + 0.18 } ? 1 : 0.28)
-                    .offset(y: 12)
+                .frame(height: 52)
+                Text(item.phrase)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.secondary.opacity(0.14)))
+                    .opacity(cycle > 0.3 && cycle < 3.0 ? 1 : 0.25)
             }
+            Image(systemName: "arrow.right")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(heard ? Color.mint : Color.secondary.opacity(0.4))
             VStack(spacing: 6) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(recognized ? Color.mint.opacity(0.3) : Color.secondary.opacity(0.12))
+                        .fill(heard ? Color.mint.opacity(0.3) : Color.secondary.opacity(0.12))
                         .frame(width: 44, height: 44)
-                    Text("\(count)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(recognized ? Color.mint : Color.secondary)
-                        .contentTransition(.numericText())
+                    Image(systemName: item.icon)
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(heard ? Color.mint : Color.secondary)
                 }
-                Text(recognized ? String(localized: "Double tap") : (count > 0 ? String(localized: "Counting") : String(localized: "Waiting")))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text(item.result)
+                    .font(.caption)
+                    .foregroundStyle(heard ? .primary : .secondary)
             }
+            .frame(minWidth: 96)
         }
-        .frame(maxWidth: .infinity)
-        .animation(.easeInOut(duration: 0.25), value: count)
     }
 }
 
@@ -2678,7 +2721,8 @@ private struct CursorRegionsDemo: View {
     }
     @ViewBuilder private func content(at t: TimeInterval) -> some View {
         let phase = (sin(t * 1.1) + 1) / 2          // 0...1 sweep
-        let inside = phase > 0.62
+        // When the tip crosses the border, not before.
+        let inside = phase > 0.76
         HStack(spacing: 24) {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 8)

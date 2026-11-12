@@ -127,6 +127,13 @@ enum HIDDescriptorParser {
         var fieldsByReport: [Int?: [Field]] = [:]
         var cursorByReport: [Int?: Int] = [:]
         var arraysByReport: [Int?: [ArrayInput]] = [:]
+        // The per-item caps above still let a crafted descriptor repeat
+        // INPUT thousands of times and allocate millions of fields, which
+        // stalls the main actor at attach. Past these ceilings the rest of
+        // the descriptor is dropped and what was read so far is returned.
+        let maxFieldsTotal = 4096
+        let maxReportBits = 64 * 1024 * 8
+        var fieldTotal = 0
 
         let bytes = Array(descriptor)
         var i = 0
@@ -236,6 +243,23 @@ enum HIDDescriptorParser {
                             cursorByReport[id, default: 0] += orphanCursor
                         }
                         cursorByReport[Int?.none] = nil
+                    }
+                    // Past the field cap or the bit cap, what was read so far
+                    // is kept and the rest of the descriptor is ignored (a
+                    // truncation, not a rejection): buildLayout works from
+                    // whatever fields a report has, so a huge descriptor
+                    // still gives its first controls. Both are checked here,
+                    // after the orphan merge, so a truncation never leaves
+                    // orphan fields under the nil key and the bit cap holds
+                    // for the merged cursor.
+                    if !isConstant && isVariable {
+                        fieldTotal += g.reportCount
+                        if fieldTotal > maxFieldsTotal {
+                            return (fieldsByReport, cursorByReport, arraysByReport)
+                        }
+                    }
+                    if cursorByReport[g.reportID, default: 0] + totalBits > maxReportBits {
+                        return (fieldsByReport, cursorByReport, arraysByReport)
                     }
 
                     if !isConstant && isVariable {

@@ -1,23 +1,93 @@
 import SwiftUI
 import AppKit
 import os
+import Combine
+
+/// Launch intervals and events for Instruments' Points of Interest (App
+/// Launch template). Nothing is recorded while Instruments is not, so they
+/// stay in Release. They settle whether the bus services start before or
+/// after the first frame before anything moves them.
+enum LaunchSignpost {
+    static let signposter = OSSignposter(subsystem: "com.inputconfig.app", category: .pointsOfInterest)
+
+    @discardableResult
+    static func measure<T>(_ name: StaticString, _ body: () throws -> T) rethrows -> T {
+        let state = begin(name)
+        defer { end(name, state) }
+        return try body()
+    }
+
+    static func begin(_ name: StaticString) -> OSSignpostIntervalState { note("begin", name); return signposter.beginInterval(name) }
+    static func end(_ name: StaticString, _ state: OSSignpostIntervalState) { note("end", name); signposter.endInterval(name, state) }
+    static func event(_ name: StaticString) { note("event", name); signposter.emitEvent(name) }
+
+    /// An event for the first time only, for points in code that runs
+    /// again later (a view's body, an onAppear). Written `let _ =` in a body.
+    @discardableResult
+    static func once(_ name: StaticString) -> Bool {
+        guard seen.withLock({ $0.insert("\(name)").inserted }) else { return false }
+        event(name)
+        return true
+    }
+    private static let seen = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    /// DEBUG, with IC_LAUNCH_LOG set: the same points with their times, to
+    /// tmp/launch-points.txt, where Instruments records none of them.
+    /// Appended a line at a time: rewriting the whole file atomically at
+    /// every point cost more than some of the steps it timed.
+    private static func note(_ kind: String, _ name: StaticString) {
+        #if DEBUG
+        guard logPoints else { return }
+        let line = String(format: "%.2f %@ %@\n", (CACurrentMediaTime() - startedAt) * 1000, kind, "\(name)")
+        pointsLock.lock(); pointsFile?.write(Data(line.utf8)); pointsLock.unlock()
+        #endif
+    }
+    #if DEBUG
+    private static let logPoints = ProcessInfo.processInfo.environment["IC_LAUNCH_LOG"] != nil
+    private static let pointsLock = NSLock()
+    /// Emptied when the first point is written, then kept open.
+    private static let pointsFile: FileHandle? = {
+        let path = NSTemporaryDirectory() + "launch-points.txt"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
+    /// The process start, from the kernel, so the first point is not zero.
+    private static let startedAt: CFTimeInterval = {
+        var info = kinfo_proc(), size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return CACurrentMediaTime() }
+        let start = info.kp_proc.p_starttime
+        let startDate = Double(start.tv_sec) + Double(start.tv_usec) / 1e6
+        return CACurrentMediaTime() - (Date().timeIntervalSince1970 - startDate)
+    }()
+    #endif
+}
 
 @MainActor
 final class AppState: ObservableObject {
-    let presetStore = PresetStore()
-    let controllerService = GameControllerService()
-    let eightBitDoDetector = EightBitDoDetector()
+    // Each step timed for the launch log (LaunchSignpost); the first
+    // also marks when SwiftUI starts making the app state.
+    let presetStore = LaunchSignpost.measure("PresetStore.init") { PresetStore() }
+    let controllerService = LaunchSignpost.measure("GameControllerService.init") { GameControllerService() }
+    let eightBitDoDetector = LaunchSignpost.measure("EightBitDo.init") { EightBitDoDetector() }
     lazy var mappingEngine = MappingEngine(controllerService: controllerService)
-    let crashRecovery = CrashRecoveryService.shared
-    let freezeWatchdog = FreezeWatchdogService.shared
-    let externalInput = ExternalInputDeviceService.shared
-    let accessibility = AccessibilityPermissionService.shared
+    let crashRecovery = LaunchSignpost.measure("CrashRecovery.init") { CrashRecoveryService.shared }
+    let freezeWatchdog = LaunchSignpost.measure("FreezeWatchdog.init") { FreezeWatchdogService.shared }
+    let externalInput = LaunchSignpost.measure("ExternalInput.init") { ExternalInputDeviceService.shared }
+    let accessibility = LaunchSignpost.measure("Accessibility.init") { AccessibilityPermissionService.shared }
     /// Created at launch, not when the tip jar first opens: its StoreKit
     /// transaction listener has to run all the time to finish purchases
     /// approved later (Ask to Buy) and renewals.
-    let tipJar = TipJarService.shared
+    let tipJar = LaunchSignpost.measure("TipJar.init") { TipJarService.shared }
+
+    /// The live app state, for the App Intents (Siri, Shortcuts, Spotlight,
+    /// Voice Control) that start and stop presets from outside the window.
+    static weak var current: AppState?
 
     init() {
+        let launchInterval = LaunchSignpost.begin("AppState.init")
+        defer { LaunchSignpost.end("AppState.init", launchInterval) }
+        Self.current = self
         // Registered (volatile) defaults, applied whenever a key is unset.
         // Polling defaults to the power-source auto-switch mode so a fresh
         // install already adapts its rate to AC vs battery; the engine reads
@@ -47,7 +117,10 @@ final class AppState: ObservableObject {
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         // The keyboard layout's labels before anything names a key: the
         // emergency stop registers below and names its chord in an alert.
-        _ = KeyboardLayoutService.shared
+        LaunchSignpost.measure("KeyboardLayout.init") { _ = KeyboardLayoutService.shared }
+        // The review ask counts launches and its ten quiet minutes from
+        // launch, not from the first preset activation that reached it.
+        _ = ReviewPromptService.shared
         // Boot the freeze watchdog before any heavy work runs - this is the
         // earliest place the main actor is alive, so we get the most
         // accurate "main thread responsiveness" baseline.
@@ -76,7 +149,9 @@ final class AppState: ObservableObject {
         // because you believe you have one. Carbon hot keys are exclusive per
         // process, so another app (or a second copy of this one) holding the
         // same chord makes this fail quietly.
-        let stopShortcutTaken = !EmergencyStopService.shared.refreshRegistration()
+        let stopShortcutTaken = LaunchSignpost.measure("EmergencyStop.register") {
+            !EmergencyStopService.shared.refreshRegistration()
+        }
         // Keys a crashed run left held are let go first. If the user
         // hasn't opted out of session restore, the preset that was running
         // is offered again below, deferred to the next run-loop tick so
@@ -99,14 +174,32 @@ final class AppState: ObservableObject {
         // all, and all of this hung off the window's onAppear: the app ran
         // with no menu bar item, no auto-switch and no preset migrations.
         // Each call is safe to repeat when the window appears.
+        // The engine is made here (the capture list), timed on its own.
+        let mappingEngine = LaunchSignpost.measure("MappingEngine.init") { self.mappingEngine }
         DispatchQueue.main.async { [presetStore, mappingEngine, controllerService] in
-            presetStore.reseedExamplePresets()
-            presetStore.restoreBuiltInsIfLibraryLost()
-            MenuBarController.shared.install(presetStore: presetStore,
-                                             mappingEngine: mappingEngine,
-                                             controllerService: controllerService)
-            FrontmostAppWatcher.shared.install(presetStore: presetStore, mappingEngine: mappingEngine)
-            LegacyRowCheck.shared.install(store: presetStore, service: controllerService)
+            let reseedInterval = LaunchSignpost.begin("Reseed")
+            defer { LaunchSignpost.end("Reseed", reseedInterval) }
+            LaunchSignpost.measure("Reseed.presets") {
+                presetStore.reseedExamplePresets()
+                presetStore.restoreBuiltInsIfLibraryLost()
+            }
+            // Siri learns the preset names for its phrases.
+            AppShortcutsRefresh.schedule()
+            LaunchSignpost.measure("MenuBar.install") {
+                MenuBarController.shared.install(presetStore: presetStore,
+                                                 mappingEngine: mappingEngine,
+                                                 controllerService: controllerService)
+            }
+            LaunchSignpost.measure("FrontmostApp.install") {
+                FrontmostAppWatcher.shared.install(presetStore: presetStore, mappingEngine: mappingEngine)
+            }
+            LaunchSignpost.measure("ConnectWatcher.install") {
+                ControllerConnectWatcher.shared.install(presetStore: presetStore, mappingEngine: mappingEngine,
+                                                        controllerService: controllerService)
+            }
+            LaunchSignpost.measure("LegacyRowCheck.install") {
+                LegacyRowCheck.shared.install(store: presetStore, service: controllerService)
+            }
             if !UserDefaults.standard.bool(forKey: "InputConfig.showDockIcon") {
                 NSApplication.shared.setActivationPolicy(.accessory)
             }
@@ -166,29 +259,56 @@ final class AppState: ObservableObject {
                 // can take longer than 20 seconds, so it waits a minute. Not
                 // longer: the switches Switch Control scans with may be the
                 // very preset this alert holds back.
+                // Only this alert's loop: a Could Not Save alert opened over
+                // it (a full disk) was aborted instead, and the countdown
+                // then never ended. It waits for that one to close.
+                func abortWhenOnTop() {
+                    if NSApp.modalWindow === alert.window { NSApp.abortModal(); return }
+                    let again = Timer(timeInterval: 1, repeats: false) { _ in MainActor.assumeIsolated { abortWhenOnTop() } }
+                    RunLoop.main.add(again, forMode: .modalPanel)
+                }
                 let timeout = Timer(timeInterval: assistive ? 60 : 20, repeats: false) { _ in
-                    NSApp.abortModal()
+                    MainActor.assumeIsolated { abortWhenOnTop() }
                 }
                 RunLoop.main.add(timeout, forMode: .modalPanel)
                 // An Emergency Stop during the countdown counts as Not Now:
                 // the preset it stopped started by itself 20 seconds later.
-                final class Flag { var stopped = false }
-                let flag = Flag()
+                let stopped = OSAllocatedUnfairLock(initialState: false)
                 let stopObserver = NotificationCenter.default.addObserver(
                     forName: EmergencyStopService.stoppedNotification, object: nil, queue: nil
                 ) { _ in
-                    flag.stopped = true
-                    NSApp.abortModal()
+                    // Posted from whichever thread stopped; the modal loop
+                    // services the main queue.
+                    stopped.withLock { $0 = true }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { NSApp.abortModal() } }
                 }
                 // A preset started meanwhile (auto-switch, a shortcut) is the
                 // one wanted now: the countdown no longer puts the old one
                 // back over it.
+                // Stop Preset from Siri or a shortcut counts the same way.
+                let declineObserver = NotificationCenter.default.addObserver(
+                    forName: CrashRecoveryService.declineRestartNotification, object: nil, queue: nil
+                ) { _ in
+                    stopped.withLock { $0 = true }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { NSApp.abortModal() } }
+                }
+                // Started by Siri, a shortcut or auto-switch: the alert goes,
+                // rather than counting down to nothing.
+                let startObserver = NotificationCenter.default.addObserver(
+                    forName: MappingEngine.didStartNotification, object: nil, queue: nil
+                ) { _ in
+                    DispatchQueue.main.async { MainActor.assumeIsolated { abortWhenOnTop() } }
+                }
                 let runningBefore = presetStore.activePresetId
+                crashRecovery.restartOffered = preset.shownName
                 let answer = alert.runModal()
+                crashRecovery.restartOffered = nil
                 timeout.invalidate()
                 NotificationCenter.default.removeObserver(stopObserver)
+                NotificationCenter.default.removeObserver(declineObserver)
+                NotificationCenter.default.removeObserver(startObserver)
                 let startedMeanwhile = presetStore.activePresetId != runningBefore && presetStore.activePresetId != nil
-                if !flag.stopped, !startedMeanwhile, answer == .alertFirstButtonReturn || answer == .abort {
+                if !stopped.withLock({ $0 }), !startedMeanwhile, answer == .alertFirstButtonReturn || answer == .abort {
                     ActivityLog.shared.warning("Recovery", "InputConfig ended unexpectedly last time; started \(preset.name) again")
                     crashRecovery.markRestarted()
                     // In the background: no second, untimed alert about
@@ -196,6 +316,7 @@ final class AppState: ObservableObject {
                     MenuBarController.activate(preset, store: presetStore, engine: mappingEngine, background: true)
                 } else {
                     ActivityLog.shared.info("Recovery", "InputConfig ended unexpectedly last time; left \(preset.name) off")
+                    if startedMeanwhile { crashRecovery.markRestarted() }
                 }
             }
           }
@@ -228,8 +349,11 @@ final class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.gracefulShutdown()
+            MainActor.assumeIsolated { self?.gracefulShutdown() }
         }
+        // A tour that never ended (a quit or crash mid-tour) gives back the
+        // preset it borrowed, as the fake controller's flag is cleared.
+        ContentView.restoreLeftoverTourBorrow(in: presetStore)
     }
 
     /// Show or hide the app's Dock icon (and, with it, the top menu bar and
@@ -237,11 +361,23 @@ final class AppState: ObservableObject {
     /// The caller guarantees at least one of {Dock icon, menu bar icon} stays
     /// visible so the app is always reachable.
     static func applyDockIconVisible(_ visible: Bool) {
+        // Nothing to redraw when the policy was already in place.
+        let before = NSApp.activationPolicy()
         NSApp.setActivationPolicy(visible ? .regular : .accessory)
+        guard NSApp.activationPolicy() != before else { return }
         // Re-activate on BOTH paths: switching to .accessory otherwise drops
         // the app behind whatever is next, which reads as the window
         // vanishing the moment the toggle is flipped. One runloop turn lets
         // the policy change land first.
+        // Back to .regular, the app is still the active app, so nothing
+        // tells the menu bar to draw the app's menus: it stayed blank until
+        // another app was in front. Stepping out and back in redraws it.
+        if visible {
+            NSApp.deactivate()
+            if let front = NSWorkspace.shared.frontmostApplication, front != .current {
+                NSApp.yieldActivation(to: front)
+            }
+        }
         DispatchQueue.main.async {
             NSApp.activate()
         }
@@ -284,7 +420,11 @@ final class AppState: ObservableObject {
             // the main thread.
             Thread.sleep(forTimeInterval: 3)
             if !mainStarted.withLock({ $0 }) {
-                InputSimulator.shared.releaseAll()
+                // Not releaseAll: its held sets are main-thread only. The
+                // sweep uses the app's own lock-guarded record of what it
+                // posted down, so a key the person holds stays theirs.
+                MouseMotionPump.shared.stop()
+                InputSimulator.shared.releaseOwnPostedLeftovers()
                 _exit(0)
             }
             Thread.sleep(forTimeInterval: 7)
@@ -299,9 +439,13 @@ final class AppState: ObservableObject {
         let me = ProcessInfo.processInfo.processIdentifier
         // Checked with the kernel, not only the running applications list,
         // which this early is a snapshot that can still hold a copy that quit.
+        // Asked by bundle identifier: the same copies as filtering the whole
+        // list, without reading every running app's identifier one by one
+        // (10 to 12 ms with 144 apps open, 1.5 to 2 ms this way, measured on
+        // an M4 Max; it is the first thing every launch does).
         func others() -> [NSRunningApplication] {
-            NSWorkspace.shared.runningApplications.filter {
-                $0.bundleIdentifier == bundleID && $0.processIdentifier != me && AppLanguage.isAlive($0.processIdentifier)
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter {
+                $0.processIdentifier != me && AppLanguage.isAlive($0.processIdentifier)
             }
         }
         // Started by a language change: the copy that started this one is
@@ -448,6 +592,9 @@ final class AppState: ObservableObject {
         //    the last motor level it was sent, so quitting mid-buzz would
         //    otherwise leave it rumbling until it is unplugged.
         InProcessLightWriter.shared.shutdownSynchronously()
+        // The 8BitDo motors are written from their own queue; stop them
+        // before the process goes.
+        RawHIDGamepadService.shared.stopEightBitDoRumble(wait: true)
     }
 }
 
@@ -959,7 +1106,7 @@ private struct ReduceMotionGate: ViewModifier {
     }
 }
 
-// MARK: - Shared design language (see ~/Desktop/Apps/DesignSync)
+// MARK: - Shared design language
 //
 // InputConfig converges on the same visual language as Aura and YapToText:
 // real Liquid Glass cards, one spacing/radius scale, hierarchical SF Symbols,
@@ -1380,7 +1527,15 @@ extension ButtonStyle where Self == GlassCTAButton {
 @MainActor
 final class QuitCoordinator: NSObject, NSApplicationDelegate {
     static weak var shared: QuitCoordinator?
-    private var quitting = false
+    /// True once a quit is under way, so nothing new (an opened preset
+    /// file's review) is put up while the sheets come down.
+    private(set) var quitting = false
+    /// Quit Apple Events (the Dock, a logout, a script) held until the
+    /// quit is decided; see handleQuitEvent. Every one gets the same answer.
+    private var suspendedQuitEvents: [NSAppleEventManager.SuspensionID] = []
+    /// True from a quit's request until its Save alert is answered: a second
+    /// quit then waits for that answer instead of opening a second alert.
+    private var quitAlertUp = false
 
     override init() {
         super.init()
@@ -1388,13 +1543,63 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        LaunchSignpost.event("willFinishLaunching")
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(handleQuitEvent(_:withReply:)),
             forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEQuitApplication))
     }
 
+    /// AppKit refuses terminate(nil) silently while a sheet is up, without
+    /// asking applicationShouldTerminate, and the editor and Settings are
+    /// sheets, so a Dock Quit did nothing at all. With one up the event is
+    /// suspended here and the quit runs as the menu's does: a logout or
+    /// shutdown then waits for the save alert instead of hearing "done" at
+    /// once, and a Cancel there answers it as canceled. A quit event while
+    /// one is being decided (the Save alert up, or the app on its way out)
+    /// waits for the same answer: it opened a second alert over the first,
+    /// or was told "done" while the app stayed. With nothing up the same
+    /// path runs at once, so every quit gets the unwritten-changes check.
     @objc private func handleQuitEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
-        requestQuit()
+        if let id = NSAppleEventManager.shared().suspendCurrentAppleEvent() { suspendedQuitEvents.append(id) }
+        guard !quitAlertUp, !quitting, suspendedQuitEvents.count == 1 else { return }
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated { self.requestQuit() }
+        }
+    }
+
+    /// The answer to every suspended quit event: a clean reply as the app
+    /// goes, or the user-canceled error when it stays.
+    private func answerQuitEvents(canceled: Bool) {
+        let ids = suspendedQuitEvents
+        suspendedQuitEvents = []
+        let manager = NSAppleEventManager.shared()
+        for id in ids {
+            if canceled {
+                manager.replyAppleEvent(forSuspensionID: id)
+                    .setParam(NSAppleEventDescriptor(int32: Int32(userCanceledErr)), forKeyword: AEKeyword(keyErrorNumber))
+            }
+            manager.resume(withSuspensionID: id)
+        }
+    }
+
+    /// The app is staying open after all (Cancel, or a quit refused): the
+    /// quits waiting are told so, and a language restart is off, or any
+    /// later quit, an installer's included, relaunched it.
+    private func stayOpen() {
+        quitting = false
+        quitAlertUp = false
+        AppLanguage.relaunchPending = false
+        UserDefaults.standard.removeObject(forKey: AppLanguage.relaunchPresetKey)
+        answerQuitEvents(canceled: true)
+        // A file opened during the quit waited for this.
+        OpenedPresetFiles.flush()
+    }
+
+    /// True while a window has a sheet up (Settings, Statistics), which
+    /// macOS treats as a silent refusal to quit.
+    private var sheetIsUp: Bool {
+        let appKitSheets = NSApp.windows.contains { !$0.sheets.isEmpty || $0.sheetParent != nil }
+        return appKitSheets || OpenedPresetFiles.otherSheetIsUp
     }
 
     /// A preset file chosen with Open With, or dropped on the Dock icon. It
@@ -1412,11 +1617,10 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
     /// are closed through their own state (an AppKit endSheet alone left
     /// SwiftUI showing it, and the attached-sheet lookup found nothing on
     /// macOS 27, so Restart Now in Settings did nothing), and the quit is
-    /// tried again if the first try was still refused.
+    /// tried again if the first try was still refused (an editor sheet
+    /// still sliding away after Save). Every quit, with an editor or not,
+    /// ends here, so a refusal is answered only after the last try.
     private func quitTakingSheetsDown() {
-        let appKitSheets = NSApp.windows.contains { !$0.sheets.isEmpty || $0.sheetParent != nil }
-        let anySheet = appKitSheets || OpenedPresetFiles.otherSheetIsUp
-        guard anySheet else { NSApplication.shared.terminate(nil); return }
         quitting = true
         func takeDown() {
             NotificationCenter.default.post(name: .inputConfigCloseSheetsForQuit, object: nil)
@@ -1425,36 +1629,60 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
                 if let parent = window.sheetParent { parent.endSheet(window) }
             }
         }
-        takeDown()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
+        let first = sheetIsUp ? 0.5 : 0
+        if sheetIsUp { takeDown() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + first) {
+            NSApp.terminate(nil)
             // Still running: a sheet was still closing. Once more.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 takeDown()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApplication.shared.terminate(nil) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NSApp.terminate(nil)
+                    // Still running after the last try (the quit was
+                    // refused): the app is staying open, so opened files
+                    // and the editor are handled as usual again, and a
+                    // quit waiting on us hears it was canceled.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.stayOpen()
+                    }
+                }
             }
         }
     }
 
     /// Close an open editor (saving or discarding as the person chooses),
-    /// then quit once the sheet is gone.
+    /// then quit once the sheet is gone. One at a time: a Cmd-Q, the menu
+    /// bar's Quit or Restart Now while a quit is being decided adds nothing.
     func requestQuit() {
+        guard !quitAlertUp, !quitting else { return }
+        // Text still being typed on the preset page (Notes) is written
+        // before the quit waits for the queued writes: its half-second
+        // commit otherwise came after that wait and could be lost.
+        NotificationCenter.default.post(name: .inputConfigCommitDrafts, object: nil)
         guard let editor = OpenEditor.current else {
-            quitTakingSheetsDown()
+            // A quit with no editor open gets the same check: a sidebar
+            // rename on a full disk was lost with no word.
+            quitAlertUp = true
+            let go = savedOrAskedToQuit()
+            quitAlertUp = false
+            if go { quitTakingSheetsDown() }
             return
         }
+        quitAlertUp = true
         // A number still being typed is committed first, so it is saved, or
         // counts as a change to ask about. The field sits on the editor's
         // sheet, which is not the key window when Settings is in front, so
         // every sheet ends its editing; the value lands on the next turn
         // (the editor's own Save waits the same way, commitFieldsThen), and
-        // the alert then runs from a run loop block as applicationShouldTerminate asks.
-        EditorInlineEdit.commit?()
+        // the alert then runs from a run loop block in the common modes,
+        // where a modal panel's loop still runs it.
+        EditorInlineEdit.commitField()
+        editor.edit { EditorInlineEdit.commitPanes(in: &$0) }
         for window in NSApp.windows where window.isKeyWindow || window.sheetParent != nil {
             window.makeFirstResponder(nil)
         }
         DispatchQueue.main.async {
-            RunLoop.main.perform(inModes: [.default]) {
+            RunLoop.main.perform(inModes: [.common]) {
                 MainActor.assumeIsolated { self.finishQuit(editor) }
             }
         }
@@ -1464,7 +1692,8 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
         if editor.isDirty() {
             let alert = NSAlert()
             alert.messageText = String(localized: "Save your changes to \u{201C}\(editor.name())\u{201D} before quitting?")
-            alert.informativeText = String(localized: "The binding editor is still open. If you do not save, the changes are lost.")
+            alert.informativeText = ([String(localized: "The binding editor is still open. If you do not save, the changes are lost.")]
+                                     + editor.notSaved()).joined(separator: "\n\n")
             alert.addButton(withTitle: String(localized: "Save"))
             alert.addButton(withTitle: String(localized: "Don\u{2019}t Save"))
             alert.addButton(withTitle: String(localized: "Cancel"))
@@ -1474,18 +1703,54 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
             case .alertSecondButtonReturn: editor.discard()
             default:
                 // Cancel keeps the app open, so a pending language restart is off too.
-                AppLanguage.relaunchPending = false
+                stayOpen()
                 return
             }
         } else {
             editor.discard()
         }
         quitting = true
+        quitAlertUp = false
         editor.close()
         // Give SwiftUI a moment to take the sheet down, then quit.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            NSApplication.shared.terminate(nil)
+        answerQuitWhenClear()
+    }
+
+    /// After the sheet's moment, and not while an alert is up: the failed
+    /// save warning runs in the modal panel mode, and quitting under it
+    /// lost the changes with no word. Then the same tries as any quit, so a
+    /// sheet still closing is not read as a refusal.
+    private func answerQuitWhenClear() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard NSApp.modalWindow == nil else { self?.answerQuitWhenClear(); return }
+            // From a run loop block: the alert below is modal.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    guard let self, self.savedOrAskedToQuit() else { return }
+                    self.quitTakingSheetsDown()
+                }
+            }
         }
+    }
+
+    /// The editor's Save is written on a background queue: waited for here,
+    /// and a file the disk would not take is said before the app goes, where
+    /// a second failed save in a session, or one landing after the check,
+    /// was lost with no word. False when the person stays.
+    private func savedOrAskedToQuit() -> Bool {
+        PresetStore.flushPendingWrites()
+        guard PresetStore.unwrittenCount > 0 else { return true }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "InputConfig Could Not Save")
+        alert.informativeText = String(localized: "Some changes could not be written, usually because the disk is full. If you quit now they are lost; stay, free some space, and they are saved by themselves.")
+        alert.addButton(withTitle: String(localized: "Stay Open"))
+        alert.addButton(withTitle: String(localized: "Quit Anyway"))
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertSecondButtonReturn else {
+            stayOpen()
+            return false
+        }
+        return true
     }
 
     /// Closing the main window never quits. With one `Window` scene, SwiftUI
@@ -1500,6 +1765,10 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
     /// no window when it was closed at the last quit, which left a launch
     /// with nothing on screen.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        LaunchSignpost.event("didFinishLaunching")
+        #if DEBUG
+        LaunchClock.markDidFinish()
+        #endif
         CursorSetThrottle.install()
         // Key names follow the keyboard layout from the first row drawn.
         _ = KeyboardLayoutService.shared
@@ -1515,15 +1784,19 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
     /// A language change starts the copy that replaces this one now, when
     /// nothing can cancel the quit any more.
     func applicationWillTerminate(_ notification: Notification) {
+        answerQuitEvents(canceled: false)
         AppLanguage.launchReplacement()
     }
 
+    /// Every quit of the app's own (Cmd-Q, the menu bar, Restart Now, a
+    /// quit Apple Event) goes through requestQuit, which closes the editor
+    /// and the sheets and checks for unwritten changes before it calls
+    /// terminate with `quitting` set. Anything else that reaches here first
+    /// is sent the same way and refused for now; requestQuit quits once
+    /// the checks are done.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if OpenEditor.current != nil && !quitting {
-            // From a run loop block, not the main queue: its modal alert
-            // held the queue, so the Emergency Stop chord could not fire
-            // and the freeze watchdog recorded a freeze.
-            RunLoop.main.perform(inModes: [.default]) {
+        guard quitting else {
+            RunLoop.main.perform(inModes: [.common]) {
                 MainActor.assumeIsolated { self.requestQuit() }
             }
             return .terminateCancel
@@ -1570,6 +1843,8 @@ enum OpenedPresetFiles {
 
     static func flush() {
         guard let handler, !pending.isEmpty else { return }
+        // Nothing opens while the app is quitting; the files stay here.
+        if QuitCoordinator.shared?.quitting == true { return }
         if OpenEditor.current != nil {
             ActivityLog.shared.info("Presets", "A preset file is waiting to be reviewed; it opens when the binding editor closes")
             return
@@ -1603,6 +1878,9 @@ struct OpenEditor {
     static var current: OpenEditor?
     let name: () -> String
     let isDirty: () -> Bool
+    /// Lines Save would leave out (macro text that waits for Apply), for
+    /// Quit's alert to name.
+    let notSaved: () -> [String]
     let save: () -> Void
     let discard: () -> Void
     let close: () -> Void
@@ -1613,6 +1891,39 @@ struct OpenEditor {
     let draft: () -> Preset
     let edit: ((inout Preset) -> Void) -> Void
 }
+
+#if DEBUG
+/// Launch timing for the perf bench: milliseconds from the kernel's start
+/// time for this process (so dyld, static init and AppState count) to
+/// applicationDidFinishLaunching and to the sidebar's first appear, written
+/// to tmp/launch.txt, with a signpost over the same span for Instruments.
+enum LaunchClock {
+    static let signposter = OSSignposter(subsystem: "com.inputconfig.app", category: "launch")
+    static let state = signposter.beginInterval("launch")
+    static let processStart: Double = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return Date().timeIntervalSince1970 }
+        let tv = info.kp_proc.p_un.__p_starttime
+        return Double(tv.tv_sec) + Double(tv.tv_usec) / 1_000_000
+    }()
+    nonisolated(unsafe) static var didFinishMs = 0.0
+    nonisolated(unsafe) static var sidebarMs = 0.0
+    static func sinceStartMs() -> Double { (Date().timeIntervalSince1970 - processStart) * 1000 }
+    static func markDidFinish() { if didFinishMs == 0 { didFinishMs = sinceStartMs() } }
+    /// Once per launch: the sidebar appears again after the window reopens.
+    static func markSidebar() {
+        guard sidebarMs == 0 else { return }
+        sidebarMs = sinceStartMs()
+        signposter.endInterval("launch", state)
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let text = "to_sidebar_ms=\(Int(sidebarMs)) to_didfinish_ms=\(Int(didFinishMs)) build=\(build)\n"
+        try? text.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("launch.txt"),
+                        atomically: true, encoding: .utf8)
+    }
+}
+#endif
 
 @main
 struct InputConfig: App {
@@ -1625,15 +1936,23 @@ struct InputConfig: App {
     @NSApplicationDelegateAdaptor(QuitCoordinator.self) private var quitCoordinator
 
     init() {
+        #if DEBUG
+        // Stamps the launch signpost's start as early as Swift code runs.
+        _ = LaunchClock.state
+        _ = LaunchClock.processStart
+        #endif
         // Before SwiftUI builds the scene graph. From AppState's init, which
         // runs while the graph is being built, the alert's modal run loop
         // let SwiftUI render in the middle of that update, and a second copy
         // crashed (AttributeGraph precondition failure) instead of saying a
         // copy is already running.
+        LaunchSignpost.event("App.init.start")
         AppState.enforceSingleInstance()
+        LaunchSignpost.event("App.init")
     }
 
     var body: some Scene {
+        let _ = LaunchSignpost.once("App.body")
         // One main window. As a WindowGroup, File > New Window (Cmd-N) made
         // a second library window, every broadcast then ran twice (the
         // global shortcut switched a preset on and straight back off), and
@@ -1643,6 +1962,9 @@ struct InputConfig: App {
                 .environmentObject(appState.presetStore)
                 .environmentObject(appState.controllerService)
                 .environmentObject(appState.mappingEngine)
+                // The same engine for the views that only call it (see
+                // unobservedEngine); its children still observe it above.
+                .environment(\.unobservedEngine, appState.mappingEngine)
                 .environmentObject(appState.eightBitDoDetector)
                 // The narrowest the window goes: the home screen's four
                 // showcase columns still read cleanly at this width. The
@@ -1659,11 +1981,22 @@ struct InputConfig: App {
                 .handlesExternalEvents(preferring: Set(["*"]), allowing: Set(["*"]))
                 .onOpenURL { url in OpenedPresetFiles.receive([url]) }
                 .onAppear {
+                    LaunchSignpost.once("Window.onAppear")
+                    // Once the transaction that shows the window has committed.
+                    // The bus services start then, after the first frame
+                    // (a no-op on every later appear).
+                    let controllerService = appState.controllerService
+                    CATransaction.setCompletionBlock {
+                        LaunchSignpost.event("FirstFrame")
+                        RunLoop.main.perform {
+                            MainActor.assumeIsolated { controllerService.startBusServicesOnce() }
+                        }
+                    }
                     #if DEBUG
                     _ = DebugMarketing.shared   // register marketing capture hooks
                     #endif
                     OpenedPresetFiles.handler = { [presetStore = appState.presetStore] urls in
-                        presetStore.previewImports(from: urls)
+                        presetStore.previewImportsOrMacroText(from: urls)
                     }
                     MenuBarController.shared.install(
                         presetStore: appState.presetStore,
@@ -1674,6 +2007,11 @@ struct InputConfig: App {
                         presetStore: appState.presetStore,
                         mappingEngine: appState.mappingEngine
                     )
+                    ControllerConnectWatcher.shared.install(
+                        presetStore: appState.presetStore,
+                        mappingEngine: appState.mappingEngine,
+                        controllerService: appState.controllerService
+                    )
                     // Apply the saved Dock-icon preference now that the window
                     // is up. Defaults to visible (registered in AppState.init).
                     AppState.applyDockIconVisible(
@@ -1683,6 +2021,13 @@ struct InputConfig: App {
         }
         .defaultSize(width: 1300, height: 750)
         .commands {
+            // Settings is a sheet on the main window (MenuBarController
+            // routes there); the standard Cmd-comma opens that same sheet
+            // rather than a second, separate Settings window.
+            CommandGroup(replacing: .appSettings) {
+                Button(String(localized: "Settings") + "\u{2026}") { MenuBarController.shared.openSettings() }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
             // Quit goes through QuitCoordinator so an open editor closes first.
             CommandGroup(replacing: .appTermination) {
                 Button("Quit InputConfig") { QuitCoordinator.shared?.requestQuit() }
@@ -1699,6 +2044,8 @@ struct InputConfig: App {
                 .keyboardShortcut("n", modifiers: .command)
 
                 Button("Duplicate Active Preset") {
+                    // The page saves what is still being typed first.
+                    NotificationCenter.default.post(name: .inputConfigCommitDrafts, object: nil)
                     if let active = appState.presetStore.presets.first(where: { $0.isActive }) {
                         _ = appState.presetStore.duplicatePreset(active)
                     } else {
@@ -1707,6 +2054,13 @@ struct InputConfig: App {
                     }
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                // The preset on paper, in black on white: its drawing, its
+                // notes, and what every control does.
+                Button("Print Preset\u{2026}") { Self.sidebar(.print) }
+                    .keyboardShortcut("p", modifiers: .command)
 
                 Divider()
 
@@ -1727,6 +2081,7 @@ struct InputConfig: App {
             // (Control-Command-S) here itself, and a second one of the app's
             // own showed the same shortcut twice.
             CommandGroup(before: .sidebar) {
+                SimpleViewCommand()
                 Button("Show Statistics") {
                     MenuBarController.shared.postToMainWindow(.inputConfigShowStats)
                 }
@@ -1785,8 +2140,9 @@ struct InputConfig: App {
                 .keyboardShortcut("p", modifiers: [.command, .option])
 
                 Button("Stop All Activity") {
-                    appState.mappingEngine.stop()
-                    appState.presetStore.deactivateAll()
+                    // The one stop: it arms the controller hold for a pointer
+                    // preset, whose pointer is now dead.
+                    MenuBarController.deactivate(store: appState.presetStore, engine: appState.mappingEngine)
                 }
                 .keyboardShortcut(".", modifiers: [.command, .shift])
 
@@ -1830,14 +2186,6 @@ struct InputConfig: App {
                 .keyboardShortcut("t", modifiers: [.command, .option, .shift])
             }
         }
-
-        Settings {
-            SettingsView()
-                .environmentObject(appState.presetStore)
-                .environmentObject(appState.controllerService)
-                .environmentObject(appState.mappingEngine)
-                .appAccessibility()
-        }
     }
 }
 
@@ -1871,11 +2219,41 @@ final class FrontmostAppWatcher {
     /// The preset the watcher itself activated last; if the active preset
     /// differs, the user switched manually and the watcher backs off.
     private var lastAutoActivatedPresetID: UUID?
+    /// An app's switch or stand-down is in effect, so Activate with
+    /// controller leaves it alone rather than starting over it.
+    var holdsSwitch: Bool {
+        guard let last = lastAutoActivatedPresetID else { return false }
+        // A hand switch inside the app ended it, though the record stays
+        // until the app leaves the front.
+        return (last == Self.standDownID && presetStore?.activePresetId == nil) || presetStore?.activePresetId == last
+    }
+    /// This watcher is starting or stopping a preset right now.
+    var isSwitching: Bool { activatingFromWatcher }
+    /// The app the menu bar pop-up is handing the focus back to: its
+    /// return to the front is not a switch. Read and cleared once, and
+    /// only within two seconds: a hand-back macOS refused left it set, and
+    /// a later real switch to that app was taken for it.
+    var skipHandBack: String? {
+        get { skipHandBackAt.map { Date().timeIntervalSince($0) < 2 } == true ? skipHandBackID : nil }
+        set { skipHandBackID = newValue; skipHandBackAt = newValue == nil ? nil : Date() }
+    }
+    private var skipHandBackID: String?
+    private var skipHandBackAt: Date?
+
+    /// The restore point moves on: the preset to come back to was started
+    /// by a controller that has since left.
+    func replaceRestorePoint(_ old: UUID, with new: UUID?) {
+        if autoSwitchedFromPresetID == old { autoSwitchedFromPresetID = new }
+    }
     /// Set by the emergency stop; cleared when a preset is started by hand.
     private var holdAfterEmergencyStop = false
     private var activatingFromWatcher = false
     private var emergencyObserver: NSObjectProtocol?
     private var startObserver: NSObjectProtocol?
+    private var defaultsObserver: NSObjectProtocol?
+    /// The toggle as last seen, so a defaults change that did not touch
+    /// it is not a re-evaluation.
+    private var lastEnabled = false
 
     private init() {}
 
@@ -1914,20 +2292,65 @@ final class FrontmostAppWatcher {
                 self.holdAfterEmergencyStop = false
             }
         }
+        // The toggle turned on in Settings applies to the app already in
+        // front, not only to the next switch.
+        lastEnabled = UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: UserDefaults.standard, queue: nil
+        ) { [weak self] _ in
+            // Posted on the writer's thread, which a main-queue observer
+            // made wait for main (the freeze watchdog's stamp, mid hang).
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let enabled = UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
+                guard enabled != self.lastEnabled else { return }
+                self.lastEnabled = enabled
+                if enabled {
+                    self.evaluateFrontmostApp()
+                } else {
+                    // Off: what runs is the person's from here, as the
+                    // controller watcher does; turned back on later, the
+                    // old switch must not unwind a preset run since.
+                    self.lastAutoActivatedPresetID = nil
+                    self.autoSwitchedFromPresetID = nil
+                }
+            }
+        }
+        // The app in front at install (a game already running when
+        // InputConfig launched at login) counts as well.
+        evaluateFrontmostApp()
     }
+
+    /// Treat the app in front now as if it had just come to the front.
+    private func evaluateFrontmostApp() {
+        handleFrontmost(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    }
+
+    /// What held the watcher back ended (a take, the open editor): the app
+    /// in front is looked at now, not at the next switch.
+    func recheck() { evaluateFrontmostApp() }
 
     /// Stands for "stepped aside for an app whose preset binds nothing" in
     /// lastAutoActivatedPresetID, while no preset is active.
     private static let standDownID = UUID(uuidString: "00000000-0000-0000-0000-00000000A5D0")!
     /// The lock screen, the screen saver and system prompts come to the
-    /// front without being an app the user switched to.
-    private static let systemOverlays: Set<String> = [
+    /// front without being an app the user switched to. The engine's
+    /// Only in these apps gate skips them too.
+    nonisolated static let systemOverlays: Set<String> = [
         "com.apple.loginwindow", "com.apple.ScreenSaver.Engine",
         "com.apple.SecurityAgent", "com.apple.UserNotificationCenter",
         "com.apple.accessibility.universalAccessAuthWarn",
     ]
 
     private func handleFrontmost(bundleID: String?) {
+        let handedBack = skipHandBack
+        skipHandBack = nil
+        if let bundleID, bundleID == handedBack { return }
+        // A take hides InputConfig so its target comes forward: that is no
+        // switch, and it started presets under the open editor. The open
+        // editor holds too, as it does the controller watcher: its close
+        // paused or resumed a preset it never judged.
+        guard !MacroRecorderService.shared.isRecording, OpenEditor.current == nil else { return }
         guard UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey),
               let bundleID,
               bundleID != Bundle.main.bundleIdentifier,
@@ -1941,8 +2364,13 @@ final class FrontmostAppWatcher {
         guard !holdAfterEmergencyStop else { return }
         // In sidebar order, so the preset higher in the sidebar wins when two
         // list the same app.
+        // Loop protection kept a preset off this launch; auto-switch must
+        // not start the same one the moment its app comes to the front.
+        let skippedLoop = CrashRecoveryService.shared.skippedLoopPresetID
+        let wanted = bundleID.lowercased()
         if let match = store.presetsInSidebarOrder.first(where: { preset in
-            (preset.automation.autoActivateBundleIDs ?? []).contains(bundleID)
+            preset.id != skippedLoop
+                && (preset.automation.autoActivateBundleIDs ?? []).contains { $0.lowercased() == wanted }
         }) {
             // A preset with nothing bound means "step aside here" (a game
             // that reads the controller itself, as Help suggests): whatever
@@ -1956,8 +2384,10 @@ final class FrontmostAppWatcher {
                 if lastAutoActivatedPresetID == nil || store.activePresetId != lastAutoActivatedPresetID {
                     autoSwitchedFromPresetID = store.activePresetId
                 }
+                activatingFromWatcher = true
                 engine.stop()
                 store.deactivateAll()
+                activatingFromWatcher = false
                 lastAutoActivatedPresetID = Self.standDownID
                 ActivityLog.shared.info("Presets", "Stepped aside because an app listed for \"\(match.name)\" came to the front and it binds nothing")
                 return
@@ -1984,6 +2414,9 @@ final class FrontmostAppWatcher {
                 return
             }
             lastAutoActivatedPresetID = match.id
+            // Started after a recovered launch: a crash inside the minute
+            // and a half counts toward the loop, as the controller watcher's.
+            CrashRecoveryService.shared.markRestartedOnce()
             ActivityLog.shared.info("Presets", "Auto-switched to \"\(match.name)\" because one of its apps came to the front")
         } else if let lastAuto = lastAutoActivatedPresetID {
             // Only unwind an ACTIVE auto switch; if the user changed presets
@@ -1992,6 +2425,7 @@ final class FrontmostAppWatcher {
             guard store.activePresetId == lastAuto || standingDown else {
                 lastAutoActivatedPresetID = nil
                 autoSwitchedFromPresetID = nil
+                ControllerConnectWatcher.shared.recheck()
                 return
             }
             if let backID = autoSwitchedFromPresetID,
@@ -2000,11 +2434,344 @@ final class FrontmostAppWatcher {
                 MenuBarController.activate(back, store: store, engine: engine, background: true)
                 activatingFromWatcher = false
             } else if !standingDown {
+                activatingFromWatcher = true
                 engine.stop()
                 store.deactivateAll()
+                activatingFromWatcher = false
             }
             lastAutoActivatedPresetID = nil
             autoSwitchedFromPresetID = nil
+            ControllerConnectWatcher.shared.recheck()
         }
+    }
+}
+
+/// Activate with controller: a preset that lists a controller starts when
+/// that controller connects, and steps aside when the last of its listed
+/// controllers disconnects, bringing back what ran before. Gated by the
+/// same automatic switching toggle as Activate with app. A manual switch
+/// in between clears the memory, so the watcher never undoes a choice.
+@MainActor
+final class ControllerConnectWatcher {
+    static let shared = ControllerConnectWatcher()
+
+    private weak var presetStore: PresetStore?
+    private weak var mappingEngine: MappingEngine?
+    private weak var controllerService: GameControllerService?
+    private var subscriptions: [AnyCancellable] = []
+    private var observers: [NSObjectProtocol] = []
+    /// The controllers seen at the last look, by name and count; slots are
+    /// renumbered when a pad arrives, so a name seen more often is a connect.
+    private var knownNames: [String: Int] = [:]
+    /// The preset this watcher started, and what ran before it.
+    private var autoActivatedPresetID: UUID?
+    private var switchedFromPresetID: UUID?
+    /// Set by the emergency stop; cleared when a preset is started by hand.
+    private var holdAfterEmergencyStop = false
+    private var activating = false
+    private var pending: DispatchWorkItem?
+    /// Until then a change only updates knownNames: the pads already
+    /// connected at launch, after a wake or as the Quick Tour ends are not
+    /// arrivals (one started a preset during the crash-restore alert).
+    private var quietUntil = Date.distantPast
+    /// A quiet spell runs on while the listing keeps changing, up to here.
+    private var quietCap = Date.distantPast
+    /// When each name was last seen leaving, so a pad back within two
+    /// minutes (a Bluetooth drop, an idle disconnect) is a reconnect.
+    private var departedAt: [String: Date] = [:]
+    /// The preset this watcher brought back as its controller left; a
+    /// reconnect may replace it, as it may replace nothing running.
+    private var restoredPresetID: UUID?
+    /// When each name was first seen, or last started its preset.
+    private var connectedAt: [String: Date] = [:]
+    /// The last start this watcher and the app watcher had no hand in.
+    private var handChosenAt: Date?
+    private var lastStartedID: UUID?
+    /// Pads that arrived while an app's switch held, and when: looked at
+    /// again when it ends, or a pad turned on in a game waited for a replug.
+    private var deferredArrivals: [String: Date] = [:]
+
+    private init() {}
+
+    /// A change arrives only while nothing is holding the listing still.
+    nonisolated static func isListening(now: Date, quietUntil: Date, tourPad: Bool, restoreAlertUp: Bool) -> Bool {
+        !tourPad && !restoreAlertUp && now >= quietUntil
+    }
+
+    /// A pad seen before that comes back: within two minutes (a Bluetooth
+    /// drop), or at any time with a preset chosen by hand since it
+    /// connected (an idle disconnect, then a press of its PS button).
+    /// A pad that waited out an app's switch was never seen leaving; it
+    /// counts as back when a preset was chosen by hand since it connected.
+    nonisolated static func isReconnect(now: Date, departed: Date?, connected: Date?, handChosen: Date?, deferred: Bool = false) -> Bool {
+        guard let departed else {
+            guard deferred, let handChosen else { return false }
+            return handChosen > (connected ?? .distantPast)
+        }
+        if now.timeIntervalSince(departed) < 120 { return true }
+        guard let handChosen else { return false }
+        return handChosen > (connected ?? .distantPast)
+    }
+
+    enum ArrivalAction { case start, wait, leave }
+
+    /// What an arrival does: an app's switch makes it wait; a reconnect
+    /// may start its preset over nothing or what this watcher brought back.
+    nonisolated static func arrivalAction(appHolds: Bool, reconnect: Bool, active: UUID?, restored: UUID?) -> ArrivalAction {
+        if appHolds { return .wait }
+        if reconnect, let active, active != restored { return .leave }
+        return .start
+    }
+
+    /// The waiting arrivals still to look at once an app's switch ends: a
+    /// preset chosen by hand while they waited stands (the person picked
+    /// one inside the game, then left it, and the pad's preset replaced it).
+    nonisolated static func releasedArrivals(_ deferred: [String: Date], handChosen: Date?) -> Set<String> {
+        Set(deferred.filter { entry in handChosen.map { $0 <= entry.value } ?? true }.keys)
+    }
+
+    /// Something another watcher did may have freed a waiting arrival.
+    func recheck() { schedule() }
+
+    /// Paired controllers were just asked to connect (at launch, at wake,
+    /// as a preset starts): what lists in the next seconds is a pad coming
+    /// back, not an arrival, whenever its link takes.
+    func reconnectsRequested() { quiet(for: 6) }
+
+    private func quiet(for seconds: TimeInterval) {
+        let now = Date()
+        quietUntil = max(quietUntil, now.addingTimeInterval(seconds))
+        quietCap = max(quietCap, now.addingTimeInterval(seconds + 10))
+        schedule()
+    }
+
+    private func forgetSwitch() {
+        autoActivatedPresetID = nil
+        switchedFromPresetID = nil
+        restoredPresetID = nil
+    }
+
+
+    func install(presetStore: PresetStore, mappingEngine: MappingEngine, controllerService: GameControllerService) {
+        guard subscriptions.isEmpty else { return }
+        self.presetStore = presetStore
+        self.mappingEngine = mappingEngine
+        self.controllerService = controllerService
+        // Every way a controller arrives or leaves: game controllers, raw
+        // HID pads, the Steam Controller, wheels, and pads set to ignore.
+        let changes: [AnyPublisher<Void, Never>] = [
+            controllerService.$controllerDetails.map { _ in () }.eraseToAnyPublisher(),
+            controllerService.$rawHIDGamepadSlots.map { _ in () }.eraseToAnyPublisher(),
+            controllerService.$steamControllerSlot.map { _ in () }.eraseToAnyPublisher(),
+            controllerService.$racingWheelSlots.map { _ in () }.eraseToAnyPublisher(),
+            controllerService.$ignoredDevices.map { _ in () }.eraseToAnyPublisher(),
+        ]
+        for change in changes {
+            subscriptions.append(change.receive(on: DispatchQueue.main).sink { [weak self] in self?.schedule() })
+        }
+        // The tour's fake DualSense Edge comes and goes in slot 0.
+        subscriptions.append(controllerService.$tutorialFakeControllerActive.dropFirst()
+            .receive(on: DispatchQueue.main).sink { [weak self] _ in self?.quiet(for: 2) })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.quiet(for: 5) }
+        })
+        // A preset stopped by hand, or another one started (by hand, the
+        // app watcher or a shortcut), ends this watcher's switch: an unplug
+        // later must not stop or replace that choice.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: MappingEngine.didStopNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // The app watcher's switch keeps this memory: it comes back
+                // to this preset, and an unplug then still has to count.
+                guard let self, !self.activating, !FrontmostAppWatcher.shared.isSwitching else { return }
+                self.forgetSwitch()
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: EmergencyStopService.stoppedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.holdAfterEmergencyStop = true
+                self?.forgetSwitch()
+                self?.deferredArrivals = [:]
+            }
+        })
+        // Automatic switching turned off: what this watcher started is the
+        // person's at once, not at the next look.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: UserDefaults.standard, queue: nil
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, !UserDefaults.standard.bool(forKey: FrontmostAppWatcher.enabledDefaultsKey) else { return }
+                self.forgetSwitch()
+                // Released hours later, it started a preset "because its
+                // controller connected".
+                self.deferredArrivals = [:]
+            }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: MappingEngine.didStartNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let active = self.presetStore?.activePresetId
+                let changed = active != self.lastStartedID
+                self.lastStartedID = active
+                guard !self.activating, !FrontmostAppWatcher.shared.isSwitching else { return }
+                self.holdAfterEmergencyStop = false
+                if changed { self.handChosenAt = Date() }
+                // A reload of the same preset posts this too and changes
+                // nothing: the app watcher's switch keeps this watcher's
+                // restore memory on purpose, so only another preset forgets it.
+                guard changed else { return }
+                if let auto = self.autoActivatedPresetID ?? self.restoredPresetID,
+                   self.presetStore?.activePresetId != auto { self.forgetSwitch() }
+            }
+        })
+        // Past the 4 s adoption grace of raw pads, which publish at about
+        // 4.5 s and are no arrival. A paired pad's reconnect has no fixed
+        // time: asking for it quiets the watcher again (reconnectsRequested).
+        quiet(for: 6)
+    }
+
+    /// A pad's name and details arrive a moment after it connects, so the
+    /// look waits for them to settle.
+    private func schedule() {
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.evaluate() } }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// The slots a listed name reads, leaving out ignored pads.
+    private func liveSlots(named name: String, in service: GameControllerService) -> [Int] {
+        service.matchingSlots(forDeviceNamed: name).filter { !service.isIgnored(slot: $0) }
+    }
+
+    private func evaluate() {
+        guard let store = presetStore, let engine = mappingEngine, let service = controllerService else { return }
+        let slots = Set(service.controllerDetails.keys).union(service.rawHIDGamepadSlots.keys)
+            .filter { !service.isIgnored(slot: $0) }
+        func name(_ slot: Int) -> String? {
+            (service.controllerDetails[slot]?.name ?? service.rawHIDGamepadSlots[slot]?.productName)?.lowercased()
+        }
+        var names: [String: Int] = [:]
+        for slot in slots { if let n = name(slot) { names[n, default: 0] += 1 } }
+        let now = Date()
+        for (n, count) in knownNames where names[n, default: 0] < count { departedAt[n] = now }
+        for n in names.keys where connectedAt[n] == nil { connectedAt[n] = now }
+        // The tour's pad, the quiet spells and the crash restore alert only
+        // update what is known; a spell ends on a listing that has settled.
+        let restoreAlertUp = CrashRecoveryService.shared.restartOffered != nil
+        if !Self.isListening(now: now, quietUntil: quietUntil, tourPad: service.tutorialFakeControllerActive, restoreAlertUp: restoreAlertUp) {
+            if names != knownNames { quietUntil = max(quietUntil, min(quietCap, now.addingTimeInterval(2))) }
+            knownNames = names
+            if now < quietUntil {
+                let wait = quietUntil.timeIntervalSince(now) + 0.05
+                pending?.cancel()
+                let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.evaluate() } }
+                pending = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+            }
+            return
+        }
+        var arrivedNames = Set(names.filter { $0.value > knownNames[$0.key, default: 0] }.keys)
+        knownNames = names
+        let appHolds = FrontmostAppWatcher.shared.holdsSwitch
+        // The editor holds arrivals too, a take inside it included: a
+        // preset started under it ran on, and the editor's close then paused
+        // or resumed a preset it never judged. The editor's close rechecks.
+        let recording = MacroRecorderService.shared.isRecording || OpenEditor.current != nil
+        var waited: Set<String> = []
+        if !appHolds && !recording {
+            waited = Self.releasedArrivals(deferredArrivals, handChosen: handChosenAt).filter { names[$0] != nil }
+            arrivedNames.formUnion(waited)
+            deferredArrivals = [:]
+        }
+        let reconnect = arrivedNames.contains {
+            Self.isReconnect(now: now, departed: departedAt[$0], connected: connectedAt[$0], handChosen: handChosenAt,
+                             deferred: waited.contains($0))
+        }
+        let arrived = Set(slots.filter { name($0).map(arrivedNames.contains) ?? false })
+
+        // Automatic switching turned off: what this watcher started is the
+        // person's now, and its controller leaving stops nothing.
+        if !UserDefaults.standard.bool(forKey: FrontmostAppWatcher.enabledDefaultsKey) { forgetSwitch() }
+        // Leaving first: the preset this watcher started steps aside once
+        // none of its controllers is connected.
+        if let auto = autoActivatedPresetID {
+            if store.activePresetId != auto {
+                // Switched by hand since: that choice stands. An app's switch
+                // comes back to this preset, unless its controller has left:
+                // then it comes back to what ran before.
+                if !appHolds {
+                    forgetSwitch()
+                } else if let preset = store.presets.first(where: { $0.id == auto }),
+                          !(preset.automation.autoActivateControllers ?? []).contains(where: { !liveSlots(named: $0, in: service).isEmpty }) {
+                    let back = switchedFromPresetID
+                    FrontmostAppWatcher.shared.replaceRestorePoint(auto, with: back)
+                    forgetSwitch()
+                    // What the app watcher will bring back counts as this
+                    // watcher's: the pad replugged meanwhile replaces it.
+                    restoredPresetID = back
+                }
+            } else if let preset = store.presets.first(where: { $0.id == auto }),
+                      !(preset.automation.autoActivateControllers ?? []).contains(where: { !liveSlots(named: $0, in: service).isEmpty }) {
+                let back = switchedFromPresetID.flatMap { id in store.presets.first { $0.id == id } }
+                forgetSwitch()
+                if let back, back.isRunnable {
+                    activating = true
+                    MenuBarController.activate(back, store: store, engine: engine, background: true)
+                    activating = false
+                    if store.activePresetId == back.id { restoredPresetID = back.id }
+                } else {
+                    engine.stop()
+                    store.deactivateAll()
+                }
+                ActivityLog.shared.info("Presets", "Stepped aside because the controller for \"\(preset.name)\" disconnected")
+            }
+        }
+
+        guard !arrived.isEmpty,
+              UserDefaults.standard.bool(forKey: FrontmostAppWatcher.enabledDefaultsKey),
+              !holdAfterEmergencyStop else { return }
+        switch Self.arrivalAction(appHolds: appHolds || recording, reconnect: reconnect, active: store.activePresetId, restored: restoredPresetID) {
+        case .wait:
+            // An app's switch or stand-down stands; starting over it made
+            // the app watcher forget its restore point.
+            for n in arrivedNames where deferredArrivals[n] == nil { deferredArrivals[n] = now }
+            return
+        case .leave:
+            return
+        case .start:
+            break
+        }
+        // In sidebar order, so the preset higher in the sidebar wins when two
+        // list the same controller; loop protection's preset is left out.
+        let skippedLoop = CrashRecoveryService.shared.skippedLoopPresetID
+        guard let match = store.presetsInSidebarOrder.first(where: { preset in
+            preset.id != skippedLoop && preset.isRunnable
+                && (preset.automation.autoActivateControllers ?? []).contains { name in
+                    !arrived.isDisjoint(with: liveSlots(named: name, in: service))
+                }
+        }), store.activePresetId != match.id else { return }
+        let before = store.activePresetId
+        activating = true
+        MenuBarController.activate(match, store: store, engine: engine, background: true)
+        activating = false
+        // Refused (an import not yet confirmed): nothing switched.
+        guard store.activePresetId == match.id else { return }
+        // After a crash this start is the restart, so a crash from here is
+        // the loop the protection is for.
+        CrashRecoveryService.shared.markRestartedOnce()
+        // Hopping between two listed controllers keeps the first restore point.
+        if autoActivatedPresetID == nil { switchedFromPresetID = before }
+        autoActivatedPresetID = match.id
+        restoredPresetID = nil
+        for n in arrivedNames { connectedAt[n] = now }
+        ActivityLog.shared.info("Presets", "Activated \"\(match.name)\" because its controller connected")
     }
 }

@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle rettigheter forbeholdt.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig lytter etter stemmefrasene i en forhåndsinnstilling, bare mens den forhåndsinnstillingen kjører eller Stemmefraser-panelet er åpent. Ingenting tas opp eller beholdes.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig gjenkjenner stemmefrasene i en forhåndsinnstilling, på denne maskinen når språket tillater det. Ingenting tas opp eller beholdes.";

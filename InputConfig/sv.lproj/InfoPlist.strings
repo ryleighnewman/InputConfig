@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alla rättigheter förbehållna.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig lyssnar efter röstfraserna i en förinställning, bara medan den förinställningen körs eller dess Röstfraser-panel är öppen. Inget spelas in eller sparas.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig känner igen röstfraserna i en förinställning, på den här datorn när språket tillåter det. Inget spelas in eller sparas.";

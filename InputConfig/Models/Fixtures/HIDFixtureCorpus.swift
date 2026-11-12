@@ -5,7 +5,7 @@ import Foundation
 /// fixtures and one of sequences; add a family here and nowhere else.
 enum HIDFixtureCorpus {
     static var all: [HIDFixture] {
-        access + playStation + xbox + nintendo + valve + elgato + logitech + sim + macroPads + externalInput + output
+        access + playStation + xbox + nintendo + eightBitDo + valve + elgato + logitech + sim + macroPads + externalInput + output
     }
 
     static var sequences: [HIDSequenceFixture] {

@@ -12,12 +12,28 @@ enum HelpLocalizer {
     /// The table for the language the app is showing, loaded once.
     private static let table: [String: String] = {
         let lang = Bundle.main.preferredLocalizations.first ?? "en"
-        guard lang != "en",
-              let folder = Bundle.main.url(forResource: "HelpTranslations", withExtension: nil),
-              let data = try? Data(contentsOf: folder.appendingPathComponent("help-\(lang).json")),
-              let t = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        guard lang != "en", let t = bundledTable("help-\(lang)") else { return [:] }
         return t
     }()
+
+    /// One table from the bundle's HelpTranslations folder, by name
+    /// ("help-fr"). The Pack Text Resources phase ships each as
+    /// <name>.json.lzfse: the plain JSON was 31.6 MB of the app, packed it
+    /// is 9.4 MB, and unpacking one costs under half a millisecond. A plain
+    /// <name>.json still reads, for a build made without that phase.
+    static func bundledTable(_ name: String) -> [String: String]? {
+        guard let folder = Bundle.main.url(forResource: "HelpTranslations", withExtension: nil) else { return nil }
+        let data: Data
+        if let packed = try? Data(contentsOf: folder.appendingPathComponent("\(name).json.lzfse")),
+           let unpacked = try? (packed as NSData).decompressed(using: .lzfse) as Data {
+            data = unpacked
+        } else if let plain = try? Data(contentsOf: folder.appendingPathComponent("\(name).json")) {
+            data = plain
+        } else {
+            return nil
+        }
+        return try? JSONDecoder().decode([String: String].self, from: data)
+    }
 
     /// One string in the app's language.
     static func t(_ s: String) -> String { table[s] ?? s }
@@ -73,6 +89,8 @@ enum HelpLocalizer {
         case .terms(let terms): return .terms(terms.map { HelpTerm(term: t($0.term), detail: t($0.detail)) })
         case .table(let header, let rows): return .table(header: header.map(t), rows: rows.map { $0.map(t) })
         case .questions(let qs): return .questions(qs.map { HelpQuestion(question: t($0.question), answer: t($0.answer)) })
+        // Macro text keeps its English keywords in every language.
+        case .code: return b
         }
     }
 
@@ -97,6 +115,7 @@ enum HelpLocalizer {
                     case .terms(let ts): ts.forEach { add($0.term); add($0.detail) }
                     case .table(let h, let rows): h.forEach(add); rows.forEach { $0.forEach(add) }
                     case .questions(let qs): qs.forEach { add($0.question); add($0.answer) }
+                    case .code: break
                     }
                 }
             }
@@ -127,10 +146,7 @@ extension Array {
 enum ShippedText {
     private static let table: [String: String] = {
         let lang = Bundle.main.preferredLocalizations.first ?? "en"
-        guard lang != "en",
-              let folder = Bundle.main.url(forResource: "HelpTranslations", withExtension: nil),
-              let data = try? Data(contentsOf: folder.appendingPathComponent("presets-\(lang).json")),
-              let t = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        guard lang != "en", let t = HelpLocalizer.bundledTable("presets-\(lang)") else { return [:] }
         return t
     }()
 
@@ -192,10 +208,7 @@ enum ShippedText {
 enum LayoutText {
     private static let table: [String: String] = {
         let lang = Bundle.main.preferredLocalizations.first ?? "en"
-        guard lang != "en",
-              let folder = Bundle.main.url(forResource: "HelpTranslations", withExtension: nil),
-              let data = try? Data(contentsOf: folder.appendingPathComponent("layouts-\(lang).json")),
-              let t = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        guard lang != "en", let t = HelpLocalizer.bundledTable("layouts-\(lang)") else { return [:] }
         return t
     }()
 

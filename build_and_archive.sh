@@ -7,44 +7,38 @@ cd "$(dirname "$0")"
 
 MODE="${1:-debug}"
 STEAM_HELPER_SRC="SteamControllerHelper/main.swift"
+# The commands file is shared with the app, so the helper compiles it too.
+STEAM_HELPER_SHARED="InputConfig/Services/Devices/SteamController2015Commands.swift"
 STEAM_HELPER_ENTITLEMENTS="SteamControllerHelper/SteamControllerHelper.entitlements"
 
-# Do not kill xcodebuild/XCBBuildService here. That discards incremental
-# build state and forces a full rebuild. Only kill them if you hit a
-# CreateBuildOperation hang.
-
-# Only rebuild a helper if its source is newer than the binary, or the binary
-# is not universal. Built for both Apple silicon and Intel: through 1.5 (29)
-# the helpers were built for the machine doing the build only, so the App
-# Store copy shipped them arm64 only and on an Intel Mac the Steam
-# Controller helper could not start. The Xcode project's Build Helpers
-# phase now does the same on every build.
+# Rebuild the helper, universal (Apple silicon and Intel), when its source is
+# newer than the binary or the binary is not universal.
 build_helper_if_needed() {
     local src="$1"
-    local out="$2"
-    local name="$3"
+    local shared="$2"
+    local out="$3"
+    local name="$4"
     local archs
     archs=$(lipo -archs "$out" 2>/dev/null || true)
     case "$archs" in *arm64*) ;; *) archs="" ;; esac
     case "$archs" in *x86_64*) ;; *) archs="" ;; esac
-    if [ ! -f "$out" ] || [ "$src" -nt "$out" ] || [ -z "$archs" ]; then
+    if [ ! -f "$out" ] || [ "$src" -nt "$out" ] || [ "$shared" -nt "$out" ] || [ -z "$archs" ]; then
         echo "=== Building $name (universal) ==="
-        swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit "$src" -o "$out.arm64"
-        swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit "$src" -o "$out.x86_64"
+        swiftc -O -target arm64-apple-macos14.0 -framework Foundation -framework IOKit "$src" "$shared" -o "$out.arm64"
+        swiftc -O -target x86_64-apple-macos14.0 -framework Foundation -framework IOKit "$src" "$shared" -o "$out.x86_64"
         lipo -create "$out.arm64" "$out.x86_64" -output "$out"
         rm -f "$out.arm64" "$out.x86_64"
     fi
 }
-build_helper_if_needed "$STEAM_HELPER_SRC" "SteamControllerHelper/SteamControllerHelper" "SteamControllerHelper"
+build_helper_if_needed "$STEAM_HELPER_SRC" "$STEAM_HELPER_SHARED" "SteamControllerHelper/SteamControllerHelper" "SteamControllerHelper"
 
 # Signing is Xcode's: the project's Sign Helpers phase signs the helper with
 # the identity the build uses, and nothing here re-signs after Xcode seals it.
 
 if [ "$MODE" = "archive" ]; then
     echo "=== Archiving InputConfig ==="
-    # Outside the iCloud-synced project, so no iCloud attributes reach the
-    # archive, with Xcode 26's compilation cache off, and with the watchdog
-    # for the clang probe that can block forever (both needed for 1.5).
+    # Archived outside the project folder, with the compilation cache off and
+    # a watchdog for a clang probe that can stall.
     OUT="$HOME/Library/Caches/InputConfigArchive"
     ARCHIVE="$OUT/InputConfig.xcarchive"
     mkdir -p "$OUT"
@@ -66,9 +60,8 @@ if [ "$MODE" = "archive" ]; then
         -archivePath "$ARCHIVE"
     kill $WATCHDOG 2>/dev/null || true
 
-    # The project's Copy Helpers and Sign Helpers phases put the signed
-    # helpers in the app before Xcode seals it. Copying and re-signing them
-    # here, after the seal, broke the app's signature, so this only checks.
+    # The project's Copy Helpers and Sign Helpers phases sign the helper
+    # before Xcode seals the app, so this only checks.
     APP="$ARCHIVE/Products/Applications/InputConfig.app"
     MACOS_DIR="$APP/Contents/MacOS"
 
@@ -81,8 +74,7 @@ if [ "$MODE" = "archive" ]; then
     fi
     codesign -dvv "$MACOS_DIR/SteamControllerHelper" 2>&1 | /usr/bin/grep -E "Identifier|Authority"
     # The helper carries exactly app-sandbox + inherit: it runs inside the
-    # app's sandbox. Its own device entitlements fail App Store validation
-    # and made every helper die before main through 1.5.
+    # app's sandbox.
     HELPER_ENTS=$(codesign -d --entitlements - --xml "$MACOS_DIR/SteamControllerHelper" 2>/dev/null)
     for KEY in com.apple.security.app-sandbox com.apple.security.inherit; do
         if ! echo "$HELPER_ENTS" | /usr/bin/grep -q "$KEY"; then
@@ -115,8 +107,7 @@ elif [ "$MODE" = "install" ]; then
     SRC=$(find ~/Library/Developer/Xcode/DerivedData/InputConfig-*/Build/Products/Release -name "InputConfig.app" -maxdepth 1 2>/dev/null | head -1)
     if [ -z "$SRC" ]; then echo "Release build not found"; exit 1; fi
     DEST="/Applications/InputConfig.app"
-    # Never replace the Mac App Store copy: it has a receipt, and deleting
-    # it silently lost the purchased install.
+    # Never replace the Mac App Store copy.
     if [ -e "$DEST/Contents/_MASReceipt" ]; then
         echo "Refusing: $DEST is the Mac App Store copy. Move it aside first if you mean to replace it."
         exit 1
@@ -126,10 +117,7 @@ elif [ "$MODE" = "install" ]; then
     if [ -e "$DEST" ]; then
         mv "$DEST" "$HOME/.Trash/InputConfig-dev-$(date +%Y%m%d-%H%M%S).app"
     fi
-    # As built: the Copy Helpers and Sign Helpers phases already signed the
-    # helper inside it with the identity Xcode used. Re-signing here with
-    # the first certificate in the keychain could change the signature, and
-    # the Accessibility and Input Monitoring grants with it.
+    # Copied as built, so the signature and the permission grants stay.
     ditto "$SRC" "$DEST"
 
     echo "=== Verifying ==="
@@ -143,17 +131,12 @@ else
     [ "$MODE" = "release" ] && CONFIG="Release"
 
     echo "=== Building InputConfig ($CONFIG) ==="
-    # Let xcodebuild use all cores. -jobs 1 is only needed for the Xcode GUI,
-    # which can hang at CreateBuildOperation; the command-line build does not.
     xcodebuild -scheme InputConfig \
         -configuration "$CONFIG" \
         -destination 'generic/platform=macOS' \
         -skipPackagePluginValidation \
         build
 
-    # The project's Copy Helpers and Sign Helpers phases already put the
-    # signed helpers in the built app; re-signing them here after Xcode
-    # sealed it broke the app's signature.
     APP=$(find ~/Library/Developer/Xcode/DerivedData/InputConfig-*/Build/Products/$CONFIG -name "InputConfig.app" -maxdepth 1 2>/dev/null | head -1)
     if [ -n "$APP" ]; then
         echo "=== Build complete: $APP ==="

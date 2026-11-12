@@ -6,7 +6,7 @@ import SwiftUI
 /// even collapsed; expanded, it lists the activity log with a level and a
 /// source per line, filters, and a Save Report button that writes one text
 /// file with the machine, the setup, and the log for a bug report.
-struct DebugLogView: View {
+struct DebugLogView: View, Equatable {
     /// Whether this view currently owns a pushed resize cursor.
     @State private var resizeCursorPushed = false
     /// True in the pop-out window: no collapse control, fills the window.
@@ -37,23 +37,81 @@ struct DebugLogView: View {
 
     private var expanded: Bool { standalone || isExpanded }
 
-    private var filteredLog: [ActivityLog.Entry] {
-        var lines = log.entries
+    /// Its two inputs. Everything it shows comes from what it observes (the
+    /// log, the engine, the controllers, the permission) and its own state,
+    /// which redraw it themselves; its stored settings made every window
+    /// body (each preset switch) run it again for nothing.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.standalone == b.standalone && a.onHome == b.onHome
+    }
+
+    /// The entries the filters let through. Cached: computed in the body
+    /// on every redraw, the filter ran over the whole log for each of the
+    /// list, the count and the scroll, several times a second during play.
+    @State private var filteredLog: [ActivityLog.Entry] = []
+    /// The newest entry id `filteredLog` has been filtered through, so a
+    /// flush filters only what it added (see refiltered). A reference, so
+    /// moving it is not a state change.
+    @State private var filterCursor = LogFilterCursor()
+
+    private func updateFilteredLog() {
+        filteredLog = currentFilteredLog
+        filterCursor.throughID = log.entries.last?.id ?? filterCursor.throughID
+    }
+
+    /// After a flush: with a filter on, only the new entries are filtered.
+    /// It filtered all 2,000 again, about 4 ms per flush during play.
+    private func updateFilteredLogAfterFlush() {
+        guard filtering else { updateFilteredLog(); return }
+        filteredLog = Self.refiltered(filteredLog, through: filterCursor.throughID,
+                                      entries: log.entries, keep: passesFilters)
+        filterCursor.throughID = log.entries.last?.id ?? filterCursor.throughID
+    }
+
+    private var filtering: Bool { showProblemsOnly || showEventsOnly || !filterText.isEmpty }
+
+    private var currentFilteredLog: [ActivityLog.Entry] {
+        // Unfiltered, the log itself is shared rather than copied.
+        filtering ? log.entries.filter(passesFilters) : log.entries
+    }
+
+    /// Whether a line shows under the filters set.
+    private func passesFilters(_ e: ActivityLog.Entry) -> Bool {
         if showProblemsOnly {
-            lines = lines.filter { $0.level >= .warning }
+            if e.level < .warning { return false }
         } else if showEventsOnly {
-            lines = lines.filter { $0.level == .event }
+            if e.level != .event { return false }
         }
         if !filterText.isEmpty {
-            lines = lines.filter {
-                $0.text.localizedCaseInsensitiveContains(filterText)
-                || $0.source.localizedCaseInsensitiveContains(filterText)
-            }
+            return e.text.localizedCaseInsensitiveContains(filterText)
+                || e.source.localizedCaseInsensitiveContains(filterText)
         }
+        return true
+    }
+
+    /// The lines shown after the log changed, from the ones shown before:
+    /// lines the log has trimmed or cleared leave from the front, and lines
+    /// added after `through` are filtered and appended. Entry ids only grow
+    /// and entries never change, so this is the whole log filtered again.
+    static func refiltered(_ shown: [ActivityLog.Entry], through: Int, entries: [ActivityLog.Entry],
+                           keep: (ActivityLog.Entry) -> Bool) -> [ActivityLog.Entry] {
+        let firstID = entries.first?.id ?? Int.max
+        var lines = shown
+        if let drop = lines.firstIndex(where: { $0.id >= firstID }) {
+            lines.removeFirst(drop)
+        } else {
+            lines.removeAll()
+        }
+        var start = entries.endIndex
+        while start > entries.startIndex, entries[start - 1].id > through { start -= 1 }
+        lines.append(contentsOf: entries[start...].filter(keep))
         return lines
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyRuns.note("DebugLogView")
+        #endif
         VStack(alignment: .leading, spacing: 0) {
             toolbar
             if expanded {
@@ -75,6 +133,9 @@ struct DebugLogView: View {
         )
         .padding(.horizontal)
         .onAppear { if onHome { isExpanded = false } }
+        .onChange(of: filterText) { _, _ in updateFilteredLog() }
+        .onChange(of: showEventsOnly) { _, _ in updateFilteredLog() }
+        .onChange(of: showProblemsOnly) { _, _ in updateFilteredLog() }
         .onChange(of: onHome) { _, home in
             if home { withAnimation(.easeInOut(duration: 0.2)) { isExpanded = false } }
         }
@@ -312,7 +373,7 @@ struct DebugLogView: View {
 
     private func chip(icon: String, text: String, tint: Color, spoken: String? = nil) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
+            IconView(name: icon, glyphHeight: 10)
                 .font(.system(size: 8))
                 .accessibilityHidden(true)
             Text(text)
@@ -361,7 +422,19 @@ struct DebugLogView: View {
                     .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
             )
             .padding(.horizontal, 8)
+            // Opened, popped out or refiltered with Follow on: at the newest
+            // line, not the oldest, when nothing new is logged.
+            .onAppear {
+                updateFilteredLog()
+                if autoScroll, let last = filteredLog.last {
+                    DispatchQueue.main.async { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+            .onChange(of: filteredLog.last?.id) { _, last in
+                if autoScroll, let last { proxy.scrollTo(last, anchor: .bottom) }
+            }
             .onChange(of: log.revision) { _, _ in
+                updateFilteredLogAfterFlush()
                 if autoScroll, let last = filteredLog.last {
                     // Instant scroll: animating a log tail 5x/sec during active
                     // play was the costly part and reads identically.
@@ -561,4 +634,9 @@ final class ActivityLogWindowController {
         w.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
+}
+
+/// DebugLogView's place in the log: the newest entry id it has filtered.
+final class LogFilterCursor {
+    var throughID = 0
 }

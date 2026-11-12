@@ -69,6 +69,7 @@ extension ControllerModelID {
     static let stadia = ControllerModelID("stadia")
     static let eightBitDoUltimate = ControllerModelID("8bitdo-ultimate")
     static let eightBitDoUltimate2C = ControllerModelID("8bitdo-ultimate-2c")
+    static let eightBitDoUltimate2Wireless = ControllerModelID("8bitdo-ultimate-2-wireless")
     static let eightBitDoPro2 = ControllerModelID("8bitdo-pro2")
     static let eightBitDoPro3 = ControllerModelID("8bitdo-pro3")
     static let eightBitDoSN30Pro = ControllerModelID("8bitdo-sn30pro")
@@ -143,6 +144,9 @@ enum ControlKind: Sendable, Equatable {
 enum ControlShape: Sendable, Equatable {
     case circle
     case capsule(angleDegrees: Double)
+    /// A band bowed one way, as a curve cap on the Access controller's
+    /// ring: 0 bows up, the angle turns it clockwise.
+    case curve(angleDegrees: Double)
     case roundedRect(corner: Double)
     case squircle
     case trapezoid(topWidthRatio: Double)

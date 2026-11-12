@@ -70,6 +70,16 @@ final class MouseMotionPump: @unchecked Sendable {
     /// Pixels moved since the engine last asked; the engine records them
     /// into Statistics on the main thread.
     private var movedPixels: Int = 0
+    /// A smooth scroll's glide is under way and this pump steps it, one
+    /// share a tick (InputSimulator.glideStep), so a scrolling stick no
+    /// longer keeps the glide's own 125 Hz timer going beside this one,
+    /// unaligned: 250 wakes a second for 125 posts. Keeps the timer awake
+    /// while pixels are owed, without counting as motion, so the pump
+    /// sleeps again as soon as a glide that woke it is over.
+    private var glideActive = false
+    /// Counts wakeForGlide calls, so a tick that saw one glide end does not
+    /// clear the flag for a glide set going meanwhile.
+    private var glideWakes: UInt64 = 0
 
     /// Pixels moved since the previous call.
     func takeMovedPixels() -> Int {
@@ -87,6 +97,11 @@ final class MouseMotionPump: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return sleeping
     }
+    /// Tests only: whether the pump runs at all (a pointer preset is on).
+    var debugIsRunning: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running
+    }
     #endif
 
     /// Resume a sleeping timer. Called with the lock held; the next tick
@@ -97,6 +112,22 @@ final class MouseMotionPump: @unchecked Sendable {
         sleeping = false
         lastTick = 0
         timer.resume()
+    }
+
+    /// A glide wants stepping. False when the pump is not running; the
+    /// glide then keeps its own timer. Never called with scrollLock held.
+    func wakeForGlide() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard running, let timer else { return false }
+        glideActive = true
+        glideWakes &+= 1
+        // Tick now: the first share goes out as the scroll arrives, as the
+        // glide timer's first tick did, then every 8 ms from here. Moves
+        // integrate the real time step, so the one short frame this makes
+        // moves the pointer no differently.
+        timer.schedule(deadline: .now(), repeating: .milliseconds(8), leeway: .microseconds(250))
+        wakeLocked()
+        return true
     }
 
     /// Add an exact pixel displacement to be paid out over the next feed
@@ -197,8 +228,11 @@ final class MouseMotionPump: @unchecked Sendable {
         velocityAt = 0; scrollVelocityAt = 0
         owedX = 0; owedY = 0; lastFeed = 0
         scrollVelocityX = 0; scrollVelocityY = 0; scrollCarryX = 0; scrollCarryY = 0
+        glideActive = false
         lock.unlock()
         t?.cancel()
+        // A glide this pump was stepping goes on on its own timer.
+        InputSimulator.shared.glidePumpStopped()
     }
 
     private func tick() {
@@ -251,18 +285,41 @@ final class MouseMotionPump: @unchecked Sendable {
         }
         let busy = vx != 0 || vy != 0 || owedX != 0 || owedY != 0 || sx != 0 || sy != 0
             || wholeX != 0 || wholeY != 0
+        var glide = glideActive
+        let wakes = glideWakes
         if busy {
             lastBusy = now
-        } else if running, now - lastBusy > sleepAfter, !sleeping, let timer {
+        } else if !glide, running, now - lastBusy > sleepAfter, !sleeping, let timer {
             sleeping = true
             timer.suspend()
         }
         lock.unlock()
         if wholeX != 0 || wholeY != 0 {
-            InputSimulator.shared.moveMouse(deltaX: wholeX, deltaY: wholeY)
+            InputSimulator.shared.moveMouseScaled(deltaX: wholeX, deltaY: wholeY)
         }
         if scrollX != 0 || scrollY != 0 {
-            InputSimulator.shared.scrollWheel(deltaX: scrollX, deltaY: scrollY)
+            if InputSimulator.shared.scrollWheelFromPump(deltaX: scrollX, deltaY: scrollY) { glide = true }
         }
+        if glide { stepGlide(now: now, wakes: wakes) }
+    }
+
+    /// One glide step, after this tick's own moves and scroll and outside
+    /// the lock, as they are.
+    private func stepGlide(now: Double, wakes: UInt64) {
+        let step = InputSimulator.shared.glideStep(now: now)
+        if step.x != 0 || step.y != 0 {
+            InputSimulator.shared.postPixelScroll(deltaX: step.x, deltaY: step.y)
+        }
+        lock.lock()
+        if step.owedLeft {
+            if running { glideActive = true }
+        } else if glideWakes == wakes {
+            glideActive = false
+        }
+        // Stopped while this tick ran, after stop() handed the glide over:
+        // hand it over again, or it would be left with nobody stepping it.
+        let orphaned = step.owedLeft && !running
+        lock.unlock()
+        if orphaned { InputSimulator.shared.glidePumpStopped() }
     }
 }

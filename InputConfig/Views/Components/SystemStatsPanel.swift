@@ -70,7 +70,8 @@ struct SystemStatsPanel: View {
                             stat("Since start", String(format: "%+.0f%%", locale: .current, -delta), delta > 0 ? .orange : .green)
                         }
                         if let mins = p.minutesRemaining {
-                            stat("Time left", String(localized: "\(mins) min"))
+                            // While charging the time is until full, not left.
+                            stat(p.minutesAreUntilFull ? "Until full" : "Time left", String(localized: "\(mins) min"))
                         }
                     }
                 }

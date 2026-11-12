@@ -65,7 +65,7 @@ struct ScanOverlayView: View {
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
 
-                Text("Hold a button or move an axis on your controller, press a key, click, or scroll on your Mac, or play a note or twist a knob on a MIDI device. Taps on the Mac are picked from the input type menu, not scanned.")
+                Text(TapTheMac.canOffer ? "Hold a button or move an axis on your controller, press a key, click, or scroll on your Mac, or play a note or twist a knob on a MIDI device. Taps on the Mac are picked from the input type menu, not scanned." : "Hold a button or move an axis on your controller, press a key, click, or scroll on your Mac, or play a note or twist a knob on a MIDI device.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
@@ -156,6 +156,9 @@ struct ScanOverlayView: View {
             announce(String(localized: "Scanning for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it. Press Escape to cancel."))
         }
         .onDisappear {
+            // Closed by its host: a detection landing in the next moment
+            // must not report into a view that is gone.
+            canceled = true
             cleanup()
         }
     }
@@ -193,7 +196,9 @@ struct ScanOverlayView: View {
         // Escape still cancels in the moment after a detection, rather than
         // reaching the editor's own Cancel.
         if didCompleteScan {
-            guard event.type == .keyDown, event.keyCode == 53, !canceled else { return false }
+            // Keys are still held here until the hand-off: Command Z in
+            // that moment undid the row the scan was filling.
+            guard event.type == .keyDown, event.keyCode == 53, !canceled else { return event.type == .keyDown }
             canceled = true
             cleanup()
             onCancel()
@@ -322,6 +327,13 @@ struct ScanOverlayView: View {
             // A deliberate Force Click (stage 2) scans as a Deep Press
             // input; the continuous pressure stream is ignored here so an
             // ordinary click does not get captured as pressure.
+            // Not on the card or Cancel, which a click there is not scanned
+            // from either: a firm press bound Deep Press, or Cancel's press
+            // bound it before the button's release could cancel.
+            if let content = event.window?.contentView {
+                let point = content.convert(event.locationInWindow, from: nil)
+                if cancelButtonFrame.insetBy(dx: -6, dy: -6).contains(point) || cardFrame.contains(point) { return true }
+            }
             if event.stage >= 2 {
                 pendingLeftClick?.cancel()
                 pendingLeftClick = nil
@@ -427,6 +439,7 @@ struct ScanOverlayView: View {
         let seconds = ScanTiming.seconds
         timeRemaining = seconds
         guard seconds > 0 else { return }
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             if timeRemaining > 0 {
                 timeRemaining -= 1
@@ -461,6 +474,8 @@ struct ScanOverlayView: View {
     private func cleanup() {
         timer?.invalidate()
         timer = nil
+        pendingLeftClick?.cancel()
+        pendingLeftClick = nil
         controllerService.stopScanning()
         #if canImport(AppKit)
         if let m = inputMonitor { NSEvent.removeMonitor(m); inputMonitor = nil }

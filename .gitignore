@@ -1,50 +1,16 @@
-# macOS
 .DS_Store
 *.swp
 *~
-
-# Xcode
 build/
 DerivedData/
+xcuserdata/
 *.xcuserstate
 *.xcscmblueprint
-xcuserdata/
-
-# Keys and secrets
+*.xcarchive
 *.key
 *.p12
 *.cer
 *.mobileprovision
 *.certSigningRequest
-
-# Archives
-*.xcarchive
-
-# Editor / tooling
-.cursor/
-.vscode/
-
-# Compiled helper binary (rebuilt by the Build Helpers phase; LightHelper was removed in 1.6)
-LightHelper/LightHelper
-
-# Personal setup notes (not part of the app)
-IAP_SETUP.md
-IAP_APPSTORE_TUTORIAL.md
-# Compiled helper binaries (rebuilt by build_and_archive.sh)
-TouchpadHelper/TouchpadHelper
-SteamControllerHelper/SteamControllerHelper
-# Logs
 *.log
-
-# Release archive output
-build/
-# Internal working notes (not published)
-RELEASE_PREP.md
-docs/
-AUDIT-*.md
-Marketing/*
-!Marketing/posters/
-scripts/* 2.py
-
-# A personal file in the posters folder, not part of the app or its marketing
-Marketing/posters/verstappen-minecaft.gif
+SteamControllerHelper/SteamControllerHelper

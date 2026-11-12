@@ -28,6 +28,7 @@ enum ControllerLayoutCatalog {
         .stadia,
         .eightBitDoUltimate,
         .eightBitDoUltimate2C,
+        .eightBitDoUltimate2Wireless,
         .eightBitDoPro2,
         .eightBitDoPro3,
         .eightBitDoSN30Pro,
@@ -72,14 +73,16 @@ enum ControllerLayoutCatalog {
     /// InputConfig.showExperimentalControllerDrawings -bool true
     nonisolated static let showExperimentalKey = "InputConfig.showExperimentalControllerDrawings"
 
-    /// Whether experimental drawings are shown: only with the hidden setting
-    /// on, in every build, so a Debug build shows what customers see. The
-    /// test suites still render every drawing.
+    /// Whether experimental drawings are shown, in every build, so a Debug
+    /// build shows what customers see. The test suites render every drawing.
+    /// Shown by default since 1.9 (the whole collection
+    /// of popular controllers should be there to pick); the hidden setting
+    /// set to false hides them again.
     nonisolated static var showsExperimental: Bool {
         #if DEBUG
         if NSClassFromString("XCTestCase") != nil { return true }
         #endif
-        return UserDefaults.standard.bool(forKey: showExperimentalKey)
+        return UserDefaults.standard.object(forKey: showExperimentalKey) as? Bool ?? true
     }
 
     /// Whether a layout may be drawn now.

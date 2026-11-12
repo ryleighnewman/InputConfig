@@ -4554,5 +4554,21 @@
 "return": "리턴",
 "save": "저장",
 "space": "스페이스",
-"undo": "실행 취소"
+"undo": "실행 취소",
+"A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. X runs a recorded style macro at double speed: types gg, Return, waits, then Command V. Down, Down, B pressed in order is a button sequence that sends Space. LB sends J three times (Repeat). Turbo, macros, Record steps, Play once and Repeat are options on every row.": "매크로와 터보 쇼케이스입니다. RB는 누르고 있는 동안 Space를 빠르게 반복합니다(터보). A는 매크로를 실행합니다: 복사, 앱 전환, 붙여넣기. Y도 매크로를 실행합니다: 세 항목 아래로 이동한 다음 Return. X는 녹화한 방식의 매크로를 두 배 속도로 실행합니다: gg 입력, Return, 대기, Command V. Down, Down, B를 차례로 누르면 Space를 보내는 버튼 순서입니다. LB는 J를 세 번 보냅니다(반복). 터보, 매크로, 단계 녹화, 한 번 재생, 반복은 모든 행에서 쓸 수 있는 옵션입니다.",
+"Built for the PlayStation Access Controller. Out of the box its base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick: the stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight. The other rows wait for Square, Triangle, L1, R1, L2, R2 and Create, which reach the Mac once a profile made on a PS5 gives them to sockets: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control. The PS button reaches the app as its own input, PS button, through the controller's own report, so a row can use it. If your profile puts buttons elsewhere, Scan a row and press the socket you mean.\n\nTo stop everything at once, hold socket 7 (Options) for the emergency stop's hold time; the usual Create hold cannot reach the Mac from the base profile. Settings, General, Emergency stop sets the time.\n\nIf the pointer drifts, raise the Deadzone in the stick rows' Options (Adjust live shows the stick as you set it). Change Speed on those rows if it feels too fast or slow.": "PlayStation Access Controller용입니다. 기본 프로파일은 처음부터 가운데 버튼에서 Cross, 소켓 5에서 Circle, 소켓 7에서 Options, 그리고 스틱을 보냅니다. 스틱은 포인터, 가운데 버튼은 클릭, 소켓 5는 오른쪽 클릭, 소켓 7은 Spotlight를 엽니다. 나머지 행은 Square, Triangle, L1, R1, L2, R2, Create를 기다립니다. PS5에서 만든 프로파일이 이 버튼들을 소켓에 지정하면 Mac에 전달되며, 더블 클릭, Return, 위아래 스크롤, 단축키를 위한 Command 누르기, Space, Mission Control이 실행됩니다. PS 버튼은 컨트롤러 자체의 보고를 통해 PS 버튼이라는 별도의 입력으로 앱에 전달되므로 행에서 사용할 수 있습니다. 프로파일에서 버튼 위치가 다르면 행에서 스캔을 누른 다음 원하는 소켓을 누르세요.\n\n모든 것을 한 번에 멈추려면 소켓 7(Options)을 긴급 정지의 누르는 시간만큼 누르고 있으세요. 기본 프로파일에서는 평소의 Create 길게 누르기가 Mac에 전달되지 않습니다. 시간은 설정, 일반, 긴급 정지에서 정합니다.\n\n포인터가 저절로 움직이면 스틱 행의 옵션에서 데드존을 높이세요(실시간 조정을 쓰면 설정하면서 스틱 움직임을 볼 수 있습니다). 너무 빠르거나 느리면 해당 행에서 속도를 바꾸세요.",
+"A showcase for Toggle: press once to hold a key, press again to release it. A holds Shift, B holds Command, X holds F10 (mute in many apps), Y holds W for auto-run in games. A, B and Y vibrate when they latch. Toggle is an option on every row.": "토글 쇼케이스입니다. 한 번 누르면 키가 눌린 채로 유지되고, 다시 누르면 해제됩니다. A는 Shift, B는 Command, X는 F10(많은 앱에서 음소거), Y는 게임의 자동 달리기를 위해 W를 누른 채로 유지합니다. A, B, Y는 고정되면 진동합니다. 토글은 모든 행에서 쓸 수 있는 옵션입니다.",
+"Macro at double speed: types gg, Return, waits, Command V": "두 배 속도의 매크로: gg 입력, Return, 대기, Command V",
+"Button sequence Down, Down, B: Space": "버튼 순서 Down, Down, B: Space",
+"RB = rapid space, A = copy/switch/paste macro, Y = list navigation, X = typed macro, Down Down B = sequence, LB = triple J": "RB = 빠른 Space, A = 복사/전환/붙여넣기 매크로, Y = 목록 탐색, X = 입력 매크로, Down Down B = 순서, LB = J 세 번",
+"Hold RB for turbo, tap A for the chord macro, tap Y to walk a list, tap X for the typed macro, press Down, Down, B for the sequence, tap LB for repeat": "RB를 누르고 있으면 터보, A를 탭하면 코드 매크로, Y를 탭하면 목록 따라 이동, X를 탭하면 입력 매크로, Down, Down, B를 누르면 순서, LB를 탭하면 반복",
+"Voice Commands": "음성 명령",
+"show my windows": "내 창 보여줘",
+"open search": "검색 열어",
+"start dictation": "받아쓰기 시작",
+"read this": "이거 읽어줘",
+"play music": "음악 재생",
+"Say a phrase; no controller needed": "문구를 말하세요. 컨트롤러가 필요 없습니다",
+"Listens only while this preset runs. Change the words in Voice Phrases.": "이 프리셋이 실행 중일 때만 듣습니다. 음성 문구에서 단어를 변경하세요.",
+"No controller needed: say the words and it happens. The first start asks for the microphone and Speech Recognition. It listens only while this preset runs, and nothing is recorded or kept. To change the words, click Edit and open Voice Phrases.": "컨트롤러가 필요 없습니다. 단어를 말하면 실행됩니다. 처음 시작할 때 마이크와 음성 인식 권한을 요청합니다. 이 프리셋이 실행 중일 때만 들으며 아무것도 녹음하거나 보관하지 않습니다. 단어를 변경하려면 편집을 클릭하고 음성 문구를 여세요."
 }

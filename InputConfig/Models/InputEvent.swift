@@ -50,12 +50,33 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
     /// stick (0 left, 1 right), `gestureSteps` the flicks in order. Fires
     /// like a quick button press when the last flick lands.
     case stickGesture = "sgs"
+    /// Buttons of the row's controller pressed in a set order, such as
+    /// Down, Down, A: a combo. `sequenceSteps` are the button indices in
+    /// order; each press must come within the row's time between presses
+    /// of the one before. Fires like a quick button press on the last one.
+    case buttonSequence = "bsq"
+    /// Keys typed in a set order on any keyboard, such as J then K: a
+    /// typed shortcut. `sequenceSteps` are the HID codes in order; each
+    /// key must come within the row's time between presses of the one
+    /// before. Fires like a quick button press on the last one.
+    case keySequence = "ksq"
     /// A message from an external MIDI device (keyboard, pad controller,
     /// knob box). Notes and pads behave like buttons; CC knobs, pitch
     /// bend, and aftertouch behave like analog axes. `index` carries the
     /// note or CC number, `midiChannel` the 1-16 channel (nil = any),
     /// and `midiKind` which message family it is.
     case midi = "mid"
+    /// A point on a display and the color it shows. Match fires while the
+    /// pixel is within the watch's tolerance of its color; Change fires
+    /// briefly when the pixel changes. The watch lives in the preset
+    /// (`Preset.screenPixels`), `screenPixelID` names it.
+    case screenPixel = "spx"
+    /// Words read inside an area of a display (`Preset.screenTexts`,
+    /// `screenTextID`): held while they show, or a press when they appear.
+    case screenText = "stx"
+    /// Words heard by the Mac's speech recognizer (`Preset.voicePhrases`,
+    /// `voicePhraseID`): a quick press each time the phrase is said.
+    case voicePhrase = "vph"
 
     var id: String { rawValue }
 
@@ -72,9 +93,14 @@ enum InputType: String, Codable, CaseIterable, Identifiable {
         case .cursorRegion: return String(localized: "Screen region")
         case .stickRegion: return String(localized: "Stick region")
         case .stickGesture: return String(localized: "Stick gesture")
+        case .buttonSequence: return String(localized: "Button sequence")
+        case .keySequence: return String(localized: "Key sequence")
         case .touchpadGesture: return String(localized: "Touchpad Gesture")
         case .chassisTap: return String(localized: "Tap the Mac")
         case .midi: return "MIDI"
+        case .screenPixel: return String(localized: "Screen color")
+        case .screenText: return String(localized: "Screen text")
+        case .voicePhrase: return String(localized: "Voice phrase")
         }
     }
 }
@@ -354,6 +380,11 @@ enum AxisDirection: String, Codable, CaseIterable, Identifiable {
         case .negative: return String(localized: "minus")
         }
     }
+
+    /// A row on no one half: the stick works both ways round its center.
+    /// Stored as no direction, which the engine has always read that way.
+    static let bothDisplayName = "+/-"
+    static var bothSpokenName: String { String(localized: "plus and minus") }
 }
 
 /// Direction for hat (D-pad) inputs
@@ -394,6 +425,13 @@ struct InputEvent: Codable, Hashable, Identifiable {
     /// Same on-disk format as `touchpadRegionID` - kept on a separate
     /// field so the two region kinds don't collide in tooling.
     var cursorRegionID: UUID?
+    /// ID of the screen color watch. Only valid for `.screenPixel`. Same
+    /// on-disk format as `cursorRegionID`, its own field for the same reason.
+    var screenPixelID: UUID?
+    /// ID of the screen text watch. Only valid for `.screenText`.
+    var screenTextID: UUID?
+    /// ID of the voice phrase. Only valid for `.voicePhrase`.
+    var voicePhraseID: UUID?
     /// Recognized touchpad gesture (two-finger tap, etc.). Only valid
     /// for `.touchpadGesture`. Stored as the raw enum string in JSON
     /// so older saves without the field decode as nil.
@@ -436,19 +474,23 @@ struct InputEvent: Codable, Hashable, Identifiable {
     var touchpadSurface: Int? = nil
     /// The flicks of a `.stickGesture`, in order.
     var gestureSteps: [GestureStep]? = nil
+    /// The button indices of a `.buttonSequence`, in order.
+    var sequenceSteps: [Int]? = nil
+    /// Presses in one sequence, at most.
+    static let maxSequenceSteps = 8
 
     var displayName: String {
         switch type {
         case .button:
             return String(localized: "Button \(index)")
         case .axis:
-            let dir = axisDirection?.displayName ?? "+"
+            let dir = axisDirection?.displayName ?? AxisDirection.bothDisplayName
             return String(localized: "Axis \(index) \(dir)")
         case .hat:
             let dir = hatDirection?.displayName ?? String(localized: "Up")
             return String(localized: "Hat \(index) \(dir)")
         case .touchpad:
-            let finger = min(max(touchpadFinger ?? 0, 0), 9) + 1
+            let finger = min(max(touchpadFinger ?? index, 0), 9) + 1
             let axis = touchpadAxis?.rawValue.uppercased() ?? "X"
             let dir = axisDirection?.displayName ?? "+"
             return touchpadSurface == 1
@@ -488,7 +530,8 @@ struct InputEvent: Codable, Hashable, Identifiable {
             case .penTiltX:
                 return String(localized: "Pen Tilt \(axisDirection?.displayName ?? "+")")
             case .penTiltY:
-                return String(localized: "Pen Tilt \(axisDirection == .negative ? "Up" : "Down")")
+                // Whole translated phrases: "Up" and "Down" stayed English inside.
+                return axisDirection == .negative ? String(localized: "Pen tilt up") : String(localized: "Pen tilt down")
             case .penButton:
                 return String(localized: "Pen Button \(index &+ 1)")
             case .penEraser:
@@ -500,6 +543,13 @@ struct InputEvent: Codable, Hashable, Identifiable {
             // Like `.touchpadRegion`, the human name lives in the
             // CursorRegionService and is resolved in the binding row.
             return String(localized: "Screen region")
+        case .screenPixel:
+            // The watch's name lives in ScreenPixelService; the row resolves it.
+            return String(localized: "Screen color")
+        case .screenText:
+            return String(localized: "Screen text")
+        case .voicePhrase:
+            return String(localized: "Voice phrase")
         case .stickRegion:
             if StickRegionService.isBandKey(index) {
                 return String(localized: "\(StickRegionService.axisDisplayName(index - StickRegionService.bandKeyBase)) region")
@@ -508,6 +558,14 @@ struct InputEvent: Codable, Hashable, Identifiable {
         case .stickGesture:
             let stick = index == 1 ? String(localized: "Right stick") : String(localized: "Left stick")
             return String(localized: "\(stick) gesture: \(GestureStep.describe(gestureSteps ?? []))")
+        case .buttonSequence:
+            let steps = sequenceSteps ?? []
+            if steps.isEmpty { return String(localized: "Button sequence: no presses yet") }
+            return String(localized: "Button sequence: \(steps.map { ButtonSequenceRecognizer.hatDirection(forCode: $0)?.displayName ?? String(localized: "Button \($0)") }.joined(separator: ", "))")
+        case .keySequence:
+            let steps = sequenceSteps ?? []
+            if steps.isEmpty { return String(localized: "Key sequence: no keys yet") }
+            return String(localized: "Key sequence: \(steps.map { KeyCodeMap.name(for: $0) }.joined(separator: ", "))")
         case .touchpadGesture:
             return touchpadGestureKind?.displayName ?? String(localized: "Touchpad Gesture")
         case .chassisTap:
@@ -548,11 +606,11 @@ struct InputEvent: Codable, Hashable, Identifiable {
         case .button:
             return "btn \(index)"
         case .axis:
-            return "axi \(index) \(axisDirection?.rawValue ?? "+")"
+            return "axi \(index) \(axisDirection?.rawValue ?? "b")"
         case .hat:
             return "hat \(index) \(hatDirection?.rawValue ?? "U")"
         case .touchpad:
-            let finger = touchpadFinger ?? 0
+            let finger = touchpadFinger ?? index
             let axis = touchpadAxis?.rawValue ?? "x"
             let dir = axisDirection?.rawValue ?? "+"
             return "tpd \(finger) \(axis) \(dir)" + (touchpadSurface == 1 ? " s1" : "")
@@ -585,6 +643,19 @@ struct InputEvent: Codable, Hashable, Identifiable {
             let raw = (cursorRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
                 .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             return "crg \(raw)"
+        case .screenPixel:
+            // "spx <32-char hex UUID>", the watch's id in the preset's screenPixels.
+            let raw = (screenPixelID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+                .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            return "spx \(raw)"
+        case .screenText:
+            let raw = (screenTextID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+                .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            return "stx \(raw)"
+        case .voicePhrase:
+            let raw = (voicePhraseID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
+                .uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            return "vph \(raw)"
         case .stickRegion:
             // "srg <stickIndex> <32-char hex UUID>"
             let raw = (stickRegionID ?? UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)))
@@ -594,6 +665,15 @@ struct InputEvent: Codable, Hashable, Identifiable {
             // "sgs <stick> <step>.<step>" e.g. "sgs 0 d.d", pulled back twice
             let steps = (gestureSteps ?? []).map(\.token).joined(separator: ".")
             return "sgs \(index) \(steps.isEmpty ? "-" : steps)"
+        case .buttonSequence:
+            // "bsq <button>.<button>" e.g. "bsq 253.253.0", Down, Down, A (the d-pad
+            // directions are ButtonSequenceRecognizer.hatCodes)
+            let steps = (sequenceSteps ?? []).map(String.init).joined(separator: ".")
+            return "bsq \(steps.isEmpty ? "-" : steps)"
+        case .keySequence:
+            // "ksq <hid>.<hid>" e.g. "ksq 13.14", J then K
+            let steps = (sequenceSteps ?? []).map(String.init).joined(separator: ".")
+            return "ksq \(steps.isEmpty ? "-" : steps)"
         case .touchpadGesture:
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             return "tpg \(touchpadGestureKind?.rawValue ?? "twoFingerTap")" + (touchpadSurface == 1 ? " s1" : "")
@@ -627,17 +707,19 @@ struct InputEvent: Codable, Hashable, Identifiable {
             return InputEvent(type: .button, index: index)
         case "axi":
             guard parts.count >= 3, let index = Int(parts[1]) else { return nil }
-            let dir = AxisDirection(rawValue: parts[2]) ?? .positive
+            // "b": both ways round the center, stored as no direction.
+            if parts[2] == "b" { return InputEvent(type: .axis, index: index, axisDirection: nil) }
+            guard let dir = AxisDirection(rawValue: parts[2]) else { return nil }
             return InputEvent(type: .axis, index: index, axisDirection: dir)
         case "hat":
             guard parts.count >= 3, let index = Int(parts[1]) else { return nil }
-            let dir = HatDirection(rawValue: parts[2]) ?? .up
+            guard let dir = HatDirection(rawValue: parts[2]) else { return nil }
             return InputEvent(type: .hat, index: index, hatDirection: dir)
         case "tpd":
             guard parts.count >= 4,
                   let finger = Int(parts[1]), (0...9).contains(finger),
                   let axis = TouchpadAxis(rawValue: parts[2]) else { return nil }
-            let dir = AxisDirection(rawValue: parts[3]) ?? .positive
+            guard let dir = AxisDirection(rawValue: parts[3]) else { return nil }
             var event = InputEvent(type: .touchpad, index: finger,
                                    axisDirection: dir,
                                    touchpadFinger: finger,
@@ -672,7 +754,7 @@ struct InputEvent: Codable, Hashable, Identifiable {
             guard parts.count >= 5,
                   let kind = ExtMouseKind(rawValue: parts[1]),
                   let idx = Int(parts[2]) else { return nil }
-            let dir = AxisDirection(rawValue: parts[3]) ?? .positive
+            guard let dir = AxisDirection(rawValue: parts[3]) else { return nil }
             let device = parts[4] == "any" ? nil : parts[4]
             return InputEvent(type: .extMouse, index: idx,
                               axisDirection: dir,
@@ -687,6 +769,24 @@ struct InputEvent: Codable, Hashable, Identifiable {
             guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
             return InputEvent(type: .cursorRegion, index: 0,
                               cursorRegionID: uuid)
+        case "spx":
+            // "spx <32-char hex UUID>"
+            guard parts.count >= 2 else { return nil }
+            let raw = parts[1]
+            guard raw.count == 32 else { return nil }
+            let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
+            guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
+            var event = InputEvent(type: .screenPixel, index: 0)
+            event.screenPixelID = uuid
+            return event
+        case "stx", "vph":
+            guard parts.count >= 2 else { return nil }
+            let raw = parts[1]
+            guard raw.count == 32 else { return nil }
+            let dashed = "\(raw.prefix(8))-\(raw.dropFirst(8).prefix(4))-\(raw.dropFirst(12).prefix(4))-\(raw.dropFirst(16).prefix(4))-\(raw.dropFirst(20).prefix(12))"
+            guard let uuid = UUID(uuidString: dashed.uppercased()) else { return nil }
+            if parts[0] == "stx" { return InputEvent.screenText(uuid) }
+            return InputEvent.voicePhrase(uuid)
         case "srg":
             // "srg <stickIndex> <32-char hex UUID>"
             guard parts.count >= 3,
@@ -701,6 +801,14 @@ struct InputEvent: Codable, Hashable, Identifiable {
             guard parts.count >= 3, let stick = Int(parts[1]), (0...1).contains(stick) else { return nil }
             let steps = parts[2].split(separator: ".").compactMap { GestureStep(token: String($0)) }
             return InputEvent(type: .stickGesture, index: stick, gestureSteps: Array(steps.prefix(GestureStep.maxSteps)))
+        case "bsq", "ksq":
+            guard parts.count >= 2 else { return nil }
+            let tokens = parts[1] == "-" ? [] : parts[1].split(separator: ".")
+            let steps = tokens.compactMap { Int($0) }
+            let top = parts[0] == "ksq" ? 0xFFFF : 255
+            guard steps.count == tokens.count, steps.allSatisfy({ (0...top).contains($0) }) else { return nil }
+            return InputEvent(type: parts[0] == "ksq" ? .keySequence : .buttonSequence, index: 0,
+                              sequenceSteps: Array(steps.prefix(InputEvent.maxSequenceSteps)))
         case "tpg":
             // "tpg <kind>" e.g. "tpg twoFingerTap"
             guard parts.count >= 2,
@@ -722,8 +830,13 @@ struct InputEvent: Codable, Hashable, Identifiable {
                   let kind = MIDIInputKind(rawValue: parts[1]),
                   let number = Int(parts[2]) else { return nil }
             let channel: Int? = parts.count > 3 ? Int(parts[3]) : nil
-            let dir: AxisDirection = (parts.count > 4
-                ? AxisDirection(rawValue: parts[4]) : nil) ?? .positive
+            let dir: AxisDirection
+            if parts.count > 4 {
+                guard let read = AxisDirection(rawValue: parts[4]) else { return nil }
+                dir = read
+            } else {
+                dir = .positive
+            }
             let device: String? = (parts.count > 5 && parts[5] != "any") ? parts[5] : nil
             let ccMode: MIDICCMode? = parts.count > 6 ? MIDICCMode(rawValue: parts[6]) : nil
             return InputEvent(type: .midi, index: number,
@@ -769,12 +882,38 @@ struct InputEvent: Codable, Hashable, Identifiable {
         InputEvent(type: .cursorRegion, index: 0, cursorRegionID: id)
     }
 
+    static func screenPixel(_ id: UUID) -> InputEvent {
+        var e = InputEvent(type: .screenPixel, index: 0)
+        e.screenPixelID = id
+        return e
+    }
+
+    static func screenText(_ id: UUID) -> InputEvent {
+        var e = InputEvent(type: .screenText, index: 0)
+        e.screenTextID = id
+        return e
+    }
+
+    static func voicePhrase(_ id: UUID) -> InputEvent {
+        var e = InputEvent(type: .voicePhrase, index: 0)
+        e.voicePhraseID = id
+        return e
+    }
+
     static func stickRegion(stickIndex: Int, id: UUID) -> InputEvent {
         InputEvent(type: .stickRegion, index: stickIndex, stickRegionID: id)
     }
 
     static func stickGesture(stick: Int, _ steps: [GestureStep]) -> InputEvent {
         InputEvent(type: .stickGesture, index: stick, gestureSteps: steps)
+    }
+
+    static func buttonSequence(_ steps: [Int]) -> InputEvent {
+        InputEvent(type: .buttonSequence, index: 0, sequenceSteps: steps)
+    }
+
+    static func keySequence(_ steps: [Int]) -> InputEvent {
+        InputEvent(type: .keySequence, index: 0, sequenceSteps: steps)
     }
 
     static func touchpadGesture(_ kind: TouchpadGestureKind) -> InputEvent {
@@ -809,15 +948,6 @@ struct InputEvent: Codable, Hashable, Identifiable {
     static func extMouseButton(_ button: Int, deviceID: String? = nil) -> InputEvent {
         InputEvent(type: .extMouse, index: button,
                    extDeviceID: deviceID, extMouseKind: .button)
-    }
-
-    static func extMouseMotion(_ kind: ExtMouseKind,
-                               direction: AxisDirection,
-                               deviceID: String? = nil) -> InputEvent {
-        InputEvent(type: .extMouse, index: 0,
-                   axisDirection: direction,
-                   extDeviceID: deviceID,
-                   extMouseKind: kind)
     }
 }
 
@@ -926,6 +1056,81 @@ struct GestureStep: Codable, Hashable {
             return String(localized: "a region")
         }.joined(separator: ", ")
     }
+}
+
+/// Recognizes a button sequence from the buttons down each poll. A press
+/// is a button that was up the poll before; the expected press advances,
+/// a wrong one falls back to the longest run of recent presses that still
+/// starts the sequence (so an extra leading press is not held against the
+/// person), and a gap longer than the window between presses starts over.
+struct ButtonSequenceRecognizer {
+    /// The d-pad is a hat, not a button: its four directions take these
+    /// codes in a sequence, above every real button index (the Access
+    /// controller's ports end at 55) and inside the parser's 0...255.
+    static let hatCodes: [HatDirection: Int] = [.up: 252, .down: 253, .left: 254, .right: 255]
+    static func hatDirection(forCode code: Int) -> HatDirection? {
+        hatCodes.first { $0.value == code }?.key
+    }
+    /// What counts as down this poll: the buttons over half, and the
+    /// first hat's directions past the engine's hat threshold.
+    static func downSet(_ state: ControllerState) -> Set<Int> {
+        var down = Set(state.buttons.filter { $0.value > 0.5 }.keys)
+        if let hat = state.hats[0] {
+            if hat.y >= 0.5 { down.insert(hatCodes[.up]!) }
+            if hat.y <= -0.5 { down.insert(hatCodes[.down]!) }
+            if hat.x <= -0.5 { down.insert(hatCodes[.left]!) }
+            if hat.x >= 0.5 { down.insert(hatCodes[.right]!) }
+        }
+        return down
+    }
+
+    var windowMs: Int = 600
+    private(set) var progress = 0
+    private var wasDown: Set<Int> = []
+    private var lastPressAt: Double = 0
+
+    /// One poll. Returns true on the poll the last press of `steps` lands.
+    mutating func feed(down: Set<Int>, now: Double, steps: [Int]) -> Bool {
+        guard !steps.isEmpty else { wasDown = down; return false }
+        if progress > 0, now - lastPressAt > Double(windowMs) / 1000 { progress = 0 }
+        let pressed = down.subtracting(wasDown)
+        wasDown = down
+        var fired = false
+        // Presses that land in the same poll are walked in the sequence's
+        // order (the next expected button first), then the rest by index,
+        // so a fast two-button finish is not read backwards.
+        var order: [Int] = []
+        var rest = pressed
+        var expected = progress
+        while expected < steps.count, rest.contains(steps[expected]) {
+            order.append(steps[expected])
+            rest.remove(steps[expected])
+            expected += 1
+        }
+        order += rest.sorted()
+        for button in order {
+            if button == steps[progress] {
+                progress += 1
+            } else {
+                // Keep the longest tail of the presses so far, plus this
+                // one, that still starts the sequence: Down, Down, Down, A
+                // fires Down, Down, A. The presses so far are exactly the
+                // matched prefix, so no press buffer is needed.
+                let recent = Array(steps[0..<progress]) + [button]
+                progress = 0
+                for k in stride(from: recent.count, through: 1, by: -1)
+                where Array(recent.suffix(k)) == Array(steps.prefix(k)) {
+                    progress = k
+                    break
+                }
+            }
+            lastPressAt = now
+            if progress >= steps.count { progress = 0; fired = true }
+        }
+        return fired
+    }
+
+    mutating func reset() { progress = 0; wasDown = [] }
 }
 
 /// Recognizes stick gestures from the stick's position, frame by frame. A

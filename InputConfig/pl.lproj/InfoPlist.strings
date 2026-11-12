@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Wszelkie prawa zastrzeżone.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig nasłuchuje fraz głosowych profilu tylko wtedy, gdy ten profil działa lub jego arkusz Frazy głosowe jest otwarty. Nic nie jest nagrywane ani zachowywane.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig rozpoznaje frazy głosowe profilu na tym Macu, gdy język na to pozwala. Nic nie jest nagrywane ani zachowywane.";

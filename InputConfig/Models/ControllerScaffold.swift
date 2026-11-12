@@ -295,7 +295,7 @@ enum ControllerScaffold {
                              inputKind: SlotInputKind,
                              purpose: Purpose = .layout,
                              presetFamily: FaceLetters? = nil) -> DeviceCapabilities {
-        let macTaps = ChassisTapService.shared.isAvailable
+        let macTaps = ChassisTapService.shared.isAvailable && TapTheMac.canOffer
 
         switch inputKind {
         case .mouse:
@@ -368,16 +368,28 @@ enum ControllerScaffold {
                 // Many third-party pads use the Xbox 360 identity in their
                 // XInput mode, where they send no gyro or touchpad at all.
                 caps.limitation = String(localized: "In this mode the controller reports as an Xbox 360 pad, which sends no gyro or touchpad. If it has a PlayStation or Switch mode, switch to that to insert them.")
+            case .eightBitDo:
+                caps.sticks = twoSticks
+                caps.triggers = true
+                caps.dpad = true
+                caps.buttons = [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12].map { ($0, standardName($0, fam)) }
+                    + [16, 17, 18, 19].map { ($0, LayoutText.t(names[$0])) }
             case .dualShock3:
                 caps.sticks = twoSticks
                 caps.triggers = true
                 caps.dpad = true
                 caps.buttons = (0...12).map { ($0, standardName($0, fam, model)) }
-            case .dualShock4, .dualSenseAlt:
+            case .dualShock4:
                 caps.sticks = twoSticks
                 caps.triggers = true
                 caps.dpad = true
                 caps.buttons = (0...13).map { ($0, standardName($0, fam, model)) }
+            case .dualSenseAlt:
+                // The decoder sets 15 for the mute button.
+                caps.sticks = twoSticks
+                caps.triggers = true
+                caps.dpad = true
+                caps.buttons = ((0...13).map { ($0, standardName($0, fam, model)) }) + [(15, standardName(15, fam, model))]
             case .xboxBluetooth(let share):
                 caps.sticks = twoSticks
                 caps.triggers = true
@@ -933,9 +945,14 @@ enum ControllerScaffold {
         case .motion: return SectionName.motion
         case .stickRegion: return "Stick regions"
         case .stickGesture: return "Stick gestures"
+        case .buttonSequence: return "Button sequences"
+        case .keySequence: return "Keyboard"
         case .extKey: return "Keyboard"
         case .extMouse: return "Mouse"
         case .cursorRegion: return "Screen regions"
+        case .screenPixel: return "Screen colors"
+        case .screenText: return "Screen text"
+        case .voicePhrase: return "Voice phrases"
         case .midi: return "MIDI"
         case .chassisTap: return "Mac taps"
         }

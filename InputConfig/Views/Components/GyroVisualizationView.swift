@@ -800,6 +800,9 @@ final class Controller3DSnapshot {
 
     func image(pitch: Float, yaw: Float, roll: Float, size: CGSize) -> NSImage? {
         guard size.width > 0, size.height > 0 else { return nil }
+        // An angle that is not a number (a sensor hiccup) keeps the last
+        // picture: Int() of it would trap.
+        guard pitch.isFinite, yaw.isFinite, roll.isFinite else { return last?.image }
         // A hundredth of a radian is below what the eye sees at this size.
         let key = [Int(pitch * 100), Int(yaw * 100), Int(roll * 100), Int(size.width), Int(size.height)]
         if let last, last.key == key { return last.image }

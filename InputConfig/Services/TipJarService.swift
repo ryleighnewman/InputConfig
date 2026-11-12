@@ -35,7 +35,9 @@ final class TipJarService: ObservableObject {
         "com.inputconfig.app.tip.small.monthly",
         "com.inputconfig.app.tip.medium.monthly",
         "com.inputconfig.app.tip.large.monthly",
-        "com.inputconfig.app.tip.generous.monthly"
+        "com.inputconfig.app.tip.generous.monthly",
+        "com.inputconfig.app.tip.huge.monthly",     // suggested $24.99
+        "com.inputconfig.app.tip.patron.monthly"    // suggested $99.99
     ]
 
     @Published private(set) var consumableProducts: [Product] = []
@@ -121,7 +123,7 @@ final class TipJarService: ObservableObject {
             switch verification {
             case .verified(let transaction):
                 await transaction.finish()
-                incrementTipCount()
+                creditTransaction(transaction.id)
                 await refreshActiveSubscription()
                 AccessibilityNotification.Announcement(String(localized: "Thank you for your support")).post()
                 return true
@@ -154,6 +156,9 @@ final class TipJarService: ObservableObject {
             await refreshActiveSubscription()
             notice = activeSubscription.map { String(localized: "Restored. Your \($0.displayName) is active.") }
                 ?? String(localized: "Restored. There are no active monthly tips on this Apple Account.")
+        } catch StoreKitError.userCancelled {
+            // Canceled at the Apple Account prompt on purpose: no error.
+            return
         } catch {
             lastError = String(localized: "Could not restore purchases: \(error.localizedDescription)")
         }
@@ -209,9 +214,12 @@ final class TipJarService: ObservableObject {
                     // lifetime count. The initial subscription purchase is
                     // counted in purchase(); only out-of-band one-time
                     // (consumable) tips need crediting from the listener.
-                    if transaction.productType != .autoRenewable {
+                    // A subscription's first transaction does count when it
+                    // arrives here: Ask to Buy approved later never passed
+                    // through purchase(). Renewals keep their original id.
+                    if transaction.productType != .autoRenewable || transaction.id == transaction.originalID {
                         await MainActor.run {
-                            self.incrementTipCount()
+                            self.creditTransaction(transaction.id)
                         }
                     }
                     await self.refreshActiveSubscription()
@@ -220,19 +228,19 @@ final class TipJarService: ObservableObject {
         }
     }
 
-    /// Throws if the given verification result is not verified.
-    private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
-        switch result {
-        case .verified(let safe):
-            return safe
-        case .unverified:
-            throw TipJarError.unverifiedTransaction
-        }
-    }
-
     // MARK: - Local Tip Counter
 
     private static let tipCountKey = "InputConfig.tipCount"
+
+    /// Transactions credited this session. A consumable bought in
+    /// purchase() also arrives in Transaction.updates, and was counted twice.
+    private var creditedTransactionIDs: Set<UInt64> = []
+
+    /// Counts a tip once per transaction.
+    private func creditTransaction(_ id: UInt64) {
+        guard creditedTransactionIDs.insert(id).inserted else { return }
+        incrementTipCount()
+    }
 
     private func loadTipCount() {
         totalTipsCount = UserDefaults.standard.integer(forKey: Self.tipCountKey)

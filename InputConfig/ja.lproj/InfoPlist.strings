@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. All rights reserved.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfigがプリセットの音声フレーズを聞くのは、そのプリセットの実行中か「音声フレーズ」シートが開いている間だけです。何も録音も保存もしません。";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfigはプリセットの音声フレーズを、言語が対応していればこのMac上で認識します。何も録音も保存もしません。";

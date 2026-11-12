@@ -28,7 +28,18 @@ final class CursorRegionService: ObservableObject {
     /// display the cursor is currently on, not the primary one, so a
     /// region means the same corner of whatever screen you are pointing
     /// at. (0, 0) is top-left.
-    @Published private(set) var cursorNormalized: CGPoint = .zero
+    var cursorNormalized: CGPoint { livePointer.normalized }
+
+    /// The pointer on an object of its own: published by the service, every
+    /// move redrew each open region card's whole body. Only what follows the
+    /// pointer observes this; the rest observes regionsUnderPointer.
+    final class LivePointer: ObservableObject {
+        @Published fileprivate(set) var normalized: CGPoint = .zero
+    }
+    let livePointer = LivePointer()
+
+    /// The regions the pointer is in, changing only as it crosses an edge.
+    @Published private(set) var regionsUnderPointer: Set<UUID> = []
 
     /// The display the cursor is on right now, so a map of these regions
     /// can be drawn in that screen's real shape and named. Regions are
@@ -66,12 +77,38 @@ final class CursorRegionService: ObservableObject {
                           serial: CGDisplaySerialNumber(id), name: screen.localizedName, uuid: uuid)
     }
 
+    /// `key(for:)` per display number, worked out once per display
+    /// arrangement and dropped when the displays change: it asks IOKit
+    /// and ColorSync (110 to 160 us a screen), and the cursor poll asked
+    /// it 60 times a second, each screen watch on every capture.
+    private static var cachedKeys: [UInt32: DisplayKey] = [:]
+    private static var observingKeys = false
+
+    /// The same key as `key(for:)`, from the cache.
+    static func cachedKey(for screen: NSScreen) -> DisplayKey {
+        let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        // A screen with no number is not kept: two of them would share one.
+        guard number != 0 else { return key(for: screen) }
+        if let kept = cachedKeys[number] { return kept }
+        if !observingKeys {
+            observingKeys = true
+            NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                   object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { cachedKeys = [:] }
+            }
+        }
+        let key = key(for: screen)
+        cachedKeys[number] = key
+        return key
+    }
+
     func refreshDisplays() {
         let list = NSScreen.screens.map { screen in
             AttachedDisplay(key: Self.key(for: screen),
                             aspect: screen.frame.height > 0 ? screen.frame.width / screen.frame.height : 16.0 / 10.0,
                             isMain: screen == NSScreen.main)
         }
+        DisplayKey.noteAttached(Set(list.compactMap(\.key.uuid)))
         if list != attachedDisplays { attachedDisplays = list }
         screenCount = list.count
     }
@@ -200,12 +237,17 @@ final class CursorRegionService: ObservableObject {
     ///
     /// False while nobody is tracking: the last sampled position goes
     /// stale, and a region under it would read as held forever.
-    func isRegionPressed(_ id: UUID) -> Bool {
+    ///
+    /// `active` is true while the row already holds: the region is then
+    /// read a little wider on every side, so a pointer resting on its edge
+    /// does not press and release on every sub-pixel move.
+    func isRegionPressed(_ id: UUID, active: Bool = false) -> Bool {
         guard pollTimer != nil else { return false }
-        guard let r = region(with: id) else { return false }
-        guard r.maxX > r.minX && r.maxY > r.minY else { return false }
+        guard let found = region(with: id) else { return false }
+        guard found.maxX > found.minX && found.maxY > found.minY else { return false }
         // A region drawn for one display is silent on every other.
-        guard regionApplies(r) else { return false }
+        guard regionApplies(found) else { return false }
+        let r = active ? found.widened(by: TouchpadRegion.holdMargin) : found
         let p = cursorNormalized
         // Far edges open (except at the screen's edge), so neighbors that
         // share a border are not both pressed on it.
@@ -236,13 +278,14 @@ final class CursorRegionService: ObservableObject {
         guard let screen = screen else { return }
         let frame = screen.frame
         guard frame.width > 0, frame.height > 0 else { return }
-        let name = screen.localizedName
+        // The key carries the screen's localizedName, read with it.
+        let key = Self.cachedKey(for: screen)
+        let name = key.name
         let aspect = frame.width / frame.height
         let count = NSScreen.screens.count
         if name != currentScreenName { currentScreenName = name }
         if abs(aspect - currentScreenAspect) > 0.001 { currentScreenAspect = aspect }
         if count != screenCount { screenCount = count }
-        let key = Self.key(for: screen)
         if key != currentDisplay { currentDisplay = key }
         let nx = (point.x - frame.minX) / frame.width
         let nyFromTop: CGFloat
@@ -260,8 +303,10 @@ final class CursorRegionService: ObservableObject {
         // storm for sub-pixel jitter.
         if abs(clamped.x - cursorNormalized.x) > 0.001
             || abs(clamped.y - cursorNormalized.y) > 0.001 {
-            cursorNormalized = clamped
+            livePointer.normalized = clamped
         }
+        let under = Set(regions.filter { isRegionPressed($0.id) }.map(\.id))
+        if under != regionsUnderPointer { regionsUnderPointer = under }
     }
 
     // MARK: - Persistence

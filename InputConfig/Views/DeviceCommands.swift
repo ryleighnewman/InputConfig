@@ -9,6 +9,7 @@ struct DeviceCommands: Commands {
     let controllerService: GameControllerService
 
     var body: some Commands {
+        let _ = LaunchSignpost.once("Commands.body")
         CommandGroup(after: .appInfo) {
             Menu("Devices") {
                 DevicesMenuContent(controllerService: controllerService)
@@ -30,6 +31,9 @@ struct DevicesMenuContent: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = BodyRuns.note("DevicesMenuContent")
+        #endif
         transportSection(.bluetooth)
         Divider()
         transportSection(.usb)

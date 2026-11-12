@@ -48,6 +48,13 @@ enum RawHIDReportApplier {
             // learned rest point is the fallback for a pad whose flash was
             // not read.
             if Switch2Calibration.current(product: pad.productID) == nil { pad.removeStickRest(&decoded) }
+            // A GameCube controller for Switch 2 an older preset was made on
+            // keeps its B and Y as they were then, so those rows still fire.
+            if profile.layout == .switch2GameCube,
+               HIDDeviceRegistry.keepsLegacyNumbering(vendorID: pad.vendorID, productID: pad.productID) {
+                let b = decoded.buttons[1], y = decoded.buttons[3]
+                decoded.buttons[1] = y; decoded.buttons[3] = b
+            }
             processMotion(&decoded, pad: pad)
             pad.updateState(decoded)
         } else if case .streamDeck(let format) = profile.layout, !format.oneShotSlots.isEmpty {
@@ -91,8 +98,10 @@ enum RawHIDReportApplier {
     /// Merge a decoded report. A descriptor pad's relative axes (a knob's
     /// turns) are short pushes that let go on their own; the rest is a merge.
     nonisolated static func applyDecoded(_ decoded: ControllerState, to pad: RawHIDGamepad, profile: ControllerProfile) {
-        if case .generic(let generic) = profile.layout {
-            let relative = HIDExtendedLayoutRegistry.extended(for: generic).relativeAxisSlots
+        if case .generic = profile.layout {
+            // Kept on the pad, built once from its profile, which every
+            // caller passes here: the list was rebuilt per report.
+            let relative = pad.relativeAxes
             if !relative.isEmpty {
                 pad.updateState(decoded, pulsingAxes: relative)
                 return

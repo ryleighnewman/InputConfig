@@ -4554,5 +4554,21 @@
 "return": "換行",
 "save": "儲存",
 "space": "空白",
-"undo": "還原"
+"undo": "還原",
+"A showcase for macros and turbo. RB repeats Space rapidly while held (turbo). A runs a macro: copy, switch app, paste. Y runs a macro: down three items, then Return. X runs a recorded style macro at double speed: types gg, Return, waits, then Command V. Down, Down, B pressed in order is a button sequence that sends Space. LB sends J three times (Repeat). Turbo, macros, Record steps, Play once and Repeat are options on every row.": "巨集和連發的展示。RB 在按住時快速重複空白鍵（連發）。A 執行一個巨集：拷貝、切換 App、貼上。Y 執行一個巨集：向下三項，然後 Return。X 以兩倍速度執行一個錄製風格的巨集：輸入 gg、Return、等待，然後 Command V。依序按下 Down、Down、B 是一個送出空白鍵的按鈕序列。LB 送出三次 J（重複）。連發、巨集、「錄製步驟」、「播放一次」和重複都是每一列都有的選項。",
+"Built for the PlayStation Access Controller. Out of the box its base profile sends Cross from the center button, Circle from socket 5, Options from socket 7, and the stick: the stick is the pointer, the center button clicks, socket 5 right-clicks, and socket 7 opens Spotlight. The other rows wait for Square, Triangle, L1, R1, L2, R2 and Create, which reach the Mac once a profile made on a PS5 gives them to sockets: double click, Return, scroll up and down, hold Command for shortcuts, Space, and Mission Control. The PS button reaches the app as its own input, PS button, through the controller's own report, so a row can use it. If your profile puts buttons elsewhere, Scan a row and press the socket you mean.\n\nTo stop everything at once, hold socket 7 (Options) for the emergency stop's hold time; the usual Create hold cannot reach the Mac from the base profile. Settings, General, Emergency stop sets the time.\n\nIf the pointer drifts, raise the Deadzone in the stick rows' Options (Adjust live shows the stick as you set it). Change Speed on those rows if it feels too fast or slow.": "專為 PlayStation Access 控制器打造。開箱即用時，它的基本設定檔會由中央按鈕送出 Cross，由 5 號插孔送出 Circle，由 7 號插孔送出 Options，另有搖桿：搖桿是指標，中央按鈕點按，5 號插孔點按右鍵，7 號插孔開啟 Spotlight。其餘各列等待 Square、Triangle、L1、R1、L2、R2 和 Create，這些按鈕要在 PS5 上製作的設定檔將它們指派給插孔後才能傳到 Mac：連按兩下、Return、向上和向下捲動、按住 Command 以使用快速鍵、空白鍵，以及 Mission Control。PS 按鈕會透過控制器本身的回報，作為獨立的輸入「PS 按鈕」傳給 App，所以某一列可以使用它。如果你的設定檔把按鈕放在別處，請對該列按「掃描」，然後按下你要用的插孔。\n\n若要一次停止所有操作，請按住 7 號插孔（Options），時間長度為緊急停止的按住時間；一般的 Create 長按無法從基本設定檔傳到 Mac。該時間可在「設定」、「一般」、「緊急停止」中設定。\n\n如果指標漂移，請在搖桿列的「選項」中調高死區（「即時調整」會在你設定時顯示搖桿狀態）。如果覺得太快或太慢，請調整這些列上的速度。",
+"A showcase for Toggle: press once to hold a key, press again to release it. A holds Shift, B holds Command, X holds F10 (mute in many apps), Y holds W for auto-run in games. A, B and Y vibrate when they latch. Toggle is an option on every row.": "「切換」的展示：按一次按住一個鍵，再按一次放開。A 按住 Shift，B 按住 Command，X 按住 F10（在許多 App 中是靜音），Y 按住 W，用於遊戲中的自動奔跑。A、B 和 Y 鎖定時會震動。「切換」是每一列都有的選項。",
+"Macro at double speed: types gg, Return, waits, Command V": "兩倍速度的巨集：輸入 gg、Return、等待、Command V",
+"Button sequence Down, Down, B: Space": "按鈕序列 Down、Down、B：空白鍵",
+"RB = rapid space, A = copy/switch/paste macro, Y = list navigation, X = typed macro, Down Down B = sequence, LB = triple J": "RB = 快速空白鍵，A = 拷貝/切換/貼上巨集，Y = 清單導覽，X = 輸入巨集，Down Down B = 序列，LB = 連按三次 J",
+"Hold RB for turbo, tap A for the chord macro, tap Y to walk a list, tap X for the typed macro, press Down, Down, B for the sequence, tap LB for repeat": "按住 RB 連發，輕點 A 執行和弦巨集，輕點 Y 逐項瀏覽清單，輕點 X 執行輸入巨集，按下 Down、Down、B 觸發序列，輕點 LB 重複",
+"Voice Commands": "語音指令",
+"show my windows": "顯示我的視窗",
+"open search": "打開搜尋",
+"start dictation": "開始聽寫",
+"read this": "讀這個",
+"play music": "播放音樂",
+"Say a phrase; no controller needed": "說出片語，不需手把",
+"Listens only while this preset runs. Change the words in Voice Phrases.": "僅在此預設組執行時聆聽。可在語音片語中更改字詞。",
+"No controller needed: say the words and it happens. The first start asks for the microphone and Speech Recognition. It listens only while this preset runs, and nothing is recorded or kept. To change the words, click Edit and open Voice Phrases.": "不需手把：說出字詞即可執行。首次啟動時會要求麥克風和語音辨識權限。僅在此預設組執行時聆聽，不會錄製或保留任何內容。若要更改字詞，請按一下「編輯」並打開「語音片語」。"
 }

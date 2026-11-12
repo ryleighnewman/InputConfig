@@ -62,7 +62,7 @@ extension ControllerLayout {
             [.vidPid(vendor: 0x057E, products: [0x2073])],
         ],
         matchPriority: 30,
-        readability: .partial("Experimental, USB only: read from its report 0x05 the way SDL reads it, analog L and R and the motion sensors included; not yet checked on a real pad"),
+        readability: .partial("Experimental: read over USB, or over Bluetooth LE when the Switch 2 Bluetooth setting is on, from its report 0x05 the way SDL reads it, analog L and R and the motion sensors included; not yet checked on a real pad"),
         approximate: true,
         sources: [
             "en-americas-support.nintendo.com Nintendo GameCube Controller Diagram (answer 68429, the Switch 2 model)",
@@ -109,14 +109,15 @@ extension ControllerLayout {
 
     private static let gameCubeSwitch2Controls: [PlacedControl] = [
         // Top: L and R wrap the rear corners. They are analog with a click at
-        // the bottom of the pull, but the decoder only reads the clicks, so
-        // axes 4 and 5 are 0 or 1 copies of btn 6 and 7.
+        // the bottom of the pull: the decoder reads the pull on axes 4 and 5
+        // (from the pad's own zero when it is read) and the clicks as btn 6
+        // (also btn 4) and btn 7.
         PlacedControl(id: "l", kind: .trigger(.analog), face: .top, center: CGPoint(x: 0.17, y: 0.2431), size: 0.18, height: 0.13,
                       shape: .roundedRect(corner: 0.45), inputs: .trigger(axis: 4, digital: 6),
-                      note: "Analog on the controller, read as 0 or 1 from its full-press click for now (also btn 4)", callout: .above),
+                      note: "Analog pull on axis 4; the end click reads as fully pressed (btn 6, also btn 4)", callout: .above),
         PlacedControl(id: "r", kind: .trigger(.analog), face: .top, center: CGPoint(x: 0.83, y: 0.2431), size: 0.18, height: 0.13,
                       shape: .roundedRect(corner: 0.45), inputs: .trigger(axis: 5, digital: 7),
-                      note: "Analog on the controller, read as 0 or 1 from its full-press click for now", callout: .above),
+                      note: "Analog pull on axis 5; the end click reads as fully pressed (btn 7)", callout: .above),
         // ZL, new on this model, sits on the front edge in front of L; the
         // long Z sits in the same place in front of R.
         PlacedControl(id: "zl", kind: .shoulder, face: .top, center: CGPoint(x: 0.15, y: 0.82), size: 0.065, height: 0.035,
@@ -132,7 +133,7 @@ extension ControllerLayout {
                       shape: .capsule(angleDegrees: 0),
                       readable: .notReported("Output only: InputConfig lights player 1 when it starts the controller")),
         PlacedControl(id: "usbc", kind: .port, face: .top, center: CGPoint(x: 0.5, y: 0.66), size: 0.07, height: 0.022,
-                      shape: .capsule(angleDegrees: 0), note: "The cable InputConfig reads this controller over"),
+                      shape: .capsule(angleDegrees: 0), note: "The cable InputConfig can read this controller over; Bluetooth LE works too"),
         PlacedControl(id: "charge-led", kind: .light, face: .top, center: CGPoint(x: 0.58, y: 0.5), size: 0.014,
                       readable: .notReported("A charging light, not an input")),
         PlacedControl(id: "home", kind: .homeButton, face: .top, center: CGPoint(x: 0.643, y: 0.28), size: 0.036,
@@ -145,7 +146,7 @@ extension ControllerLayout {
         // small +Control Pad on the bulb below and inboard.
         PlacedControl(id: "stick", kind: .stick, center: CGPoint(x: 0.18, y: 0.45), size: 0.19, shape: .octagonGate,
                       inputs: .stick(x: 0, y: 1, press: nil),
-                      note: "No click. Scaled with the Pro Controller's range, so full tilt may read short of 1", callout: .below),
+                      note: "No click. Scaled with the pad's own calibration when it can be read", callout: .below),
         PlacedControl(id: "dpad", kind: .dpad, center: CGPoint(x: 0.334, y: 0.78), size: 0.13, shape: .crossPad,
                       inputs: .hat(0), callout: .below),
 
@@ -167,6 +168,6 @@ extension ControllerLayout {
         // Front, right bulb: the yellow C-stick in its own octagonal gate.
         PlacedControl(id: "cstick", kind: .stick, center: CGPoint(x: 0.662, y: 0.77), size: 0.15, shape: .octagonGate,
                       printed: "C", tint: .snesYellow, inputs: .stick(x: 2, y: 3, press: nil),
-                      note: "No click. Scaled with the Pro Controller's range, so full tilt may read short of 1", callout: .below),
+                      note: "No click. Scaled with the pad's own calibration when it can be read", callout: .below),
     ]
 }

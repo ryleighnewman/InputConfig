@@ -168,8 +168,12 @@ extension HIDFixtureCorpus {
             + [.axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001), .hat(0, x: 0, y: 0),
                .axis(0, 1, tolerance: 0.001), .axis(1, -1, tolerance: 0.001), .axis(2, -1, tolerance: 0.001), .axis(3, 1, tolerance: 0.001)], "F-GC2-2"),
         gc2("switch2gc.a", gc2Report(b5: 0x08), [.button(0, 1), .buttonAbsent(1), .buttonAbsent(2), .buttonAbsent(3)], "F-GC2-3: A is bit 3 (code and SDL agree)"),
-        gc2("switch2gc.b", gc2Report(b5: 0x01), [.button(1, 1), .buttonAbsent(3)], "F-GC2-4: SDL WEST slot, mapped b:b3 under the GameCube face style; a pad must confirm"),
-        gc2("switch2gc.y", gc2Report(b5: 0x04), [.button(3, 1), .buttonAbsent(1)], "F-GC2-5: SDL SOUTH slot, mapped y:b2"),
+        // SDL_gamepad.c's Switch 2 GameCube mapping (a:b1, b:b3, x:b0, y:b2 over
+        // HandleGameCubeState's SOUTH 0x04, EAST 0x08, WEST 0x01, NORTH 0x02)
+        // puts A on 0x08, B on 0x04, X on 0x02, Y on 0x01, the Switch 2 Pro's
+        // own letter order. Before 1.9 (39) B and Y were the other way round.
+        gc2("switch2gc.b", gc2Report(b5: 0x04), [.button(1, 1), .buttonAbsent(3)], "F-GC2-4: B is 0x04 (SDL a:b1 b:b3 x:b0 y:b2)"),
+        gc2("switch2gc.y", gc2Report(b5: 0x01), [.button(3, 1), .buttonAbsent(1)], "F-GC2-5: Y is 0x01"),
         gc2("switch2gc.x", gc2Report(b5: 0x02), [.button(2, 1), .buttonAbsent(0)], "F-GC2-6"),
         gc2("switch2gc.clicks", gc2Report(b5: 0xC0, b7: 0xC0), [.button(5, 1), .button(7, 1), .button(4, 1), .button(6, 1), .button(16, 1), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001)], "F-GC2-7: the clicks force the triggers full"),
         gc2("switch2gc.triggers.half", gc2Report(l: 0x88, r: 0x88), [.axis(4, 0.5, tolerance: 0.001), .axis(5, 0.5, tolerance: 0.001)], "F-GC2-8 with zero 40"),

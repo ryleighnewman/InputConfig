@@ -60,16 +60,21 @@ enum ButtonNames {
     /// language whose name for Cross is the printed "\u{00D7}" heard it as
     /// the multiplication sign. Names that are already words are untouched.
     static func spokenGlyphs(_ name: String) -> String {
-        let words: [Character: String] = [
-            "\u{00D7}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
-            "\u{25CB}": String(localized: "spoken.circle", defaultValue: "Circle", comment: "The PlayStation Circle button, as a screen reader says it"),
-            "\u{25A1}": String(localized: "spoken.square", defaultValue: "Square", comment: "The PlayStation Square button, as a screen reader says it"),
-            "\u{25B3}": String(localized: "spoken.triangle", defaultValue: "Triangle", comment: "The PlayStation Triangle button, as a screen reader says it"),
-            "\u{2715}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
-        ]
+        let words = spokenGlyphWords
         guard name.contains(where: { words[$0] != nil }) else { return name }
         return name.map { words[$0] ?? String($0) }.joined()
     }
+
+    /// The glyphs spokenGlyphs turns into words. Built once: the Live
+    /// Visualizer and every binding row's VoiceOver label read it on each
+    /// render, and the app's language changes only with a relaunch.
+    static let spokenGlyphWords: [Character: String] = [
+        "\u{00D7}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
+        "\u{25CB}": String(localized: "spoken.circle", defaultValue: "Circle", comment: "The PlayStation Circle button, as a screen reader says it"),
+        "\u{25A1}": String(localized: "spoken.square", defaultValue: "Square", comment: "The PlayStation Square button, as a screen reader says it"),
+        "\u{25B3}": String(localized: "spoken.triangle", defaultValue: "Triangle", comment: "The PlayStation Triangle button, as a screen reader says it"),
+        "\u{2715}": String(localized: "spoken.cross", defaultValue: "Cross", comment: "The PlayStation Cross button, as a screen reader says it"),
+    ]
 
     /// An input's name for lists and search: a button or axis by the
     /// family's name ("Cross", "L2 +"), anything else as it always reads.
@@ -79,7 +84,7 @@ enum ButtonNames {
             return label(event.index, family: family, model: model)
         case .axis:
             guard let name = axisName(event.index, family: family) else { return event.displayName }
-            return "\(name) \(event.axisDirection?.displayName ?? "+")"
+            return "\(name) \(event.axisDirection?.displayName ?? AxisDirection.bothDisplayName)"
         case .touchpad where family?.isSteam == true:
             let left = event.touchpadSurface == 1
             let positive = event.axisDirection != .negative

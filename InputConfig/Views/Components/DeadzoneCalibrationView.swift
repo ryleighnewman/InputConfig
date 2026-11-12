@@ -56,6 +56,9 @@ struct DeadzoneCalibrationView: View {
     /// gauge reads the axis as the engine does.
     var direction: AxisDirection? = nil
     var fullTravel = false
+    /// The region a stick region row reads: lit at the deadzone being tuned,
+    /// which gates it in the engine, not the 25% other regions use.
+    var regionID: UUID? = nil
 
     @EnvironmentObject var controllerService: GameControllerService
     @Environment(\.appTextScale) private var textScale
@@ -64,11 +67,14 @@ struct DeadzoneCalibrationView: View {
     @ObservedObject private var zones = StickRegionService.shared
     @State private var showZones = false
 
-    @State private var currentX: Float = 0
-    @State private var currentY: Float = 0
-    @State private var trail: [(x: Float, y: Float)] = []
-    @State private var maxMagnitude: Float = 0
-    @State private var sampleTimer: Timer?
+    /// The live reading, sampled off the view's state: as four @State
+    /// values written on every tick, the whole sheet was rebuilt 60 times
+    /// a second with the stick at rest.
+    @StateObject private var live = StickSampler()
+    private var currentX: Float { live.x }
+    private var currentY: Float { live.y }
+    private var trail: [(x: Float, y: Float)] { live.trail }
+    private var maxMagnitude: Float { live.maxMagnitude }
 
     // Snapshots of the original values, captured on appear. If the user
     // presses Cancel, we restore these so the binding model doesn't keep
@@ -84,7 +90,6 @@ struct DeadzoneCalibrationView: View {
     @State private var saved = false
 
     private let canvasSize: CGFloat = 260
-    private let trailLimit = 200
 
     // MARK: - Axis Pairing
 
@@ -128,7 +133,8 @@ struct DeadzoneCalibrationView: View {
         // The zones are drawn as the stick reads; this row's Invert mirrors
         // only its own dot.
         let sx = isInverted ? -currentX : currentX, sy = isInverted ? -currentY : currentY
-        if is2D { return hypot(sx, sy) >= 0.25 && r.contains(normalizedX: Double(sx + 1) / 2, y: Double(sy + 1) / 2) }
+        let gate: Float = r.id == regionID ? Float(inner) : 0.25
+        if is2D { return hypot(sx, sy) >= gate && r.contains(normalizedX: Double(sx + 1) / 2, y: Double(sy + 1) / 2) }
         return r.maxY > r.minY && r.containsTravel(Double(max(0, min(1, currentX))))
     }
 
@@ -262,7 +268,7 @@ struct DeadzoneCalibrationView: View {
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $outer, in: max(inner + 0.05, 0.1)...1.0, step: 0.01)
+                Slider(value: $outer, in: max(inner + 0.01, 0.1)...1.0, step: 0.01)
                     .accessibilityLabel("Full push at")
                     .accessibilityValue("\(Int((outer * 100).rounded())) percent")
                     .accessibilityHint(outerMeaning)
@@ -357,7 +363,14 @@ struct DeadzoneCalibrationView: View {
             }
             startSampling()
         }
-        .onChange(of: inner) { _, _ in updatePreview() }
+        .onChange(of: inner) { _, new in
+            // The full-push ring stays outside the deadzone: dragged past
+            // it, the deadzone pushes it along (its slider's floor), by the
+            // row's own margin. Not for the value the sheet opened on: Save
+            // with nothing touched wrote a raised Full push.
+            if new != deadzone { outer = max(outer, min(1.0, new + 0.01)) }
+            updatePreview()
+        }
         .onChange(of: outer) { _, _ in updatePreview() }
         .onDisappear {
             stopSampling()
@@ -420,8 +433,7 @@ struct DeadzoneCalibrationView: View {
 
     private var resetTrailButton: some View {
         Button {
-            trail.removeAll()
-            maxMagnitude = 0
+            live.reset()
         } label: {
             Label("Reset Trail", systemImage: "arrow.counterclockwise")
                 .font(.caption)
@@ -474,19 +486,12 @@ struct DeadzoneCalibrationView: View {
     // MARK: - Live Sampling
 
     private func startSampling() {
-        sampleTimer?.invalidate()
         // 60Hz is more than enough for visualization without being heavy.
-        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
-            Task { @MainActor in sample() }
-        }
-        if let t = sampleTimer {
-            RunLoop.main.add(t, forMode: .common)
-        }
+        live.start { sample() }
     }
 
     private func stopSampling() {
-        sampleTimer?.invalidate()
-        sampleTimer = nil
+        live.stop()
     }
 
     private func sample() {
@@ -502,18 +507,66 @@ struct DeadzoneCalibrationView: View {
             if axisPair.y != nil { y = -y }
         }
 
-        currentX = x
-        currentY = y
-
-        let mag = magnitude
-        if mag > maxMagnitude { maxMagnitude = mag }
+        live.set(x: x, y: y)
 
         // Only add to trail if outside the deadzone; otherwise the rest position
         // would spam the trail with overlapping dots.
-        if mag > Float(inner) * 0.5 {
+        live.record(magnitude: magnitude, onTrail: magnitude > Float(inner) * 0.5)
+    }
+}
+
+/// The stick's live reading and trail for the Adjust live sheet, sampled
+/// on its own 60 Hz timer. Publishes only what changed, so a stick at rest
+/// redraws nothing.
+@MainActor
+private final class StickSampler: ObservableObject {
+    @Published private(set) var x: Float = 0
+    @Published private(set) var y: Float = 0
+    @Published private(set) var maxMagnitude: Float = 0
+    @Published private(set) var trail: [(x: Float, y: Float)] = []
+    private let trailLimit = 200
+    private var timer: Timer?
+    /// Held here and reached through a weak self, so the timer never
+    /// retains the sheet that owns this object.
+    private var read: (@Sendable @MainActor () -> Void)?
+
+    /// The owning sheet releases this on the main thread, where the
+    /// timer was scheduled.
+    deinit { MainActor.assumeIsolated { timer?.invalidate() } }
+
+    /// Runs `read` on every tick, on the main thread the timer fires on.
+    func start(_ read: @escaping @Sendable @MainActor () -> Void) {
+        timer?.invalidate()
+        self.read = read
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.read?() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        read = nil
+    }
+
+    func set(x: Float, y: Float) {
+        if self.x != x { self.x = x }
+        if self.y != y { self.y = y }
+    }
+
+    func record(magnitude: Float, onTrail: Bool) {
+        if magnitude > maxMagnitude { maxMagnitude = magnitude }
+        if onTrail {
             trail.append((x: x, y: y))
             if trail.count > trailLimit { trail.removeFirst(trail.count - trailLimit) }
         }
+    }
+
+    func reset() {
+        trail.removeAll()
+        maxMagnitude = 0
     }
 }
 
@@ -578,12 +631,19 @@ struct StickPlot<Extra: View>: View {
                     .frame(width: CGFloat(fullPush) * size, height: CGFloat(fullPush) * size)
             }
 
-            ForEach(Array(trail.enumerated()), id: \.offset) { index, point in
-                let progress = Double(index) / Double(max(1, trail.count - 1))
-                Circle()
-                    .fill(Color.accentColor.opacity(0.05 + 0.35 * progress))
-                    .frame(width: 4, height: 4)
-                    .position(x: px(point.x), y: px(point.y))
+            // One drawing for the trail: a view per dot was two hundred
+            // views laid out again on every tick.
+            if !trail.isEmpty {
+                Canvas { context, _ in
+                    let last = Double(max(1, trail.count - 1))
+                    for (index, point) in trail.enumerated() {
+                        let progress = Double(index) / last
+                        let dot = CGRect(x: px(point.x) - 2, y: px(point.y) - 2, width: 4, height: 4)
+                        context.fill(Path(ellipseIn: dot), with: .color(Color.accentColor.opacity(0.05 + 0.35 * progress)))
+                    }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
             if showsDot {
                 Circle()
@@ -652,25 +712,32 @@ struct TriggerGauge<Extra: View>: View {
                         .offset(y: -(height * full))
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(alignment: .topLeading) {
                 ZStack(alignment: .topLeading) {
-                    ForEach(bands) { band in
-                        let color = regionPaletteColor(at: band.colorIndex)
-                        let on = lit(band), picked = band.id == selected
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(color.opacity(on ? 0.32 : (picked ? 0.2 : 0.04)))
-                            .overlay(RoundedRectangle(cornerRadius: 3).stroke(color.opacity(on || picked ? 1 : 0.8),
-                                                                              lineWidth: on || picked ? 2.5 : 1))
-                            .frame(width: width - 10, height: max(2, (band.maxY - band.minY) * height))
-                            .offset(x: 5, y: (1 - band.maxY) * height)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
+                    ZStack(alignment: .topLeading) {
+                        ForEach(bands) { band in
+                            let color = regionPaletteColor(at: band.colorIndex)
+                            let on = lit(band), picked = band.id == selected
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(color.opacity(on ? 0.32 : (picked ? 0.2 : 0.04)))
+                                .overlay(RoundedRectangle(cornerRadius: 3).stroke(color.opacity(on || picked ? 1 : 0.8),
+                                                                                  lineWidth: on || picked ? 2.5 : 1))
+                                .frame(width: width - 10, height: max(2, (band.maxY - band.minY) * height))
+                                .offset(x: 5, y: (1 - band.maxY) * height)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                     }
+                    .frame(width: width, height: height, alignment: .topLeading)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    // Not clipped: a picked band's dots sit on its two ends,
+                    // and at the very top or bottom of the bar half of a dot
+                    // lies outside it.
                     extra()
                 }
                 .frame(width: width, height: height, alignment: .topLeading)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
             .frame(width: width, height: height)
             // The bar is a drawing; the labels beside it follow the language.
             .environment(\.layoutDirection, .leftToRight)
@@ -709,6 +776,7 @@ struct MiniDeadzonePreview: View {
     let axisIndex: Int
     /// The way the row fires: + or -, or nil for a zone row.
     let direction: AxisDirection?
+    var bothWays: Bool = false
     let inner: Double
     let outer: Double
     let isInverted: Bool
@@ -810,6 +878,14 @@ struct MiniDeadzonePreview: View {
             if let way = firingWay {
                 firingArrow(dx: way.dx, dy: way.dy)
                     .stroke(Color.accentColor.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+            // A row read both ways fires along the whole axis.
+            if bothWays {
+                let horizontal = axisIndex == 0 || axisIndex == 2
+                ForEach([CGFloat(1), -1], id: \.self) { sign in
+                    firingArrow(dx: horizontal ? sign : 0, dy: horizontal ? 0 : sign)
+                        .stroke(Color.accentColor.opacity(0.9), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                }
             }
             Circle()
                 .strokeBorder(Color.red.opacity(0.6), lineWidth: 1)

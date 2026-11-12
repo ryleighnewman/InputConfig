@@ -96,8 +96,11 @@ final class CursorGuardService: ObservableObject {
     private init() {
         frontAppObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.frontAppChanged() }
+        ) { [weak self] notification in
+            // The app the notification names, not frontmostApplication,
+            // which can already be the next app when activations queue up.
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { self?.frontAppChanged(activated: app) }
         }
         // Restart in case any persisted flag was already on.
         restartLoop()
@@ -127,6 +130,9 @@ final class CursorGuardService: ObservableObject {
         "com.apple.LocalAuthentication.UIAgent", "com.apple.dock",
         // The "would like to control this computer" Accessibility prompt.
         "com.apple.accessibility.universalAccessAuthWarn",
+        // Spotlight, Notification Center and Control Center: panels that
+        // come to the front over the game without being an app switch.
+        "com.apple.Spotlight", "com.apple.notificationcenterui", "com.apple.controlcenter",
     ]
 
     private static func targets(of automation: PresetAutomation?) -> GuardScope {
@@ -182,8 +188,8 @@ final class CursorGuardService: ObservableObject {
         return false
     }
 
-    private func frontAppChanged() {
-        let front = NSWorkspace.shared.frontmostApplication
+    private func frontAppChanged(activated: NSRunningApplication? = nil) {
+        let front = activated ?? NSWorkspace.shared.frontmostApplication
         let id = front?.bundleIdentifier
         let scope = presetTargets
         let inFront: Bool
@@ -318,6 +324,11 @@ final class CursorGuardService: ObservableObject {
             // (allocation + hop up to 60x/second while confine is active).
             MainActor.assumeIsolated { self?.tick() }
         }
+        // Some slack lets the system coalesce this tick with the poll's
+        // wakeup; confine still answers within the same frame.
+        // Confine only: a recenter-only tick zeroes its accumulator, so
+        // slack there spread real recenter gaps toward twice the setting.
+        if effectiveConfineEnabled { t.tolerance = tickInterval / 2 }
         RunLoop.main.add(t, forMode: .common)
         loopTimer = t
         recenterAccumulator = 0

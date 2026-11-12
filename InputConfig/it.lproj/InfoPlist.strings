@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Tutti i diritti riservati.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig ascolta le frasi vocali di un preset, solo mentre quel preset è in esecuzione o il suo pannello Frasi vocali è aperto. Non viene registrato né conservato nulla.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig riconosce le frasi vocali di un preset, su questo Mac quando la lingua lo consente. Non viene registrato né conservato nulla.";

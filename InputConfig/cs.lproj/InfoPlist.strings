@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Všechna práva vyhrazena.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig poslouchá hlasové fráze předvolby, jen dokud ta předvolba běží nebo je otevřený její panel Hlasové fráze. Nic se nenahrává ani neukládá.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig rozpoznává hlasové fráze předvolby, na tomto Macu, pokud to jazyk umožňuje. Nic se nenahrává ani neukládá.";

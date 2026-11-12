@@ -295,6 +295,73 @@ struct KeyCodeMap {
         allKeys.first(where: { $0.name == name })?.code
     }
 
+    // MARK: Macro text words
+
+    /// The words the macro text (MacroText) calls keys by, in the table's
+    /// order: the English name lowercased, with the exceptions and aliases
+    /// in `textWordOverrides`. The first word for a code is the one the
+    /// writer uses. English on every layout and in every language, so a
+    /// macro pasted from a forum reads the same everywhere.
+    static let textWords: [(word: String, code: Int)] = {
+        var out: [(word: String, code: Int)] = []
+        for key in allKeys {
+            if let words = textWordOverrides[key.code] {
+                for word in words { out.append((word, key.code)) }
+            } else {
+                out.append((usName(for: key.code).lowercased(), key.code))
+            }
+        }
+        // F21 to F24, which macOS cannot send: named so a stored one reads
+        // back, with a note from the parser.
+        for key in unavailableKeys { out.append(("f\(key.code - 91)", key.code)) }
+        return out
+    }()
+
+    /// The keys whose table name is not their word: punctuation by name,
+    /// the modifiers by their short names, the special keys without the
+    /// slashes and parentheses of the menu names.
+    private static let textWordOverrides: [Int: [String]] = [
+        45: ["minus"], 46: ["equals"], 47: ["left bracket"], 48: ["right bracket"], 49: ["backslash"],
+        50: ["iso hash"], 51: ["semicolon"], 52: ["quote"], 53: ["grave"], 54: ["comma"], 55: ["period"], 56: ["slash"],
+        40: ["return", "enter"], 41: ["escape", "esc"], 76: ["delete", "del", "forward delete"],
+        75: ["page up", "pgup"], 78: ["page down", "pgdn"], 70: ["print screen"],
+        84: ["keypad slash"], 85: ["keypad star"], 86: ["keypad minus"], 87: ["keypad plus"],
+        99: ["keypad period"], 103: ["keypad equals"], 133: ["keypad comma"],
+        100: ["section"], 137: ["yen"], 135: ["underscore"], 145: ["eisu"], 144: ["kana"],
+        227: ["cmd", "command"], 231: ["right cmd", "right command"],
+        225: ["shift"], 229: ["right shift"],
+        226: ["opt", "option", "alt"], 230: ["right opt", "right option", "right alt"],
+        224: ["ctrl", "control"], 228: ["right ctrl", "right control"],
+        globeFnCode: ["fn"],
+        303: ["launchpad key"], 305: ["keyboard light down"], 306: ["keyboard light up"],
+        globeKeyCode: ["globe"], 307: ["previous track"], 308: ["play pause"], 309: ["next track"],
+        310: ["mute"], spotlightKeyCode: ["spotlight key"], dictationKeyCode: ["dictation key"],
+        focusKeyCode: ["focus key"],
+    ]
+
+    private static let textWordCodes: [String: Int] = {
+        var out: [String: Int] = [:]
+        for entry in textWords where out[entry.word] == nil { out[entry.word] = entry.code }
+        return out
+    }()
+
+    private static let codeTextWords: [Int: String] = {
+        var out: [Int: String] = [:]
+        for entry in textWords where out[entry.code] == nil { out[entry.code] = entry.word }
+        return out
+    }()
+
+    /// The key a macro text word names, in any case, or nil.
+    static func code(forTextWord word: String) -> Int? {
+        textWordCodes[word.lowercased().trimmingCharacters(in: .whitespaces)]
+    }
+
+    /// The word the macro text writes a key as: the first in the table for
+    /// its code. nil for a code the table has no name for.
+    static func textWord(for code: Int) -> String? {
+        codeTextWords[code]
+    }
+
     /// HID usage code to macOS virtual key code mapping (for CGEvent)
     /// This maps the HID codes used in presets to the macOS virtual key codes needed for CGEvent
     static let hidToVirtualKeyCode: [Int: Int] = [
@@ -355,7 +422,7 @@ struct KeyCodeMap {
         54: 0x2B,  // ,
         55: 0x2F,  // .
         56: 0x2C,  // /
-        57: 0x39,  // Caps Lock
+        57: 0x39,  // Caps Lock: toggled with a flagsChanged, not a key event (InputSimulator.postPlainKey)
         58: 0x7A,  // F1
         59: 0x78,  // F2
         60: 0x63,  // F3

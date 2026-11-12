@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Telif Hakkı © 2026 Ryleigh Newman. Tüm hakları saklıdır.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig bir ön ayardaki ses ifadelerini yalnızca o ön ayar çalışırken ya da Ses İfadeleri sayfası açıkken dinler. Hiçbir şey kaydedilmez ya da saklanmaz.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig bir ön ayardaki ses ifadelerini, dil izin verdiğinde bu Mac’te tanır. Hiçbir şey kaydedilmez ya da saklanmaz.";

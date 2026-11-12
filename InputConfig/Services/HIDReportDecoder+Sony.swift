@@ -73,20 +73,6 @@ extension HIDReportDecoder {
         state.motion[.accelZ] = (511 - word(43)) / perG
         state.motion[.accelY] = (511 - word(45)) / perG
     }
-
-    /// Battery byte 30 of the DualShock 3 report (hid-sony.c
-    /// sixaxis_parse_report): 0xEE charging, 0xEF full, else an index into
-    /// 0, 1, 25, 50, 75, 100 percent. nil for a report that is not a state.
-    static func dualShock3Battery(report: Data) -> (level: Int, state: String)? {
-        let bytes = Array(report)
-        guard bytes.count >= 49, bytes[0] == 0x01, bytes[1] != 0xFF else { return nil }
-        switch bytes[30] {
-        case 0xEE: return (100, "Charging")
-        case 0xEF: return (100, "Full")
-        case 0...5: return ([0, 1, 25, 50, 75, 100][Int(bytes[30])], "Discharging")
-        default: return nil
-        }
-    }
 }
 
 extension HIDReportDecoder {

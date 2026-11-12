@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Hak Cipta © 2026 Ryleigh Newman. Semua hak dilindungi undang-undang.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig mendengarkan frasa suara dalam preset, hanya saat preset itu berjalan atau lembar Frasa Suara-nya terbuka. Tidak ada yang direkam atau disimpan.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig mengenali frasa suara dalam preset, di Mac ini jika bahasanya memungkinkan. Tidak ada yang direkam atau disimpan.";

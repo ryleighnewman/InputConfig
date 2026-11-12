@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. כל הזכויות שמורות.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig מאזין לביטויים הקוליים שבפריסט רק בזמן שהפריסט הזה פועל או שגיליון הביטויים הקוליים שלו פתוח. שום דבר לא מוקלט או נשמר.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig מזהה את הביטויים הקוליים שבפריסט על ה‑Mac הזה כשהשפה מאפשרת זאת. שום דבר לא מוקלט או נשמר.";

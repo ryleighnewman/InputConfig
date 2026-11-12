@@ -159,7 +159,8 @@ struct KeyboardDiagramView: View {
     static let extendedRows: [[Key]] = [
         [.key(104, "F13", 1.0), .key(105, "F14", 1.0), .key(106, "F15", 1.0), .spacer(0.5),
          .key(107, "F16", 1.0), .key(108, "F17", 1.0), .key(109, "F18", 1.0), .key(110, "F19", 1.0)],
-        [.spacer(7.5)],
+        // F20 and the PC Menu key, which a scan can bind: they had no tile.
+        [.key(111, "F20", 1.0), .key(101, "\u{2263}", 1.0), .spacer(5.5)],
         [.symbol([KeyCodeMap.globeFnCode, KeyCodeMap.globeKeyCode, 73], "globe", 1.0), .key(74, "↖", 1.0), .key(75, "⇞", 1.0), .spacer(0.5),
          .key(83, "⌧", 1.0), .key(103, "=", 1.0), .key(84, "/", 1.0), .key(85, "*", 1.0)],
         [.key(76, "⌦", 1.0), .key(77, "↘", 1.0), .key(78, "⇟", 1.0), .spacer(0.5),
@@ -173,7 +174,7 @@ struct KeyboardDiagramView: View {
     ]
 
     /// Codes that live in the extended block. A row using one shows it.
-    private static let extendedCodes: Set<Int> = Set(104...110).union(73...78).union(83...99).union([103, 133])
+    private static let extendedCodes: Set<Int> = Set(104...110).union(73...78).union(83...99).union([103, 133, 101, 111])
 
     /// Whether to draw the navigation keys and number pad.
     private var showsExtended: Bool {

@@ -145,10 +145,33 @@ struct SteamControllerState {
 /// The helper is the only piece that holds the HID device; this service
 /// just parses its stdout into a thread-safe `SteamControllerState`.
 final class SteamControllerService: @unchecked Sendable {
-    nonisolated(unsafe) static let shared = SteamControllerService()
+    static let shared = SteamControllerService()
 
     private let lock = NSLock()
     private var state = SteamControllerState()
+    /// Called on the main queue when `isConnected` flips, so the slot sync
+    /// runs on that edge rather than on a 2 Hz timer for the app's life.
+    /// Set once by GameControllerService; read under `lock`.
+    private var connectionChangeHandler: (@Sendable () -> Void)?
+    /// The connection state last handed to the handler. Guarded by `lock`.
+    private var announcedConnected = false
+
+    func setConnectionChangeHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock()
+        connectionChangeHandler = handler
+        lock.unlock()
+    }
+
+    /// Hands a connect or disconnect to the handler, once per edge. Called
+    /// after each place that can change `state.connected`, outside the lock.
+    private func announceConnectionIfChanged() {
+        lock.lock()
+        let now = state.connected
+        let notify = now != announcedConnected ? connectionChangeHandler : nil
+        announcedConnected = now
+        lock.unlock()
+        if let notify { DispatchQueue.main.async(execute: notify) }
+    }
 
     private var process: Process?
     private var pipeOut: Pipe?
@@ -203,7 +226,13 @@ final class SteamControllerService: @unchecked Sendable {
         // The 2026 model is read in the app itself, by the same rule.
         Task { @MainActor in RawHIDGamepadService.shared.setSteamController2026LizardOff(off) }
     }
+    /// What the helper wrote that has no newline yet. Guarded by `lock`:
+    /// the readability handler of one launch can still be running when the
+    /// next launch's starts.
     private var stdoutBuffer = Data()
+    /// Counts helper launches: a chunk the handler of an older launch
+    /// delivers late is dropped instead of being glued to this one's lines.
+    private var launchGeneration = 0
     /// Last left stick and left pad values. The controller reports one of
     /// them per frame on the shared leftX/leftY fields; when both are in use
     /// (hardware bit 23) it alternates, so the other side holds its last
@@ -265,12 +294,18 @@ final class SteamControllerService: @unchecked Sendable {
     /// stops reporting a phantom Steam Controller after the helper
     /// has exited unexpectedly. Idempotent; no-op if state was
     /// already disconnected.
+    fileprivate func isCurrentLaunch(_ generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return generation == launchGeneration
+    }
+
     fileprivate func markHelperDisconnected() {
         lock.lock()
         if state.connected {
             state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
         }
         lock.unlock()
+        announceConnectionIfChanged()
     }
 
     private func start() {
@@ -303,6 +338,10 @@ final class SteamControllerService: @unchecked Sendable {
         p.standardOutput = outPipe
         p.standardError = FileHandle.nullDevice
         p.standardInput = inPipe
+        lock.lock()
+        launchGeneration += 1
+        let generation = launchGeneration
+        lock.unlock()
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             // CRITICAL: empty data from a readabilityHandler is the EOF
@@ -319,11 +358,16 @@ final class SteamControllerService: @unchecked Sendable {
                 // after the helper crashes or exits. Previous version
                 // detached the handler but left `state.connected = true`
                 // sticky until the next retain/release cycle.
-                self?.markHelperDisconnected()
+                // Only this launch's: an old helper's late end of file wiped
+                // the state a newer one had just reported.
+                if self?.isCurrentLaunch(generation) == true { self?.markHelperDisconnected() }
                 return
             }
-            self?.consumeStdout(data)
+            self?.consumeStdout(data, generation: generation)
         }
+        // A half line left by the last helper must not be glued to the
+        // first line of this one.
+        lock.lock(); stdoutBuffer.removeAll(keepingCapacity: false); lock.unlock()
         do {
             try p.run()
             lock.lock()
@@ -352,6 +396,10 @@ final class SteamControllerService: @unchecked Sendable {
                     self.process = nil
                     self.pipeOut = nil
                     self.pipeIn = nil
+                    self._diagnostics.helperLaunched = false
+                    self._diagnostics.helperPID = nil
+                    self._diagnostics.readyHandshakeReceived = false
+                    self._diagnostics.firstStateLineReceived = false
                 }
                 if isCurrent {
                     self.managerOpenFailures = self.sawStateThisLaunch ? 0 : self.managerOpenFailures + 1
@@ -407,6 +455,7 @@ final class SteamControllerService: @unchecked Sendable {
         pipeIn = nil
         state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
         lock.unlock()
+        announceConnectionIfChanged()
 
         po?.fileHandleForReading.readabilityHandler = nil
         try? pi?.fileHandleForWriting.close()
@@ -451,6 +500,7 @@ final class SteamControllerService: @unchecked Sendable {
         state = simulated
         isSimulating = true
         lock.unlock()
+        announceConnectionIfChanged()
     }
 
     /// Convenience: simulate a single Steam Controller button held down for
@@ -464,6 +514,7 @@ final class SteamControllerService: @unchecked Sendable {
         state = simulated
         isSimulating = true
         lock.unlock()
+        announceConnectionIfChanged()
     }
 
     /// Releases a previously-pressed simulated button.
@@ -487,17 +538,23 @@ final class SteamControllerService: @unchecked Sendable {
             isSimulating = false
         }
         lock.unlock()
+        announceConnectionIfChanged()
     }
 
     // MARK: - Stdout parsing
 
-    private func consumeStdout(_ chunk: Data) {
+    private func consumeStdout(_ chunk: Data, generation: Int) {
+        // The lines are cut out under the lock and handled outside it:
+        // handleLine takes the lock itself.
+        var lines: [String] = []
+        lock.lock()
+        guard generation == launchGeneration else { lock.unlock(); return }
         stdoutBuffer.append(chunk)
         while let nl = stdoutBuffer.firstIndex(of: 0x0A) {
             let lineData = stdoutBuffer.subdata(in: stdoutBuffer.startIndex..<nl)
             stdoutBuffer.removeSubrange(stdoutBuffer.startIndex...nl)
             if let line = String(data: lineData, encoding: .utf8) {
-                handleLine(line)
+                lines.append(line)
             }
         }
         // Hard cap to catch a malformed helper run that never emits a
@@ -505,10 +562,11 @@ final class SteamControllerService: @unchecked Sendable {
         // garbage means the helper is broken and we should drop it.
         // Without this guard a buggy helper could grow stdoutBuffer
         // unbounded over a long session and consume hundreds of MB.
-        if stdoutBuffer.count > 65_536 {
-            NSLog("SteamControllerService: stdoutBuffer exceeded 64 KB without a newline; truncating")
-            stdoutBuffer.removeAll(keepingCapacity: false)
-        }
+        let overflow = stdoutBuffer.count > 65_536
+        if overflow { stdoutBuffer.removeAll(keepingCapacity: false) }
+        lock.unlock()
+        if overflow { NSLog("SteamControllerService: stdoutBuffer exceeded 64 KB without a newline; truncating") }
+        for line in lines { handleLine(line) }
     }
 
     /// Lines:
@@ -517,6 +575,8 @@ final class SteamControllerService: @unchecked Sendable {
     ///   "S <seq> <buttonsHex> <lx> <ly> <rx> <ry> <lt> <rt> \
     ///      <gx> <gy> <gz> <ax> <ay> <az>"
     private func handleLine(_ line: String) {
+        // A W, D or first S line connects or disconnects.
+        defer { announceConnectionIfChanged() }
         lock.lock()
         _diagnostics.totalStdoutLines += 1
         _diagnostics.lastStdoutLineAt = Date()
@@ -532,6 +592,8 @@ final class SteamControllerService: @unchecked Sendable {
             state.connected = (line == "W 1")
             lastStick = (0, 0)
             lastLeftPad = (0, 0)
+            // Off: the bench read the old flag as a controller streaming.
+            if line == "W 0" { _diagnostics.firstStateLineReceived = false }
             lock.unlock()
             return
         }
@@ -539,6 +601,8 @@ final class SteamControllerService: @unchecked Sendable {
         if line == "D" {
             lock.lock()
             state = SteamControllerState(); imuMotion = [:]; imu.reset(); lastStick = (0, 0); lastLeftPad = (0, 0)
+            _diagnostics.firstStateLineReceived = false
+            _diagnostics.readyHandshakeReceived = false
             lastStick = (0, 0)
             lastLeftPad = (0, 0)
             lock.unlock()
@@ -584,6 +648,10 @@ final class SteamControllerService: @unchecked Sendable {
         }
 
         lock.lock()
+        // Buttons, sticks, pads and triggers, not the IMU: it changes every
+        // sample, and a controller lying still lets the engine's poll rest.
+        let moved = state.buttons != buttonsHex || state.leftX != lx || state.leftY != ly
+            || state.rightX != rx || state.rightY != ry || state.leftTrigger != lt || state.rightTrigger != rt
         state.buttons = buttonsHex
         state.leftX = lx
         state.leftY = ly
@@ -615,6 +683,7 @@ final class SteamControllerService: @unchecked Sendable {
         sawStateThisLaunch = true
         _diagnostics.firstStateLineReceived = true
         lock.unlock()
+        if moved { DirectPadActivity.shared.noteChange(ObjectIdentifier(self)) }
 
         // The IMU, once the helper has turned it on (its bytes are zero
         // until then): gyro at 2000 degrees per second full scale, the

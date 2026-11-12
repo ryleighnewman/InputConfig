@@ -1,7 +1,21 @@
 import Foundation
 import Combine
 import AppKit
+import AVFoundation
+import Speech
 import GameController
+
+extension BindingModel {
+    /// What belongs to the input a row just left. Block held back the key a
+    /// row was changed to (a 1.8 middle-click row made a key row swallowed
+    /// that key after the update), and Only while held has no release to
+    /// stop at on an input that is never held: the editor showed Every
+    /// press while the engine cut the macro after one step.
+    @MainActor mutating func forgetInputBoundOptions() {
+        blockOriginal = nil
+        if MappingEngine.isNeverHeld(input) { macroInterruptOnRelease = nil }
+    }
+}
 
 /// The core engine that reads controller inputs and fires output actions.
 /// 120Hz polling with debug logging capability.
@@ -10,6 +24,26 @@ class MappingEngine: ObservableObject {
     @Published var isRunning: Bool = false {
         didSet {
             if isRunning, !oldValue { ControllerPowerService.shared.presetStarted() }
+            // The light bar follows the running preset's choice, else Settings:
+            // weighed after this turn of the run loop, so a reload's stop and
+            // start (or a switch between presets) never flips it in between.
+            if isRunning != oldValue {
+                DispatchQueue.main.async { [weak self] in self?.controllerService.reloadLightBarControlFromDefaults() }
+            }
+            // A preset made for a Switch 2 controller looks for one over
+            // Bluetooth while it runs, without changing the Settings switch.
+            // Weighed after this turn of the run loop: a reload or a switch
+            // stops and starts in one turn, and the link must not drop.
+            if isRunning != oldValue {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    if self.isRunning, let preset = self.activePreset, Self.wantsSwitch2Bluetooth(preset) {
+                        Switch2BluetoothService.shared.startForPreset()
+                    } else {
+                        Switch2BluetoothService.shared.stopForPreset()
+                    }
+                }
+            }
             #if DEBUG
             if isRunning { Self.debugRunning[ObjectIdentifier(self)] = activePreset?.name ?? "?" } else { Self.debugRunning.removeValue(forKey: ObjectIdentifier(self)) }
             #endif
@@ -19,7 +53,101 @@ class MappingEngine: ObservableObject {
     /// Tests: the engines running right now, to catch one left running.
     nonisolated(unsafe) static var debugRunning: [ObjectIdentifier: String] = [:]
     #endif
-    @Published var activePreset: Preset?
+    @Published var activePreset: Preset? {
+        // Scroll direction and Smooth scrolling follow the running preset,
+        // edits included, and are off when nothing runs.
+        didSet { applyScrollStyle() }
+    }
+
+    /// Whether a preset is made for a controller macOS reads only through
+    /// InputConfig's own Bluetooth link: a group set to the Switch 2 Pro
+    /// Controller, the GameCube controller for Switch 2 or a Joy-Con 2 pair.
+    static func wantsSwitch2Bluetooth(_ preset: Preset) -> Bool {
+        let models: Set<ControllerModelID> = [.switch2Pro, .gameCubeSwitch2, .joyCon2Pair]
+        return preset.joysticks.contains { group in
+            guard let m = group.controllerModel else { return false }
+            return models.contains(ControllerModelID(m).base)
+        }
+    }
+
+    /// Hands the running preset's Scroll direction and Smooth scrolling to
+    /// the simulator; the Test Bench calls it again after its own checks.
+    func applyScrollStyle() {
+        // A reload applies it once, at its end: stop and start in between
+        // removed the wheel tap and made it again, and cut a pad's glide.
+        guard !reloadHoldsScrollStyle else { return }
+        let a = activePreset?.automation
+        let reverseV = a?.scrollReverseVertical == true
+        let reverseH = a?.scrollReverseHorizontal == true
+        let smooth = a?.smoothScrolling == true
+        InputSimulator.shared.setScrollStyle(
+            reverseVertical: reverseV, reverseHorizontal: reverseH,
+            glideMs: smooth ? (a?.smoothScrollMs ?? PresetAutomation.defaultSmoothScrollMs) : nil)
+        // The mouse wheel too, unless the preset leaves it out, and not
+        // while outputs are suspended (asleep, locked, an unlisted app),
+        // paused, or held for a Scan in the editor.
+        let mouse = suspendReasons.isEmpty && !outputsPaused && !editorScanGate
+        // Held to the slider's range, as the poll loop holds it.
+        let stored = a?.scrollMultiplier ?? 1
+        let speed = stored.isFinite && stored > 0 ? min(20, max(0.05, stored)) : 1
+        // Held back, the shaper keeps its tap and lets scrolls pass, so an
+        // app switch or a lock does not remove and remake it.
+        MouseWheelShaper.shared.configure(
+            reverseVertical: reverseV,
+            reverseHorizontal: reverseH,
+            wheel: a?.scrollReverseSkipsMouse != true,
+            trackpad: a?.scrollReverseTrackpad == true,
+            smooth: smooth && a?.smoothScrollSkipsMouse != true,
+            wheelSpeed: a?.scrollSpeedIncludesMouse == true ? speed : 1,
+            trackpadSpeed: a?.scrollSpeedIncludesTrackpad == true ? speed : 1,
+            passing: !mouse)
+        // Pointer speed on the Mac's own mouse and trackpad, when asked.
+        let pointerStored = a?.sensitivityMultiplier ?? 1
+        let pointerSpeed = pointerStored.isFinite && pointerStored > 0 ? min(20, max(0.05, pointerStored)) : 1
+        let steady = a?.pointerSteadying ?? 0
+        PointerSpeedShaper.shared.configure(speed: a?.pointerSpeedIncludesMouse == true ? pointerSpeed : 1,
+                                            reverseX: a?.pointerReverseHorizontal == true,
+                                            reverseY: a?.pointerReverseVertical == true,
+                                            steadying: steady.isFinite ? min(1, max(0, steady)) : 0,
+                                            passing: !mouse)
+        // The light bar follows the running preset's choice, else Settings
+        // (an edit to it included), weighed once the moment settles.
+        DispatchQueue.main.async { [weak self] in self?.controllerService.reloadLightBarControlFromDefaults() }
+    }
+    private var reloadHoldsScrollStyle = false
+
+    /// The reason held while Only in these apps keeps the preset quiet.
+    static let unlistedAppReason = "app not listed"
+
+    /// Only in these apps: outputs are suspended while an app the preset
+    /// does not list is in front. InputConfig itself always counts as
+    /// listed, so the preset can still be stopped and edited from here.
+    func updateAppGate(frontmost: String? = NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+        // The lock screen, the screen saver and password prompts are not an
+        // app switched to, at a start either: gated there, "app not listed"
+        // sat beside "screen lock" and ended the lock-screen pointer.
+        guard Self.frontmostCountsForGate(frontmost) else { return }
+        if let a = activePreset?.automation, Self.appGateHolds(a, frontmost: frontmost) {
+            suspend(Self.unlistedAppReason)
+        } else {
+            resume(Self.unlistedAppReason)
+        }
+    }
+
+    nonisolated static func frontmostCountsForGate(_ bundleID: String?) -> Bool {
+        bundleID.map { !FrontmostAppWatcher.systemOverlays.contains($0) } ?? true
+    }
+
+    /// Whether Only in these apps holds the preset back with this app in
+    /// front. An unknown app in front, or an empty list, holds nothing.
+    nonisolated static func appGateHolds(_ a: PresetAutomation, frontmost: String?) -> Bool {
+        guard a.onlyInListedApps == true,
+              let listed = a.autoActivateBundleIDs, !listed.isEmpty,
+              let front = frontmost?.lowercased(),
+              front != Bundle.main.bundleIdentifier?.lowercased()
+        else { return false }
+        return !listed.contains { $0.lowercased() == front }
+    }
 
     /// Non-published copies of exactly what the 120 Hz poll loop reads.
     ///
@@ -39,13 +167,17 @@ class MappingEngine: ObservableObject {
     /// when no setting is saved yet.
     @Published var currentPollHz: Int = 120
     /// Adaptive polling. A preset that reads only controller buttons, sticks
-    /// and the D-pad drops to `idlePollHz` after `idleAfter` seconds with
-    /// nothing pressed, held or moving, and any input brings it straight
-    /// back: GameController's change callback wakes it at once, and the
+    /// and the D-pad (MIDI, keys and mouse buttons too) drops to
+    /// `idlePollHz` after `idleAfter` seconds with nothing pressed, held or
+    /// moving, and any input brings it straight back: GameController's change
+    /// callback, a MIDI message or a key event wakes it at once, and the
     /// slower poll sees every other change itself. Polling a still
     /// controller 120 times a second was most of what the app cost while it
-    /// sat in the background with a preset on.
-    private var idlePolling = false
+    /// sat in the background with a preset on. Raw HID pads, the Steam
+    /// Controller and racing wheels wake it through DirectPadActivity.
+    private var idlePolling = false {
+        didSet { if idlePolling != oldValue { DirectPadActivity.shared.setResting(idlePolling) } }
+    }
     private var idleEligible = false
     /// The running preset's "D-pad: one direction at a time", and which axis
     /// of each D-pad went down first (1 across, 2 up and down), keyed by
@@ -55,6 +187,12 @@ class MappingEngine: ObservableObject {
     private var lastInputChangeAt: CFTimeInterval = 0
     private static let idlePollHz = 30
     private static let idleAfter: CFTimeInterval = 2.0
+    /// The running preset reads a controller at all (any input that needs
+    /// a slot), as against only the Mac's keyboard and mouse, MIDI and the
+    /// like. Set at start; the idle rate reads it.
+    private var idleReadsPads = true
+    /// The rate the poll timer was installed at, 0 for no timer.
+    private var installedPollHz = 0
     /// Mirror of currently-active inputs. NOT @Published - observers update
     /// via the throttled `activeInputsPublished` instead so a fast-changing
     /// joystick does not re-render the editor 120 times per second.
@@ -66,7 +204,6 @@ class MappingEngine: ObservableObject {
         didSet { LiveInputStore.shared.active = activeInputsPublished }
     }
     private var activeInputsLastFlush: CFTimeInterval = -.infinity
-    @Published var debugLog: [(text: String, joystickIndex: Int?)] = []  // Rolling debug log visible in UI
 
     private var controllerService: GameControllerService
     /// For Settings' reload after Reset or Restore.
@@ -89,6 +226,7 @@ class MappingEngine: ObservableObject {
     private var steamSlotSubscription: AnyCancellable?
     private var racingWheelSlotSubscription: AnyCancellable?
     private var ignoredSubscription: AnyCancellable?
+    private var accessibilitySubscription: AnyCancellable?
     /// Which controller object held each slot at the last check, so a
     /// different pad taking a slot resets that slot's held state.
     private var slotOccupants: [Int: String] = [:]
@@ -127,15 +265,41 @@ class MappingEngine: ObservableObject {
     /// an app action fired from a button can act on that controller.
     private var pollingJoystickIndex: Int = 0
     /// Group index to the controller slot it reads; see `effectiveSlot`.
-    private var slotForGroup: [Int: Int] = [:]
-    /// A group of the preset reads a raw HID pad, the Steam Controller or a
-    /// racing wheel, none of which report activity the way GameController
-    /// pads do.
-    private var readsDirectPad: Bool {
-        let read = Set(slotForGroup.values)
-        return controllerService.rawHIDGamepadSlots.keys.contains { read.contains($0) }
-            || controllerService.racingWheelSlots.keys.contains { read.contains($0) }
-            || controllerService.steamControllerSlot.map { read.contains($0) } ?? false
+    /// Every pad arriving, leaving or moving goes through an assignment
+    /// here, so the direct pads the idle poll listens to follow it.
+    private var slotForGroup: [Int: Int] = [:] {
+        didSet { refreshDirectPadWatch() }
+    }
+    /// The raw HID pads, Steam Controller and racing wheels the groups read,
+    /// as handed to DirectPadActivity. Only the ones this preset reads: a
+    /// Stream Deck or adapter left plugged in kept every preset awake.
+    private var directPadSources: Set<ObjectIdentifier> = []
+    /// A group reads a racing wheel: the preset keeps the full rate, as in
+    /// 1.9. Whether GameController calls the wheel's change handler on an
+    /// acquired wheel is not yet checked on hardware, and
+    /// without it a paddle flick between two slow ticks was lost.
+    private var readsRacingWheel = false
+
+    /// Runs on every slot map assignment (the poll's 2 Hz resolve too), so
+    /// it walks the dictionaries by slot and hands the set over only when it
+    /// changed. A preset that reads no pad (keys, mouse buttons, MIDI) does
+    /// not listen even when its groups' slots hold one.
+    private func refreshDirectPadWatch() {
+        var sources: Set<ObjectIdentifier> = []
+        var wheelRead = false
+        if idleEligible, idleReadsPads {
+            let raw = controllerService.rawHIDGamepadSlots, wheels = controllerService.racingWheelSlots
+            let steam = controllerService.steamControllerSlot
+            for slot in slotForGroup.values {
+                if let pad = raw[slot] { sources.insert(ObjectIdentifier(pad)) }
+                if let wheel = wheels[slot] { sources.insert(ObjectIdentifier(wheel)); wheelRead = true }
+                if slot == steam { sources.insert(ObjectIdentifier(SteamControllerService.shared)) }
+            }
+        }
+        readsRacingWheel = wheelRead
+        guard sources != directPadSources else { return }
+        directPadSources = sources
+        DirectPadActivity.shared.watch(sources)
     }
     /// Groups that read the touchpad feed's controller; nil lets every group.
     /// TouchpadService tracks one surface, so a second player's touchpad
@@ -181,30 +345,54 @@ class MappingEngine: ObservableObject {
         didSet { if pitchAnchorReset { pitchAnchorResetPoll = pollCount } }
     }
     private var pitchAnchorResetPoll = 0
+    /// Groups whose anchors a re-zero on one pad drops, with the poll that
+    /// asked: taken up on a later poll, as `pitchAnchorReset` is.
+    private var groupAnchorResets: [Int: Int] = [:]
     private func anchorKey(_ group: Int, _ channel: MotionChannel) -> Int { group &* 16 &+ channelIndex(channel) }
 
     /// A re-center in progress: where the pointer was put, and when. Motion
     /// rows send nothing until it is confirmed, then anchor on fresh state.
-    private var motionRecenter: (point: CGPoint, poll: Int, at: CFTimeInterval)?
+    /// `groups` is the set a re-zero on one pad asked for (nil: every
+    /// group), so the confirmation drops only those anchors.
+    private var motionRecenter: (point: CGPoint, poll: Int, at: CFTimeInterval, groups: Set<Int>?)?
 
     /// Make the controller's current tilt the pointer's new neutral, with
     /// the pointer at the center of the display it is on (every re-zero, the
     /// Center Pointer action). Only while a preset is moving the pointer from
     /// motion (in the editor too, where the pointer keeps working); with
     /// none, a re-zero leaves the pointer alone.
-    func reanchorMotion() {
-        pitchAnchorReset = true
-        angleNeutral.removeAll()
+    ///
+    /// With a `slot` (the re-zero was pressed on one pad), only the groups
+    /// reading that pad let go of their anchors; a re-zero on a pad no
+    /// group reads leaves the pointer alone. Without one, every group.
+    /// With a `point` (Return Pointer to Spot), the pointer stays there and
+    /// the motion rows anchor from it instead of the center: re-centering
+    /// threw the spot away.
+    func reanchorMotion(slot: Int? = nil, at point: CGPoint? = nil) {
+        var groups: Set<Int>?
+        if let slot {
+            let reading = Set((activePreset?.joysticks.indices ?? 0..<0).filter { (slotForGroup[$0] ?? $0) == slot })
+            guard !reading.isEmpty else { return }
+            for g in reading { groupAnchorResets[g] = pollCount }
+            angleNeutral = angleNeutral.filter { !reading.contains($0.key / 16) }
+            groups = reading
+        } else {
+            pitchAnchorReset = true
+            // Return Pointer to Spot and Next Screen place the pointer, they
+            // do not re-zero: a tilt row measured from the grip keeps it.
+            if point == nil { angleNeutral.removeAll() }
+        }
         guard isRunning, !outputsBlocked || pointerOnly, let preset = activePreset,
-              preset.joysticks.contains(where: { group in
-                  group.bindings.contains { $0.input.type == .motion && Self.drivesPointer($0) }
+              preset.joysticks.indices.contains(where: { g in
+                  groups?.contains(g) != false
+                      && preset.joysticks[g].bindings.contains { $0.input.type == .motion && Self.drivesPointer($0) }
               }) else { return }
         // Whatever this poll's motion rows already added is dropped, so it
         // does not land after the warp.
         pendingMotionDeltaX = 0
         pendingMotionDeltaY = 0
-        guard let center = InputSimulator.shared.centerPointerOnCurrentScreen() else { return }
-        motionRecenter = (center, pollCount, CACurrentMediaTime())
+        guard let center = point ?? InputSimulator.shared.centerPointerOnCurrentScreen() else { return }
+        motionRecenter = (center, pollCount, CACurrentMediaTime(), groups)
     }
 
     /// Called at the top of every poll. The pointer pump may still be paying
@@ -212,10 +400,15 @@ class MappingEngine: ObservableObject {
     /// poll's movement over the next few milliseconds), which nudged the
     /// pointer off the center it was just put on. Once that has run out (two
     /// polls and 40 ms), the pointer is put back on the same center and the
-    /// motion rows anchor from there.
+    /// motion rows anchor from there. A re-zero on one pad keeps the drop
+    /// to the groups reading that pad; the others keep pointing as they were.
     private func confirmMotionRecenter() {
         guard let pending = motionRecenter else { return }
-        pitchAnchorReset = true
+        if let groups = pending.groups {
+            for g in groups { groupAnchorResets[g] = pollCount }
+        } else {
+            pitchAnchorReset = true
+        }
         guard pollCount >= pending.poll + 2, CACurrentMediaTime() - pending.at >= 0.04 else { return }
         InputSimulator.shared.warpPointer(to: pending.point)
         motionRecenter = nil
@@ -232,6 +425,11 @@ class MappingEngine: ObservableObject {
             guard pollCount > pitchAnchorResetPoll, motionRecenter == nil else { return 0 }
             pitchAnchors = [:]
             pitchAnchorReset = false
+        }
+        if let asked = groupAnchorResets[group] {
+            guard pollCount > asked, motionRecenter == nil else { return 0 }
+            groupAnchorResets[group] = nil
+            dropAnchors(group: group)
         }
         let key = anchorKey(group, channel)
         var entry = pitchAnchors[key] ?? TiltPointer(anchor: absolute)
@@ -293,20 +491,132 @@ class MappingEngine: ObservableObject {
         rowsSeenUp.removeAll()
         requireSeenUp = true
     }
-    private var appActionRowCache: [UUID: Bool] = [:]
-    private func appActionRow(_ binding: BindingModel) -> Bool {
-        if let known = appActionRowCache[binding.id] { return known }
-        let all = binding.outputs + (binding.holdOutputs ?? []) + (binding.doubleTapOutputs ?? []) + (binding.tripleTapOutputs ?? [])
-            + (binding.macroSteps ?? []).map(\.action)
-        let has = all.contains { $0.type == .appAction }
-        appActionRowCache[binding.id] = has
-        return has
+
+    /// What the poll reads about one row that cannot change while the
+    /// preset runs, worked out once by start (a reload starts again) from
+    /// `pollJoysticks`, the rows the loop goes through. Each poll used to
+    /// look these up by row id in five caches, build a chord row's held
+    /// controls again (an array per row per poll), and scan every row's
+    /// outputs in four passes for answers that never changed. A class, so
+    /// the loop takes one reference per row rather than a copy of each field.
+    private final class PollRow {
+        /// "group:uuid": the row's own press state, timers and held keys.
+        let bindKey: String
+        /// The input's serialized form, shared by the rows on that input.
+        let plainKey: String
+        /// plainKey, or for a chord its input and held controls.
+        let inputKey: String
+        let modifiers: [InputEvent]
+        let modifierSet: Set<String>
+        /// The row's input, for a MIDI note played As played.
+        let input: InputEvent
+        /// Any of its lists sends an app action (see armedAppActionRows).
+        let isAppAction: Bool
+        /// Its outputs include one fireContinuousOutputs acts on.
+        let hasContinuousOutputs: Bool
+        let hasAbsoluteVolume: Bool
+        /// The axes its zone takes over while held (a zone row that does
+        /// not share its stick); empty otherwise.
+        let zoneAxes: Set<Int>
+        /// The per-poll one-shot answer key of its input, and the one a Steam
+        /// pad's right trackpad uses (see cachedKey(forInput:)).
+        let oneShotKey: String
+        let oneShotSteamKey: String?
+
+        init(bindKey: String, plainKey: String, inputKey: String, modifiers: [InputEvent], modifierSet: Set<String>,
+             input: InputEvent, isAppAction: Bool, hasContinuousOutputs: Bool, hasAbsoluteVolume: Bool,
+             zoneAxes: Set<Int>, oneShotKey: String, oneShotSteamKey: String?) {
+            self.bindKey = bindKey
+            self.plainKey = plainKey
+            self.inputKey = inputKey
+            self.modifiers = modifiers
+            self.modifierSet = modifierSet
+            self.input = input
+            self.isAppAction = isAppAction
+            self.hasContinuousOutputs = hasContinuousOutputs
+            self.hasAbsoluteVolume = hasAbsoluteVolume
+            self.zoneAxes = zoneAxes
+            self.oneShotKey = oneShotKey
+            self.oneShotSteamKey = oneShotSteamKey
+        }
     }
-    // Cache of serialized input keys to avoid repeated string allocations at 120Hz
-    private var serializedKeyCache: [UUID: String] = [:]
-    /// Cache for the toggle/turbo/macro bind key ("slot:uuid") so a preset with
-    /// those bindings doesn't rebuild binding.id.uuidString every 120 Hz frame.
-    private var bindKeyCache: [UUID: String] = [:]
+
+    /// One group's rows in the table, and the rows each pass before the
+    /// main loop reads, by position, in order.
+    private struct PollGroup {
+        var rows: [PollRow] = []
+        /// Stick zone rows that do not share the stick.
+        var zoneRows: [Int] = []
+        /// Rows with held controls.
+        var chordRows: [Int] = []
+        /// Pause Motion While Held and Motion Only While Held rows.
+        var muteRows: [Int] = []
+        var enableRows: [Int] = []
+        /// The groups those two act on (see motionTargets).
+        var motionTargets: [Int] = []
+    }
+    /// Index for index with `pollJoysticks`, set and cleared with it.
+    private var pollTable: [PollGroup] = []
+
+    /// Outputs fireContinuousOutputs acts on; every other type it skips.
+    private static let continuousOutputTypes: Set<OutputType> = [.mouseMotion, .mouseWheel, .absoluteVolume, .midiCC, .midiPitchBend]
+
+    /// The table for these groups. Keys go by row id first, as the caches it
+    /// replaces did: a row id the preset repeats (decoding gives every row
+    /// its own, a draft may not) keeps sharing the first such row's keys.
+    private static func buildPollTable(for groups: [JoystickMapping]) -> [PollGroup] {
+        var bindKeys: [UUID: String] = [:]
+        var plainKeys: [UUID: String] = [:]
+        var chordKeys: [UUID: (key: String, mods: Set<String>)] = [:]
+        var appActions: [UUID: Bool] = [:]
+        let motionGroups = groups.indices.filter { g in groups[g].bindings.contains { $0.input.type == .motion } }
+        var table: [PollGroup] = []
+        table.reserveCapacity(groups.count)
+        for (g, group) in groups.enumerated() {
+            var entry = PollGroup()
+            entry.rows.reserveCapacity(group.bindings.count)
+            entry.motionTargets = group.bindings.contains { $0.input.type == .motion } ? [g] : motionGroups
+            for (r, row) in group.bindings.enumerated() {
+                let input = row.input
+                let serialized = input.serialized
+                let bindKey = bindKeys[row.id] ?? "\(g):\(row.id.uuidString)"
+                bindKeys[row.id] = bindKey
+                let plainKey = plainKeys[row.id] ?? serialized
+                plainKeys[row.id] = plainKey
+                let modifiers = row.modifiers
+                var inputKey = plainKey
+                var modifierSet = Set<String>()
+                if !modifiers.isEmpty {
+                    let chord = chordKeys[row.id]
+                        ?? (plainKey + "+" + modifiers.map(\.serialized).joined(separator: "+"), Set(modifiers.map(\.serialized)))
+                    chordKeys[row.id] = chord
+                    inputKey = chord.key
+                    modifierSet = chord.mods
+                    entry.chordRows.append(r)
+                }
+                let isAppAction = appActions[row.id] ?? everyOutput(of: row).contains { $0.type == .appAction }
+                appActions[row.id] = isAppAction
+                let isZone = input.type == .stickRegion && row.zoneSharesStick == false
+                if isZone { entry.zoneRows.append(r) }
+                if row.outputs.contains(where: { $0.type == .appAction && $0.appActionKind == .holdMuteMotion }) { entry.muteRows.append(r) }
+                if hasMotionAction(row, .holdEnableMotion) { entry.enableRows.append(r) }
+                var oneShotKey = serialized
+                if input.type == .midi, input.midiCCMode == .relative, let step = input.midiTurnStep {
+                    oneShotKey = serialized + " step \(step)"
+                }
+                entry.rows.append(PollRow(
+                    bindKey: bindKey, plainKey: plainKey, inputKey: inputKey, modifiers: modifiers, modifierSet: modifierSet,
+                    input: input, isAppAction: isAppAction,
+                    hasContinuousOutputs: row.outputs.contains { continuousOutputTypes.contains($0.type) },
+                    hasAbsoluteVolume: row.outputs.contains { $0.type == .absoluteVolume },
+                    zoneAxes: isZone ? axesOfZone(key: input.index, id: input.stickRegionID) : [],
+                    oneShotKey: oneShotKey,
+                    oneShotSteamKey: input.type == .touchpadGesture && input.touchpadSurface != 1 ? serialized + " steam" : nil))
+            }
+            table.append(entry)
+        }
+        return table
+    }
 
     /// Monotonically increasing counter bumped on every start()/stop().
     /// Background blocks (macros, turbo release) capture this at schedule
@@ -314,7 +624,11 @@ class MappingEngine: ObservableObject {
     /// changed - prevents stuck keys after stop() invalidates the poll
     /// timer but in-flight macro / turbo blocks still try to release a
     /// key from a preset that's no longer active.
-    private var engineGeneration: Int = 0
+    private var engineGeneration: Int = 0 {
+        // Mirrored for the chain threads: a glide or screen wait in
+        // progress has to end at stop(), a pause edge or a lock at once.
+        didSet { MacroCancelFlags.shared.setGeneration(engineGeneration) }
+    }
 
     /// Scratch Sets reused across poll frames so the 120 Hz hot path
     /// doesn't allocate a fresh `Set<String>` per joystick per tick.
@@ -341,6 +655,9 @@ class MappingEngine: ObservableObject {
     /// direction rows step aside, the way a chord takes over its plain row.
     /// A zone row set to share the stick leaves them firing.
     private var zoneTakenAxes: Set<Int> = []
+    /// The regions behind those takeovers: a direction row that waits in
+    /// one of them is the one row meant to fire there.
+    private var zoneTakenRegionIDs: Set<UUID> = []
     /// The held-control sets of the chords satisfied this frame, by input,
     /// so a chord with more held controls takes over from one with fewer.
     private var chordSatisfied: [String: [Set<String>]] = [:]
@@ -348,7 +665,6 @@ class MappingEngine: ObservableObject {
     /// go. Letting go of LB before A in an LB+A chord used to fire A's plain
     /// row on the way out.
     private var chordLatched: [Int: Set<String>] = [:]
-    private var chordKeyCache: [UUID: String] = [:]
     /// Gyro ratchet: true while a "Pause Motion While Held" row on the slot
     /// being polled is held. Motion bindings read 0 for the frame.
     private var currentSlotMotionMuted = false
@@ -455,16 +771,6 @@ class MappingEngine: ObservableObject {
     private static let debugLogDefaultsKey = "InputConfig.showDebugLog"
     private var debugLineCount = 0
 
-    /// Internal buffer the polling loop writes to without triggering UI
-    /// re-renders. A separate timer flushes this into `debugLog` (which is
-    /// @Published) at a much slower rate so the editor and other observers
-    /// of `mappingEngine` do not re-render on every input event.
-    private var pendingLog: [(text: String, joystickIndex: Int?)] = []
-    /// Set when `pendingLog` gains a new entry. Lets flushPendingLog skip the
-    /// @Published mirror assignment on idle 5 Hz ticks, so DebugLogView does
-    /// not re-render and re-filter the whole log when nothing has changed.
-    private var pendingLogDirty = false
-    private var logFlushTimer: Timer?
     /// True while the active preset retains TouchpadService. Tracked
     /// separately so stop() only releases when start() retained.
     private var usesTouchpadInput = false
@@ -472,6 +778,12 @@ class MappingEngine: ObservableObject {
     /// whether we asked CursorRegionService to poll the cursor, so
     /// stop() balances the beginTracking() call exactly once.
     private var usesCursorRegionInput = false
+    /// Same for screen color rows and ScreenPixelService.
+    private var usesScreenPixelInput = false
+    private var usesScreenTextInput = false
+    private var usesVoicePhraseInput = false
+    /// Tracking a reload's stop left running for the start right after it.
+    private var carriedTrackers: (pixel: Bool, text: Bool, voice: Bool) = (false, false, false)
 
     /// When true, the engine keeps polling and updating `activeInputs` so the
     /// editor's row highlights and the touchpad calibration UI keep working,
@@ -525,9 +837,9 @@ class MappingEngine: ObservableObject {
             // Paused (from the menu bar, or the editor over a preset whose
             // pointer does not pass through), the Steam Controller gets its
             // own mouse and keys back, since the preset sends nothing.
-            if oldValue != outputsPaused, isRunning {
-                SteamControllerService.shared.setLizardModeOff(!outputsPaused || editorPassthroughApplies)
-            }
+            if oldValue != outputsPaused { applyLizardMode() }
+            // Paused, the person's own wheel and trackpad go back to normal.
+            if oldValue != outputsPaused { applyScrollStyle() }
             if oldValue != outputsPaused {
                 // Presses made while paused still ran the latch logic, so a
                 // toggle turbo row came back as a running auto-clicker and a
@@ -536,7 +848,7 @@ class MappingEngine: ObservableObject {
                 // Running macro, turbo and repeat chains stop with them.
                 engineGeneration &+= 1
                 clearLatches()
-                ExternalInputDeviceService.shared.setBlockingPaused(outputsBlocked)
+                applyBlockingPaused()
                 // Recenter, confine and hide pause with everything else:
                 // they kept pulling the pointer to the middle while Pause
                 // Outputs was on and over the open editor's Save button.
@@ -547,6 +859,10 @@ class MappingEngine: ObservableObject {
 
     /// Observes PresetStore saves so the running engine follows edits.
     private var presetSaveObserver: NSObjectProtocol?
+    /// The freeze watchdog and an Accessibility revoke let go of every
+    /// posted key and button behind the engine's back; this squares the
+    /// engine's latches with that, so a toggled row is not inverted after.
+    private var forcedReleaseObserver: NSObjectProtocol?
 
     /// Re-arm on the edited preset when it is the one currently running.
     /// `start(with:)` already calls `stop()` first, so this is a clean
@@ -562,21 +878,31 @@ class MappingEngine: ObservableObject {
     /// name counted 8 activations and opened the auto-launch URL 8 times.
     /// A change only to the name, tag, notes, or order does nothing at all,
     /// and a preset edited down to no rows and no drive stops.
+    /// Set by reload while it writes its own Stopped line, so stop() does
+    /// not write a second one for the same stop.
+    private var stopLineWritten = false
+
     func reload(with updated: Preset) {
         guard isRunning, let current = activePreset, current.id == updated.id else { return }
         if Self.runtimeShape(of: current) == Self.runtimeShape(of: updated) {
             activePreset = updated   // keep the displayed name current
             return
         }
-        let hasAnyBinding = updated.joysticks.contains { !$0.bindings.isEmpty }
-        guard hasAnyBinding || updated.driveConfig?.enabled == true else {
+        // Rows, drive, or a scroll style: a scroll-only preset keeps
+        // running through an automation edit.
+        guard updated.isRunnable else {
             activity(String(localized: "Stopped \u{201C}\(updated.shownName)\u{201D}: it has no rows left"))
+            stopLineWritten = true
             stop()
+            stopLineWritten = false
             // The store still marked it running; the menu bar clears that.
             NotificationCenter.default.post(name: Self.stoppedEmptyPresetNotification, object: updated.id)
             return
         }
+        reloadHoldsScrollStyle = true
         start(with: updated, isReload: true)
+        reloadHoldsScrollStyle = false
+        applyScrollStyle()
     }
 
     /// The parts of a preset the engine runs on, with the descriptive ones
@@ -634,6 +960,35 @@ class MappingEngine: ObservableObject {
         guard isRunning || restartWatch != nil else { return }
         let wanted = holdButtons
         if controllerService.emergencyButtons != wanted { controllerService.emergencyButtons = wanted }
+        // The hold moved to (or off) the PS button or a paddle, or was
+        // switched on or off: the stream and the idle rate follow.
+        updateSupplementWanted()
+        reRateIdlePoll()
+    }
+
+    /// The running preset reads PS, mute, FN or a paddle (set at start).
+    private var presetReadsSupplement = false
+    /// What this engine last asked of the DualSense report stream.
+    private var supplementWanted = false
+
+    /// The DualSense report stream (about 250 main thread callbacks a
+    /// second per wired pad) is wanted by a running preset only when it
+    /// reads what only the stream gives, or the emergency hold is on one of
+    /// those buttons. Every preset wanted it, so a preset of plain buttons
+    /// and sticks paid for buttons it never read. The editor, the
+    /// visualizer, Scan and the restart hold want it on their own.
+    private func updateSupplementWanted() {
+        let wanted = isRunning && (presetReadsSupplement || Self.wantsSupplement(buttonsRead: [], holdButtons: holdButtons))
+        guard wanted != supplementWanted else { return }
+        supplementWanted = wanted
+        DualSenseSupplementService.shared.setPollingWanted(wanted, reason: "engine")
+    }
+
+    /// Whether these buttons, read by rows or held for the emergency stop,
+    /// need the DualSense supplement's report stream.
+    static func wantsSupplement(buttonsRead: Set<Int>, holdButtons: Set<Int>) -> Bool {
+        !buttonsRead.isDisjoint(with: DualSenseSupplementService.publishedButtons)
+            || !holdButtons.isDisjoint(with: DualSenseSupplementService.publishedButtons)
     }
     private var holdSettingsObserver: NSObjectProtocol?
 
@@ -650,7 +1005,7 @@ class MappingEngine: ObservableObject {
     /// wheel pinned by name is followed when the pads enumerate in another
     /// order.
     func driveReadSlot(_ drive: DriveConfig, in groups: [JoystickMapping]) -> Int {
-        guard drive.slot < groups.count, groups[drive.slot].inputKind == .controller,
+        guard groups.indices.contains(drive.slot), groups[drive.slot].inputKind == .controller,
               groups[drive.slot].customName != nil,
               let slot = slotForGroup[drive.slot] else { return drive.slot }
         // Away: nothing is read, as for the group's own rows.
@@ -679,6 +1034,26 @@ class MappingEngine: ObservableObject {
             guard let preset = note.userInfo?["preset"] as? Preset else { return }
             MainActor.assumeIsolated { self?.activePresetWasEdited(preset) }
         }
+        forcedReleaseObserver = NotificationCenter.default.addObserver(
+            forName: InputSimulator.outputsForcedReleaseNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.squareAfterForcedRelease() }
+        }
+    }
+
+    /// The simulator already let everything go (and on the Accessibility
+    /// path kept its own record for the re-grant sweep, so it is not asked
+    /// again here); the engine's side of a press is cleared the way a pause
+    /// edge clears it, and nothing is suspended: MIDI, apps, speech and
+    /// lights keep working.
+    private func squareAfterForcedRelease() {
+        engineGeneration &+= 1
+        driveProcessor.releaseAll()
+        MIDIService.shared.releaseAllNotes()
+        releaseHeldLights()
+        MouseMotionPump.shared.setVelocity(x: 0, y: 0)
+        MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
+        clearLatches()
     }
 
     /// Release every synthesized output when the machine sleeps, and refresh
@@ -693,9 +1068,29 @@ class MappingEngine: ObservableObject {
     /// is sent: a Return or Type Text row used to type into the login
     /// window's password field, and a latched Shift stayed held there.
     private var suspendReasons: Set<String> = []
+    /// Held back now (asleep, locked, another user, an unlisted app), for
+    /// Siri and Shortcuts to say so.
+    var isSuspended: Bool { !suspendReasons.isEmpty }
+    /// Held back only by Only in these apps.
+    var isHeldByAppGate: Bool { suspendReasons == [Self.unlistedAppReason] }
+    /// A permission the running preset's screen or voice rows need is
+    /// missing, so those rows do nothing yet.
+    var missingInputPermission: Bool {
+        let screen = (usesScreenPixelInput || usesScreenTextInput) && !CGPreflightScreenCaptureAccess()
+        let voice = usesVoicePhraseInput && (AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                                             || SFSpeechRecognizer.authorizationStatus() != .authorized)
+        return screen || voice
+    }
 
     /// Outputs are held back while paused by the editor or suspended.
     private var outputsBlocked: Bool { outputsPaused || !suspendReasons.isEmpty || editorScanGate }
+    private var debugLeavesVoice: Bool {
+        #if DEBUG
+        debugWalking
+        #else
+        false
+        #endif
+    }
 
     // MARK: - Override in the editor
 
@@ -706,6 +1101,8 @@ class MappingEngine: ObservableObject {
             // The paused rate depends on the editor: re-rate when it opens or
             // closes while outputs stay paused.
             if oldValue != editorOpen, outputsPaused, isRunning { idlePolling = false; installPollTimer() }
+            // So does the idle rate: no timer only with the editor closed.
+            if oldValue != editorOpen { reRateIdlePoll() }
         }
     }
 
@@ -720,8 +1117,7 @@ class MappingEngine: ObservableObject {
     /// preset has. Without them a controller-only user could no longer
     /// reach Undo, Cancel or Save, so such an edit waits for Save.
     static func draftKeepsWayOut(saved: Preset, draft: Preset) -> Bool {
-        let hasRows = draft.joysticks.contains { !$0.bindings.isEmpty } || draft.driveConfig?.enabled == true
-        guard hasRows else { return false }
+        guard draft.isRunnable else { return false }
         if hasPointerOutputs(saved) && !hasPointerOutputs(draft) { return false }
         if hasEditorSafeKeyRows(saved) && !hasEditorSafeKeyRows(draft) { return false }
         return true
@@ -730,10 +1126,7 @@ class MappingEngine: ObservableObject {
     /// Whether any row sends only keys the editor lets through.
     static func hasEditorSafeKeyRows(_ preset: Preset) -> Bool {
         preset.joysticks.contains { group in
-            group.bindings.contains { row in
-                let keys = row.outputs.filter { $0.type == .key }
-                return !keys.isEmpty && keys.allSatisfy { editorSafeKeys.contains($0.keyCode ?? -1) }
-            }
+            group.bindings.contains { keysAllSafe($0.outputs) }
         }
     }
 
@@ -753,7 +1146,12 @@ class MappingEngine: ObservableObject {
     /// button) still holds every output back, so the press being scanned
     /// does not also fire its row.
     private var editorScanGate: Bool {
-        editorOpen && (controllerService.isScanning || Self.editorListenerArmed)
+        // A take too: it stores the raw input, so a running preset must
+        // not reshape what the target app sees meanwhile.
+        // A listening sheet holds back without the editor too: Motion
+        // Calibration opened from the menu fired the running row for the
+        // button being assigned.
+        (editorOpen && (controllerService.isScanning || MacroRecorderService.shared.isRecording)) || Self.editorListenerArmed
     }
     private var lastEditorScanGate = false
 
@@ -769,8 +1167,33 @@ class MappingEngine: ObservableObject {
     /// At the lock screen with the editor open, the pointer still works too,
     /// or a controller-only user who left the editor up was locked out.
     private var pointerOnlyAtLockScreen: Bool {
-        suspendReasons == ["screen lock"] && (!outputsPaused || editorPassthroughApplies)
+        // The gate's reason does not count: locked from an unlisted app, a
+        // controller-only user still needs the pointer at the login window.
+        // Counted rather than compared with a new set: the pointer flush asks
+        // this every poll while the preset is held back.
+        suspendReasons.contains("screen lock")
+            && suspendReasons.count == (suspendReasons.contains(Self.unlistedAppReason) ? 2 : 1)
+            && (!outputsPaused || editorPassthroughApplies)
     }
+
+    /// The Steam Controller's own mouse and keys are off while the running
+    /// preset sends something (pointer passthrough in the editor and at the
+    /// lock screen included) and back on while it is paused or suspended,
+    /// so in an app Only in these apps does not list the pad still works.
+    private func applyLizardMode(starting: Bool = false) {
+        let sending = suspendReasons.isEmpty && (!outputsPaused || editorPassthroughApplies)
+        #if DEBUG
+        if let sink = debugLizardSink { sink(sending || pointerOnlyAtLockScreen); return }
+        #endif
+        guard isRunning || starting else { return }
+        let off = sending || pointerOnlyAtLockScreen
+        // Written when it changes: each app switch under the gate sent the
+        // Steam helper a report and a task for the same value.
+        guard starting || off != lastLizardOff else { return }
+        lastLizardOff = off
+        SteamControllerService.shared.setLizardModeOff(off)
+    }
+    private var lastLizardOff: Bool?
 
     /// Set while the preset editor holds outputs back. The pointer, clicks
     /// and scrolling still go through, so someone who uses the controller
@@ -788,13 +1211,19 @@ class MappingEngine: ObservableObject {
     private var presetSuitsEditorPassthrough = false
     var editorPassthroughApplies: Bool { editorPointerPassthrough && presetSuitsEditorPassthrough }
     private var pointerWhileEditing: Bool {
+        // Not during a take: as with a Scan, the preset's own clicks and keys
+        // reached the app being recorded and were not in the take.
         outputsPaused && editorPassthroughApplies && suspendReasons.isEmpty
-            && !controllerService.isScanning && !Self.editorListenerArmed
+            && !controllerService.isScanning && !Self.editorListenerArmed && !MacroRecorderService.shared.isRecording
     }
-    /// Set while a sheet over the editor waits for a controller button (the
-    /// re-zero button in Motion Calibration), so that press does not also
-    /// click wherever the pointer is.
-    static var editorListenerArmed = false
+    /// Set while a sheet waits for a controller button or keys (the re-zero
+    /// button in Motion Calibration, from the editor or the menu, and the
+    /// sequence recorders), so that press does not also fire a row.
+    static var editorListenerArmed = false {
+        // A sheet listening needs its scan edge seen by the poll, so an
+        // idle poll with no timer takes one again.
+        didSet { if editorListenerArmed != oldValue { current?.reRateIdlePoll() } }
+    }
 
     /// Whether any row of the preset sends a pointer output, leaving out
     /// touchpad rows when asked (they stay paused in the editor).
@@ -815,8 +1244,10 @@ class MappingEngine: ObservableObject {
     /// Set while Touchpad Setup is open: touchpad pointer rows wait then,
     /// since a finger setting up zones would fling the pointer. Otherwise
     /// they pass in the editor, so a preset whose pointer is the touchpad
-    /// can still reach Save and Cancel.
-    static var touchpadSetupOpen = false
+    /// can still reach Save and Cancel. Counted, not a flag: the first of
+    /// two open sheets to close cleared it for the one still open.
+    static var touchpadSetupOpenCount = 0
+    static var touchpadSetupOpen: Bool { touchpadSetupOpenCount > 0 }
 
     /// Touchpad Setup open over the editor: the touchpad's rows wait, so a
     /// finger drawing zones does not move the pointer or fire zone rows,
@@ -838,7 +1269,7 @@ class MappingEngine: ObservableObject {
         return !controllerService.isSteamSlot(slotForGroup[group] ?? group)
     }
 
-    private static let pointerOutputTypes: Set<OutputType> = [.mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep]
+    private static let pointerOutputTypes: Set<OutputType> = [.mouseButton, .mouseMotion, .mouseWheel, .mouseWheelStep, .mouseStep]
 
     /// Keys that move around and answer the editor: Escape, Return, Tab,
     /// Space, the arrows, and Shift (for Shift Tab). They pass while the
@@ -850,10 +1281,19 @@ class MappingEngine: ObservableObject {
     /// and in the editor a row whose keys are all safe keys (a row with
     /// Command Tab keeps none of its keys, rather than sending a bare Tab).
     private func passingOutputs(_ outputs: [OutputAction]) -> [OutputAction] {
-        let keys = outputs.filter { $0.type == .key }
-        let keysPass = pointerWhileEditing && !pointerOnlyAtLockScreen && !keys.isEmpty
-            && keys.allSatisfy { Self.editorSafeKeys.contains($0.keyCode ?? -1) }
+        let keysPass = safeKeysPass(outputs)
         return outputs.filter { Self.pointerOutputTypes.contains($0.type) || (keysPass && $0.type == .key) }
+    }
+
+    /// Whether a row's keys go out while the editor holds outputs back: it
+    /// has keys, all of them safe. The keep set reads the same answer.
+    private func safeKeysPass(_ outputs: [OutputAction]) -> Bool {
+        pointerWhileEditing && !pointerOnlyAtLockScreen && Self.keysAllSafe(outputs)
+    }
+
+    static func keysAllSafe(_ outputs: [OutputAction]) -> Bool {
+        let keys = outputs.filter { $0.type == .key }
+        return !keys.isEmpty && keys.allSatisfy { editorSafeKeys.contains($0.keyCode ?? -1) }
     }
 
     /// Whether a preset has rows the editor lets through: a pointer row,
@@ -865,12 +1305,40 @@ class MappingEngine: ObservableObject {
     private func suspend(_ reason: String) {
         let wasSuspended = !suspendReasons.isEmpty
         let wasPointerOnly = pointerOnlyAtLockScreen
+        // A Play once chain running under Only in these apps stops at a
+        // lock, sleep or user switch, and lets go of what it holds: the
+        // early return below bumps no generation.
+        if reason != Self.unlistedAppReason, macrosInFlight.contains(Self.editorPlayKey) {
+            editorPlaybackWasCut = true
+            macroCancelRequests.insert(Self.editorPlayKey)
+            InputSimulator.shared.releaseOwners(withPrefix: Self.editorPlayKey)
+            MIDIService.shared.releaseNotes(ownerPrefix: Self.editorPlayKey)
+            releaseHeldLights(withPrefix: Self.editorPlayKey)
+        }
         suspendReasons.insert(reason)
         suspendedSince[reason] = suspendedSince[reason] ?? Date()
         startReconcileTimer()
         // A second reason while the lock screen was letting the pointer
         // through (it locked, then slept): what the pointer rows hold goes.
-        guard !wasSuspended || wasPointerOnly else { return }
+        // Every edge answers lizard mode and the wheel: sleep then lock
+        // left lizard on at the login window, typing into the password field.
+        guard !wasSuspended || (wasPointerOnly && !pointerOnlyAtLockScreen) else {
+            // The gate, then the lock: the pointer begins to pass here, as
+            // at every other such edge, so a latch flipped or a chain
+            // started under the gate (unseen there) must not go live at
+            // the login window.
+            if !wasPointerOnly, pointerOnlyAtLockScreen {
+                engineGeneration &+= 1
+                pitchAnchorReset = true
+                MouseMotionPump.shared.setVelocity(x: 0, y: 0)
+                MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
+                clearLatches()
+            }
+            applyBlockingPaused()
+            applyScrollStyle()
+            applyLizardMode()
+            return
+        }
         engineGeneration &+= 1   // in-flight macros, turbo and repeats stop
         driveProcessor.releaseAll()
         InputSimulator.shared.releaseAll()
@@ -882,13 +1350,44 @@ class MappingEngine: ObservableObject {
         // resolves against a press from before.
         clearLatches()
         CursorGuardService.shared.setSuspended(true)
-        ExternalInputDeviceService.shared.setBlockingPaused(true)
-        if isRunning { log("Outputs suspended: \(reason)") }
+        applyBlockingPaused()
+        if !debugLeavesVoice { VoicePhraseService.shared.setSuspended(true) }
+        applyScrollStyle()
+        applyLizardMode()
+        // Under a pause the gate's lines are not logged, as its resumed line is not.
+        if isRunning, reason != Self.unlistedAppReason || !outputsPaused { log("Outputs suspended: \(reason)") }
     }
 
     private func resume(_ reason: String) {
         suspendedSince[reason] = nil
-        guard suspendReasons.remove(reason) != nil, suspendReasons.isEmpty else { return }
+        let wasPointerOnly = pointerOnlyAtLockScreen
+        guard suspendReasons.remove(reason) != nil else { return }
+        guard suspendReasons.isEmpty else {
+            // Unlocked into an app the preset does not list: what the pointer
+            // rows hold goes now, as their release would be dropped under
+            // the gate and a click or drag lock stayed down in that app.
+            if wasPointerOnly && !pointerOnlyAtLockScreen {
+                engineGeneration &+= 1
+                InputSimulator.shared.releaseAll()
+                MouseMotionPump.shared.setVelocity(x: 0, y: 0)
+                MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
+                clearLatches()
+            }
+            // Woken into the lock screen under the gate: the pointer begins
+            // to pass, so a latch or chain made unseen under the gate must
+            // not go live at the login window (suspend's twin).
+            if !wasPointerOnly && pointerOnlyAtLockScreen {
+                engineGeneration &+= 1
+                pitchAnchorReset = true
+                MouseMotionPump.shared.setVelocity(x: 0, y: 0)
+                MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
+                clearLatches()
+            }
+            applyBlockingPaused()
+            applyScrollStyle()
+            applyLizardMode()
+            return
+        }
         reconcileTimer?.invalidate()
         reconcileTimer = nil
         pitchAnchorReset = true
@@ -906,8 +1405,12 @@ class MappingEngine: ObservableObject {
         MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
         clearLatches()
         CursorGuardService.shared.setSuspended(outputsBlocked)
-        ExternalInputDeviceService.shared.setBlockingPaused(outputsBlocked)
-        if isRunning { log("Outputs resumed") }
+        applyBlockingPaused()
+        if !debugLeavesVoice { VoicePhraseService.shared.setSuspended(false) }
+        applyScrollStyle()
+        applyLizardMode()
+        // Only in these apps lifting under a paused preset resumes nothing.
+        if isRunning, !outputsPaused { log("Outputs resumed") }
     }
 
     /// Clears every press latch: toggles, turbo, tap and hold decisions,
@@ -918,17 +1421,26 @@ class MappingEngine: ObservableObject {
         turboPulseDown.removeAll()
         turboTimestamps.removeAll()
         turboCounts.removeAll()
+        turboNextInterval.removeAll()
         deferredPressStart.removeAll()
         modifierKeyDownMark.removeAll()
         holdFired.removeAll()
         lastTapTime.removeAll()
         tapCount.removeAll()
         gestureRecognizers.removeAll()
+        sequenceRecognizers.removeAll()
+        keySequenceRecognizers.removeAll()
+        keySequenceFiredUntil.removeAll()
+        keySequenceLitUntil.removeAll()
         pendingSingleTapToken.removeAll()
         secondTapPressed.removeAll()
         repeatsInFlight.removeAll()
         macrosInFlight.removeAll()
         macroCancelRequests.removeAll()
+        // Every edge that clears the latches (Pause, lock, sleep, the app
+        // gate, a Scan, a forced release) also never sees a held Precision
+        // While Held row's release.
+        InputSimulator.shared.clearPrecision()
     }
 
     /// When each reason began, so a missed ending can be noticed.
@@ -977,6 +1489,19 @@ class MappingEngine: ObservableObject {
 
     private func installSleepWakeObservers() {
         let center = NSWorkspace.shared.notificationCenter
+        // The wheel shaper and the key and button blocks leave InputConfig's
+        // own windows alone.
+        let selfFront = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+        MouseWheelShaper.shared.setSelfInFront(selfFront)
+        PointerSpeedShaper.shared.setSelfInFront(selfFront)
+        ExternalInputDeviceService.shared.setSelfInFront(selfFront)
+        center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let bundleID = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MouseWheelShaper.shared.setSelfInFront(bundleID == Bundle.main.bundleIdentifier)
+            PointerSpeedShaper.shared.setSelfInFront(bundleID == Bundle.main.bundleIdentifier)
+            ExternalInputDeviceService.shared.setSelfInFront(bundleID == Bundle.main.bundleIdentifier)
+            Task { @MainActor in self?.updateAppGate(frontmost: bundleID) }
+        }
         let pairs: [(Notification.Name, Notification.Name, String)] = [
             (NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification, "sleep"),
             (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, "user switch"),
@@ -997,7 +1522,14 @@ class MappingEngine: ObservableObject {
             Task { @MainActor in self?.suspend("screen lock") }
         }
         distributed.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.resume("screen lock") }
+            Task { @MainActor in
+                self?.resume("screen lock")
+                // No app activation need follow an unlock: the gate read
+                // again, now and once the login window has gone.
+                self?.updateAppGate()
+                try? await Task.sleep(for: .seconds(1))
+                self?.updateAppGate()
+            }
         }
     }
 
@@ -1020,10 +1552,13 @@ class MappingEngine: ObservableObject {
     /// outputs are let go. Storing the cancellable also fixes the previous fire-and-forget
     /// NotificationCenter observer, which was never removed.
     private func installControllerDisconnectObserver() {
+        // Each also re-rates an idle poll: a pad arriving gives a poll that
+        // had no timer (nothing to read) its idle timer back.
         controllerListSubscription = controllerService.$connectedControllers
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.cleanupAfterControllerDisconnect()
+                self?.reRateIdlePoll()
             }
         // Raw HID pads come and go without touching connectedControllers
         // (a GameCube adapter port, a pad swapped on the same USB port).
@@ -1031,6 +1566,7 @@ class MappingEngine: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.cleanupAfterControllerDisconnect()
+                self?.reRateIdlePoll()
             }
         // The Steam Controller's slot too: its disconnect touched neither
         // list, so a toggled key or auto-click on it kept going.
@@ -1038,12 +1574,14 @@ class MappingEngine: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.cleanupAfterControllerDisconnect()
+                self?.reRateIdlePoll()
             }
         // A racing wheel read through GCRacingWheel the same way.
         racingWheelSlotSubscription = controllerService.$racingWheelSlots
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.cleanupAfterControllerDisconnect()
+                self?.reRateIdlePoll()
             }
         ignoredSubscription = controllerService.$ignoredDevices
             .removeDuplicates()
@@ -1051,20 +1589,31 @@ class MappingEngine: ObservableObject {
             .sink { [weak self] _ in
                 self?.cleanupAfterControllerDisconnect()
             }
+        // The wheel shaper's tap could not be made without Accessibility
+        // and nothing else asks again, so a scroll-only preset stayed dead.
+        accessibilitySubscription = AccessibilityPermissionService.shared.$isTrusted
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyScrollStyle() }
         // A re-zero (Quick Zero, the re-zero button, Motion Calibration)
         // restarts the tilt estimate, so the pointer's neutral moves with
         // it; keeping the old anchor made the pointer leap.
         rezeroObserver = NotificationCenter.default.addObserver(
             forName: GameControllerService.motionRezeroedNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reanchorMotion() }
+        ) { [weak self] note in
+            let slot = note.userInfo?["slot"] as? Int
+            MainActor.assumeIsolated { self?.reanchorMotion(slot: slot) }
         }
         // A tilt sign learned mid-use: anchor again where the pad is, with
         // no re-center, so the pointer does not leap by twice the tilt.
         holdSettingsObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+            forName: UserDefaults.didChangeNotification, object: nil, queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshHoldButtons() }
+            // Not queue: .main: a block observer on a queue makes the
+            // writer wait for it, so the freeze watchdog's stamp from its
+            // own queue waited on the hung main thread.
+            DispatchQueue.main.async { self?.refreshHoldButtons() }
         }
         tiltSignObserver = NotificationCenter.default.addObserver(
             forName: GameControllerService.tiltSignLearnedNotification, object: nil, queue: .main
@@ -1085,9 +1634,6 @@ class MappingEngine: ObservableObject {
     /// it, but a stuck simulated key on disconnect is the kind of
     /// stuck-output bug that's hard to undo without a relaunch.
     private func cleanupAfterControllerDisconnect() {
-        // A pad that came back is a new controller with a fresh tilt
-        // estimate; the old anchor would make the pointer leap.
-        pitchAnchorReset = true
         // Which controller holds each slot now. A slot whose controller left,
         // or was replaced by another, invalidates the state of every group
         // that reads it. Groups are compared by the slot they actually read,
@@ -1106,10 +1652,16 @@ class MappingEngine: ObservableObject {
         let changedSlots = Set(slotOccupants.compactMap { slot, old in occupants[slot] != old ? slot : nil })
         let previousOccupants = slotOccupants
         slotOccupants = occupants
-        guard !changedSlots.isEmpty, let preset = activePreset else { return }
+        guard !changedSlots.isEmpty else { return }
+        // A pad that came back is a new controller with a fresh tilt
+        // estimate; the old anchor would make the pointer leap. Only when a
+        // slot did change: dropping every anchor on each controller list
+        // emission put every tilt pointer back on its neutral.
+        pitchAnchorReset = true
+        guard let preset = activePreset else { return }
 
         let controllerTypes: Set<InputType> = [.button, .axis, .hat, .touchpad, .touchpadRegion,
-                                               .touchpadGesture, .motion, .stickRegion, .stickGesture]
+                                               .touchpadGesture, .motion, .stickRegion, .stickGesture, .buttonSequence]
         // A group is affected when the pad it reads is not the pad it read:
         // compared by occupant, not by slot number, so a pinned pad that
         // only moved to another slot (a second pad plugged in ahead of it)
@@ -1146,10 +1698,20 @@ class MappingEngine: ObservableObject {
             toggleStates = toggleStates.filter { !$0.key.hasPrefix(prefix) }
             turboTimestamps = turboTimestamps.filter { !$0.key.hasPrefix(prefix) }
             turboCounts = turboCounts.filter { !$0.key.hasPrefix(prefix) }
+            turboNextInterval = turboNextInterval.filter { !$0.key.hasPrefix(prefix) }
+            // A pulse mid-hold when the pad left is released by owner
+            // below; its entry would send that release a second time.
+            turboPulseDown = turboPulseDown.filter { !$0.key.hasPrefix(prefix) }
+            // A Move pointer glide reads only the cancel flag. The next
+            // press on the row clears it.
+            macroCancelRequests.formUnion(macrosInFlight.filter { $0.hasPrefix(prefix) })
             macrosInFlight = macrosInFlight.filter { !$0.hasPrefix(prefix) }
             secondTapPressed = secondTapPressed.filter { !$0.hasPrefix(prefix) }
             lastTapTime = lastTapTime.filter { !$0.key.hasPrefix(prefix) }
             tapCount = tapCount.filter { !$0.key.hasPrefix(prefix) }
+            pendingSingleTapToken = pendingSingleTapToken.filter { !$0.key.hasPrefix(prefix) }
+            // Plain inputs a chord on this pad was keeping quiet.
+            chordLatched[g] = nil
             // Running chains on these rows stop pressing (their press hop
             // checks the token), so a new press does not run a second chain.
             macroChainToken = macroChainToken.filter { !$0.key.hasPrefix(prefix) }
@@ -1163,6 +1725,7 @@ class MappingEngine: ObservableObject {
         for g in affected {
             let prefix = "\(g):"
             InputSimulator.shared.releaseOwners(withPrefix: prefix)
+            InputSimulator.shared.clearPrecision(ownerPrefix: prefix)
             releaseHeldLights(withPrefix: prefix)
             // The notes this group's rows hold, and no others.
             MIDIService.shared.releaseNotes(ownerPrefix: prefix)
@@ -1195,23 +1758,238 @@ class MappingEngine: ObservableObject {
 
     // MARK: - Start / Stop
 
-    /// Mouse buttons a preset asks to block: middle and side button rows
-    /// with "Block the button's own action" on.
-    static func blockedMouseButtons(in preset: Preset) -> Set<Int> {
-        var out = Set<Int>()
+    /// A mouse row that blocks its button: the middle or a side button,
+    /// pressed or double clicked, with "Block the button's own action" on.
+    /// Mouse buttons arrive through one event tap that cannot tell mice
+    /// apart, so only a row for any mouse (or that tap's own mouse) blocks;
+    /// a row bound to one particular device never fires from the tap and
+    /// must not silence every mouse.
+    private static func blocksMouseButton(_ row: BindingModel) -> Bool {
+        row.blockOriginal == true && row.input.type == .extMouse
+            && [.button, .doubleClick].contains(row.input.extMouseKind ?? .button)
+            && row.input.index >= 2
+            && [nil, "any", ExternalInputDeviceService.builtInMouseID].contains(row.input.extDeviceID)
+    }
+
+    /// Per blocked mouse button, the held controls each blocking row waits
+    /// for (its Second control). An empty list blocks whenever the preset
+    /// runs; otherwise the button is held back only while that chord is held.
+    static func mouseBlockChords(in preset: Preset) -> [Int: [[InputEvent]]] {
+        var out: [Int: [[InputEvent]]] = [:]
         for group in preset.joysticks {
-            // Mouse buttons arrive through one event tap that cannot tell
-            // mice apart, so only a row for any mouse (or that tap's own
-            // mouse) blocks; a row bound to one particular device never
-            // fires from the tap and must not silence every mouse.
-            for row in group.bindings where row.blockOriginal == true
-                && row.input.type == .extMouse && (row.input.extMouseKind ?? .button) == .button
-                && row.input.index >= 2
-                && [nil, "any", ExternalInputDeviceService.builtInMouseID].contains(row.input.extDeviceID) {
-                out.insert(row.input.index)
+            for row in group.bindings {
+                if blocksMouseButton(row) {
+                    // A pad's or a screen's Second control cannot be read
+                    // from the tap: the button blocks on every press, as 1.8.
+                    out[row.input.index, default: []].append(chordIsReadable(row.modifiers) ? row.modifiers : [])
+                }
+                if row.blockHeldControls == true {
+                    for m in row.modifiers where heldControlCanBlock(m) && m.type == .extMouse {
+                        out[m.index, default: []].append([])
+                    }
+                }
             }
         }
         return out
+    }
+
+    /// A Second control the row can hold back from other apps: an ordinary
+    /// key or a middle or side mouse button, on any keyboard or mouse.
+    nonisolated static func heldControlCanBlock(_ m: InputEvent) -> Bool {
+        switch m.type {
+        case .extKey:
+            return keyCanBlock(m.index)
+                && [nil, "any", ExternalInputDeviceService.builtInKeyboardID].contains(m.extDeviceID)
+        case .extMouse:
+            return (m.extMouseKind ?? .button) == .button && m.index >= 2
+                && [nil, "any", ExternalInputDeviceService.builtInMouseID].contains(m.extDeviceID)
+        default:
+            return false
+        }
+    }
+
+    /// Whether the taps can tell a chord is held: only keys and mouse
+    /// buttons can, so a key row's block waits on nothing else.
+    nonisolated static func chordIsReadable(_ chord: [InputEvent]) -> Bool {
+        chord.allSatisfy { $0.type == .extKey || $0.type == .extMouse }
+    }
+
+    /// Mouse buttons a preset asks to block.
+    static func blockedMouseButtons(in preset: Preset) -> Set<Int> {
+        Set(mouseBlockChords(in: preset).keys)
+    }
+
+    /// A key the tap can hold back: never a modifier (a lost Shift or
+    /// Command takes the Mac's shortcuts with it) and never a key without a
+    /// virtual key code (media, brightness, Globe), which macOS handles
+    /// before any app. Nor Caps Lock: it arrives as a flags change, which
+    /// the tap does not see.
+    nonisolated static func keyCanBlock(_ code: Int) -> Bool {
+        !(224...231).contains(code) && code != 57 && KeyCodeMap.hidToVirtualKeyCode[code] != nil
+    }
+
+    /// Per blocked key (HID code), the held controls each blocking row
+    /// waits for. A key row on any keyboard (or the Mac's own) blocks its
+    /// key; a key sequence row blocks every key in its sequence, since the
+    /// tap cannot know a key starts the sequence until the next one comes.
+    nonisolated static func keyBlockChords(in preset: Preset) -> [Int: [[InputEvent]]] {
+        var out: [Int: [[InputEvent]]] = [:]
+        for group in preset.joysticks {
+            // A Second control the tap cannot read (a pad's button) never
+            // arms: the editor hides Block there, and the key is not listed.
+            for row in group.bindings where row.blockOriginal == true && chordIsReadable(row.modifiers) {
+                let codes: [Int]
+                switch row.input.type {
+                case .extKey where [nil, "any", ExternalInputDeviceService.builtInKeyboardID].contains(row.input.extDeviceID):
+                    codes = [row.input.index]
+                case .keySequence:
+                    codes = row.input.sequenceSteps ?? []
+                default:
+                    codes = []
+                }
+                for code in Set(codes) where keyCanBlock(code) {
+                    out[code, default: []].append(row.modifiers)
+                }
+            }
+            // A held key blocked for its chord: every time, no condition.
+            for row in group.bindings where row.blockHeldControls == true {
+                for m in row.modifiers where heldControlCanBlock(m) && m.type == .extKey {
+                    out[m.index, default: []].append([])
+                }
+            }
+        }
+        return out
+    }
+
+    /// Keys (HID codes) the preset's rows block the own action of.
+    nonisolated static func blockedKeys(in preset: Preset) -> Set<Int> {
+        Set(keyBlockChords(in: preset).keys)
+    }
+
+    /// Whether an output still runs while outputs are held back, read the
+    /// way fireOutputs reads it: under a plain pause (the editor, the menu
+    /// bar's Pause) every app action runs; suspended, only the ones that
+    /// stop things, and under Only in these apps alone the preset switches
+    /// and Open App and Open URL too. Motion On / Off and Precision While
+    /// Held are the engine's own state and run under every hold; the motion
+    /// holds count while pointer outputs pass.
+    private func runsWhileHeldBack(_ output: OutputAction) -> Bool {
+        let gateOnly = suspendReasons.count == 1 && suspendReasons.contains(Self.unlistedAppReason)
+        switch output.type {
+        case .appAction:
+            let kind = output.appActionKind ?? .togglePauseOutputs
+            if kind == .toggleMotion { return true }
+            // Precision only scales the pointer, so it does nothing unless
+            // the pointer is moving.
+            if [.holdPrecision, .holdMuteMotion, .holdEnableMotion].contains(kind) { return pointerOnly }
+            if suspendReasons.isEmpty { return true }
+            return [.togglePauseOutputs, .deactivate, .emergencyStop].contains(kind)
+                || (gateOnly && [.activatePreset, .nextPreset, .previousPreset].contains(kind))
+        case .systemAction:
+            return gateOnly && !outputsPaused && !editorScanGate && [.openApp, .openURL].contains(output.systemActionKind)
+        default:
+            return false
+        }
+    }
+
+    /// Every output a row can send: its own, held, double and triple tap
+    /// outputs, and its macro's steps.
+    private static func everyOutput(of row: BindingModel) -> [OutputAction] {
+        row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []) + (row.tripleTapOutputs ?? [])
+            + (row.macroSteps?.map(\.action) ?? [])
+    }
+
+    /// Hands the pause to the taps, with the blocked keys and buttons whose
+    /// rows run anyway: left to pass, F5 on Pause or Resume Outputs reloaded
+    /// the page each time it resumed, and a side button on it went Back. One
+    /// rule with fireOutputs (runsWhileHeldBack, and the editor's safe-key
+    /// pass), key sequence rows and every output list included. Per key the
+    /// chords of the rows that run, so a plain W to Up Arrow still passes
+    /// while Shift W to Pause keeps its block. The chords of rows that send
+    /// pointer outputs are handed over too, per key and per button, held
+    /// back only while the pointer passes: a plain W to E beside Shift W to
+    /// a click still types in the app.
+    private func applyBlockingPaused() {
+        var running: [Int: [[InputEvent]]] = [:]
+        var buttons: [Int: [[InputEvent]]] = [:]
+        var pointerKeys: [Int: [[InputEvent]]] = [:]
+        var pointerButtons: [Int: [[InputEvent]]] = [:]
+        if outputsBlocked, let preset = activePreset {
+            for group in preset.joysticks {
+                for row in group.bindings {
+                    let outputs = Self.everyOutput(of: row)
+                    // The editor's safe-key pass goes by each list as it is
+                    // fired, as fireOutputs does.
+                    let runs = outputs.contains(where: runsWhileHeldBack)
+                        || [row.outputs, row.holdOutputs ?? [], row.doubleTapOutputs ?? [], row.tripleTapOutputs ?? []].contains(where: safeKeysPass)
+                        || (row.macroSteps ?? []).contains { safeKeysPass($0.pressedActions) }
+                    let readable = Self.chordIsReadable(row.modifiers)
+                    let pointer = outputs.contains { Self.pointerOutputTypes.contains($0.type) }
+                    if row.blockOriginal == true {
+                        switch row.input.type {
+                        case .extKey where readable:
+                            if runs { running[row.input.index, default: []].append(row.modifiers) }
+                            if pointer { pointerKeys[row.input.index, default: []].append(row.modifiers) }
+                        case .keySequence where readable:
+                            if runs { for code in Set(row.input.sequenceSteps ?? []) { running[code, default: []].append(row.modifiers) } }
+                            // Its keys are pointer keys too when it clicks.
+                            if pointer { for code in Set(row.input.sequenceSteps ?? []) { pointerKeys[code, default: []].append(row.modifiers) } }
+                        case .extMouse where Self.blocksMouseButton(row):
+                            // A pad's Second control cannot be read from the
+                            // tap: kept on every press, as the block set does
+                            // (mouseBlockChords), or a running row's button
+                            // also went Back in the browser.
+                            if runs { buttons[row.input.index, default: []].append(readable ? row.modifiers : []) }
+                            if pointer { pointerButtons[row.input.index, default: []].append(readable ? row.modifiers : []) }
+                        default:
+                            break
+                        }
+                    }
+                    // A held control the row blocks too stays blocked while
+                    // the row runs: it also did its own action under a pause.
+                    if row.blockHeldControls == true, runs || pointer {
+                        for m in row.modifiers where Self.heldControlCanBlock(m) {
+                            if m.type == .extKey {
+                                if runs { running[m.index, default: []].append([]) }
+                                if pointer { pointerKeys[m.index, default: []].append([]) }
+                            } else if m.type == .extMouse {
+                                if runs { buttons[m.index, default: []].append([]) }
+                                if pointer { pointerButtons[m.index, default: []].append([]) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ExternalInputDeviceService.shared.setBlockingPaused(outputsBlocked, keeping: running, buttons: buttons,
+                                                            pointerKeys: pointerKeys, pointerButtons: pointerButtons)
+        // The taps read these as values on their own thread: whether the
+        // pointer passes, and what is held of the chords just handed over.
+        ExternalInputDeviceService.shared.setPointerOutputsPassing(pointerOnly)
+        refreshBlockChordHeld()
+    }
+
+    /// The key and button taps run on their own thread and cannot call in
+    /// here: after each change to the external held state, the chord
+    /// members they wait for are answered and handed over. The taps answer
+    /// a key or button they saw go down or up themselves, at the event;
+    /// this answer covers the rest (held since before the tap was made, or
+    /// never seen by a tap). Nothing to do while no blocking row's chord has
+    /// a held key or mouse input in it.
+    private func refreshBlockChordHeld() {
+        ExternalInputDeviceService.shared.updateHeldChordMembers { blockChordMemberHeld($0) }
+    }
+
+    /// Whether a chord's held control (not a modifier key, which the tap
+    /// reads from the event's own flags) is down right now, for the key and
+    /// button taps. Only keys and mouse buttons can be told from the tap;
+    /// anything else reads as up, so the key keeps its own action rather
+    /// than being lost on a guess.
+    fileprivate func blockChordMemberHeld(_ input: InputEvent) -> Bool {
+        switch input.type {
+        case .extKey, .extMouse: return checkExternalInput(input)
+        default: return false
+        }
     }
 
     /// True when a blocking row for this mouse button sends a click,
@@ -1219,10 +1997,9 @@ class MappingEngine: ObservableObject {
     private static func mouseButtonRowSendsPointer(_ button: Int, in preset: Preset) -> Bool {
         preset.joysticks.contains { group in
             group.bindings.contains { row in
-                row.blockOriginal == true && row.input.type == .extMouse
-                    && (row.input.extMouseKind ?? .button) == .button && row.input.index == button
-                    && (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []) + (row.tripleTapOutputs ?? []))
-                        .contains { pointerOutputTypes.contains($0.type) }
+                blocksMouseButton(row) && row.input.index == button
+                    // A click in its macro counts too.
+                    && everyOutput(of: row).contains { pointerOutputTypes.contains($0.type) }
             }
         }
     }
@@ -1244,15 +2021,25 @@ class MappingEngine: ObservableObject {
             let global = Float(CursorGuardService.shared.sensitivityMultiplier)
             let preset = Float(activePreset?.automation.sensitivityMultiplier ?? 1)
             let g = global * preset
-            pointerGainCache = (g.isFinite && g > 0) ? g : 1
+            // Held to what the sliders allow (Settings 0.1 to 5, the preset
+            // 0.05 to 20): a huge finite value from a file trapped where
+            // the scroll gain is rounded to an Int of lines. A stored zero
+            // or negative value is the default 1, as main treats it, not
+            // the floor of the clamp.
+            pointerGainCache = g.isFinite && g > 0 ? min(100, max(0.005, g)) : 1
             let s = Float(activePreset?.automation.scrollMultiplier ?? 1)
-            scrollGainCache = (s.isFinite && s > 0) ? s : 1
+            scrollGainCache = s.isFinite && s > 0 ? min(20, max(0.05, s)) : 1
         }
         return pointerGainCache
     }
     private var pointerGainCache: Float = 1
     /// The preset's Scroll speed, refreshed with pointerGain; read it after.
     private var scrollGainCache: Float = 1
+    /// The edited preset's Scroll speed while its Play once chain runs. The
+    /// poll cache above is refreshed only by a running preset, so a Scroll
+    /// step played from the editor scrolled at the last running preset's
+    /// speed, or 1 line per count when nothing had run. nil keeps the cache.
+    private var editorScrollGain: Float?
     private var pointerGainCheckedAt: CFTimeInterval = 0
 
     /// Every input type the preset reads: each row's own input plus the
@@ -1293,18 +2080,28 @@ class MappingEngine: ObservableObject {
         // after the line below it took them away for the whole run, so
         // macOS kept its screenshot gesture on Create.
         endRestartWatch()
-        controllerService.buttonsInUse = Set(preset.joysticks.flatMap(\.bindings)
-            .flatMap { [$0.input] + $0.modifiers }.filter { $0.type == .button }.map(\.index))
+        let allRows: [BindingModel] = preset.joysticks.flatMap(\.bindings)
+        var inUse = Set(allRows.flatMap { [$0.input] + $0.modifiers }.filter { $0.type == .button }.map(\.index))
+        // Buttons inside a sequence are in use too, so Share or Create in
+        // one loses its system screenshot gesture like a bound button.
+        for row in allRows where row.input.type == .buttonSequence {
+            inUse.formUnion(row.input.sequenceSteps ?? [])
+        }
+        controllerService.buttonsInUse = inUse
         controllerService.emergencyButtons = holdButtons
+        presetReadsSupplement = Self.wantsSupplement(buttonsRead: inUse, holdButtons: [])
         // A pause a row started belongs to that run: the next preset starts
         // live, or it sent nothing and nothing in it could resume.
         if !isReload, !editorOpen, outputsPaused { outputsPaused = false }
         // Motion starts on; the held gate follows the rows (a reload keeps
         // a Motion On / Off choice made with the old version).
         if !isReload { resetMotionSwitches(for: preset) } else {
-            let off = motionToggledOff
+            // By the group's id, not its number: a group deleted above it
+            // moved the choice onto the wrong group.
+            let old = activePreset?.joysticks ?? []
+            let offIDs = Set(motionToggledOff.compactMap { old.indices.contains($0) ? old[$0].id : nil })
             resetMotionSwitches(for: preset)
-            motionToggledOff = off.filter { preset.joysticks.indices.contains($0) }
+            motionToggledOff = Set(preset.joysticks.indices.filter { offIDs.contains(preset.joysticks[$0].id) })
         }
         if !isReload { MIDIInputService.shared.clearMomentaryHits() }
         if !isReload {
@@ -1335,7 +2132,7 @@ class MappingEngine: ObservableObject {
         // reload has already taken the working set into the draft.
         if editorOpen, let owner = Preset.regionWorkingSetOwner, owner != preset.id || !isReload {
             ActivityLog.shared.info("Presets", "Kept the editor's zones in place; \(preset.shownName)'s load when the editor closes")
-        } else {
+        } else if !quietRun {
             preset.applyRegionsToServices()
         }
         slotForGroup = [:]
@@ -1356,22 +2153,26 @@ class MappingEngine: ObservableObject {
         debugEnabled = UserDefaults.standard.bool(forKey: Self.debugLogDefaultsKey)
         if debugSettingObserver == nil {
             debugSettingObserver = NotificationCenter.default.addObserver(
-                forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+                forName: UserDefaults.didChangeNotification, object: nil, queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated {
+                // Off the writer's thread without making it wait; see above.
+                DispatchQueue.main.async {
                     self?.debugEnabled = UserDefaults.standard.bool(forKey: Self.debugLogDefaultsKey)
                 }
             }
         }
 
         activePreset = preset
-        ExternalInputDeviceService.shared.setBlockingPaused(outputsBlocked)
-        ExternalInputDeviceService.shared.pointerOutputsPassing = { [weak self] in
-            MainActor.assumeIsolated { self?.pointerOnly ?? false }
-        }
+        applyBlockingPaused()
+        // Chords first, so the taps never read a new key with an old chord,
+        // and what is held of them with them.
+        ExternalInputDeviceService.shared.setBlockChords(keys: Self.keyBlockChords(in: preset),
+                                                         buttons: Self.mouseBlockChords(in: preset))
+        refreshBlockChordHeld()
         let blocked = Self.blockedMouseButtons(in: preset)
         ExternalInputDeviceService.shared.setBlockedMouseButtons(
             blocked, pointerRows: blocked.filter { Self.mouseButtonRowSendsPointer($0, in: preset) })
+        ExternalInputDeviceService.shared.setBlockedKeys(Self.blockedKeys(in: preset))
         // The 30 Hz snapshot loop feeds the touchpad of pads macOS gives no
         // typed Sony class; the engine reads everything else itself. Kept
         // off otherwise, so a running preset does not wake the app 30 more
@@ -1384,23 +2185,28 @@ class MappingEngine: ObservableObject {
         } else {
             controllerService.releaseLiveInput("engine")
         }
-        NotificationCenter.default.post(name: Self.didStartNotification, object: nil)
+        if !quietRun { NotificationCenter.default.post(name: Self.didStartNotification, object: nil) }
         pointerGainCheckedAt = 0   // pick up this preset's Speed at once
         let selfMods = Self.selfModifierRows(preset.joysticks)
         pollJoysticks = selfMods.groups
+        pollTable = Self.buildPollTable(for: pollJoysticks)
         // Touchpad rows stay paused in the editor, but the preset's other
         // pointer rows pass: Touchpad Mouse's Cross and Circle clicks were
         // paused too, and a controller-only user could not reach Save.
         presetSuitsEditorPassthrough = Self.suitsEditorPassthrough(preset)
+        // The taps' copy of the pointer passthrough, with this preset's own.
+        ExternalInputDeviceService.shared.setPointerOutputsPassing(pointerOnly)
         touchpadRowOwners = Set(preset.joysticks.enumerated().flatMap { j, group in
-            group.bindings.filter { $0.input.type == .touchpad || $0.input.type == .touchpadGesture }
+            // Zone rows too: a finger checking a zone in Touchpad Setup
+            // fired the row's key into the app in front.
+            group.bindings.filter { [.touchpad, .touchpadGesture, .touchpadRegion].contains($0.input.type) }
                 .map { "\(j):\($0.id.uuidString)" }
         })
         // The Steam Controller's own mouse and keys go off while a preset
         // runs and sends something, as Help says. Set on every start, reloads
         // included, by the same rule as pausing: a preset switch or an edit
         // while paused turned them off with nothing sent in their place.
-        SteamControllerService.shared.setLizardModeOff(!outputsPaused || editorPassthroughApplies)
+        applyLizardMode(starting: true)
         selfModifierByRow = selfMods.dropped
         // Rows' inputs and their chords' held controls: a Shift held as a
         // chord's layer key is not passed on to the chord's own keys.
@@ -1412,57 +2218,46 @@ class MappingEngine: ObservableObject {
         // The voice a Speak row will use is resolved now, off the poll loop.
         if rows.contains(where: { $0.speechEnabled == true }) { FeedbackService.shared.prepareSpeech() }
         isRunning = true
+        // The DualSense stream, on the same main turn the didStart observer
+        // used to ask for it.
+        updateSupplementWanted()
         engineGeneration &+= 1
         activeStates.removeAll()
         rowActiveStates.removeAll()
         armedAppActionRows.removeAll()
         holdBackHeldRows()
-        appActionRowCache.removeAll()
         activeInputs.removeAll()
         toggleStates.removeAll()
         turboTimestamps.removeAll()
         turboPulseDown.removeAll()
         turboCounts.removeAll()
+        turboNextInterval.removeAll()
         macrosInFlight.removeAll()
         // Per-session state that used to survive start() and stop(). A
         // holdFired entry left over from the previous run swallowed the next
-        // tap and sent a phantom key-up; a stale chordKeyCache entry kept
-        // edge-detecting an edited chord under its old key forever.
+        // tap and sent a phantom key-up; a stale chord key kept
+        // edge-detecting an edited chord under its old key forever (the
+        // row table above is built new on every start).
         deferredPressStart.removeAll()
         modifierKeyDownMark.removeAll()
         holdFired.removeAll()
         lastTapTime.removeAll()
         tapCount.removeAll()
         gestureRecognizers.removeAll()
+        sequenceRecognizers.removeAll()
+        keySequenceRecognizers.removeAll()
+        keySequenceFiredUntil.removeAll()
+        keySequenceLitUntil.removeAll()
         secondTapPressed.removeAll()
         pendingSingleTapToken.removeAll()
-        chordKeyCache.removeAll()
         chordLatched.removeAll()
         repeatsInFlight.removeAll()
         macroCancelRequests.removeAll()
         lastSlotState.removeAll()
-        serializedKeyCache.removeAll()
-        bindKeyCache.removeAll()
-        debugLog.removeAll()
-        pendingLog.removeAll()
         debugLineCount = 0
 
         for i in preset.joysticks.indices {
             activeStates[i] = Set<String>()
-        }
-
-        // Pre-build the serialized-input-event cache for every binding
-        // so the hot poll loop's `cachedKey(for:)` always hits the
-        // cache. Without this, the first ~N polls each pay the
-        // serialization cost (string interpolation + Codable
-        // resolution) on a freshly-active preset. Building it once
-        // here is O(N) on a quiet thread.
-        for joystick in preset.joysticks {
-            for binding in joystick.bindings {
-                if serializedKeyCache[binding.id] == nil {
-                    serializedKeyCache[binding.id] = binding.input.serialized
-                }
-            }
         }
 
         if !isReload { StatsService.shared.engineStarted(presetName: preset.name) }
@@ -1496,6 +2291,39 @@ class MappingEngine: ObservableObject {
             log("Cursor region tracking enabled")
         } else {
             usesCursorRegionInput = false
+        }
+        // Screen color rows sample the display while the preset runs. The
+        // service says once in the log when Screen Recording is not allowed.
+        // A macro that waits for a screen color or text needs the watches
+        // read while the preset runs, whether or not a row reads them.
+        let macroWaits = preset.joysticks.flatMap(\.bindings).contains { row in
+            (row.macroSteps ?? []).contains { $0.eventKind == .waitFor }
+        }
+        // What the reload's stop kept running stays on through the edit,
+        // the microphone and the display list included.
+        let carried = carriedTrackers
+        carriedTrackers = (false, false, false)
+        usesScreenPixelInput = inputTypes.contains(.screenPixel) || macroWaits
+        if usesScreenPixelInput {
+            if !carried.pixel { ScreenPixelService.shared.beginTracking() }
+            log("Screen color sampling enabled")
+        } else if carried.pixel {
+            ScreenPixelService.shared.endTracking()
+        }
+        usesScreenTextInput = inputTypes.contains(.screenText) || macroWaits
+        if usesScreenTextInput {
+            if !carried.text { ScreenTextService.shared.beginTracking() }
+            log("Screen text reading enabled")
+        } else if carried.text {
+            ScreenTextService.shared.endTracking()
+        }
+        if macroWaits { log("Screen watches read for a macro's Wait for screen steps") }
+        usesVoicePhraseInput = inputTypes.contains(.voicePhrase)
+        if usesVoicePhraseInput {
+            if !carried.voice { VoicePhraseService.shared.beginTracking() }
+            log("Voice phrase listening enabled")
+        } else if carried.voice {
+            VoicePhraseService.shared.endTracking()
         }
 
         for (i, ctrl) in controllerService.connectedControllers.enumerated() {
@@ -1562,11 +2390,29 @@ class MappingEngine: ObservableObject {
         dpadOneWay = preset.automation.dpadOneDirection == true
         dpadHeldAxis.removeAll()
         // MIDI too: its input wakes the poll the moment a message arrives.
-        let controllerOnly: Set<InputType> = [.button, .axis, .hat, .midi]
-        idleEligible = inputTypes.isSubset(of: controllerOnly) && preset.driveConfig?.enabled != true
+        // Keys, key sequences and mouse buttons too: their events wake it
+        // from the subscription below. Not the mouse's moves and wheel,
+        // which rows read as what piled up since the last poll.
+        let eventFed: Set<InputType> = [.button, .axis, .hat, .midi, .extKey, .keySequence, .extMouse]
+        let readsMouseDeltas = preset.joysticks.contains { group in
+            group.bindings.contains { row in
+                ([row.input] + row.modifiers).contains {
+                    $0.type == .extMouse && [.moveX, .moveY, .scrollX, .scrollY].contains($0.extMouseKind ?? .button)
+                }
+            }
+        }
+        idleEligible = inputTypes.isSubset(of: eventFed) && !readsMouseDeltas && preset.driveConfig?.enabled != true
+        idleReadsPads = inputTypes.contains { !Self.readsNoSlot($0) }
         idlePolling = false
         lastInputChangeAt = CACurrentMediaTime()
         controllerService.onInputActivity = idleEligible ? { [weak self] in self?.noteInputActivity() } : nil
+        // Raw HID pads, the Steam Controller and wheels: the same wake, sent
+        // to main by DirectPadActivity from whichever thread read the report.
+        if idleEligible {
+            DirectPadActivity.shared.setWake { [weak self] in self?.noteInputActivity() }
+        } else {
+            DirectPadActivity.shared.setWake(nil)
+        }
         MIDIInputService.shared.setActivityHandler(idleEligible && inputTypes.contains(.midi)
             ? { [weak self] in MainActor.assumeIsolated { self?.noteInputActivity() } } : nil)
         // Retained before the poll timer's rate is chosen, so the power
@@ -1584,7 +2430,7 @@ class MappingEngine: ObservableObject {
         let movesPointer = preset.joysticks.contains { group in
             group.bindings.contains { row in
                 (row.outputs + (row.holdOutputs ?? []) + (row.doubleTapOutputs ?? []) + (row.tripleTapOutputs ?? [])).contains {
-                    $0.type == .mouseMotion || $0.type == .mouseWheel || $0.type == .mouseWheelStep
+                    $0.type == .mouseMotion || $0.type == .mouseWheel || $0.type == .mouseWheelStep || $0.type == .mouseStep
                 }
             }
         } || preset.driveConfig?.enabled == true
@@ -1601,6 +2447,7 @@ class MappingEngine: ObservableObject {
         // hide the system cursor / start its recenter loop if the user
         // enabled those toggles.
         CursorGuardService.shared.engineDidChangeState(running: true)
+        updateAppGate()
 
         // Watch power-source transitions so applyPollRate() runs
         // exactly once per plug / unplug when the user has enabled
@@ -1615,9 +2462,14 @@ class MappingEngine: ObservableObject {
                 guard let self = self else { return }
                 let auto = UserDefaults.standard
                     .bool(forKey: "InputConfig.autoPollHzByPower")
-                guard auto, newSource != self.lastSeenPowerSource else { return }
+                // Remembered with the switch off too: a later plug back to the
+                // remembered source was taken for no change and ignored.
+                let changed = newSource != self.lastSeenPowerSource
                 self.lastSeenPowerSource = newSource
-                self.applyPollRate()
+                guard auto, changed else { return }
+                // On the next turn: @Published sends before it stores, so the
+                // rate read the old source and ran AC's rate on battery.
+                DispatchQueue.main.async { [weak self] in self?.applyPollRate() }
             }
 
         // Subscribe to external keyboard / mouse events for the lifetime of
@@ -1627,12 +2479,22 @@ class MappingEngine: ObservableObject {
         // events carry an own-event marker, so they are filtered out and
         // cannot loop back in as input.
         let usesExtMouse = inputTypes.contains(.extMouse)
-        let usesExtKey = inputTypes.contains(.extKey)
+        let usesExtKey = inputTypes.contains(.extKey) || inputTypes.contains(.keySequence)
+        keySequenceRows = preset.joysticks.flatMap(\.bindings)
+            .filter { $0.input.type == .keySequence && !($0.input.sequenceSteps ?? []).isEmpty }
+            .map { ($0.id, $0.input.serialized, $0.input.sequenceSteps ?? [], max(150, min(3000, $0.gestureWindowMs ?? 600))) }
         if usesExtMouse || usesExtKey {
             externalEventSubscription = ExternalInputDeviceService.shared.events
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] event in
-                    self?.ingestExternalEvent(event)
+                    guard let self else { return }
+                    self.ingestExternalEvent(event)
+                    // A resting preset wakes on a key or button here, as a
+                    // pad's change callback wakes it, and polls at once, so
+                    // a tap between two slow polls is seen. After the state
+                    // is in, never from inside a poll (the held-back
+                    // releases a poll replays come through ingest alone).
+                    if self.idleEligible, Self.wakesRestingPoll(event) { self.noteInputActivity() }
                 }
             // Hold only what the preset actually needs; the visualizer and
             // the editor's Scan hold their own, so stopping the engine
@@ -1646,15 +2508,6 @@ class MappingEngine: ObservableObject {
             if usesExtKey { log("External keyboard input enabled") }
         }
 
-        // Flush log entries to the @Published array at 5 Hz so observers
-        // of mappingEngine do not re-render on every input event.
-        logFlushTimer?.invalidate()
-        logFlushTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.flushPendingLog()
-            }
-        }
-        RunLoop.main.add(logFlushTimer!, forMode: .common)
     }
 
     /// (Re-)installs the controller poll timer using the current
@@ -1667,7 +2520,15 @@ class MappingEngine: ObservableObject {
         let fullHz = resolveEffectivePollHz()
         // Idle polling is not shown as the engine's rate: it is the same
         // setting, only resting until the controller is touched.
-        let pollHz = idlePolling ? min(Self.idlePollHz, fullHz) : fullHz
+        let pollHz = idlePolling ? idlePollRate(fullHz: fullHz) : fullHz
+        installedPollHz = pollHz
+        guard pollHz > 0 else {
+            // Resting with nothing to read: no timer at all until a wake
+            // (noteInputActivity) or a re-rate (reRateIdlePoll).
+            if currentPollHz != fullHz { currentPollHz = fullHz }
+            pollTimer = nil
+            return
+        }
         let pollInterval: TimeInterval = 1.0 / Double(pollHz)
         MouseMotionPump.shared.setPollInterval(pollInterval)
         // Only on a change: @Published fires on every assignment, and this
@@ -1757,15 +2618,29 @@ class MappingEngine: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedApp.isEmpty {
             let ws = NSWorkspace.shared
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = automation.launchInBackground != true
             if trimmedApp.hasPrefix("/") {
-                let url = URL(fileURLWithPath: trimmedApp)
-                ws.openApplication(at: url,
-                                   configuration: NSWorkspace.OpenConfiguration(),
-                                   completionHandler: nil)
+                // Apple's own apps live in /System/Applications: a preset made
+                // before 1.9 named /Applications/Mail.app, which opened nothing.
+                var path = trimmedApp
+                let fm = FileManager.default
+                if !fm.fileExists(atPath: path), path.hasPrefix("/Applications/"),
+                   fm.fileExists(atPath: "/System" + path) {
+                    path = "/System" + path
+                }
+                if fm.fileExists(atPath: path) {
+                    let shown = path
+                    ws.openApplication(at: URL(fileURLWithPath: path), configuration: config) { _, error in
+                        guard let error else { return }
+                        let line = "Preset auto-launch: couldn't open \(shown): \(error.localizedDescription)"
+                        DispatchQueue.main.async { MappingEngine.current?.log(line) }
+                    }
+                } else {
+                    log("Preset auto-launch: \(path) is not on this Mac")
+                }
             } else if let url = ws.urlForApplication(withBundleIdentifier: trimmedApp) {
-                ws.openApplication(at: url,
-                                   configuration: NSWorkspace.OpenConfiguration(),
-                                   completionHandler: nil)
+                ws.openApplication(at: url, configuration: config, completionHandler: nil)
             } else {
                 log("Preset auto-launch: couldn't resolve \(trimmedApp)")
             }
@@ -1774,7 +2649,9 @@ class MappingEngine: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedURL.isEmpty, let url = URL(string: trimmedURL) {
             if SystemActionService.opensLink(url) {
-                NSWorkspace.shared.open(url)
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = automation.launchInBackground != true
+                NSWorkspace.shared.open(url, configuration: config, completionHandler: nil)
             } else {
                 log("Preset auto-launch: \(url.scheme ?? "this kind of") links are not opened")
             }
@@ -1786,13 +2663,19 @@ class MappingEngine: ObservableObject {
     }
 
     private func stop(isReload: Bool) {
-        if !isReload, isRunning, let name = activePreset?.shownName { activity(String(localized: "Stopped \u{201C}\(name)\u{201D}")) }
+        // A Precision While Held row held as the preset stops, or as it
+        // reloads, never sees its release.
+        InputSimulator.shared.clearPrecision()
+        if !isReload, isRunning, !stopLineWritten, let name = activePreset?.shownName { activity(String(localized: "Stopped \u{201C}\(name)\u{201D}")) }
         idlePolling = false
         idleEligible = false
         // The hold's buttons stay with the app while the restart hold is
         // armed (a second stop with nothing running), or macOS took Create.
         if !isReload { controllerService.buttonsInUse = []; controllerService.emergencyButtons = restartWatch != nil ? holdButtons : [] }
         controllerService.onInputActivity = nil
+        DirectPadActivity.shared.reset()
+        directPadSources = []
+        readsRacingWheel = false
         MIDIInputService.shared.setActivityHandler(nil)
         controllerService.touchpadSourceSlot = nil
         controllerService.touchpadSecondSourceSlot = nil
@@ -1800,18 +2683,25 @@ class MappingEngine: ObservableObject {
         secondTouchGroups = nil
         steamTouchGroups = nil
         motionRecenter = nil
+        groupAnchorResets.removeAll()
         MouseMotionPump.shared.stop()
         smoothedAxes.removeAll()
         smoothedAt.removeAll()
+        smoothedPoll.removeAll()
         rampStart.removeAll()
         lastFrameTime = 0
         ChassisTapService.shared.release("engine")
         if !isReload { StatsService.shared.engineStopped() }
+        // The pen as the tablet last said: a pen hovering at Stop read as in
+        // range at the next start and held its row's key by itself.
+        if !isReload {
+            externalPen = (pressure: 0, tiltX: 0, tiltY: 0, buttons: 0, inRange: false, eraser: false)
+            externalPressure = 0
+            externalPressureStage = 0
+        }
         engineGeneration &+= 1   // poison any in-flight macro/turbo blocks
         pollTimer?.invalidate()
         pollTimer = nil
-        logFlushTimer?.invalidate()
-        logFlushTimer = nil
         isRunning = false
         // Clear deferred state so a future start() with a different
         // preset doesn't see stale toggle / turbo / cache entries.
@@ -1819,10 +2709,14 @@ class MappingEngine: ObservableObject {
         turboTimestamps.removeAll()
         turboPulseDown.removeAll()
         turboCounts.removeAll()
+        turboNextInterval.removeAll()
         macrosInFlight.removeAll()
+        // A chain abandoned by this stop still reaches its end hop; with
+        // its token gone it cannot flip the toggle of a row reloaded since.
+        macroChainToken.removeAll()
         // Per-session state that used to survive start() and stop(). A
         // holdFired entry left over from the previous run swallowed the next
-        // tap and sent a phantom key-up; a stale chordKeyCache entry kept
+        // tap and sent a phantom key-up; a stale chord key kept
         // edge-detecting an edited chord under its old key forever.
         deferredPressStart.removeAll()
         modifierKeyDownMark.removeAll()
@@ -1830,20 +2724,25 @@ class MappingEngine: ObservableObject {
         lastTapTime.removeAll()
         tapCount.removeAll()
         gestureRecognizers.removeAll()
+        sequenceRecognizers.removeAll()
+        keySequenceRecognizers.removeAll()
+        keySequenceFiredUntil.removeAll()
+        keySequenceLitUntil.removeAll()
         secondTapPressed.removeAll()
         pendingSingleTapToken.removeAll()
-        chordKeyCache.removeAll()
         chordLatched.removeAll()
         repeatsInFlight.removeAll()
         macroCancelRequests.removeAll()
         lastSlotState.removeAll()
-        serializedKeyCache.removeAll()
-        bindKeyCache.removeAll()
+        turnConsumerKeys.removeAll()
         externalEventSubscription?.cancel()
         externalEventSubscription = nil
         // Blocking ends before the monitor is let go, so a blocked button
         // still held keeps its tap until its release (which is swallowed).
-        ExternalInputDeviceService.shared.setBlockedMouseButtons([])
+        if !isReload {
+            ExternalInputDeviceService.shared.setBlockedMouseButtons([])
+            ExternalInputDeviceService.shared.setBlockedKeys([])
+        }
         ExternalInputDeviceService.shared.release("engine")
         externalDoubleClickUntil.removeAll()
         externalScrollGestureActive.removeAll()
@@ -1855,16 +2754,21 @@ class MappingEngine: ObservableObject {
         externalMouseDY.removeAll()
         externalScrollDX.removeAll()
         externalScrollDY.removeAll()
+        refreshBlockChordHeld()
         driveProcessor.releaseAll()
         // The editor's drive readout and test car stop showing the last state.
         driveLiveState = nil
         InputSimulator.shared.releaseAll()
         MIDIService.shared.releaseAllNotes()
-        controllerService.releaseLiveInput("engine")
+        // A reload's start decides again.
+        if !isReload { controllerService.releaseLiveInput("engine") }
         // Not on a reload, which starts again at once: each edit of the
         // running preset turned the Steam Controller's own mouse on and off
         // and stopped and restarted the pad polls.
-        if !isReload { NotificationCenter.default.post(name: Self.didStopNotification, object: nil) }
+        if !isReload {
+            updateSupplementWanted()
+            if !quietRun { NotificationCenter.default.post(name: Self.didStopNotification, object: nil) }
+        }
         if usesTouchpadInput {
             TouchpadService.shared.release()
             TouchpadService.second.release()
@@ -1875,6 +2779,16 @@ class MappingEngine: ObservableObject {
             CursorRegionService.shared.endTracking()
             usesCursorRegionInput = false
         }
+        if isReload {
+            carriedTrackers = (usesScreenPixelInput, usesScreenTextInput, usesVoicePhraseInput)
+        } else {
+            if usesScreenPixelInput { ScreenPixelService.shared.endTracking() }
+            if usesScreenTextInput { ScreenTextService.shared.endTracking() }
+            if usesVoicePhraseInput { VoicePhraseService.shared.endTracking() }
+        }
+        usesScreenPixelInput = false
+        usesScreenTextInput = false
+        usesVoicePhraseInput = false
 
         // Cursor-guard goes idle: re-show the cursor if we hid it,
         // stop the recenter timer. Order matters: clear the preset
@@ -1883,6 +2797,9 @@ class MappingEngine: ObservableObject {
         // active, then we discard the override.
         CursorGuardService.shared.engineDidChangeState(running: false)
         CursorGuardService.shared.clearPresetOverride()
+        // A reload keeps the gate: the start right after answers it again,
+        // and dropping it wrote lizard L1 then L0 and logged a lone suspend.
+        if !isReload { resume(Self.unlistedAppReason) }
 
         // Drop the power-source watcher; matched against the retain
         // call in start() so SystemStatsService can park its timer
@@ -1930,12 +2847,17 @@ class MappingEngine: ObservableObject {
         faderBaseline.removeAll()
         faderEngaged.removeAll()
         activePreset = nil
-        ExternalInputDeviceService.shared.setBlockedMouseButtons([])
+        // On a reload the start right after sets them again, so a tap whose
+        // keys did not change is neither rebuilt nor logged.
+        if !isReload {
+            ExternalInputDeviceService.shared.setBlockedMouseButtons([])
+            ExternalInputDeviceService.shared.setBlockedKeys([])
+        }
+        InputSimulator.shared.inputModifierCodes = []
         pollJoysticks = []
+        pollTable = []
         pollDriveConfig = nil
         log("Engine stopped")
-        // Final flush so the user sees the stop event in the log view.
-        flushPendingLog()
     }
 
     // MARK: - Debug Logging
@@ -1947,6 +2869,7 @@ class MappingEngine: ObservableObject {
     /// the log.
     private var lastActivityAt: [String: CFTimeInterval] = [:]
     private func activity(_ text: String, key: String? = nil, joystick: Int? = nil) {
+        if quietRun { return }
         if let key {
             let now = CACurrentMediaTime()
             if let last = lastActivityAt[key], now - last < 0.5 { return }
@@ -1967,16 +2890,8 @@ class MappingEngine: ObservableObject {
     }
 
     private func log(_ message: String, joystick: Int? = nil) {
+        if quietRun { return }
         debugLineCount += 1
-        let entry = "[\(debugLineCount)] \(message)"
-        // Write to the internal buffer (no @Published trigger). The flush
-        // timer copies this into `debugLog` at 5 Hz so observers of the
-        // mapping engine do not re-render on every input event.
-        pendingLog.append((text: entry, joystickIndex: joystick))
-        pendingLogDirty = true
-        if pendingLog.count > 50 {
-            pendingLog.removeFirst()
-        }
         // The same line goes to the app-wide activity log, classified so
         // the developer log can color and count it.
         let level: ActivityLog.Level
@@ -1999,18 +2914,6 @@ class MappingEngine: ObservableObject {
     /// Copy accumulated log entries into the @Published `debugLog` array.
     /// Only fires when there's something new and only at the timer's rate.
     ///
-    /// Hard cap at 500 lines on the published mirror. `pendingLog` is
-    /// capped at 50 between flushes but `debugLog` accumulates across
-    /// engine sessions - without the cap it would grow unbounded as
-    /// the user activates / deactivates presets across a long session.
-    private func flushPendingLog() {
-        guard pendingLogDirty, !pendingLog.isEmpty else { return }
-        pendingLogDirty = false
-        debugLog = pendingLog
-        if debugLog.count > 500 {
-            debugLog.removeFirst(debugLog.count - 500)
-        }
-    }
 
     // MARK: - Polling
 
@@ -2066,6 +2969,9 @@ class MappingEngine: ObservableObject {
     /// When each smoothed axis was last updated, so a value left over from an
     /// earlier push is not filtered against.
     private var smoothedAt: [Int: CFTimeInterval] = [:]
+    /// The poll each smoothed axis was last filtered in, so a second row
+    /// reading the same axis in that poll gets the same value.
+    private var smoothedPoll: [Int: Int] = [:]
 
     /// When each ramping stick row started moving the pointer, by binding.
     /// Cleared the frame the row goes quiet, so every new push starts slow.
@@ -2103,6 +3009,11 @@ class MappingEngine: ObservableObject {
     /// The smoothed value for one stick axis this frame.
     private func smoothedAxis(_ raw: Float, joystick: Int, axis: Int) -> Float {
         let key = joystick &* 256 &+ axis
+        // Every row reading this axis advanced the filter again in the same
+        // poll, so three rows on one stick ran it three times as fast. The
+        // first row filters; the rest read what it produced.
+        if smoothedPoll[key] == pollCount, let value = smoothedAxes[key] { return value }
+        smoothedPoll[key] = pollCount
         let now = CACurrentMediaTime()
         defer { smoothedAt[key] = now }
         // A value last filtered more than a few frames ago belongs to an
@@ -2159,16 +3070,56 @@ class MappingEngine: ObservableObject {
     /// Tests only: one poll, as the timer runs it, and the timer stopped so
     /// a test steps the engine itself.
     func debugPollOnce() { pollControllers() }
+    func debugFire(_ outputs: [OutputAction], press: Bool, owner: String) { fireOutputs(outputs, press: press, owner: owner) }
+    /// Tests only: receives what lizard mode would be set to.
+    var debugLizardSink: ((Bool) -> Void)?
+    /// The bench's suspend and resume leave the microphone alone: a voice
+    /// preset's recognizer was restarted and its transcript wiped.
+    private var debugWalking = false
+    func debugSuspend(_ reason: String) { debugWalking = true; suspend(reason); debugWalking = false }
+    func debugResume(_ reason: String) { debugWalking = true; resume(reason); debugWalking = false }
     func debugStopPollTimer() { pollTimer?.invalidate(); pollTimer = nil }
+    /// Tests only: a run that leaves nothing behind: no activity or engine
+    /// lines, no start or stop notification (the auto-switch memory, the
+    /// DualSense stream and the Accessibility watch follow those), and the
+    /// region working sets left as they are. Set around the two below.
+    var debugQuiet = false
+    /// Tests only: starts a preset the way a reload does (no activation
+    /// count, stats, Started line or auto-launch), with the poll timer
+    /// stopped so the test steps every poll itself.
+    func debugStartQuiet(_ preset: Preset) {
+        start(with: preset, isReload: true)
+        debugStopPollTimer()
+    }
+    /// Tests only: stops it with no Stopped line.
+    func debugStopQuiet() {
+        stopLineWritten = true
+        stop()
+        stopLineWritten = false
+    }
     #endif
+
+    /// The bench's quiet run (see debugQuiet); always false in Release.
+    private var quietRun: Bool {
+        #if DEBUG
+        debugQuiet
+        #else
+        false
+        #endif
+    }
 
     private func pollControllers() {
         motionMutedLastPoll = motionMutedGroups
         motionMutedGroups.removeAll(keepingCapacity: true)
         motionHeldLastPoll = motionHeldGroups
         motionHeldGroups.removeAll(keepingCapacity: true)
-        guard activePreset != nil else { return }
+        // The id once per frame: the @Published struct was copied per row.
+        guard let presetID = activePreset?.id else { return }
+        let previewing = Self.deadzonePreview != nil
         let preset = (joysticks: pollJoysticks, driveConfig: pollDriveConfig)
+        // Held for the whole poll beside the rows it describes: a row's app
+        // action can start another preset in the middle of this loop.
+        let table = pollTable
         pollCount += 1
         confirmMotionRecenter()
         // A Scan starting or ending in the editor is a pause edge: what the
@@ -2177,9 +3128,13 @@ class MappingEngine: ObservableObject {
         let pointerNow = pointerWhileEditing
         let scanGateNow = editorScanGate
         if pointerNow != lastPointerWhileEditing || scanGateNow != lastEditorScanGate {
+            if scanGateNow != lastEditorScanGate { applyScrollStyle() }
             lastPointerWhileEditing = pointerNow
             lastEditorScanGate = scanGateNow
-            ExternalInputDeviceService.shared.setBlockingPaused(outputsBlocked)
+            applyBlockingPaused()
+            // The Steam Controller's own mouse and keys follow too: a pause
+            // made inside the editor left them off after it closed.
+            applyLizardMode()
             CursorGuardService.shared.setSuspended(outputsBlocked)
             engineGeneration &+= 1
             clearLatches()
@@ -2192,6 +3147,9 @@ class MappingEngine: ObservableObject {
             MouseMotionPump.shared.setScrollVelocity(x: 0, y: 0)
             holdBackHeldRows()
         }
+        // The taps' copy of the pointer passthrough, current to this tick as
+        // the outputs are; read by them only while outputs are held back.
+        if outputsBlocked { ExternalInputDeviceService.shared.setPointerOutputsPassing(pointerOnly) }
         heldRowBlockedThisPoll = false
         defer { if requireSeenUp, !heldRowBlockedThisPoll { requireSeenUp = false } }
         // Cumulative session counter for the Stats panel - cheap UInt64
@@ -2295,7 +3253,8 @@ class MappingEngine: ObservableObject {
 
         // One read per controller per frame: a read drains the gyro, so a
         // second group on the same pad got an empty accumulator and no motion.
-        var frameStates: [Int: ControllerState] = [:]
+        // stateByReadSlot holds this frame's reads (a second dictionary built
+        // per poll held the same states).
         for (joystickIndex, joystickMapping) in preset.joysticks.enumerated() {
             // External-only bindings can fire even without a controller, so
             // we don't bail out when the slot is empty - we just skip the
@@ -2305,8 +3264,12 @@ class MappingEngine: ObservableObject {
             // controller connects or the user picks a different device.
             let readSlot = slotForGroup[joystickIndex] ?? joystickIndex
             pollingReadSlot = readSlot
-            var state = frameStates[readSlot] ?? controllerService.readControllerState(at: readSlot)
-            if let state { stateByReadSlot[readSlot] = state; frameStates[readSlot] = state }
+            var state = stateByReadSlot[readSlot]
+            if state == nil {
+                state = controllerService.readControllerState(at: readSlot)
+                if let state { stateByReadSlot[readSlot] = state }
+            }
+            let pollGroup = table[joystickIndex]
             if dpadOneWay, let hats = state?.hats, !hats.isEmpty {
                 state?.hats = oneDirectionHats(hats, group: joystickIndex)
             }
@@ -2341,36 +3304,47 @@ class MappingEngine: ObservableObject {
             // polled last.
             pollingJoystickIndex = joystickIndex
             zoneTakenAxes.removeAll(keepingCapacity: true)
-            for stored in joystickMapping.bindings where stored.input.type == .stickRegion && stored.zoneSharesStick == false {
-                let b = Self.withDeadzonePreview(stored, presetID: activePreset?.id)
-                guard inputIsActive(b.input, state: state, binding: b),
-                      b.modifiers.allSatisfy({ inputIsActive($0, state: state, binding: nil) }) else { continue }
-                zoneTakenAxes.formUnion(Self.axesOfZone(key: b.input.index, id: b.input.stickRegionID))
+            zoneTakenRegionIDs.removeAll(keepingCapacity: true)
+            // The passes below go through only the rows the table lists for
+            // them, in row order: each used to go through every row.
+            for r in pollGroup.zoneRows {
+                let row = pollGroup.rows[r]
+                let stored = joystickMapping.bindings[r]
+                let b = previewing ? Self.withDeadzonePreview(stored, presetID: presetID) : stored
+                // Read with the same hold margin the zone row itself gets
+                // below: tested against the drawn edge alone, the takeover
+                // ended while the row was still held through its give, and
+                // the direction rows fired beside it on the way out.
+                hysteresisActive = rowActiveStates[joystickIndex]?.contains(row.bindKey) ?? false
+                let zoneHeld = inputIsActive(b.input, state: state, binding: b, row: row)
+                hysteresisActive = false
+                guard zoneHeld,
+                      row.modifiers.allSatisfy({ inputIsActive($0, state: state, binding: nil) }) else { continue }
+                zoneTakenAxes.formUnion(row.zoneAxes)
+                if let id = b.input.stickRegionID { zoneTakenRegionIDs.insert(id) }
             }
-            for b in joystickMapping.bindings {
-                let mods = b.modifiers
-                if !mods.isEmpty,
-                   mods.allSatisfy({ inputIsActive($0, state: state, binding: nil) }),
-                   inputIsActive(b.input, state: state, binding: b) {
-                    chordClaimed.insert(cachedKey(for: b))
-                    chordSatisfied[cachedKey(for: b), default: []].append(Set(mods.map(\.serialized)))
+            for r in pollGroup.chordRows {
+                let row = pollGroup.rows[r]
+                let b = joystickMapping.bindings[r]
+                if row.modifiers.allSatisfy({ inputIsActive($0, state: state, binding: nil) }),
+                   inputIsActive(b.input, state: state, binding: b, row: row) {
+                    chordClaimed.insert(row.plainKey)
+                    chordSatisfied[row.plainKey, default: []].append(row.modifierSet)
                 }
             }
             // A Pause Motion row honors its own chord, and a plain one stays
             // quiet while a chord holds its input.
-            for b in joystickMapping.bindings
-            where b.outputs.contains(where: { $0.type == .appAction && $0.appActionKind == .holdMuteMotion }) {
-                let mods = b.modifiers
-                guard inputIsActive(b.input, state: state, binding: b) else { continue }
-                if mods.isEmpty ? !chordClaimed.contains(cachedKey(for: b))
+            for r in pollGroup.muteRows {
+                let row = pollGroup.rows[r]
+                let b = joystickMapping.bindings[r]
+                let mods = row.modifiers
+                guard inputIsActive(b.input, state: state, binding: b, row: row) else { continue }
+                if mods.isEmpty ? !chordClaimed.contains(row.plainKey)
                     : mods.allSatisfy({ inputIsActive($0, state: state, binding: nil) }) {
                     // This group's motion, or, from a group with no motion
                     // rows (a keyboard, a pedal, another pad), every group
                     // that has them.
-                    let hasMotion = joystickMapping.bindings.contains { $0.input.type == .motion }
-                    let targets = hasMotion ? [joystickIndex]
-                        : preset.joysticks.indices.filter { g in preset.joysticks[g].bindings.contains { $0.input.type == .motion } }
-                    for t in targets where motionMutedGroups.insert(t).inserted {
+                    for t in pollGroup.motionTargets where motionMutedGroups.insert(t).inserted {
                         // The ratchet: wherever the controller is let go is
                         // the new neutral, for the muted groups only.
                         dropAnchors(group: t)
@@ -2379,14 +3353,16 @@ class MappingEngine: ObservableObject {
                 }
             }
             // Motion Only While Held rows: held now, their groups move.
-            for b in joystickMapping.bindings where Self.hasMotionAction(b, .holdEnableMotion) {
-                let mods = b.modifiers
+            for r in pollGroup.enableRows {
+                let row = pollGroup.rows[r]
+                let b = joystickMapping.bindings[r]
+                let mods = row.modifiers
                 // A plain row stays quiet while a chord holds its input, as
                 // for Pause Motion above.
-                guard inputIsActive(b.input, state: state, binding: b),
-                      mods.isEmpty ? !chordClaimed.contains(cachedKey(for: b))
+                guard inputIsActive(b.input, state: state, binding: b, row: row),
+                      mods.isEmpty ? !chordClaimed.contains(row.plainKey)
                         : mods.allSatisfy({ inputIsActive($0, state: state, binding: nil) }) else { continue }
-                motionHeldGroups.formUnion(motionTargets(from: joystickIndex, in: preset.joysticks))
+                motionHeldGroups.formUnion(pollGroup.motionTargets)
             }
             let heldOpen = motionHeldGroups.contains(joystickIndex) || motionHeldLastPoll.contains(joystickIndex)
             currentSlotMotionMuted = motionMutedGroups.contains(joystickIndex) || motionMutedLastPoll.contains(joystickIndex)
@@ -2396,9 +3372,10 @@ class MappingEngine: ObservableObject {
             // from where the controller is then, not the turn made meanwhile.
             if motionHoldGate.contains(joystickIndex) && !heldOpen { dropAnchors(group: joystickIndex) }
 
-            for stored in joystickMapping.bindings {
-                let binding = Self.withDeadzonePreview(stored, presetID: activePreset?.id)
-                let plainKey = cachedKey(for: binding)
+            for (r, stored) in joystickMapping.bindings.enumerated() {
+                let row = pollGroup.rows[r]
+                let binding = previewing ? Self.withDeadzonePreview(stored, presetID: presetID) : stored
+                let plainKey = row.plainKey
                 // bindKey is keyed by binding UUID so two distinct
                 // bindings on the same physical input (e.g. one toggle,
                 // one turbo, or two different macros) don't share
@@ -2406,25 +3383,34 @@ class MappingEngine: ObservableObject {
                 // Every row gets one: plain rows name the keys they hold
                 // with it (so two rows holding W keep it down until both
                 // let go), hold and double-tap rows keep their timers under
-                // it, and the activity log tells rows apart by it. Cached,
-                // so the 120 Hz loop does not allocate a uuidString per row
-                // per frame.
-                let bindKey: String
-                if let cached = bindKeyCache[binding.id] {
-                    bindKey = cached
-                } else {
-                    let k = "\(joystickIndex):\(binding.id.uuidString)"
-                    bindKeyCache[binding.id] = k
-                    bindKey = k
-                }
-                hysteresisActive = rowActiveStates[joystickIndex]?.contains(bindKey) ?? false
-                var isActive = inputIsActive(binding.input, state: state, binding: binding)
+                // it, and the activity log tells rows apart by it. From the
+                // table, so the 120 Hz loop does not allocate a uuidString
+                // per row per frame.
+                let bindKey = row.bindKey
+                firingRow = row
+                // Read once: nothing below changes it before the row's own
+                // edge is decided, and it was looked up twice.
+                let wasActive = rowActiveStates[joystickIndex]?.contains(bindKey) ?? false
+                hysteresisActive = wasActive
+                var isActive = inputIsActive(binding.input, state: state, binding: binding, row: row)
                 hysteresisActive = false
-                // A held zone on this stick takes over its direction rows.
-                if isActive, binding.input.type == .axis, zoneTakenAxes.contains(binding.input.index) { isActive = false }
-                let inputKey: String
-                let rowModifiers = binding.modifiers
+                // Set when a chord or a zone takes the row over while its
+                // control is still down: that is not a release, so a hold
+                // or double tap row must not read it as a tap.
+                var forcedOff = false
+                // A held zone on this stick takes over its direction rows,
+                // except one gated to that very region: it was asked to
+                // fire there.
+                if isActive, binding.input.type == .axis, zoneTakenAxes.contains(binding.input.index),
+                   !(binding.onlyInRegion.map { zoneTakenRegionIDs.contains($0) } ?? false) {
+                    isActive = false
+                    forcedOff = true
+                }
+                let inputKey = row.inputKey
+                let rowModifiers = row.modifiers
                 if !rowModifiers.isEmpty {
+                    // The row's own control, before its held controls count.
+                    let ownDown = isActive
                     // Chord row: every held control must be down too, and it
                     // tracks its own press state so it never shares an edge
                     // with the plain row.
@@ -2434,21 +3420,28 @@ class MappingEngine: ObservableObject {
                     // A satisfied chord holding more controls on the same
                     // input wins: LB + RB + A, not also LB + A.
                     if isActive, let others = chordSatisfied[plainKey], others.count > 1 {
-                        let mine = Set(rowModifiers.map(\.serialized))
-                        if others.contains(where: { $0.isStrictSuperset(of: mine) }) { isActive = false }
+                        let mine = row.modifierSet
+                        // Taken over, not let go: no tap, no double tap
+                        // window, as the other two takeovers below.
+                        if others.contains(where: { $0.isStrictSuperset(of: mine) }) {
+                            isActive = false
+                            forcedOff = true
+                            chordLatched[joystickIndex, default: []].insert(inputKey)
+                        }
                     }
-                    if let k = chordKeyCache[binding.id] {
-                        inputKey = k
-                    } else {
-                        let k = plainKey + "+" + rowModifiers.map(\.serialized).joined(separator: "+")
-                        chordKeyCache[binding.id] = k
-                        inputKey = k
+                    // Still held since the bigger chord took it over: letting
+                    // go of RB with LB and A down is leaving the chord, not
+                    // pressing LB + A. Cleared once A itself comes up.
+                    if isActive, chordLatched[joystickIndex]?.contains(inputKey) == true {
+                        isActive = false
+                    } else if !ownDown {
+                        chordLatched[joystickIndex]?.remove(inputKey)
                     }
                 } else {
-                    inputKey = plainKey
                     if isActive, chordClaimed.contains(plainKey) {
                         chordLatched[joystickIndex, default: []].insert(plainKey)
                         isActive = false
+                        forcedOff = true
                     } else if isActive, chordLatched[joystickIndex]?.contains(plainKey) == true {
                         isActive = false   // still held since the chord
                     } else if !isActive {
@@ -2460,7 +3453,7 @@ class MappingEngine: ObservableObject {
                 // control to come up first: otherwise each preset it switched
                 // to saw the same held button as a new press, and one tap
                 // stepped through the folder about ten times.
-                if appActionRow(binding) {
+                if row.isAppAction {
                     if !isActive { armedAppActionRows.insert(bindKey) }
                     else if !armedAppActionRows.contains(bindKey) { isActive = false }
                 }
@@ -2476,7 +3469,6 @@ class MappingEngine: ObservableObject {
                     scratchRowActiveSet.insert(bindKey)
                 }
 
-                let wasActive = rowActiveStates[joystickIndex]?.contains(bindKey) ?? false
                 // Axis-driven MIDI CC / pitch-bend must never fire on the press
                 // or release edge - that spikes the value for one frame and
                 // slams it on release. fireOutputs suppresses those two output
@@ -2494,6 +3486,10 @@ class MappingEngine: ObservableObject {
                         let isToggledOn = toggleStates[bindKey] ?? false
                         if isToggledOn {
                             if debugEnabled { log("TOGGLE OFF: \(inputKey)", joystick: joystickIndex) }
+                            // An auto-click pulse still down is let go here
+                            // with the rest; its own release would send a
+                            // second Note Off (see TURBO END).
+                            turboPulseDown[bindKey] = nil
                             fireOutputs(binding.outputs, press: false, inputIsAxis: inputIsAxis, owner: bindKey,
                                         restingCCValue: binding.input.axisDirection == nil ? 64 : 0)
                             // A toggled auto clicker buzzes when it stops as
@@ -2506,6 +3502,11 @@ class MappingEngine: ObservableObject {
                                 macroCancelRequests.insert(bindKey)
                             }
                             toggleStates[bindKey] = false
+                        } else if binding.macroSteps?.isEmpty == false, macrosInFlight.contains(bindKey) {
+                            // The chain toggled off a moment ago is still
+                            // letting go. Nothing starts and the row stays
+                            // off; logging it as on with no chain running
+                            // left the next press only switching it off.
                         } else {
                             if debugEnabled {
                                 log("TOGGLE ON: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex)
@@ -2516,13 +3517,21 @@ class MappingEngine: ObservableObject {
                             // documented "Toggle + Macro" combination
                             // silently did nothing.
                             if let steps = binding.macroSteps, !steps.isEmpty {
-                                if !macrosInFlight.contains(bindKey) {
-                                    macrosInFlight.insert(bindKey)
-                                    macroCancelRequests.remove(bindKey)
-                                    executeMacro(steps, joystickIndex: joystickIndex, bindKey: bindKey,
-                                                 repeatCount: binding.repeatCount ?? 1,
-                                                 repeatDelayMs: binding.repeatDelayMs ?? 100)
-                                }
+                                macrosInFlight.insert(bindKey)
+                                macroCancelRequests.remove(bindKey)
+                                // The chain gets the stacked outputs too: when
+                                // it ends on its own it switches the toggle
+                                // off, and only TOGGLE OFF above let them go,
+                                // so a Shift pressed here stayed down.
+                                executeMacro(steps, joystickIndex: joystickIndex, bindKey: bindKey,
+                                             repeatCount: binding.repeatCount ?? 1,
+                                             repeatDelayMs: binding.repeatDelayMs ?? 100,
+                                             speed: binding.macroSpeed ?? 1,
+                                             jitterPercent: binding.macroJitterPercent ?? 0,
+                                             loop: binding.macroLoop == true,
+                                             toggledOutputs: binding.outputs,
+                                             toggledInputIsAxis: inputIsAxis,
+                                             toggledRestingCCValue: binding.input.axisDirection == nil ? 64 : 0)
                                 // What is stacked beside the macro (Type Text,
                                 // a System Function) fires from the same press,
                                 // as Help says.
@@ -2545,7 +3554,7 @@ class MappingEngine: ObservableObject {
                         }
                     }
                     // Keep firing continuous outputs while toggled on
-                    if toggleStates[bindKey] == true,
+                    if row.hasContinuousOutputs, toggleStates[bindKey] == true,
                        let s = state ?? (Self.readsNoSlot(binding.input.type) ? Self.detachedState : nil) {
                         fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                     }
@@ -2556,6 +3565,19 @@ class MappingEngine: ObservableObject {
                     if binding.turboEnabled == true, binding.macroSteps?.isEmpty != false {
                         if toggleStates[bindKey] == true {
                             if !turboTick(binding, bindKey: bindKey, inputIsAxis: inputIsAxis, now: nowMonotonic) {
+                                // Stop after N ends the run the way a second
+                                // press does: the run's light bar color goes
+                                // and the stop buzz is felt. The Nth pulse
+                                // keeps its scheduled release, as in 1.8:
+                                // let go at once it was a zero-length press
+                                // that frame-sampling games missed and a
+                                // MIDI note too short to sound.
+                                var letGo: [OutputAction] = []
+                                if inputIsAxis { letGo += binding.outputs.filter { $0.type == .midiCC || $0.type == .midiPitchBend } }
+                                letGo += binding.outputs.filter { $0.type == .lightBar }
+                                fireOutputs(letGo, press: false, inputIsAxis: inputIsAxis, owner: bindKey,
+                                            restingCCValue: binding.input.axisDirection == nil ? 64 : 0)
+                                fireFeedback(for: binding, joystickIndex: joystickIndex)
                                 toggleStates[bindKey] = false
                                 turboTimestamps.removeValue(forKey: bindKey)
                                 turboCounts.removeValue(forKey: bindKey)
@@ -2580,7 +3602,7 @@ class MappingEngine: ObservableObject {
                                         inputIsAxis: inputIsAxis, owner: bindKey)
                         }
                         _ = turboTick(binding, bindKey: bindKey, inputIsAxis: inputIsAxis, now: nowMonotonic)
-                        if let s = state ?? (Self.readsNoSlot(binding.input.type) ? Self.detachedState : nil) {
+                        if row.hasContinuousOutputs, let s = state ?? (Self.readsNoSlot(binding.input.type) ? Self.detachedState : nil) {
                             fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                         }
                     } else if wasActive {
@@ -2607,8 +3629,10 @@ class MappingEngine: ObservableObject {
                             log("PRESS: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex)
                         }
                         // Motion and touchpad rows are continuous; their edges
-                        // are not events anyone wants a line for.
-                        if binding.input.type != .motion, binding.input.type != .touchpad {
+                        // are not events anyone wants a line for. Nor is a
+                        // press made during Pause: nothing goes out for it.
+                        if binding.input.type != .motion, binding.input.type != .touchpad,
+                           !outputsBlocked || pointerOnly {
                             let what: String
                             if let steps = binding.macroSteps, !steps.isEmpty {
                                 what = (steps.count == 1 ? String(localized: "macro, 1 step") : String(localized: "macro, \(steps.count) steps"))
@@ -2633,12 +3657,18 @@ class MappingEngine: ObservableObject {
                                 macroCancelRequests.remove(bindKey)
                                 executeMacro(steps, joystickIndex: joystickIndex, bindKey: bindKey,
                                              repeatCount: binding.repeatCount ?? 1,
-                                             repeatDelayMs: binding.repeatDelayMs ?? 100)
+                                             repeatDelayMs: binding.repeatDelayMs ?? 100,
+                                             speed: binding.macroSpeed ?? 1,
+                                             jitterPercent: binding.macroJitterPercent ?? 0,
+                                             loop: binding.macroLoop == true)
                                 // What is stacked beside the macro (Type Text,
                                 // a System Function) fires from the same press,
                                 // as Help says. Once per chain: a press while it
                                 // runs starts neither.
                                 fireOutputs(binding.outputs, press: true, inputIsAxis: inputIsAxis, owner: bindKey)
+                            } else if binding.macroLoop == true {
+                                // Until pressed again: this is the again.
+                                macroCancelRequests.insert(bindKey)
                             }
                         } else if usesDeferred {
                             // Tap-vs-hold / double-tap: record the press and
@@ -2667,7 +3697,10 @@ class MappingEngine: ObservableObject {
                         } else {
                             fireOutputs(binding.outputs, press: true, inputIsAxis: inputIsAxis, owner: bindKey,
                                         repeats: binding.keyRepeat == true)
-                            if Self.isOneShot(binding.input) { nudgePointer(for: binding.outputs, owner: bindKey) }
+                            // Not a double click: it moves for its 200 ms window, as 1.8.
+                            if Self.isOneShot(binding.input), !(binding.input.type == .extMouse && binding.input.extMouseKind == .doubleClick) {
+                                nudgePointer(for: binding.outputs, owner: bindKey)
+                            }
                             // A gyro pointer row moves on its first frame too:
                             // the turn made then was dropped, so a short flick
                             // moved nothing and a turn and its reverse did not
@@ -2697,7 +3730,9 @@ class MappingEngine: ObservableObject {
                             pulseTaps(binding, count: taps, bindKey: bindKey)
                         }
                         if debugEnabled { log("HOLD: \(inputKey)", joystick: joystickIndex) }
-                        activity(String(localized: "\(binding.input.displayName) held \u{2192} \(Self.describe(hold))"), joystick: joystickIndex)
+                        if !outputsBlocked || pointerOnly {
+                            activity(String(localized: "\(binding.input.displayName) held \u{2192} \(Self.describe(hold))"), joystick: joystickIndex)
+                        }
                         // A discrete action, like the tap: on a stick or
                         // trigger the axis flag sent a hold's MIDI CC or pitch
                         // bend nothing on press and only its rest value later.
@@ -2716,7 +3751,28 @@ class MappingEngine: ObservableObject {
                     } else if !isActive && wasActive {
                         if debugEnabled { log("RELEASE: \(inputKey)", joystick: joystickIndex) }
                         if usesDeferred {
-                            handleDeferredRelease(binding, bindKey: bindKey, now: nowMonotonic)
+                            if forcedOff, !holdFired.contains(bindKey) {
+                                // Taken over by a chord or a region, not let
+                                // go: the press under the hold threshold is
+                                // no tap and opens no double tap window, or
+                                // the row's main action landed beside the
+                                // chord's output. A clean tap just before
+                                // this press still goes out, as it does when
+                                // a modifier was used in a shortcut. A hold
+                                // already fired is let go through the normal
+                                // path.
+                                deferredPressStart.removeValue(forKey: bindKey)
+                                modifierKeyDownMark.removeValue(forKey: bindKey)
+                                lastTapTime.removeValue(forKey: bindKey)
+                                if secondTapPressed.remove(bindKey) != nil {
+                                    let taps = tapCount.removeValue(forKey: bindKey) ?? 1
+                                    pulseTaps(binding, count: taps, bindKey: bindKey)
+                                } else {
+                                    tapCount.removeValue(forKey: bindKey)
+                                }
+                            } else {
+                                handleDeferredRelease(binding, bindKey: bindKey, now: nowMonotonic)
+                            }
                         } else if binding.macroSteps?.isEmpty != false && (binding.repeatCount ?? 1) <= 1 {
                             fireOutputs(binding.outputs, press: false, inputIsAxis: inputIsAxis, owner: bindKey,
                                         restingCCValue: binding.input.axisDirection == nil ? 64 : 0)
@@ -2727,21 +3783,31 @@ class MappingEngine: ObservableObject {
                         }
                         // Stop-on-release: letting go asks the running chain
                         // to halt at its next press hop and release held steps.
+                        // Not for an input that is never held (a voice phrase,
+                        // a tap, a sequence): its release comes a poll later
+                        // and cut every such macro after one step.
                         if binding.macroSteps?.isEmpty == false,
                            binding.macroInterruptOnRelease == true,
+                           !Self.isNeverHeld(binding.input),
                            macrosInFlight.contains(bindKey) {
                             macroCancelRequests.insert(bindKey)
                         }
-                    } else if isActive, !usesDeferred,
+                    } else if isActive, !usesDeferred, row.hasContinuousOutputs,
                               let s = state ?? (Self.readsNoSlot(binding.input.type) ? Self.detachedState : nil) {
                         // Deferred bindings skip continuous firing: which
-                        // action this press means is not decided yet.
+                        // action this press means is not decided yet. A row
+                        // with nothing continuous (a held key) skips the call.
                         // MIDI bindings pass an empty controller state:
                         // their analog value comes from midiAxisValue, so
                         // a dial keeps scrolling with no gamepad attached.
                         fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
-                    } else if !isActive, !usesDeferred,
-                              binding.outputs.contains(where: { $0.type == .absoluteVolume }),
+                    } else if !isActive, !usesDeferred, !forcedOff, row.hasAbsoluteVolume,
+                              // Inactive for being under threshold only: with
+                              // its chord's held control up, or taken over,
+                              // the volume followed the trigger anyway.
+                              rowModifiers.allSatisfy({ inputIsActive($0, state: state, binding: nil) }),
+                              !(rowModifiers.isEmpty && (chordClaimed.contains(plainKey)
+                                  || chordLatched[joystickIndex]?.contains(plainKey) == true)),
                               let s = state ?? (Self.readsNoSlot(binding.input.type) ? Self.detachedState : nil) {
                         // Fader outputs follow the control's position even
                         // while the binding reads "inactive": a knob at 20%
@@ -2752,10 +3818,12 @@ class MappingEngine: ObservableObject {
                 }
             }
 
-            // Copy out into activeStates (cheap Set copy) so the
-            // scratch can be reused next iteration.
-            activeStates[joystickIndex] = scratchActiveSet
-            rowActiveStates[joystickIndex] = scratchRowActiveSet
+            // Swap, not copy: shared with the dictionary's entry, the
+            // scratch set's removeAll(keepingCapacity:) reallocated it on
+            // every frame after one with anything active. The old entry is
+            // now the scratch, held by nothing else.
+            swap(&activeStates[joystickIndex, default: []], &scratchActiveSet)
+            swap(&rowActiveStates[joystickIndex, default: []], &scratchRowActiveSet)
         }
 
         // The kill switch. Runs after the binding loop so it can reuse the
@@ -2838,7 +3906,7 @@ class MappingEngine: ObservableObject {
             mouseCarryX = clampedX - Float(wholeX)
             mouseCarryY = clampedY - Float(wholeY)
             if wholeX != 0 || wholeY != 0 {
-                InputSimulator.shared.moveMouse(deltaX: wholeX, deltaY: wholeY)
+                InputSimulator.shared.moveMouseScaled(deltaX: wholeX, deltaY: wholeY)
                 StatsService.shared.recordMouseMotion(pixels: abs(wholeX) + abs(wholeY))
             }
             // Whole-pixel scroll with the fraction carried, exactly like the
@@ -2882,10 +3950,17 @@ class MappingEngine: ObservableObject {
         // change that was throttled out still converges within ~0.1s instead of
         // leaving the published mirror permanently stale. Uses the monotonic
         // clock already captured at the top of pollControllers.
-        if activeInputsPublished != activeInputs,
+        // A key sequence that fired stays in the mirror for its lit time,
+        // past the few polls its row is active; the trailing reconcile
+        // clears it on the next window.
+        if !keySequenceLitUntil.isEmpty {
+            for (k, until) in keySequenceLitUntil where until <= nowMonotonic { keySequenceLitUntil.removeValue(forKey: k) }
+        }
+        let publishable = keySequenceLitUntil.isEmpty ? activeInputs : activeInputs.union(keySequenceLitUntil.keys)
+        if activeInputsPublished != publishable,
            nowMonotonic - activeInputsLastFlush > 0.1 {
             activeInputsLastFlush = nowMonotonic
-            activeInputsPublished = activeInputs
+            activeInputsPublished = publishable
         }
 
         // Drain external motion / scroll deltas now that bindings have read
@@ -2901,12 +3976,16 @@ class MappingEngine: ObservableObject {
             pendingExternalUps.removeAll()
             for up in ups { ingestExternalEvent(up) }
         }
+        // Deltas drained, double clicks timed out: the taps' answers follow.
+        refreshBlockChordHeld()
     }
 
     /// One answer for "is this control down right now", whatever device
     /// it lives on. Keyboard, mouse, and MIDI inputs fire with no game
     /// controller connected; controller inputs need the slot's state.
-    private func inputIsActive(_ input: InputEvent, state: ControllerState?, binding: BindingModel?) -> Bool {
+    /// `row` is given for a row's own input, whose one-shot key the table
+    /// holds; a held control's is built here.
+    private func inputIsActive(_ input: InputEvent, state: ControllerState?, binding: BindingModel?, row: PollRow? = nil) -> Bool {
         // One-shot inputs are used up when read. Read each once per frame and
         // share the answer, so the chord pre-pass does not eat a Program
         // Change before its row sees it, and two rows on the same one fire.
@@ -2915,7 +3994,12 @@ class MappingEngine: ObservableObject {
             // one group read (and used up) fired the other group's row too.
             if input.type == .touchpadGesture, let groups = touchGate(input.touchpadSurface),
                !groups.contains(pollingJoystickIndex) { return false }
-            let key = cachedKey(forInput: input)
+            let key: String
+            if let row {
+                if let steam = row.oneShotSteamKey, pollingSteamGroup { key = steam } else { key = row.oneShotKey }
+            } else {
+                key = cachedKey(forInput: input)
+            }
             if let seen = oneShotFrame[key] { return seen }
             let result = readInput(input, state: state, binding: binding)
             oneShotFrame[key] = result
@@ -2931,6 +4015,8 @@ class MappingEngine: ObservableObject {
     private func nudgePointer(for outputs: [OutputAction], owner: String) {
         guard !outputsBlocked || (pointerOnly && !touchpadHeldBack(owner: owner)) else { return }
         guard !touchpadSetupHolds(owner: owner) else { return }
+        // Read first: it also refreshes the scroll gain the wheel case uses.
+        let gain = pointerGain
         for output in outputs {
             let sign = output.resolvedMouseDirection == .positive ? 1 : -1
             switch output.type {
@@ -2939,16 +4025,25 @@ class MappingEngine: ObservableObject {
                                                       direction: output.resolvedMouseDirection,
                                                       lines: Int(scrollGainCache.rounded()))
             case .mouseMotion:
-                let distance = sign * max(1, output.speed ?? 6) * 4
+                // Scaled by both Pointer speed sliders, as every other row is;
+                // at least a point, the low end can round to nothing.
+                let distance = sign * max(1, Int((Float(max(1, output.speed ?? 6) * 4) * gain).rounded()))
                 if output.resolvedMouseAxis == .horizontal {
-                    InputSimulator.shared.moveMouse(deltaX: distance, deltaY: 0)
+                    InputSimulator.shared.moveMouseScaled(deltaX: distance, deltaY: 0)
                 } else {
-                    InputSimulator.shared.moveMouse(deltaX: 0, deltaY: distance)
+                    InputSimulator.shared.moveMouseScaled(deltaX: 0, deltaY: distance)
                 }
             default:
                 break
             }
         }
+    }
+
+    /// A one-shot input, or one that is made rather than held (a stick
+    /// gesture, a button or key sequence): it fires when complete and its
+    /// release follows a poll later. The editor asks this too.
+    static func isNeverHeld(_ input: InputEvent) -> Bool {
+        [.stickGesture, .buttonSequence, .keySequence].contains(input.type) || isOneShot(input)
     }
 
     /// Answers for one-shot inputs this frame; cleared at each frame start.
@@ -2958,7 +4053,18 @@ class MappingEngine: ObservableObject {
     /// asks this too, so the hold modes it offers cannot drift from it.
     static func isOneShot(_ input: InputEvent) -> Bool {
         switch input.type {
-        case .touchpadGesture, .chassisTap: return true
+        case .touchpadGesture, .chassisTap, .voicePhrase: return true
+        case .extMouse:
+            // A double click's 200 ms window and a wheel notch are over at once.
+            return [.doubleClick, .scrollX, .scrollY].contains(input.extMouseKind ?? .button)
+        case .screenText:
+            // A short press when the text appears; held while it shows.
+            guard let id = input.screenTextID else { return false }
+            return ScreenTextService.shared.watch(with: id)?.mode == .appears
+        case .screenPixel:
+            // A short press when the color changes; held while it shows.
+            guard let id = input.screenPixelID else { return false }
+            return ScreenPixelService.shared.watch(with: id)?.mode == .change
         case .midi:
             switch input.midiKind ?? .note {
             case .programChange, .transport: return true
@@ -3007,6 +4113,12 @@ class MappingEngine: ObservableObject {
         switch input.type {
         case .extKey, .extMouse:
             return checkExternalInput(input)
+        case .keySequence:
+            // Fed by the keyboard events as they arrive (ingestExternalEvent);
+            // read as pressed for a few polls after its last key. By row id:
+            // the uuidString key was built per row per poll. A held control
+            // has no row, and was never fired under its input's text.
+            return pollCount <= ((binding?.id).flatMap { keySequenceFiredUntil[$0] } ?? -1)
         case .midi:
             return checkMIDIInput(input, binding: binding,
                                   threshold: binding?.deadzone ?? defaultAxisThreshold)
@@ -3019,7 +4131,7 @@ class MappingEngine: ObservableObject {
             // (a trackpad-only or tap-only preset is perfectly valid). Every
             // other type genuinely needs the slot's state.
             switch input.type {
-            case .touchpad, .touchpadRegion, .touchpadGesture, .cursorRegion, .chassisTap:
+            case .touchpad, .touchpadRegion, .touchpadGesture, .cursorRegion, .chassisTap, .screenPixel, .screenText, .voicePhrase:
                 return checkInput(input, state: Self.detachedState, binding: binding)
             default:
                 return false
@@ -3034,7 +4146,7 @@ class MappingEngine: ObservableObject {
     /// and scroll outputs run with no controller in the group's slot.
     private static func readsNoSlot(_ type: InputType) -> Bool {
         switch type {
-        case .midi, .extKey, .extMouse, .cursorRegion, .chassisTap,
+        case .midi, .extKey, .extMouse, .keySequence, .cursorRegion, .chassisTap, .screenPixel, .screenText, .voicePhrase,
              .touchpad, .touchpadRegion, .touchpadGesture: return true
         default: return false
         }
@@ -3097,6 +4209,8 @@ class MappingEngine: ObservableObject {
     /// the button from Settings, with Start too when the default needs it,
     /// or Options alone on an Access Controller (its base profile sends
     /// neither Create nor Start).
+    private static let padsWithNoBack: Set<ControllerModelID> = [.gameCubeAdapter, .gameCubeSwitch2, .nsoN64, .nsoGenesis]
+
     func emergencyHoldIsDown(useFrame: Bool = false) -> Bool {
         let service = EmergencyStopService.shared
         let button = service.controllerButton
@@ -3104,10 +4218,19 @@ class MappingEngine: ObservableObject {
         // Every slot with a controller in it, by the slot it sits in: a
         // group redirected to slot 1 left the pad in slot 0 unread, and a
         // count-based range missed a raw HID pad in a higher slot.
-        var slots = Set(controllerService.controllerDetails.keys)
-        slots.formUnion(controllerService.rawHIDGamepadSlots.keys)
-        if let steam = controllerService.steamControllerSlot { slots.insert(steam) }
-        for slot in slots.sorted() {
+        // Lowest first, each once, with no Set and no sort per poll: the
+        // answer is an OR, but a pad no group reads is read here, so the
+        // order the reads happen in stays as it was.
+        let details = controllerService.controllerDetails, raw = controllerService.rawHIDGamepadSlots
+        let steamSlot = controllerService.steamControllerSlot
+        var last = Int.min
+        while true {
+            var slot = Int.max
+            for s in details.keys where s > last && s < slot { slot = s }
+            for s in raw.keys where s > last && s < slot { slot = s }
+            if let s = steamSlot, s > last, s < slot { slot = s }
+            guard slot != Int.max else { break }
+            last = slot
             // A racing wheel nothing holds is left to the game that may be
             // using it: reading it here would take it.
             if controllerService.racingWheelSlots[slot] != nil, !controllerService.racingWheelIsHeld(slot) { continue }
@@ -3120,6 +4243,9 @@ class MappingEngine: ObservableObject {
                     ? SteamControllerButton.index(forStandardButton: standard) : standard
                 return index.map { (state.buttons[$0] ?? 0) > 0.5 } ?? false
             }
+            // Nothing down: the layout below only decides which of the two
+            // buttons count, and resolving it cost every frame for nothing.
+            guard down(button) || down(EmergencyStopService.startButton) else { continue }
             if button == EmergencyStopService.defaultControllerButton {
                 let layout = ControllerLayoutResolver.cachedMatch(service: controllerService, slot: slot)?.id
                 if layout == .psAccess, down(EmergencyStopService.startButton) { return true }
@@ -3132,7 +4258,7 @@ class MappingEngine: ObservableObject {
                 // Pads with no Back button at all (the GameCube controllers,
                 // the N64 and Genesis pads, anything that never sends 8):
                 // Start alone is the hold, or it could never fire.
-                let noBack: Set<ControllerModelID> = [.gameCubeAdapter, .gameCubeSwitch2, .nsoN64, .nsoGenesis]
+                let noBack = Self.padsWithNoBack
                 // Matched with the hidden drawings too: these pads' drawings are
                 // experimental and hidden in Release, where the shown-only
                 // match found nothing and a Genesis pad (which sends a
@@ -3172,6 +4298,8 @@ class MappingEngine: ObservableObject {
         // so the hold would never be seen.
         RawHIDGamepadService.shared.setDecodingWanted(true, reason: "restartHold")
         DualSenseSupplementService.shared.setPollingWanted(true, reason: "restartHold")
+        // The watch reads the GameController pads on main: their handlers too.
+        controllerService.setControllersRead(true, reason: "restartHold")
         // Full-rate timers in the background, or App Nap spaced the watch's
         // ticks out behind a game and the hold was missed.
         AppActivity.shared.retain("restartHold")
@@ -3215,19 +4343,12 @@ class MappingEngine: ObservableObject {
         restartAction = nil
         RawHIDGamepadService.shared.setDecodingWanted(false, reason: "restartHold")
         DualSenseSupplementService.shared.setPollingWanted(false, reason: "restartHold")
+        controllerService.setControllersRead(false, reason: "restartHold")
         AppActivity.shared.release("restartHold")
         // A start sets them again itself.
         if !isRunning { controllerService.emergencyButtons = [] }
     }
 
-
-    /// Returns cached serialized key for a binding's input to avoid string allocations in 120Hz loop
-    private func cachedKey(for binding: BindingModel) -> String {
-        if let cached = serializedKeyCache[binding.id] { return cached }
-        let key = binding.input.serialized
-        serializedKeyCache[binding.id] = key
-        return key
-    }
 
     /// Remap a raw axis magnitude (0...1) through the binding's inner and
     /// outer deadzones. Below the inner deadzone the result is 0. Above the
@@ -3266,9 +4387,44 @@ class MappingEngine: ObservableObject {
     private var externalDownSincePoll: Set<String> = []
     private var pendingExternalUps: [ExternalInputDeviceService.Event] = []
 
+    /// The active preset's key sequence rows: the row's key, the serialized
+    /// input the editor lights it by, its keys and its window, read on every
+    /// key down.
+    private var keySequenceRows: [(key: UUID, input: String, steps: [Int], windowMs: Int)] = []
+    private var keySequenceRecognizers: [UUID: ButtonSequenceRecognizer] = [:]
+    private var keySequenceFiredUntil: [UUID: Int] = [:]
+    /// Serialized input to the monotonic time the row light stays on until.
+    /// A sequence row is active for only three or four polls, and the
+    /// editor's mirror is published at most every 100 ms, so the light Help
+    /// promises was skipped whenever another row had changed just before.
+    private var keySequenceLitUntil: [String: CFTimeInterval] = [:]
+
+    private func feedKeySequences(_ code: Int) {
+        guard !keySequenceRows.isEmpty else { return }
+        let now = CACurrentMediaTime()
+        for row in keySequenceRows {
+            var r = keySequenceRecognizers[row.key] ?? ButtonSequenceRecognizer()
+            r.windowMs = row.windowMs
+            // One key down is one press: down, then up again at once.
+            let fired = r.feed(down: [code], now: now, steps: row.steps)
+            _ = r.feed(down: [], now: now, steps: row.steps)
+            keySequenceRecognizers[row.key] = r
+            if fired {
+                keySequenceFiredUntil[row.key] = pollCount + 3
+                // Lit for 150 ms in the mirror, and the next poll publishes
+                // at once; the fired window itself stays short so the row's
+                // outputs are not held any longer.
+                keySequenceLitUntil[row.input] = now + 0.15
+                activeInputsLastFlush = -.infinity
+            }
+        }
+    }
+
     private func ingestExternalEvent(_ event: ExternalInputDeviceService.Event) {
+        defer { refreshBlockChordHeld() }
         switch event {
         case .keyDown(let dev, let code):
+            feedKeySequences(code)
             var s = externalKeysDown[dev] ?? []
             s.insert(code)
             externalKeysDown[dev] = s
@@ -3414,7 +4570,7 @@ class MappingEngine: ObservableObject {
     /// release and every row option run as for a quick button press.
     private func stickGestureActive(_ input: InputEvent, state: ControllerState, binding: BindingModel?) -> Bool {
         guard let steps = input.gestureSteps, !steps.isEmpty else { return false }
-        let key = "\(binding?.id.uuidString ?? input.serialized)#\(pollingReadSlot)"
+        let key = RecognizerKey(row: binding?.id, input: binding == nil ? input.serialized : nil, slot: pollingReadSlot)
         var entry = gestureRecognizers[key] ?? (StickGestureRecognizer(), -1, -1)
         if entry.poll != pollCount {
             entry.poll = pollCount
@@ -3429,6 +4585,32 @@ class MappingEngine: ObservableObject {
                 entry.pressedUntilPoll = pollCount + 2
             }
             gestureRecognizers[key] = entry
+        }
+        return pollCount <= entry.pressedUntilPoll
+    }
+
+    /// The buttons down in the group being polled, worked out once a poll
+    /// for all its sequence rows: each row built the same Set again.
+    private var sequenceDownFrame: (poll: Int, group: Int, down: Set<Int>) = (-1, -1, [])
+
+    /// A button sequence row: fed the buttons down once a poll, pressed for
+    /// a few polls when its last press lands, like a stick gesture.
+    private func buttonSequenceActive(_ input: InputEvent, state: ControllerState, binding: BindingModel?) -> Bool {
+        guard let steps = input.sequenceSteps, !steps.isEmpty else { return false }
+        let key = RecognizerKey(row: binding?.id, input: binding == nil ? input.serialized : nil, slot: pollingReadSlot)
+        var entry = sequenceRecognizers[key] ?? (ButtonSequenceRecognizer(), -1, -1)
+        if entry.poll != pollCount {
+            entry.poll = pollCount
+            entry.recognizer.windowMs = max(150, min(3000, binding?.gestureWindowMs ?? 600))
+            let touch = controllerService.sequenceTouchCodes(slot: pollingReadSlot).subtracting(steps)
+            if sequenceDownFrame.poll != pollCount || sequenceDownFrame.group != pollingJoystickIndex {
+                sequenceDownFrame = (pollCount, pollingJoystickIndex, ButtonSequenceRecognizer.downSet(state))
+            }
+            let down = touch.isEmpty ? sequenceDownFrame.down : sequenceDownFrame.down.subtracting(touch)
+            if entry.recognizer.feed(down: down, now: CACurrentMediaTime(), steps: steps) {
+                entry.pressedUntilPoll = pollCount + 2
+            }
+            sequenceRecognizers[key] = entry
         }
         return pollCount <= entry.pressedUntilPoll
     }
@@ -3509,7 +4691,7 @@ class MappingEngine: ObservableObject {
             // Press for as long as any finger sits inside the named region.
             // A Steam Controller's left trackpad (surface 1) has its own.
             guard let id = input.touchpadRegionID else { return false }
-            return touchService(input.touchpadSurface).isRegionPressed(id)
+            return touchService(input.touchpadSurface).isRegionPressed(id, active: hysteresisActive)
 
         case .cursorRegion:
             // Mac-trackpad / mouse analog of `.touchpadRegion`: press
@@ -3517,7 +4699,25 @@ class MappingEngine: ObservableObject {
             // Position is fed continuously by ExternalInputDeviceService's
             // CGEventTap as the cursor moves.
             guard let id = input.cursorRegionID else { return false }
-            return CursorRegionService.shared.isRegionPressed(id)
+            return CursorRegionService.shared.isRegionPressed(id, active: hysteresisActive)
+
+        case .screenPixel:
+            // What the screen shows at the watch's point: held while the
+            // color matches, or a short press when it changes, as the
+            // watch says. The service samples while the preset runs.
+            guard let id = input.screenPixelID else { return false }
+            return ScreenPixelService.shared.isPressed(id)
+
+        case .screenText:
+            // Words read inside an area of the screen: held while they show,
+            // or a short press when they appear.
+            guard let id = input.screenTextID else { return false }
+            return ScreenTextService.shared.isPressed(id)
+
+        case .voicePhrase:
+            // A short press each time the phrase is heard.
+            guard let id = input.voicePhraseID else { return false }
+            return VoicePhraseService.shared.isPressed(id)
 
         case .stickRegion:
             // Joystick stick analog of `.touchpadRegion`: press
@@ -3542,11 +4742,15 @@ class MappingEngine: ObservableObject {
                 // middle and reaches past the deadzone (50 to 100 for "pushed
                 // right") waits until the control is pushed. A band that sits
                 // inside the deadzone is about rest and still fires there.
-                if !oneWay, abs(v) < axisThreshold,
+                // Released a little inside the deadzone edge while the row
+                // holds, as the zone's own edges are, so a stick resting on
+                // the deadzone radius does not chatter.
+                let gate = hysteresisActive ? axisThreshold * 0.9 : axisThreshold
+                if !oneWay, abs(v) < gate,
                    found.region.minY < 0.5 - Double(axisThreshold) / 2 || found.region.maxY > 0.5 + Double(axisThreshold) / 2 {
                     return false
                 }
-                return StickRegionService.shared.isBandPressed(id, fraction: f)
+                return StickRegionService.shared.isBandPressed(id, fraction: f, active: hysteresisActive)
             }
             // Pull the two axes for the requested stick.
             let xAxisIdx = input.index == 1 ? 2 : 0
@@ -3555,8 +4759,10 @@ class MappingEngine: ObservableObject {
             var yRaw = state.axes[yAxisIdx] ?? 0
             // Deadzone gate: if the stick magnitude is below the
             // threshold, no region fires - prevents drift-driven
-            // false positives.
-            if hypot(xRaw, yRaw) < axisThreshold { return false }
+            // false positives. A little lower while the row holds, as
+            // the zone's edges are, so the rim of the deadzone does not
+            // chatter.
+            if hypot(xRaw, yRaw) < (hysteresisActive ? axisThreshold * 0.9 : axisThreshold) { return false }
             if binding?.invertAxis == true {
                 xRaw = -xRaw
                 yRaw = -yRaw
@@ -3564,10 +4770,16 @@ class MappingEngine: ObservableObject {
             // Pass the corrected values directly. Re-packing them into a
             // cloned axes dict copied the slot's whole dictionary every
             // deflected frame just to override these two entries.
-            return StickRegionService.shared.isRegionPressed(id, x: xRaw, y: yRaw)
+            return StickRegionService.shared.isRegionPressed(id, x: xRaw, y: yRaw, active: hysteresisActive)
 
         case .stickGesture:
             return stickGestureActive(input, state: state, binding: binding)
+
+        case .buttonSequence:
+            return buttonSequenceActive(input, state: state, binding: binding)
+
+        case .keySequence:
+            return pollCount <= ((binding?.id).flatMap { keySequenceFiredUntil[$0] } ?? -1)
 
         case .touchpadGesture:
             // Touchpad gestures (two-finger tap, etc.) are edge-fire:
@@ -3594,7 +4806,10 @@ class MappingEngine: ObservableObject {
             // Motion off still reads the row that switches it: a shake bound
             // to Motion On / Off, or to Re-zero Motion, had no way back on.
             if currentSlotMotionMuted,
-               !(binding.map { Self.hasMotionAction($0, .toggleMotion) || Self.hasMotionAction($0, .rezeroMotion) } ?? false) {
+               // In any of its lists: a Hold, a double tap or a macro step
+               // that switched motion off left the row deaf for good.
+               !(binding.map { Self.everyOutput(of: $0).contains { o in
+                   o.type == .appAction && (o.appActionKind == .toggleMotion || o.appActionKind == .rezeroMotion) } } ?? false) {
                 return false
             }
             // A row that presses keys, buttons, or MIDI is a half-axis switch:
@@ -3670,10 +4885,7 @@ class MappingEngine: ObservableObject {
     /// while the app holds the key, the key reads down. The output dropped
     /// it, and the person's own finger already holds it, so Command Tab
     /// still works and the key is released when they let go.
-    nonisolated static func withoutSelfModifierOutputs(_ groups: [JoystickMapping]) -> [JoystickMapping] {
-        selfModifierRows(groups).groups
-    }
-
+    ///
     /// The groups with those outputs dropped, and for each such row the
     /// modifier it dropped. Its other keys still carry that modifier while
     /// the person holds it (see InputSimulator.scopedModifierFlags): a
@@ -3685,7 +4897,14 @@ class MappingEngine: ObservableObject {
         for g in groups.indices {
             for r in groups[g].bindings.indices {
                 let input = groups[g].bindings[r].input
-                guard input.type == .extKey, (224...231).contains(input.index) else { continue }
+                // fn and Caps Lock are polled keys too: a row on fn that also
+                // sent fn never saw its own release and stayed held.
+                guard input.type == .extKey,
+                      (224...231).contains(input.index) || input.index == KeyCodeMap.globeFnCode || input.index == 57
+                else { continue }
+                // Caps Lock toggles rather than holds: its press already
+                // toggled it, so it is no scope for the row's other keys.
+                let toggles = input.index == 57
                 let row = groups[g].bindings[r]
                 // Only what fires while the key is physically down: on a tap
                 // or double tap row the tap and double-tap actions go out
@@ -3696,7 +4915,7 @@ class MappingEngine: ObservableObject {
                 let deferred = row.macroSteps == nil && (row.holdOutputs != nil || row.doubleTapOutputs != nil || row.tripleTapOutputs != nil)
                 let heldLists = deferred ? [row.holdOutputs].compactMap { $0 }
                                          : [row.outputs] + [row.holdOutputs].compactMap { $0 }
-                if heldLists.contains(where: { $0.contains { $0.type == .key && $0.keyCode == input.index } }) {
+                if !toggles, heldLists.contains(where: { $0.contains { $0.type == .key && $0.keyCode == input.index } }) {
                     dropped[row.id] = input.index
                 }
                 func strip(_ list: [OutputAction]) -> [OutputAction] {
@@ -3714,6 +4933,46 @@ class MappingEngine: ObservableObject {
     /// pointer row fired whichever way the pad turned, at full speed, and a
     /// tilt-forward and tilt-back pair canceled out. A motion row that
     /// scrolls is a direction switch past its deadzone, like a key row.
+    /// A one-way MIDI CC from a 0 to 1 magnitude: 0.5 sends 64. Shared with
+    /// the Test Bench, which checked its own arithmetic before.
+    nonisolated static func ccValue(magnitude: Float) -> Int {
+        guard magnitude.isFinite else { return 0 }
+        return Int((max(0, min(1, magnitude)) * 127).rounded())
+    }
+
+    /// A CC from -1 to 1 for a stick read both ways, centered on 64: full
+    /// down is 0, full up 127 (64 steps below, 63 above, so each end is
+    /// reached and a release's 64 is the middle).
+    nonisolated static func ccValue(centered v: Float) -> Int {
+        guard v.isFinite else { return 64 }
+        let c = max(-1, min(1, v))
+        return max(0, min(127, 64 + Int((c < 0 ? c * 64 : c * 63).rounded())))
+    }
+
+    /// A stick read both ways, through the row's deadzones with its sign
+    /// kept: 0 inside the deadzone, then a smooth rise to 1 or -1 at Full
+    /// push, so the value leaves the center gently instead of jumping.
+    nonisolated static func bipolarValue(_ v: Float, inner: Float, outer: Float) -> Float {
+        guard v.isFinite else { return 0 }
+        let safeOuter = max(min(outer, 1.0), inner + 0.01)
+        let m = max(0, min(1, abs(v)))
+        if m <= inner { return 0 }
+        let mag = m >= safeOuter ? 1 : (m - inner) / (safeOuter - inner)
+        return v < 0 ? -mag : mag
+    }
+
+    private func bipolarValue(_ v: Float, binding: BindingModel?) -> Float {
+        Self.bipolarValue(v, inner: binding?.deadzone ?? defaultAxisThreshold, outer: binding?.outerDeadzone ?? 1.0)
+    }
+
+    /// Pitch bend from -1 to 1, centered on 8192: full down is 0, full up
+    /// 16383 (the halves differ by one step, so each end is reached).
+    nonisolated static func pitchBendValue(_ v: Float) -> Int {
+        guard v.isFinite else { return 8192 }
+        let c = max(-1, min(1, v))
+        return max(0, min(16383, 8192 + Int((c < 0 ? c * 8192 : c * 8191).rounded())))
+    }
+
     nonisolated static func drivesPointer(_ binding: BindingModel) -> Bool {
         binding.outputs.contains { $0.type == .mouseMotion }
     }
@@ -3779,7 +5038,7 @@ class MappingEngine: ObservableObject {
                 // followed by a forced release frame so consecutive
                 // steps arrive as distinct key presses.
                 let up = (input.axisDirection ?? .positive) != .negative
-                let key = (binding?.id.uuidString ?? "scan") + (up ? "+" : "-")
+                let key = (binding?.id).map { turnConsumerKey($0, up: up) } ?? (up ? "scan+" : "scan-")
                 let step = max(1, min(32, input.midiTurnStep ?? 4))
                 return service.consumeRelativeStep(cc: input.index, channel: channel,
                                                    deviceID: device, up: up,
@@ -3799,6 +5058,17 @@ class MappingEngine: ObservableObject {
             let value = Float(service.aftertouchValue(channel: channel, deviceID: device)) / 127.0
             return value > threshold
         }
+    }
+
+    /// A Turn row's consumer keys ("uuid+" and "uuid-"), built once per row
+    /// rather than a uuidString and a join per row per poll.
+    private var turnConsumerKeys: [UUID: (up: String, down: String)] = [:]
+    private func turnConsumerKey(_ id: UUID, up: Bool) -> String {
+        if let keys = turnConsumerKeys[id] { return up ? keys.up : keys.down }
+        let s = id.uuidString
+        let keys = (up: s + "+", down: s + "-")
+        turnConsumerKeys[id] = keys
+        return up ? keys.up : keys.down
     }
 
     /// A MIDI control with a position (a knob in Switch or Dial mode, the
@@ -3828,8 +5098,14 @@ class MappingEngine: ObservableObject {
     /// its whole travel when the control rests at one end (a pedal or a
     /// throttle): 0 at rest to 1 at the far end on the row's side, so the
     /// row answers from the first bit of travel instead of from the middle.
-    func axisReading(_ state: ControllerState, _ input: InputEvent, _ binding: BindingModel?) -> Float? {
+    /// `smoothed` runs the stick filter on the raw reading, before this
+    /// row's Invert and full travel: the filter is shared per axis across
+    /// rows, so two rows on one stick with different Invert must feed it
+    /// the same value.
+    func axisReading(_ state: ControllerState, _ input: InputEvent, _ binding: BindingModel?,
+                     smoothed: Bool = false) -> Float? {
         guard var v = state.axes[input.index] else { return nil }
+        if smoothed { v = smoothedAxis(v, joystick: pollingJoystickIndex, axis: input.index) }
         if binding?.invertAxis == true { v = -v }
         // Not on the trigger slots, which already read 0 to 1, nor on an
         // axis the pad itself reads 0 to 1 (a Logitech wheel's clutch), which
@@ -4055,13 +5331,16 @@ class MappingEngine: ObservableObject {
         let busy = activeStates.values.contains { !$0.isEmpty }
             || toggleStates.values.contains(true)
             || !macrosInFlight.isEmpty || !deferredPressStart.isEmpty || !holdFired.isEmpty
-            // Raw HID and Steam pads do not report activity the way
-            // GameController pads do, so nothing would wake the slow poll
-            // for them and a quick tap between two slow ticks was lost.
-            // Only the ones this preset reads: a Stream Deck or adapter left
-            // plugged in kept every preset at the full rate.
-            || readsDirectPad
+            || readsRacingWheel
         if busy { lastInputChangeAt = now }
+        // Raw HID and Steam pads and wheels had no change callback, so they
+        // were kept at the full rate for good (a quick tap between two slow
+        // ticks was lost). They stamp their changes now, as GameController
+        // pads do through noteInputActivity, and wake the resting poll the
+        // same way.
+        if !directPadSources.isEmpty {
+            lastInputChangeAt = max(lastInputChangeAt, DirectPadActivity.shared.lastChangeTime)
+        }
         if idlePolling {
             if busy {
                 idlePolling = false
@@ -4071,6 +5350,38 @@ class MappingEngine: ObservableObject {
             idlePolling = true
             installPollTimer()
         }
+    }
+
+    /// The idle rate for the running preset now. A preset at rest with no
+    /// controller it could read (none connected, or it reads none and the
+    /// hold is off) has nothing to poll: every input it reads wakes it
+    /// (noteInputActivity), and a pad arriving re-rates it. It polled an
+    /// empty slot list 30 times a second. The editor and a listening sheet
+    /// keep the idle timer, since the poll sees their scan edges.
+    private func idlePollRate(fullHz: Int) -> Int {
+        let s = controllerService
+        let padConnected = !s.connectedControllers.isEmpty || !s.controllerDetails.isEmpty
+            || !s.rawHIDGamepadSlots.isEmpty || s.steamControllerSlot != nil || !s.racingWheelSlots.isEmpty
+        return Self.idlePollRate(fullHz: fullHz, padConnected: padConnected, readsPads: idleReadsPads,
+                                 holdEnabled: EmergencyStopService.shared.controllerHoldEnabled,
+                                 editorOpen: editorOpen, listenerArmed: Self.editorListenerArmed)
+    }
+
+    static func idlePollRate(fullHz: Int, padConnected: Bool, readsPads: Bool, holdEnabled: Bool,
+                             editorOpen: Bool, listenerArmed: Bool) -> Int {
+        // A pad matters to a resting preset when a row reads it or the
+        // emergency hold could be held on it.
+        let padMatters = padConnected && (readsPads || holdEnabled)
+        if !padMatters, !editorOpen, !listenerArmed { return 0 }
+        return min(idlePollHz, fullHz)
+    }
+
+    /// Something the idle rate depends on changed: a pad came or went, the
+    /// editor or a listening sheet opened or closed, the hold setting. An
+    /// idle poll takes its new rate; a timer already at it is left alone.
+    private func reRateIdlePoll() {
+        guard idlePolling, isRunning else { return }
+        if idlePollRate(fullHz: resolveEffectivePollHz()) != installedPollHz { installPollTimer() }
     }
 
     /// GameController reported a change on a controller. This runs on every
@@ -4084,6 +5395,16 @@ class MappingEngine: ObservableObject {
         pollControllers()
     }
 
+    /// Whether a keyboard or mouse event can change what a resting preset
+    /// reads. Moves and wheel deltas cannot: a preset reading them never
+    /// rests (see idleEligible).
+    private static func wakesRestingPoll(_ event: ExternalInputDeviceService.Event) -> Bool {
+        switch event {
+        case .mouseMove, .scroll: return false
+        default: return true
+        }
+    }
+
     /// Control, Shift, Option, Command (left and right) and Globe.
     private static func isModifierKeyCode(_ code: Int) -> Bool {
         (224...231).contains(code) || code == KeyCodeMap.globeFnCode
@@ -4092,17 +5413,33 @@ class MappingEngine: ObservableObject {
     /// `owner` names who holds the keys and buttons this press puts down
     /// (a row's bindKey, its hold action, its macro). A key another row
     /// still holds stays down when this owner lets go; see InputSimulator.
+    /// The row being evaluated in the poll, for outputs that follow its
+    /// input (a MIDI note played As played). Set per row in the loop, as a
+    /// reference: the key and input copied per row per poll were most of a
+    /// plain row's refcounting.
+    private var firingRow: PollRow?
+
     private func fireOutputs(_ outputs: [OutputAction], press: Bool, inputIsAxis: Bool = false,
                              owner: String = "", repeats: Bool = false, restingCCValue: Int? = nil) {
         // App actions run even while outputs are paused; otherwise a
         // controller-bound Pause / Resume binding could pause the engine and
         // never resume it. Hopped to main async because activating a preset
         // restarts the engine, which must not happen mid-poll.
-        if press {
+        // Not from the editor's Play once: its steps are being checked, not
+        // run as a preset, and Activate Preset, Next Preset, Deactivate or
+        // Pause would restart or stop the engine and abandon the rest of the
+        // chain (Help: plays the steps without activating the preset).
+        // Precision While Held follows the press and the release.
+        for output in outputs where output.type == .appAction && output.appActionKind == .holdPrecision {
+            InputSimulator.shared.setPrecision(press ? Double(output.resolvedPrecisionPercent) / 100 : nil, owner: owner)
+        }
+        // Touchpad Setup holds the row's app actions too: a finger setting up
+        // regions ran its Next Preset or Deactivate.
+        if press, !owner.hasPrefix(Self.editorPlayKey), !touchpadSetupHolds(owner: owner) {
             for output in outputs where output.type == .appAction {
                 let kind = output.appActionKind ?? .togglePauseOutputs
                 // Held-only gates, handled per frame in pollControllers.
-                if kind == .holdMuteMotion || kind == .holdEnableMotion { continue }
+                if kind == .holdMuteMotion || kind == .holdEnableMotion || kind == .holdPrecision { continue }
                 // Motion on and off is the engine's own state, not the app's.
                 if kind == .toggleMotion {
                     let group = owner.split(separator: ":", maxSplits: 1).first.flatMap { Int($0) } ?? pollingJoystickIndex
@@ -4110,9 +5447,12 @@ class MappingEngine: ObservableObject {
                     continue
                 }
                 // At the lock screen or asleep only the actions that stop
-                // things run; switching presets or re-zeroing waits.
-                if !suspendReasons.isEmpty,
-                   ![.togglePauseOutputs, .deactivate, .emergencyStop].contains(kind) { continue }
+                // things run; switching presets or re-zeroing waits. Held
+                // back by Only in these apps alone, switching presets runs
+                // too: a row that moves to another preset is how to leave
+                // an app the preset does not list. The keep set reads the
+                // same rule.
+                guard runsWhileHeldBack(output) else { continue }
                 let target = output.targetPresetID
                 // The controller slot this group is reading, not the group
                 // number: re-zero must hit the controller that was pressed.
@@ -4134,15 +5474,37 @@ class MappingEngine: ObservableObject {
                    }) {
                     source = slotForGroup[motionGroup] ?? motionGroup
                 }
+                let spot = output.resolvedPointerSpot
+                // The pointer is placed now, ahead of the row's other
+                // outputs: queued, the row's click went down at the old
+                // spot and the jump arrived as a drag from there.
+                // Save Pointer Spot too: queued, it saved where the row's
+                // Center Pointer or fixed click had just put the pointer.
+                if [.centerPointer, .returnPointer, .nextScreenPointer, .savePointer].contains(kind) {
+                    MenuBarController.shared.performAppAction(kind, targetPresetID: target, sourceJoystick: source, spot: spot)
+                    continue
+                }
                 DispatchQueue.main.async {
-                    MenuBarController.shared.performAppAction(kind, targetPresetID: target, sourceJoystick: source)
+                    MenuBarController.shared.performAppAction(kind, targetPresetID: target, sourceJoystick: source, spot: spot)
                 }
             }
         }
         var outputs = outputs
-        if touchpadSetupHolds(owner: owner) { return }
-        if outputsBlocked {
-            guard pointerOnly, !touchpadHeldBack(owner: owner) else { return }
+        // Releases pass: a drag lock toggled before Touchpad Setup opened
+        // stayed down for the whole session, as its toggle off was held too.
+        if press, touchpadSetupHolds(owner: owner) { return }
+        // Held back by Only in these apps alone, Open App and Open URL
+        // still run: they are how a row brings up the app the preset is for.
+        // The same rule as the keep set (runsWhileHeldBack).
+        let opens: (OutputAction) -> Bool = { $0.type == .systemAction && self.runsWhileHeldBack($0) }
+        if outputsBlocked, outputs.contains(where: opens) {
+            outputs = outputs.filter(opens)
+        // The editor's Play once is the one thing the editing pause lets
+        // through: it was asked for from the editor itself.
+        } else if outputsBlocked, !editorPlayPasses(owner) {
+            // A release is always safe: a touchpad row toggled off while
+            // Touchpad Setup is open must still let its outputs go.
+            guard pointerOnly, !press || !touchpadHeldBack(owner: owner) else { return }
             outputs = passingOutputs(outputs)
             if outputs.isEmpty { return }
         }
@@ -4203,7 +5565,9 @@ class MappingEngine: ObservableObject {
                             var count: UInt32 = 0
                             CGGetDisplaysWithPoint(CGPoint(x: x, y: y), 0, nil, &count)
                             guard count > 0 else {
-                                activity(String(localized: "Fixed click point (\(Int(x)), \(Int(y))) is off every screen; click skipped"))
+                                // Keyed, so a turbo row logs it twice a
+                                // second rather than once per pulse.
+                                activity(String(localized: "Fixed click point (\(Int(x)), \(Int(y))) is off every screen; click skipped"), key: owner)
                                 continue
                             }
                             InputSimulator.shared.placePointer(atX: x, y: y)
@@ -4216,9 +5580,20 @@ class MappingEngine: ObservableObject {
 
             case .mouseWheelStep:
                 if press {
+                    // The editor's Play once scrolls at the edited preset's
+                    // speed; a running preset's own steps keep the poll cache.
+                    let gain = owner.hasPrefix(Self.editorPlayKey) ? (editorScrollGain ?? scrollGainCache) : scrollGainCache
                     InputSimulator.shared.scrollWheelStep(axis: output.resolvedMouseAxis,
                                                           direction: output.resolvedMouseDirection,
-                                                          lines: Int(scrollGainCache.rounded()))
+                                                          lines: Int(gain.rounded()))
+                }
+
+            case .mouseStep:
+                // One set distance per press; holding it does nothing more
+                // unless the row repeats.
+                if press {
+                    let d = output.stepDelta
+                    InputSimulator.shared.moveMouse(deltaX: d.x, deltaY: d.y)
                 }
 
             case .typeText:
@@ -4257,7 +5632,16 @@ class MappingEngine: ObservableObject {
 
             case .midiNote:
                 let note = output.midiNote ?? 60
-                let vel = output.midiVelocity ?? 100
+                var vel = output.midiVelocity ?? 100
+                // As played: the striking velocity of the MIDI note that
+                // fired the row, so soft and loud playing come through.
+                // Only for the row the poll is on: a timer firing later
+                // (hold, double tap) or a macro falls back to the set value.
+                if press, output.velocityFromInput == true, let row = firingRow,
+                   owner == row.bindKey, case let input = row.input, input.type == .midi, (input.midiKind ?? .note) == .note,
+                   let played = MIDIInputService.shared.noteVelocity(input.index, channel: input.midiChannel, deviceID: input.midiDeviceID) {
+                    vel = played
+                }
                 let ch = output.midiChannel ?? 1
                 if press {
                     MIDIService.shared.sendNoteOn(note: note, velocity: vel, channel: ch, owner: owner)
@@ -4467,7 +5851,11 @@ class MappingEngine: ObservableObject {
     /// Stick gesture rows, by row and the controller slot they read: the
     /// recognizer, the poll it last saw (a row is checked more than once a
     /// poll), and until when the row reads as pressed after a gesture lands.
-    private var gestureRecognizers: [String: (recognizer: StickGestureRecognizer, poll: Int, pressedUntilPoll: Int)] = [:]
+    /// A row (or an input with no row) on a read slot, with no string built
+    /// per frame: the uuidString key cost two allocations a frame per row.
+    private struct RecognizerKey: Hashable { let row: UUID?; let input: String?; let slot: Int }
+    private var gestureRecognizers: [RecognizerKey: (recognizer: StickGestureRecognizer, poll: Int, pressedUntilPoll: Int)] = [:]
+    private var sequenceRecognizers: [RecognizerKey: (recognizer: ButtonSequenceRecognizer, poll: Int, pressedUntilPoll: Int)] = [:]
     /// Incrementing token per binding that invalidates a scheduled
     /// single-tap fire when a second tap lands inside the window.
     private var pendingSingleTapToken: [String: Int] = [:]
@@ -4576,6 +5964,9 @@ class MappingEngine: ObservableObject {
         // fired later knows which controller pressed it.
         let owner = bindKey + "#pulse-" + UUID().uuidString
         fireOutputs(outputs, press: true, owner: owner)
+        // A tap of a row with a Hold or Double tap action: its Mouse Motion
+        // or Mouse Wheel moves once, as a plain row's press does.
+        nudgePointer(for: outputs, owner: bindKey)
         let gen = engineGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self, self.engineGeneration == gen else { return }
@@ -4592,13 +5983,79 @@ class MappingEngine: ObservableObject {
         didSet { MacroCancelFlags.shared.set(macroCancelRequests) }
     }
 
-    /// Ask a running chain to stop. Reads on the main actor only.
-    func requestMacroCancel(bindKey: String) {
-        macroCancelRequests.insert(bindKey)
+    /// The row key the editor's Play once uses; nothing else is keyed by it.
+    static let editorPlayKey = "editor#play"
+
+    /// Whether a macro's Move pointer step may move the pointer now: as a
+    /// row's pointer output passes (fireOutputs), or the editor's Play once.
+    private func pointerMayMove(owner: String) -> Bool {
+        if editorPlayPasses(owner) { return true }
+        guard outputsBlocked else { return true }
+        return pointerOnly && !touchpadHeldBack(owner: owner)
     }
 
+    /// The editor's Play once goes past the editing pause and Only in these
+    /// apps (it plays into the app the person switched to), never past a
+    /// lock, sleep or another user: it typed and clicked at the login window.
+    private func editorPlayPasses(_ owner: String) -> Bool {
+        owner.hasPrefix(Self.editorPlayKey) && suspendReasons.subtracting([Self.unlistedAppReason]).isEmpty
+    }
+
+    /// Plays a macro from the editor once, after the editor's countdown,
+    /// so the steps can be checked without activating the preset. Outputs
+    /// paused for editing let this chain through, and only this chain.
+    /// The editor's Play once began the screen watches for a Wait for
+    /// screen step; the chain's end hop balances them.
+    private var editorPlayTracksScreen = false
+
+    /// `scrollMultiplier` is the edited preset's Scroll speed, so a Scroll
+    /// step plays at the speed the preset will run with; nil keeps the
+    /// poll cache (the last running preset's speed).
+    /// False when nothing started: the Mac locked or slept during the count.
+    @discardableResult
+    func playMacroFromEditor(_ steps: [MacroStep], speed: Double, jitterPercent: Int, scrollMultiplier: Double? = nil) -> Bool {
+        guard !steps.isEmpty, !macrosInFlight.contains(Self.editorPlayKey),
+              suspendReasons.subtracting([Self.unlistedAppReason]).isEmpty else { return false }
+        macrosInFlight.insert(Self.editorPlayKey)
+        editorPlaybackWasCut = false
+        macroCancelRequests.remove(Self.editorPlayKey)
+        // The same clamp pointerGain applies to the running preset's value.
+        if let m = scrollMultiplier {
+            let s = Float(m)
+            editorScrollGain = s.isFinite && s > 0 ? min(20, max(0.05, s)) : 1
+        } else {
+            editorScrollGain = nil
+        }
+        // A Wait for screen step reads the watches, which only sample
+        // while something tracks them: the preset may not be running.
+        // The services count callers, so this sits beside start().
+        if steps.contains(where: { $0.eventKind == .waitFor }) {
+            ScreenPixelService.shared.beginTracking()
+            ScreenTextService.shared.beginTracking()
+            editorPlayTracksScreen = true
+        }
+        executeMacro(steps, joystickIndex: 0, bindKey: Self.editorPlayKey, speed: speed, jitterPercent: jitterPercent)
+        return true
+    }
+
+    /// Stops the editor's Play once chain, as a second click does.
+    func stopEditorPlayback() {
+        guard macrosInFlight.contains(Self.editorPlayKey) else { return }
+        macroCancelRequests.insert(Self.editorPlayKey)
+    }
+
+    var editorPlaybackRunning: Bool { macrosInFlight.contains(Self.editorPlayKey) }
+    /// The running Play once was cut by a lock or sleep, not finished.
+    private(set) var editorPlaybackWasCut = false
+
+    /// `toggledOutputs` are the outputs a Toggles on and off row pressed
+    /// beside its macro at TOGGLE ON; the chain lets them go when it ends
+    /// on its own, before it switches the toggle off.
     private func executeMacro(_ steps: [MacroStep], joystickIndex: Int, bindKey: String,
-                              repeatCount: Int = 1, repeatDelayMs: Int = 0) {
+                              repeatCount: Int = 1, repeatDelayMs: Int = 0,
+                              speed: Double = 1, jitterPercent: Int = 0, loop: Bool = false,
+                              toggledOutputs: [OutputAction] = [], toggledInputIsAxis: Bool = false,
+                              toggledRestingCCValue: Int = 64) {
         StatsService.shared.recordMacroExecution()
         if debugEnabled { log("MACRO: executing \(steps.count) steps", joystick: joystickIndex) }
         let scheduledGen = engineGeneration
@@ -4622,19 +6079,116 @@ class MappingEngine: ObservableObject {
             // releasing Shift does not let go of a Shift a Down step holds.
             var heldActions: [(action: OutputAction, owner: String)] = []
             // The wait the row shows between repeats, which the macro used
-            // to ignore. Clamped like everything else here.
-            let between = min(Double(max(0, repeatDelayMs)) / 1000.0, 30.0)
-            outer: for pass in 0..<repeats {
-                if pass > 0, between > 0 { MacroCancelFlags.shared.sleep(between, row: bindKey) }
+            // to ignore. Clamped like everything else here. Until pressed
+            // again gets the editor's 10 ms floor as well: a file can store
+            // 0, and a one step macro with no wait and no hold then spun
+            // this thread against the main queue, posting key down and up
+            // as fast as the hops were served, until the second press.
+            let between = loop
+                ? min(max(Double(max(0, repeatDelayMs)) / 1000.0, 0.01), 30.0)
+                : min(Double(max(0, repeatDelayMs)) / 1000.0, 30.0)
+            // Every wait and hold through the row's speed and random spread.
+            func scaled(_ ms: Int) -> Double {
+                MacroStep.playbackSeconds(ms, speed: speed, jitterPercent: jitterPercent, roll: Double.random(in: -1...1))
+            }
+            // Until pressed again: the passes go on until the row's cancel
+            // request (the second press) or the engine ends them.
+            var pass = 0
+            outer: while pass < repeats || loop {
+                defer { pass += 1 }
+                if pass > 0, between > 0 { MacroCancelFlags.shared.sleep(between, row: bindKey, generation: scheduledGen) }
+                if pass > 0, MacroCancelFlags.shared.isCanceled(bindKey, generation: scheduledGen) { break }
                 for (stepIndex, step) in steps.enumerated() {
                     guard self != nil, !chainAbandoned else { break outer }
                     let stepOwner = bindKey + "#macro#\(chainToken)#\(stepIndex)"
                     // Pre-step delay (clamped to 30s).
                     if step.delayMs > 0 {
-                        let secs = min(Double(step.delayMs) / 1000.0, 30.0)
-                        MacroCancelFlags.shared.sleep(secs, row: bindKey)
+                        MacroCancelFlags.shared.sleep(scaled(step.delayMs), row: bindKey, generation: scheduledGen)
                     }
                     let kind = step.eventKind ?? .tap
+                    // Still wanted, asked on main where the flags live: a
+                    // chain stop() or the emergency stop ended must not go
+                    // on to move the pointer or wait on the screen. A Tap or
+                    // Hold down step asks in its press hop below, which
+                    // refuses on the same three conditions; asked here too,
+                    // every press waited on main twice. A Release step keeps
+                    // this gate, as its release goes out with none of its own.
+                    // A Move pointer step also learns here whether the
+                    // pointer may move, which was a third round trip.
+                    var pointerMayMoveNow = false
+                    if kind != .tap && kind != .down {
+                        let liveGate = DispatchSemaphore(value: 0)
+                        let live = MacroPressOutcome()
+                        let mayMove = MacroPressOutcome()
+                        let asksPointer = kind == .moveTo
+                        DispatchQueue.main.async { [weak self] in
+                            if let self, self.engineGeneration == scheduledGen,
+                               self.macroChainToken[bindKey] == chainToken,
+                               !self.macroCancelRequests.contains(bindKey) {
+                                live.didPress = true
+                                if asksPointer { MainActor.assumeIsolated { mayMove.didPress = self.pointerMayMove(owner: bindKey) } }
+                            }
+                            liveGate.signal()
+                        }
+                        liveGate.wait()
+                        if !live.didPress { chainAbandoned = true; break outer }
+                        pointerMayMoveNow = mayMove.didPress
+                    }
+                    // The steps that press nothing.
+                    if kind == .wait { continue }
+                    if kind == .moveTo {
+                        let px = step.action.clickX ?? 0, py = step.action.clickY ?? 0
+                        // The same check a fixed click point gets: the point
+                        // was recorded on a display that may be gone (a
+                        // laptop off its monitor). The recorder writes this
+                        // step to aim the click that follows, so gliding
+                        // anyway would land that click wherever the window
+                        // server left the pointer. The rest of the pass is
+                        // skipped instead. Logged on main, where activity lives.
+                        var onDisplays: UInt32 = 0
+                        CGGetDisplaysWithPoint(CGPoint(x: px, y: py), 0, nil, &onDisplays)
+                        guard onDisplays > 0 else {
+                            DispatchQueue.main.async { [weak self] in
+                                self?.activity(String(localized: "Move pointer to (\(Int(px)), \(Int(py))) is off every screen; macro stopped"), key: bindKey)
+                            }
+                            chainAbandoned = true
+                            break outer
+                        }
+                        // Not while outputs are held back (a pause, the
+                        // editor without passthrough, an unlisted app, a
+                        // Scan): the key and click steps are dropped there,
+                        // and the glide moved the real pointer on its own.
+                        // Asked in the live gate above.
+                        guard pointerMayMoveNow else { continue }
+                        InputSimulator.shared.glidePointer(toX: px, y: py,
+                                                           seconds: scaled(step.holdMs), row: bindKey, generation: scheduledGen)
+                        continue
+                    }
+                    if kind == .waitFor {
+                        guard let watch = step.watchID else { continue }
+                        // Until the watch reads as pressed, asked on main where
+                        // the services live, or the timeout passes: then the
+                        // rest of the macro is skipped, as nothing it was
+                        // waiting for happened.
+                        let deadline = CACurrentMediaTime() + min(Double(step.timeoutMs ?? 10_000) / 1000.0, 60.0)
+                        var seen = false
+                        repeat {
+                            let gate = DispatchSemaphore(value: 0)
+                            let box = MacroPressOutcome()
+                            DispatchQueue.main.async {
+                                box.didPress = ScreenPixelService.shared.isPressed(watch) || ScreenTextService.shared.isPressed(watch)
+                                gate.signal()
+                            }
+                            gate.wait()
+                            seen = box.didPress
+                            if seen || MacroCancelFlags.shared.isCanceled(bindKey, generation: scheduledGen) { break }
+                            MacroCancelFlags.shared.sleep(0.05, row: bindKey, generation: scheduledGen)
+                        } while CACurrentMediaTime() < deadline
+                        // Past the timeout the rest is skipped, unless the
+                        // step says to go on regardless.
+                        if !seen, step.continueOnTimeout != true { chainAbandoned = true; break outer }
+                        continue
+                    }
 
                     // A Release step lets go of an earlier held action. The
                     // release fires regardless of generation (scoped, safe)
@@ -4643,14 +6197,30 @@ class MappingEngine: ObservableObject {
                     // everything it presses goes down and up together.
                     let actions = step.pressedActions
                     if kind == .up {
-                        // Released by whichever Down step pressed it.
-                        let serialized = Set(actions.map(\.serialized))
-                        let releasing = heldActions.filter { serialized.contains($0.action.serialized) }
-                        heldActions.removeAll { serialized.contains($0.action.serialized) }
-                        let unmatched = actions.filter { a in !releasing.contains { $0.action.serialized == a.serialized } }
+                        // Released by whichever Down step pressed it. A
+                        // release of one action lets go of every held copy,
+                        // as in 1.8 (Hold Shift A, Hold Shift B, Release
+                        // Shift lets go of Shift). A shortcut's release lets
+                        // go of one copy per part (key before its modifiers,
+                        // as a tap lets go), so a modifier another Down step
+                        // also holds stays held for it.
+                        var releasing: [(action: OutputAction, owner: String)] = []
+                        var unmatched: [OutputAction] = []
+                        for a in actions.reversed() {
+                            if actions.count == 1 {
+                                let all = heldActions.filter { $0.action.serialized == a.serialized }
+                                heldActions.removeAll { $0.action.serialized == a.serialized }
+                                if all.isEmpty { unmatched.append(a) } else { releasing += all }
+                            } else if let i = heldActions.firstIndex(where: { $0.action.serialized == a.serialized }) {
+                                releasing.append(heldActions.remove(at: i))
+                            } else {
+                                unmatched.append(a)
+                            }
+                        }
+                        let toRelease = releasing, unheld = unmatched
                         DispatchQueue.main.async { [weak self] in
-                            for held in releasing { self?.fireOutputs([held.action], press: false, owner: held.owner) }
-                            if !unmatched.isEmpty { self?.fireOutputs(unmatched, press: false, owner: stepOwner) }
+                            for held in toRelease { self?.fireOutputs([held.action], press: false, owner: held.owner) }
+                            if !unheld.isEmpty { self?.fireOutputs(unheld, press: false, owner: stepOwner) }
                         }
                         continue
                     }
@@ -4669,39 +6239,45 @@ class MappingEngine: ObservableObject {
                            self.macroChainToken[bindKey] == chainToken,
                            !self.macroCancelRequests.contains(bindKey) {
                             self.fireOutputs(actions, press: true, owner: stepOwner)
+                            // A scroll step of several lines is that many presses.
+                            if step.action.type == .mouseWheelStep, let lines = step.count, lines > 1 {
+                                for _ in 1..<min(lines, 100) { self.fireOutputs(actions, press: true, owner: stepOwner) }
+                            }
                             outcome.didPress = true
                         }
                         pressGate.signal()
                     }
                     pressGate.wait()
-                    let didPress = outcome.didPress
+                    // Press was skipped (generation changed or the user
+                    // released with stop-on-release): firing the release
+                    // anyway could drop an input the next preset is
+                    // legitimately holding. Exit the chain now, as the live
+                    // gate did before this hop asked for both: waiting out
+                    // the hold first only kept the chain in flight longer.
+                    guard outcome.didPress else { chainAbandoned = true; break outer }
                     // Hold (clamped to 30s).
                     if step.holdMs > 0 {
-                        let secs = min(Double(step.holdMs) / 1000.0, 30.0)
-                        MacroCancelFlags.shared.sleep(secs, row: bindKey)
+                        MacroCancelFlags.shared.sleep(scaled(step.holdMs), row: bindKey, generation: scheduledGen)
                     }
-                    if didPress {
-                        if kind == .down {
-                            // Stay held for the following steps (chords).
-                            heldActions.append(contentsOf: actions.map { ($0, stepOwner) })
-                        } else {
-                            // Release ONLY this step's output, whether or not
-                            // the generation still matches by now: a macro
-                            // mid-hold that gets shut down by stop() must not
-                            // leave a synthesized key permanently down. Scoped
-                            // to the step, so a mid-macro preset switch cannot
-                            // drop the NEXT preset's freshly-pressed keys the
-                            // way a global releaseAll here once did.
-                            DispatchQueue.main.async { [weak self] in
-                                self?.fireOutputs(Array(actions.reversed()), press: false, owner: stepOwner)
-                            }
+                    if kind == .down {
+                        // Stay held for the following steps (chords).
+                        // Once per step: a looping macro whose Hold down
+                        // step has no Release came round to it every
+                        // pass and the list grew for as long as it ran.
+                        for a in actions where !heldActions.contains(where: { $0.owner == stepOwner && $0.action.serialized == a.serialized }) {
+                            heldActions.append((a, stepOwner))
                         }
                     } else {
-                        // Press was skipped (generation changed or the user
-                        // released with stop-on-release): firing the release
-                        // anyway could drop an input the next preset is
-                        // legitimately holding. Exit the chain.
-                        chainAbandoned = true
+                        // Release ONLY this step's output, whether or not
+                        // the generation still matches by now: a macro
+                        // mid-hold that gets shut down by stop() must not
+                        // leave a synthesized key permanently down. Scoped
+                        // to the step, so a mid-macro preset switch cannot
+                        // drop the NEXT preset's freshly-pressed keys the
+                        // way a global releaseAll here once did.
+                        DispatchQueue.main.async { [weak self] in
+                            self?.fireOutputs(Array(actions.reversed()), press: false, owner: stepOwner)
+                        }
                     }
                 }
             }
@@ -4718,33 +6294,58 @@ class MappingEngine: ObservableObject {
             // Chain done or abandoned; clear the in-flight flag so the next
             // press can fire a fresh macro execution, and drop any unconsumed
             // cancel request so it cannot abort a future chain.
+            // Not after a stop, pause or preset switch: those cleared the
+            // flags themselves, and the row may have been reloaded since.
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.macroChainToken[bindKey] == chainToken else { return }
+                guard let self else { return }
+                // The editor's chain ends its screen tracking whatever the
+                // generation: a start() or stop() meanwhile does not own it.
+                if bindKey == Self.editorPlayKey, self.editorPlayTracksScreen {
+                    ScreenPixelService.shared.endTracking()
+                    ScreenTextService.shared.endTracking()
+                    self.editorPlayTracksScreen = false
+                }
+                guard self.engineGeneration == scheduledGen,
+                      self.macroChainToken[bindKey] == chainToken else { return }
                 self.macrosInFlight.remove(bindKey)
                 self.macroCancelRequests.remove(bindKey)
                 // A toggled macro that ran to its end is off again, so the
                 // next press starts it rather than only switching it off.
-                if self.toggleStates[bindKey] == true { self.toggleStates[bindKey] = false }
+                // What was stacked beside it goes up first, as TOGGLE OFF
+                // does; with the toggle cleared, nothing else would let it go.
+                if self.toggleStates[bindKey] == true {
+                    if !toggledOutputs.isEmpty {
+                        self.fireOutputs(toggledOutputs, press: false, inputIsAxis: toggledInputIsAxis,
+                                         owner: bindKey, restingCCValue: toggledRestingCCValue)
+                    }
+                    self.toggleStates[bindKey] = false
+                }
             }
         }
     }
 
     /// Execute outputs with repeat count.
     ///
-    /// Repeat count is clamped to 10 000 and delay to 30 s to bound the
-    /// worst-case from an adversarial / malformed preset. Each fire
+    /// Repeat count is clamped to 100 (the editor's cap, and what Help
+    /// states) and delay to 30 s to bound the worst-case from an
+    /// adversarial / malformed preset. Each fire
     /// hop checks `engineGeneration` against the value captured at
     /// schedule time so an active repeat won't leak past stop().
     private func fireWithRepeat(_ binding: BindingModel, bindKey: String) {
         // One run per row at a time: pressing again mid-run used to start a
         // second chain whose presses interleaved with the first.
         guard repeatsInFlight[bindKey] == nil else { return }
-        let count = max(1, min(10_000, binding.repeatCount ?? 1))
+        let count = max(1, min(100, binding.repeatCount ?? 1))
         let delaySecs = min(Double(binding.repeatDelayMs ?? 100) / 1000.0, 30.0)
         repeatRunCounter &+= 1
         repeatsInFlight[bindKey] = repeatRunCounter
+        // A one-shot input (a voice phrase, a tap on the Mac, a gesture)
+        // has no held frames to move or scroll on: each press nudges, as a
+        // plain row's one press does. A held button scrolls while held.
+        let nudges = Self.isOneShot(binding.input)
+            && !(binding.input.type == .extMouse && binding.input.extMouseKind == .doubleClick)
         repeatStep(0, of: count, delay: delaySecs, outputs: binding.outputs,
-                   bindKey: bindKey, generation: engineGeneration, run: repeatRunCounter)
+                   bindKey: bindKey, generation: engineGeneration, run: repeatRunCounter, nudges: nudges)
     }
 
     /// Rows running a repeat, by bindKey, with the run's number. An old run
@@ -4759,7 +6360,7 @@ class MappingEngine: ObservableObject {
     /// apart), and every hop checks the generation, so Stop and the
     /// emergency stop end the run.
     private func repeatStep(_ i: Int, of count: Int, delay: Double, outputs: [OutputAction],
-                            bindKey: String, generation: Int, run: Int) {
+                            bindKey: String, generation: Int, run: Int, nudges: Bool = false) {
         let owner = bindKey + "#repeat"
         // A light bar color goes on with the run's first press and off with
         // its last release, or when the run is cut short, not on and off
@@ -4781,6 +6382,7 @@ class MappingEngine: ObservableObject {
         firingTurboPulse = count > 3
         fireOutputs(i == 0 ? outputs : pulse, press: true, owner: owner)
         firingTurboPulse = false
+        if nudges { nudgePointer(for: outputs, owner: bindKey) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self else { return }
             guard self.engineGeneration == generation else { endRun(); return }
@@ -4789,7 +6391,7 @@ class MappingEngine: ObservableObject {
             guard !last else { endRun(lightOff: false); return }
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.repeatStep(i + 1, of: count, delay: delay, outputs: outputs,
-                                 bindKey: bindKey, generation: generation, run: run)
+                                 bindKey: bindKey, generation: generation, run: run, nudges: nudges)
             }
         }
     }
@@ -4819,9 +6421,7 @@ class MappingEngine: ObservableObject {
 
                 var magnitude: Float = 1.0
                 var signedMagnitude: Float = 1.0   // for touchpad / motion: sign indicates direction of motion
-                if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding) {
-                    axisValue = smoothedAxis(axisValue, joystick: pollingJoystickIndex,
-                                             axis: input.index + (binding?.fullTravel == true ? 128 : 0))
+                if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding, smoothed: true) {
                     // Only this row's half of the stick: a toggled-on row runs
                     // every frame, and the other half moved it its own way.
                     if input.axisDirection == .positive { axisValue = max(0, axisValue) }
@@ -4847,20 +6447,22 @@ class MappingEngine: ObservableObject {
                     // same finger+axis all read the same motion.
                     let surface = input.touchpadSurface ?? 0
                     var delta = touchService(surface).peekDelta(finger: finger, axis: tpAxis)
+                    // The finger's movement since the last poll, turned into
+                    // a rate by the time that poll actually took, so a late
+                    // poll does not arrive as a lurch. Lightly filtered like
+                    // the sticks: touch sampling is coarse and a finger
+                    // never moves in a straight line at one speed. Filtered
+                    // before this row's Invert and scale: the filter is
+                    // shared per finger axis across rows.
+                    delta = delta / frameScale
+                    delta = smoothedAxis(delta, joystick: pollingJoystickIndex,
+                                         axis: 300 + surface * 4 + finger * 2 + (tpAxis == .x ? 0 : 1))
                     if binding?.invertAxis == true { delta = -delta }
                     // A vertical row recorded before 1.6 moves as it did then,
                     // when each axis was divided by its own span.
                     if tpAxis == .y, let b = binding, LegacyRowCheck.isOlderRow(b) {
                         delta *= touchService(surface).legacyVerticalScale
                     }
-                    // The finger's movement since the last poll, turned into
-                    // a rate by the time that poll actually took, so a late
-                    // poll does not arrive as a lurch. Lightly filtered like
-                    // the sticks: touch sampling is coarse and a finger
-                    // never moves in a straight line at one speed.
-                    delta = delta / frameScale
-                    delta = smoothedAxis(delta, joystick: pollingJoystickIndex,
-                                         axis: 300 + surface * 4 + finger * 2 + (tpAxis == .x ? 0 : 1))
                     // Filter by requested half-axis: + means motion in the
                     // positive direction counts, motion in the other direction
                     // is ignored. This lets users bind "swipe right" → mouse
@@ -5038,9 +6640,7 @@ class MappingEngine: ObservableObject {
                 let useVariable = binding?.variableSensitivity ?? (input.type == .axis || input.type == .midi)
 
                 var magnitude: Float = 1.0
-                if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding) {
-                    axisValue = smoothedAxis(axisValue, joystick: pollingJoystickIndex,
-                                             axis: input.index + (binding?.fullTravel == true ? 128 : 0))
+                if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding, smoothed: true) {
                     // Only this row's half of the stick: a toggled-on row runs
                     // every frame, and the other half moved it its own way.
                     if input.axisDirection == .positive { axisValue = max(0, axisValue) }
@@ -5127,13 +6727,22 @@ class MappingEngine: ObservableObject {
                 if input.axisDirection == .positive {
                     var mag = remapMagnitude(max(0, min(1, axisValue)), binding: binding)
                     if let curve = binding?.sensitivityCurve { mag = abs(curve.apply(mag)) }
-                    ccValue = Int((mag * 127).rounded())
+                    ccValue = Self.ccValue(magnitude: mag)
                 } else if input.axisDirection == .negative {
                     var mag = remapMagnitude(max(0, min(1, -axisValue)), binding: binding)
                     if let curve = binding?.sensitivityCurve { mag = abs(curve.apply(mag)) }
-                    ccValue = Int((mag * 127).rounded())
+                    ccValue = Self.ccValue(magnitude: mag)
+                } else if input.type == .axis {
+                    // A stick both ways: the row's deadzones and curve on
+                    // each side of the center, which stays at 64.
+                    var v = bipolarValue(axisValue, binding: binding)
+                    if let curve = binding?.sensitivityCurve {
+                        let mag = abs(curve.apply(abs(v)))
+                        v = v < 0 ? -mag : mag
+                    }
+                    ccValue = Self.ccValue(centered: v)
                 } else {
-                    // Full-range axis: -1..1 maps to 0..127
+                    // Full-range MIDI input: -1..1 maps to 0..127
                     let normalized = (axisValue + 1) / 2
                     // Rounded, so center is 64, the value its release sends.
                     ccValue = Int((max(0, min(1, normalized)) * 127).rounded())
@@ -5152,6 +6761,8 @@ class MappingEngine: ObservableObject {
                     v = remapMagnitude(max(0, min(1, axisValue)), binding: binding)
                 } else if input.axisDirection == .negative {
                     v = -remapMagnitude(max(0, min(1, -axisValue)), binding: binding)
+                } else if input.type == .axis {
+                    v = bipolarValue(axisValue, binding: binding)
                 } else {
                     v = max(-1, min(1, axisValue))
                 }
@@ -5160,7 +6771,7 @@ class MappingEngine: ObservableObject {
                     v = v >= 0 ? mag : -mag
                 }
                 // Centered on 8192, the value a release sends.
-                let pbValue = max(0, min(16383, 8192 + Int((v * 8191).rounded())))
+                let pbValue = Self.pitchBendValue(v)
                 let ch = output.midiChannel ?? 1
                 MIDIService.shared.sendPitchBend(value: pbValue, channel: ch)
 
@@ -5177,9 +6788,13 @@ class MappingEngine: ObservableObject {
     /// button by its family's name ("A", "Cross"), a zone or region by its
     /// own name, anything else by its display name.
     static func spokenInputName(_ input: InputEvent, family: FaceLetters?) -> String {
-        if let id = input.touchpadRegionID, let r = TouchpadService.shared.region(with: id) { return r.shownName }
-        if let id = input.cursorRegionID, let r = CursorRegionService.shared.region(with: id) { return r.shownName }
-        if let id = input.stickRegionID, let r = StickRegionService.shared.region(with: id) { return r.region.shownName }
+        // By the row's type, so an id left over from an earlier type never names it.
+        if input.type == .touchpadRegion, let id = input.touchpadRegionID, let r = TouchpadService.shared.region(with: id) { return r.shownName }
+        if input.type == .cursorRegion, let id = input.cursorRegionID, let r = CursorRegionService.shared.region(with: id) { return r.shownName }
+        if input.type == .screenPixel, let id = input.screenPixelID, let w = ScreenPixelService.shared.watch(with: id) { return w.shownName }
+        if input.type == .screenText, let id = input.screenTextID, let w = ScreenTextService.shared.watch(with: id) { return w.shownName }
+        if input.type == .voicePhrase, let id = input.voicePhraseID, let p = VoicePhraseService.shared.phrase(with: id) { return p.shownName }
+        if input.type == .stickRegion, let id = input.stickRegionID, let r = StickRegionService.shared.region(with: id) { return r.region.shownName }
         if input.type == .extMouse, (input.extMouseKind ?? .button) == .button {
             return BindingRowView.mouseButtonName(input.index)
         }
@@ -5224,6 +6839,13 @@ class MappingEngine: ObservableObject {
             RawHIDGamepadService.shared.rumbleSteamController2026(
                 gamepadID: pad.id, intensity: binding.hapticIntensity ?? 0.6,
                 durationMs: binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)
+        } else if binding.hapticEnabled == true, let pad = controllerService.rawHIDGamepadSlots[slot] {
+            // An 8BitDo pad read directly whose motors are proven (see
+            // RawHIDGamepadService.eightBitDoRumbleProducts); any other raw
+            // pad has no motor path and stays still.
+            RawHIDGamepadService.shared.rumbleEightBitDo(
+                gamepadID: pad.id, intensity: binding.hapticIntensity ?? 0.6,
+                durationMs: binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)
         }
 
         if binding.speechEnabled == true {
@@ -5257,15 +6879,27 @@ final class MacroCancelFlags: @unchecked Sendable {
     static let shared = MacroCancelFlags()
     private let lock = NSLock()
     private var rows: Set<String> = []
+    private var generation = 0
     func set(_ value: Set<String>) { lock.lock(); rows = value; lock.unlock() }
     func contains(_ row: String) -> Bool { lock.lock(); defer { lock.unlock() }; return rows.contains(row) }
+    func setGeneration(_ value: Int) { lock.lock(); generation = value; lock.unlock() }
+    /// True once `row` is let go or the engine moved past `generation`
+    /// (stop, a pause edge, a lock: those clear the rows, so a chain
+    /// sleeping on its row alone slept on).
+    func isCanceled(_ row: String, generation: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return rows.contains(row) || self.generation != generation
+    }
 
-    /// Sleep up to `seconds`, waking early once `row` is let go.
-    func sleep(_ seconds: Double, row: String) {
-        let end = Date().addingTimeInterval(seconds)
-        while Date() < end {
-            if contains(row) { return }
-            Thread.sleep(forTimeInterval: min(0.02, end.timeIntervalSinceNow))
+    /// Sleep up to `seconds`, waking early once `row` is let go or the
+    /// engine generation moved.
+    func sleep(_ seconds: Double, row: String, generation: Int) {
+        // Monotonic, like the rest of the engine: a wall clock stepped back
+        // kept a step's hold going that much longer.
+        let end = CACurrentMediaTime() + seconds
+        while CACurrentMediaTime() < end {
+            if isCanceled(row, generation: generation) { return }
+            Thread.sleep(forTimeInterval: min(0.02, end - CACurrentMediaTime()))
         }
     }
 }
@@ -5323,7 +6957,10 @@ final class DriveModeProcessor {
             // A -1...1 pedal is told by its raw reading, before any invert,
             // and inverting is 1 minus the pull: a sign flip read as such a
             // pedal and held half throttle at rest.
-            if y < -0.5 { throttleIsBipolar = true }
+            // Inverted it rests at +1 and a 0 to 1 axis never goes below 0,
+            // so any clear negative tells: waiting for -0.5 read most of the
+            // first press as full throttle.
+            if y < (cfg.invertThrottle ? -0.05 : -0.5) { throttleIsBipolar = true }
             var pull = throttleIsBipolar ? (y + 1) / 2 : y
             if cfg.invertThrottle { pull = 1 - pull }
             fwd = max(0, deadzoned(pull, dz))

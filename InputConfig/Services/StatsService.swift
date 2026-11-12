@@ -59,21 +59,27 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Lifetime / lifecycle
 
-    nonisolated(unsafe) static let shared = StatsService()
+    static let shared = StatsService()
 
     private let fileURL: URL
     private let persistQueue = DispatchQueue(label: "com.inputconfig.stats-io", qos: .utility)
     private var flushTimer: Timer?
+    /// Spans are measured on the system uptime clock, not the wall clock:
+    /// a clock change (NTP, a time zone, daylight saving) moved Date() and
+    /// booked hours that never passed, or a negative span.
+    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    /// Seconds since an uptime stamp, never negative.
+    private static func elapsed(since stamp: TimeInterval) -> TimeInterval { max(0, now - stamp) }
     /// True while we have at least one controller connected. Drives the
     /// "total connected time" accumulator.
-    private var connectedSince: Date?
+    private var connectedSince: TimeInterval?
     /// True while MappingEngine is running with an active preset.
-    private var engineRunningSince: Date?
+    private var engineRunningSince: TimeInterval?
     private var activePresetName: String?
-    private var activePresetStartedAt: Date?
+    private var activePresetStartedAt: TimeInterval?
     /// Each connected controller name, how many with that name are
     /// connected, and when its time was last rolled into the totals.
-    private var controllerClocks: [String: (count: Int, since: Date)] = [:]
+    private var controllerClocks: [String: (count: Int, since: TimeInterval)] = [:]
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -106,7 +112,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     /// Every running clock starts again from now.
     private func restartClocks() {
-        let now = Date()
+        let now = Self.now
         if connectedSince != nil { connectedSince = now }
         if engineRunningSince != nil { engineRunningSince = now }
         if activePresetStartedAt != nil { activePresetStartedAt = now }
@@ -126,9 +132,9 @@ final class StatsService: ObservableObject, @unchecked Sendable {
 
     func controllerConnected(name: String) {
         wakeIfAsleep()
-        if connectedSince == nil { connectedSince = Date() }
+        if connectedSince == nil { connectedSince = Self.now }
         rollControllerClocks()
-        var clock = controllerClocks[name] ?? (0, Date())
+        var clock = controllerClocks[name] ?? (0, Self.now)
         clock.count += 1
         controllerClocks[name] = clock
         stats.controllerConnectionCount[name, default: 0] += 1
@@ -149,7 +155,7 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         if !anyStillConnected {
             controllerClocks.removeAll()
             if let since = connectedSince {
-                let delta = Date().timeIntervalSince(since)
+                let delta = Self.elapsed(since: since)
                 stats.totalConnectedTime += delta
                 recordDailyConnection(delta: delta)
                 connectedSince = nil
@@ -162,17 +168,17 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     /// its total, and restart the clocks. Two pads with the same name
     /// both count.
     private func rollControllerClocks() {
-        let now = Date()
+        let now = Self.now
         for (name, clock) in controllerClocks {
-            stats.controllerTimeByName[name, default: 0] += now.timeIntervalSince(clock.since) * Double(clock.count)
+            stats.controllerTimeByName[name, default: 0] += max(0, now - clock.since) * Double(clock.count)
             controllerClocks[name] = (clock.count, now)
         }
     }
 
     func engineStarted(presetName: String) {
-        engineRunningSince = Date()
+        engineRunningSince = Self.now
         activePresetName = presetName
-        activePresetStartedAt = Date()
+        activePresetStartedAt = Self.now
         stats.presetActivationCount += 1
         stats.presetActivationCountByName[presetName, default: 0] += 1
         markDirty()
@@ -181,11 +187,11 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     func engineStopped() {
         wakeIfAsleep()
         if let s = engineRunningSince {
-            stats.totalEngineRunningTime += Date().timeIntervalSince(s)
+            stats.totalEngineRunningTime += Self.elapsed(since: s)
             engineRunningSince = nil
         }
         if let name = activePresetName, let s = activePresetStartedAt {
-            stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
+            stats.presetTimeByName[name, default: 0] += Self.elapsed(since: s)
         }
         activePresetName = nil
         activePresetStartedAt = nil
@@ -231,6 +237,10 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     func recordScroll(ticks: Int) { stats.totalScrollTicks += abs(ticks); markDirty() }
     func recordTouchpadEvent() { stats.totalTouchpadFingerEvents += 1; markDirty() }
     func recordMacroExecution() { stats.totalMacroExecutions += 1; markDirty() }
+    #if DEBUG
+    /// Tests only: puts the counts back after a bench run that pressed keys.
+    func debugRestore(_ saved: PersistentStats) { stats = saved; markDirty() }
+    #endif
 
     // MARK: - Derived
 
@@ -295,13 +305,12 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         flushTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self else { return }
-                let wasDirty = self.dirty
-                self.flushIfDirty()
-                // Only bump the published tick when stats actually
-                // changed since the last flush. Without this gate
-                // every view subscribed to `statsTick` would re-render
-                // every 5 s even when nothing happened in the engine.
-                if wasDirty {
+                // Only bump the published tick when a flush happened (a
+                // change since the last one, or idle connected time
+                // rolled up). Without this gate every view subscribed to
+                // `statsTick` would re-render every 5 s even when nothing
+                // happened in the engine.
+                if self.flushIfDirty() {
                     self.statsTick &+= 1
                 }
             }
@@ -317,37 +326,41 @@ final class StatsService: ObservableObject, @unchecked Sendable {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone.current
+        f.timeZone = .autoupdatingCurrent
         return f
     }()
 
-    private func flushIfDirty() {
-        guard !asleep else { return }
+    /// True when something was written: the stats changed, or idle
+    /// connected time was rolled up (the sheet shows that time too).
+    @discardableResult
+    private func flushIfDirty() -> Bool {
+        guard !asleep else { return false }
         // Connected time is rolled at least once a minute even with no
         // presses, so an idle night is not all booked to the next morning
         // (and a crash keeps it).
-        let rollConnected = connectedSince.map { Date().timeIntervalSince($0) > 60 } ?? false
-        guard dirty || rollConnected else { return }
+        let rollConnected = connectedSince.map { Self.elapsed(since: $0) > 60 } ?? false
+        guard dirty || rollConnected else { return false }
         // Roll up any in-flight time so a crash before disconnect doesn't
         // throw away the session. The same delta has to land in the daily
         // bucket too, otherwise connected time that is flushed before the
         // controller disconnects never reaches the 14-day usage chart.
         if let since = connectedSince {
-            let delta = Date().timeIntervalSince(since)
+            let delta = Self.elapsed(since: since)
             stats.totalConnectedTime += delta
             recordDailyConnection(delta: delta)
-            connectedSince = Date()
+            connectedSince = Self.now
         }
         if let s = engineRunningSince {
-            stats.totalEngineRunningTime += Date().timeIntervalSince(s)
-            engineRunningSince = Date()
+            stats.totalEngineRunningTime += Self.elapsed(since: s)
+            engineRunningSince = Self.now
         }
         rollControllerClocks()
         if let name = activePresetName, let s = activePresetStartedAt {
-            stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
-            activePresetStartedAt = Date()
+            stats.presetTimeByName[name, default: 0] += Self.elapsed(since: s)
+            activePresetStartedAt = Self.now
         }
         flushNow()
+        return true
     }
 
     private func flushNow() {
@@ -368,19 +381,19 @@ final class StatsService: ObservableObject, @unchecked Sendable {
     /// and time would otherwise be lost.
     func flushSynchronously() {
         if let since = connectedSince {
-            let delta = Date().timeIntervalSince(since)
+            let delta = Self.elapsed(since: since)
             stats.totalConnectedTime += delta
             recordDailyConnection(delta: delta)
-            connectedSince = Date()
+            connectedSince = Self.now
         }
         if let s = engineRunningSince {
-            stats.totalEngineRunningTime += Date().timeIntervalSince(s)
-            engineRunningSince = Date()
+            stats.totalEngineRunningTime += Self.elapsed(since: s)
+            engineRunningSince = Self.now
         }
         rollControllerClocks()
         if let name = activePresetName, let s = activePresetStartedAt {
-            stats.presetTimeByName[name, default: 0] += Date().timeIntervalSince(s)
-            activePresetStartedAt = Date()
+            stats.presetTimeByName[name, default: 0] += Self.elapsed(since: s)
+            activePresetStartedAt = Self.now
         }
         let snapshot = stats
         let url = fileURL

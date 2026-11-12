@@ -303,19 +303,22 @@ struct TipJarView: View {
             }
 
             HStack(spacing: 8) {
-                Button {
-                    Task { await restore() }
-                } label: {
-                    if isRestoring {
-                        ProgressView().scaleEffect(0.6)
-                    } else {
-                        Text("Restore Purchases")
+                // Not in the Homebrew copy, which StoreKit does not serve.
+                if service.isAppStoreCopy || !AppStoreCopy.isDeveloperIDCopy {
+                    Button {
+                        Task { await restore() }
+                    } label: {
+                        if isRestoring {
+                            ProgressView().scaleEffect(0.6)
+                        } else {
+                            Text("Restore Purchases")
+                        }
                     }
+                    .buttonStyle(.solidSecondary)
+                    .disabled(isRestoring)
+                    .accessibilityLabel("Restore Purchases")
+                    .accessibilityValue(isRestoring ? String(localized: "In progress") : "")
                 }
-                .buttonStyle(.solidSecondary)
-                .disabled(isRestoring)
-                .accessibilityLabel("Restore Purchases")
-                .accessibilityValue(isRestoring ? String(localized: "In progress") : "")
 
                 if service.activeSubscription != nil {
                     Button("Manage Subscription") {

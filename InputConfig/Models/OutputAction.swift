@@ -7,6 +7,10 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
     case mouseMotion = "mou"
     case mouseWheel = "whe"
     case mouseWheelStep = "whs"
+    /// Moves the pointer a set distance per press, then stops: Mouse
+    /// Motion's step, the way Mouse Wheel Step is the wheel's. The
+    /// distance in points rides in `speed`.
+    case mouseStep = "mst"
     case midiNote = "mni"
     case midiCC = "mcc"
     case midiPitchBend = "mpb"
@@ -50,6 +54,7 @@ enum OutputType: String, Codable, CaseIterable, Identifiable {
         case .mouseMotion: return String(localized: "Mouse Motion")
         case .mouseWheel: return String(localized: "Mouse Wheel")
         case .mouseWheelStep: return String(localized: "Mouse Wheel Step")
+        case .mouseStep: return String(localized: "Mouse Motion Step")
         case .midiNote: return String(localized: "MIDI Note")
         case .midiCC: return String(localized: "MIDI CC (Control Change)")
         case .midiPitchBend: return String(localized: "MIDI Pitch Bend")
@@ -381,6 +386,18 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
     /// Re-zero Motion on the same button for gyro pointing: the controller
     /// at rest becomes "pointer at center" again in one press.
     case centerPointer = "center"
+    /// Every pointer motion runs slower while this is held (the share in
+    /// the output's `speed`, as a percent, default 25), for placing the
+    /// pointer exactly. A Mouse Motion Step keeps its set distance.
+    case holdPrecision = "precise"
+    /// Remember where the pointer is, in spot 1, 2 or 3 (the output's
+    /// `speed`), for Return Pointer to Spot. Kept until the app quits.
+    case savePointer = "savept"
+    /// Put the pointer back where Save Pointer Spot left that spot.
+    case returnPointer = "retpt"
+    /// Put the pointer in the middle of the next display, in the order the
+    /// displays sit left to right.
+    case nextScreenPointer = "nextscreen"
 
     var id: String { rawValue }
 
@@ -397,6 +414,10 @@ enum AppActionKind: String, Codable, CaseIterable, Identifiable {
         case .emergencyStop: return String(localized: "Emergency Stop (release everything)")
         case .rezeroMotion: return String(localized: "Re-zero Motion (this controller)")
         case .centerPointer: return String(localized: "Center Pointer on Screen")
+        case .holdPrecision: return String(localized: "Precision While Held")
+        case .savePointer: return String(localized: "Save Pointer Spot")
+        case .returnPointer: return String(localized: "Return Pointer to Spot")
+        case .nextScreenPointer: return String(localized: "Pointer to Next Screen")
         }
     }
 }
@@ -463,6 +484,12 @@ struct OutputAction: Codable, Hashable, Identifiable {
     var lightMode: LightOutputMode?
     /// What a .controllerProfile output does.
     var profileAction: ControllerProfileAction?
+    /// A diagonal Mouse Motion Step: the up or down half, added to the left
+    /// or right of `mouseDirection` on the horizontal axis. nil = straight.
+    var stepVertical: MouseDirection?
+    /// A MIDI Note output played as loud as the key that fired it (a MIDI
+    /// note row only); `midiVelocity` is used for anything else.
+    var velocityFromInput: Bool?
 
     init(type: OutputType, keyCode: Int? = nil, mouseButtonIndex: Int? = nil,
          mouseAxis: MouseAxis? = nil, mouseDirection: MouseDirection? = nil, speed: Int? = nil,
@@ -538,6 +565,11 @@ struct OutputAction: Codable, Hashable, Identifiable {
                 return String(localized: "Scroll Step \(dirName)")
             }
             return String(localized: "Mouse Wheel Step")
+        case .mouseStep:
+            if mouseAxis != nil, mouseDirection != nil {
+                return String(localized: "Move \(stepDirectionName) \(resolvedStepDistance) pt")
+            }
+            return String(localized: "Mouse Motion Step")
         case .midiNote:
             let note = midiNote ?? 60
             let ch = midiChannel ?? 1
@@ -617,6 +649,36 @@ struct OutputAction: Codable, Hashable, Identifiable {
     static let defaultMouseAxis: MouseAxis = .vertical
     static let defaultMouseDirection: MouseDirection = .negative
     static let defaultMouseSpeed = 6
+    static let defaultStepDistance = 10
+    static let stepDistanceRange = 1...500
+    /// Precision While Held's share of normal pointer speed, in percent.
+    var resolvedPrecisionPercent: Int { min(max(speed ?? 25, 5), 90) }
+    /// Save Pointer Spot and Return Pointer to Spot's spot, 1 to 3.
+    var resolvedPointerSpot: Int { min(max(speed ?? 1, 1), 3) }
+    /// A Mouse Motion Step's direction as one word: Up, Down, Left, Right,
+    /// or a diagonal such as Up-Left.
+    var stepDirectionName: String {
+        let axis = resolvedMouseAxis, dir = resolvedMouseDirection
+        guard axis == .horizontal, let v = stepVertical else { return dir.axisDirectionName(axis: axis) }
+        switch (v, dir) {
+        case (.negative, .negative): return String(localized: "Up-Left")
+        case (.negative, .positive): return String(localized: "Up-Right")
+        case (.positive, .negative): return String(localized: "Down-Left")
+        case (.positive, .positive): return String(localized: "Down-Right")
+        }
+    }
+    /// A Mouse Motion Step's move in points, x then y (y grows down).
+    var stepDelta: (x: Int, y: Int) {
+        let n = resolvedStepDistance
+        let sign = resolvedMouseDirection == .positive ? 1 : -1
+        if resolvedMouseAxis == .vertical { return (0, sign * n) }
+        let v = stepVertical.map { $0 == .positive ? n : -n } ?? 0
+        return (sign * n, v)
+    }
+    /// A Mouse Motion Step's distance in points, clamped.
+    var resolvedStepDistance: Int {
+        min(max(speed ?? Self.defaultStepDistance, Self.stepDistanceRange.lowerBound), Self.stepDistanceRange.upperBound)
+    }
 
     var resolvedMouseButton: Int { mouseButtonIndex ?? Self.defaultMouseButton }
     var resolvedMouseAxis: MouseAxis { mouseAxis ?? Self.defaultMouseAxis }
@@ -637,13 +699,22 @@ struct OutputAction: Codable, Hashable, Identifiable {
             if keyCode == nil { keyCode = 4 }
         case .mouseButton:
             if mouseButtonIndex == nil { mouseButtonIndex = Self.defaultMouseButton }
+        case .appAction:
+            // Here it is a percent or a spot number, not a carried speed.
+            speed = nil
         case .mouseMotion, .mouseWheel:
             if mouseAxis == nil { mouseAxis = Self.defaultMouseAxis }
             if mouseDirection == nil { mouseDirection = Self.defaultMouseDirection }
-            if speed == nil { speed = Self.defaultMouseSpeed }
+            // Kept in this type's own range: a 300 pt Step turned into Mouse
+            // Motion ran at 300, six times the slider's top.
+            speed = min(max(speed ?? Self.defaultMouseSpeed, 1), 50)
         case .mouseWheelStep:
             if mouseAxis == nil { mouseAxis = Self.defaultMouseAxis }
             if mouseDirection == nil { mouseDirection = Self.defaultMouseDirection }
+        case .mouseStep:
+            if mouseAxis == nil { mouseAxis = .horizontal }
+            if mouseDirection == nil { mouseDirection = .positive }
+            speed = min(max(speed ?? Self.defaultStepDistance, Self.stepDistanceRange.lowerBound), Self.stepDistanceRange.upperBound)
         case .lightBar:
             if lightColor == nil { lightColor = Self.defaultLightColor }
             if lightMode == nil { lightMode = .whileHeld }
@@ -657,7 +728,7 @@ struct OutputAction: Codable, Hashable, Identifiable {
     var serialized: String {
         switch type {
         case .key:
-            return "key \(keyCode ?? 0)"
+            return "key \(keyCode ?? 4)"
         case .mouseButton:
             return "mbt \(resolvedMouseButton)"
         case .mouseMotion:
@@ -674,6 +745,11 @@ struct OutputAction: Codable, Hashable, Identifiable {
             let a = resolvedMouseAxis.rawValue
             let d = resolvedMouseDirection.rawValue
             return "whs \(a) \(d)"
+        case .mouseStep:
+            let a = resolvedMouseAxis.rawValue
+            let d = resolvedMouseDirection.rawValue
+            if a == MouseAxis.horizontal.rawValue, let v = stepVertical { return "mst \(a) \(d) \(resolvedStepDistance) \(v.rawValue)" }
+            return "mst \(a) \(d) \(resolvedStepDistance)"
         case .midiNote:
             return "mni \(midiNote ?? 60) \(midiVelocity ?? 100) \(midiChannel ?? 1)"
         case .midiCC:
@@ -693,6 +769,9 @@ struct OutputAction: Codable, Hashable, Identifiable {
             let kind = (appActionKind ?? .togglePauseOutputs).rawValue
             if appActionKind == .activatePreset, let target = targetPresetID {
                 return "app \(kind) \(target.uuidString)"
+            }
+            if [.holdPrecision, .savePointer, .returnPointer].contains(appActionKind), let n = speed {
+                return "app \(kind) \(n)"
             }
             return "app \(kind)"
         case .absoluteVolume:
@@ -730,22 +809,31 @@ struct OutputAction: Codable, Hashable, Identifiable {
             guard parts.count >= 3,
                   let axisVal = Int(parts[1]),
                   let axis = MouseAxis(rawValue: axisVal) else { return nil }
-            let dir = MouseDirection(rawValue: parts[2]) ?? .positive
+            guard let dir = MouseDirection(rawValue: parts[2]) else { return nil }
             let spd = parts.count >= 4 ? Int(parts[3]) : nil
             return OutputAction(type: .mouseMotion, mouseAxis: axis, mouseDirection: dir, speed: spd)
         case "whe":
             guard parts.count >= 3,
                   let axisVal = Int(parts[1]),
                   let axis = MouseAxis(rawValue: axisVal) else { return nil }
-            let dir = MouseDirection(rawValue: parts[2]) ?? .positive
+            guard let dir = MouseDirection(rawValue: parts[2]) else { return nil }
             let spd = parts.count >= 4 ? Int(parts[3]) : nil
             return OutputAction(type: .mouseWheel, mouseAxis: axis, mouseDirection: dir, speed: spd)
         case "whs":
             guard parts.count >= 3,
                   let axisVal = Int(parts[1]),
                   let axis = MouseAxis(rawValue: axisVal) else { return nil }
-            let dir = MouseDirection(rawValue: parts[2]) ?? .positive
+            guard let dir = MouseDirection(rawValue: parts[2]) else { return nil }
             return OutputAction(type: .mouseWheelStep, mouseAxis: axis, mouseDirection: dir)
+        case "mst":
+            guard parts.count >= 3,
+                  let axisVal = Int(parts[1]),
+                  let axis = MouseAxis(rawValue: axisVal) else { return nil }
+            guard let dir = MouseDirection(rawValue: parts[2]) else { return nil }
+            let dist = parts.count >= 4 ? Int(parts[3]) : nil
+            var step = OutputAction(type: .mouseStep, mouseAxis: axis, mouseDirection: dir, speed: dist)
+            if axis == .horizontal, parts.count >= 5 { step.stepVertical = MouseDirection(rawValue: parts[4]) }
+            return step
         case "mni":
             // mni <note> <velocity> <channel>
             guard parts.count >= 4,
@@ -773,7 +861,7 @@ struct OutputAction: Codable, Hashable, Identifiable {
         case "mtr":
             // mtr <start|stop|continue>
             guard parts.count >= 2 else { return nil }
-            let t = MIDITransport(rawValue: parts[1]) ?? .start
+            guard let t = MIDITransport(rawValue: parts[1]) else { return nil }
             return OutputAction(type: .midiTransport, midiTransport: t)
         case "avl":
             return OutputAction(type: .absoluteVolume)
@@ -783,14 +871,26 @@ struct OutputAction: Codable, Hashable, Identifiable {
             return OutputAction(type: .systemAction, text: param, systemActionKind: kind)
         case "lit":
             // lit <held|set|rainbow> [<r> <g> <b>]
-            let mode = parts.count >= 2 ? (LightOutputMode(rawValue: parts[1]) ?? .whileHeld) : .whileHeld
+            let mode: LightOutputMode
+            if parts.count >= 2 {
+                guard let read = LightOutputMode(rawValue: parts[1]) else { return nil }
+                mode = read
+            } else {
+                mode = .whileHeld
+            }
             var color = OutputAction.defaultLightColor
             if parts.count >= 5, let r = Int(parts[2]), let g = Int(parts[3]), let b = Int(parts[4]) {
                 color = RGBLightColor(r: UInt8(clamping: r), g: UInt8(clamping: g), b: UInt8(clamping: b))
             }
             return OutputAction(type: .lightBar, lightColor: color, lightMode: mode)
         case "cpf":
-            let action = parts.count >= 2 ? (ControllerProfileAction(rawValue: parts[1]) ?? .next) : .next
+            let action: ControllerProfileAction
+            if parts.count >= 2 {
+                guard let read = ControllerProfileAction(rawValue: parts[1]) else { return nil }
+                action = read
+            } else {
+                action = .next
+            }
             return OutputAction(type: .controllerProfile, profileAction: action)
         case "txt":
             // txt <percent-encoded text>
@@ -800,7 +900,10 @@ struct OutputAction: Codable, Hashable, Identifiable {
             // app <kind> [<target preset uuid>]
             guard parts.count >= 2, let kind = AppActionKind(rawValue: parts[1]) else { return nil }
             let target = parts.count >= 3 ? UUID(uuidString: parts[2]) : nil
-            return OutputAction(type: .appAction, appActionKind: kind, targetPresetID: target)
+            let number = parts.count >= 3 && [.holdPrecision, .savePointer, .returnPointer].contains(kind) ? Int(parts[2]) : nil
+            var action = OutputAction(type: .appAction, appActionKind: kind, targetPresetID: target)
+            action.speed = number
+            return action
         default:
             return nil
         }
@@ -810,7 +913,7 @@ struct OutputAction: Codable, Hashable, Identifiable {
     // listed: a property left out of a hand-written key set is silently
     // never written, and `clickX` / `clickY` were exactly that, so a click
     // parked on a screen point was shown in the row and lost on relaunch.
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, type, keyCode, mouseButtonIndex, clickX, clickY, mouseAxis, mouseDirection, speed
         case midiNote, midiVelocity, midiCCNumber, midiCCValue, midiChannel
         case midiProgramNumber, midiTransport
@@ -819,6 +922,168 @@ struct OutputAction: Codable, Hashable, Identifiable {
         case systemActionKind
         case lightColor, lightMode
         case profileAction
+        case stepVertical
+        case velocityFromInput
+    }
+}
+
+// MARK: - Macro text
+
+extension OutputAction {
+    /// The words the macro text (MacroText) calls each System Function by:
+    /// the English name lowercased with its slashes and parentheses
+    /// dropped, plus `apps`, the macOS 26 name of Launchpad. The first
+    /// word for a kind is the one the writer uses. English in every
+    /// language, so a macro reads the same everywhere.
+    static let macroTextSystemWords: [(word: String, kind: SystemActionKind)] = [
+        ("volume up", .volumeUp), ("volume down", .volumeDown), ("mute", .muteToggle),
+        ("play pause", .playPause), ("next track", .nextTrack), ("previous track", .previousTrack),
+        ("brightness up", .brightnessUp), ("brightness down", .brightnessDown),
+        ("keyboard brightness up", .keyboardBrightnessUp), ("keyboard brightness down", .keyboardBrightnessDown),
+        ("start dictation", .startDictation), ("speak selection", .speakSelection),
+        ("zoom toggle", .zoomToggle), ("zoom in", .zoomIn), ("zoom out", .zoomOut),
+        ("mission control", .missionControl), ("launchpad", .launchpad), ("apps", .launchpad),
+        ("spotlight", .spotlight), ("lock screen", .lockScreen), ("screenshot menu", .screenshotMenu),
+        ("run shortcut", .runShortcut), ("open app", .openApp), ("open url", .openURL),
+    ]
+
+    /// The System Function a macro text phrase names, in any case, or nil.
+    static func macroTextSystemKind(forWord word: String) -> SystemActionKind? {
+        let w = word.lowercased().trimmingCharacters(in: .whitespaces)
+        return macroTextSystemWords.first { $0.word == w }?.kind
+    }
+
+    /// The phrase the macro text writes a System Function as.
+    static func macroTextSystemWord(for kind: SystemActionKind) -> String {
+        macroTextSystemWords.first { $0.kind == kind }?.word ?? kind.rawValue
+    }
+
+    /// Text inside the macro text's quotes: two quotes stand for one.
+    static func macroTextQuoted(_ text: String) -> String {
+        "\"" + text.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    /// Whether a text fits on one macro text line. One with a line break
+    /// is written as the step's JSON instead.
+    private static func fitsMacroTextLine(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { [0x0A, 0x0D, 0x85, 0x2028, 0x2029].contains($0.value) }
+    }
+
+    /// The macro text's words for this output: a key's name, a click, a
+    /// scroll direction, `type "..."`, or a System Function and its
+    /// quoted parameter. nil for an output the text has no words for (a
+    /// click parked on a point, a light bar color, MIDI, an app action, a
+    /// controller profile, the volume fader, continuous mouse motion or
+    /// wheel, a text with a line break), which is written as `step {json}`.
+    var macroTextWords: String? {
+        switch type {
+        case .key:
+            guard let code = keyCode else { return nil }
+            return KeyCodeMap.textWord(for: code) ?? "key \(code)"
+        case .mouseButton:
+            guard clickX == nil, clickY == nil else { return nil }
+            switch resolvedMouseButton {
+            case 0: return "click"
+            case 1: return "right click"
+            case 2: return "middle click"
+            default: return "mouse \(resolvedMouseButton)"
+            }
+        case .mouseWheelStep:
+            switch (resolvedMouseAxis, resolvedMouseDirection) {
+            case (.vertical, .negative): return "scroll up"
+            case (.vertical, .positive): return "scroll down"
+            case (.horizontal, .negative): return "scroll left"
+            case (.horizontal, .positive): return "scroll right"
+            }
+        case .mouseStep:
+            let n = resolvedStepDistance
+            let h = resolvedMouseDirection == .negative ? "left" : "right"
+            switch (resolvedMouseAxis, resolvedMouseDirection, stepVertical) {
+            case (.vertical, .negative, _): return "nudge up \(n)"
+            case (.vertical, .positive, _): return "nudge down \(n)"
+            case (.horizontal, _, .negative?): return "nudge up-\(h) \(n)"
+            case (.horizontal, _, .positive?): return "nudge down-\(h) \(n)"
+            case (.horizontal, _, nil): return "nudge \(h) \(n)"
+            }
+        case .typeText:
+            let t = text ?? ""
+            guard Self.fitsMacroTextLine(t) else { return nil }
+            return "type " + Self.macroTextQuoted(t)
+        case .systemAction:
+            guard let kind = systemActionKind else { return nil }
+            let word = Self.macroTextSystemWord(for: kind)
+            let t = text ?? ""
+            if kind.needsParameter {
+                guard Self.fitsMacroTextLine(t) else { return nil }
+                return word + " " + Self.macroTextQuoted(t)
+            }
+            // A parameter on a kind that takes none would be lost in words.
+            return t.isEmpty ? word : nil
+        default:
+            return nil
+        }
+    }
+
+    /// The output a macro text verb and its arguments name: `click`,
+    /// `right click`, `middle click`, `mouse` with a button number, `key`
+    /// with a code, `scroll` with a direction, `type` with its text, or a
+    /// System Function phrase with its quoted parameter when it takes
+    /// one. Keys by name are read by MacroText, which also handles the
+    /// modifiers. nil when the words name nothing.
+    static func fromMacroText(verb: String, args: [String]) -> OutputAction? {
+        let v = verb.lowercased().trimmingCharacters(in: .whitespaces)
+        switch v {
+        case "click", "left click":
+            return OutputAction(type: .mouseButton, mouseButtonIndex: 0)
+        case "right click":
+            return OutputAction(type: .mouseButton, mouseButtonIndex: 1)
+        case "middle click":
+            return OutputAction(type: .mouseButton, mouseButtonIndex: 2)
+        case "mouse":
+            guard let n = args.first.flatMap({ Int($0) }), (0...31).contains(n) else { return nil }
+            return OutputAction(type: .mouseButton, mouseButtonIndex: n)
+        case "key":
+            guard let n = args.first.flatMap({ Int($0) }), (0...0xFFFF).contains(n) else { return nil }
+            return OutputAction(type: .key, keyCode: n)
+        case "scroll":
+            let axisAndDirection: (MouseAxis, MouseDirection)
+            switch args.first?.lowercased() {
+            case "up": axisAndDirection = (.vertical, .negative)
+            case "down": axisAndDirection = (.vertical, .positive)
+            case "left": axisAndDirection = (.horizontal, .negative)
+            case "right": axisAndDirection = (.horizontal, .positive)
+            default: return nil
+            }
+            return OutputAction(type: .mouseWheelStep, mouseAxis: axisAndDirection.0, mouseDirection: axisAndDirection.1)
+        case "nudge":
+            let move: (MouseAxis, MouseDirection, MouseDirection?)
+            switch args.first?.lowercased() {
+            case "up": move = (.vertical, .negative, nil)
+            case "down": move = (.vertical, .positive, nil)
+            case "left": move = (.horizontal, .negative, nil)
+            case "right": move = (.horizontal, .positive, nil)
+            case "up-left": move = (.horizontal, .negative, .negative)
+            case "up-right": move = (.horizontal, .positive, .negative)
+            case "down-left": move = (.horizontal, .negative, .positive)
+            case "down-right": move = (.horizontal, .positive, .positive)
+            default: return nil
+            }
+            let dist = args.count >= 2 ? Int(args[1]) : nil
+            var step = OutputAction(type: .mouseStep, mouseAxis: move.0, mouseDirection: move.1,
+                                    speed: dist.map { min(max($0, stepDistanceRange.lowerBound), stepDistanceRange.upperBound) })
+            step.stepVertical = move.2
+            return step
+        case "type":
+            guard let t = args.first else { return nil }
+            return OutputAction(type: .typeText, text: t)
+        default:
+            guard let kind = macroTextSystemKind(forWord: v) else { return nil }
+            if kind.needsParameter {
+                guard let t = args.first else { return nil }
+                return OutputAction(type: .systemAction, text: t, systemActionKind: kind)
+            }
+            return OutputAction(type: .systemAction, systemActionKind: kind)
+        }
     }
 }
 

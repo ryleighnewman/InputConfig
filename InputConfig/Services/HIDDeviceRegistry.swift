@@ -382,8 +382,38 @@ final class HIDDeviceRegistry: ObservableObject {
 
     /// The older, vendor and product only key. Still honored so devices
     /// connected by hand in an earlier version keep reconnecting.
-    static func pairKey(vendorID: Int32, productID: Int32) -> String {
+    nonisolated static func pairKey(vendorID: Int32, productID: Int32) -> String {
         String(format: "%04x:%04x", vendorID, productID)
+    }
+
+    /// Pads whose button numbers changed in 1.9 (39): the 8BitDo Ultimate 2
+    /// Wireless in BT mode (its own decoder instead of the descriptor's
+    /// numbering) and the GameCube controller for Switch 2 (B and Y were
+    /// swapped against SDL's Switch 2 driver).
+    nonisolated static let renumberedIn19: Set<String> = ["2dc8:6012", "057e:2073"]
+    nonisolated static let legacyNumberingKey = "InputConfig.legacyNumberingPairs.v19"
+
+    /// The renumbered pads this Mac keeps on their earlier numbering: those
+    /// a saved preset had been set up on with Scan (its group fingerprint
+    /// names the pad) the first time this build asked. Settled once, kept,
+    /// and read once per launch, so it never changes under a running preset.
+    nonisolated static let legacyPairs: Set<String> = {
+        let d = UserDefaults.standard
+        if let settled = d.stringArray(forKey: legacyNumberingKey) { return Set(settled) }
+        var found: [String] = []
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("InputConfig/presets", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        let texts = files.filter { $0.pathExtension == "json" }.compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+        for p in renumberedIn19 where texts.contains(where: { $0.contains("\"hid:" + p) }) { found.append(p) }
+        d.set(found, forKey: legacyNumberingKey)
+        return Set(found)
+    }()
+
+    /// Whether a pad keeps the numbering an earlier version gave it, so
+    /// presets made then still fire the same rows.
+    nonisolated static func keepsLegacyNumbering(vendorID: Int32, productID: Int32) -> Bool {
+        legacyPairs.contains(pairKey(vendorID: vendorID, productID: productID))
     }
 
     /// The key a device is remembered by: vendor and product, the vendor

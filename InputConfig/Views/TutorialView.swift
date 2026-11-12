@@ -463,6 +463,16 @@ struct TutorialCardView: View {
                         AccessibilityNotification.Announcement(
                             String(localized: "Step \(i + 1) of \(state.steps.count), \(s.title). \(s.body)")).post()
                     }
+                    // Step 1 too, a moment after the panel opens so the
+                    // window's own focus announcement does not cut it off.
+                    .onAppear {
+                        let at = state.stepIndex
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            guard state.stepIndex == at, let s = state.currentStep else { return }
+                            AccessibilityNotification.Announcement(
+                                String(localized: "Step \(at + 1) of \(state.steps.count), \(s.title). \(s.body)")).post()
+                        }
+                    }
                     Spacer()
                     Button {
                         state.stop()

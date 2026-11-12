@@ -57,6 +57,15 @@ final class AccessControllerPortService: @unchecked Sendable {
     // MARK: - Layout (Bluetooth byte numbers)
 
     static let buttonBytes = [17, 18]
+    /// The functions the active profile sends, in the DualSense layout:
+    /// the left and right stick at 2 to 5, L2 and R2 at 6 and 7, the
+    /// buttons and D-pad at 9 to 11. Apple's GameController misreads these
+    /// on this pad (macOS 27.0.1, measured 2026-11-07: Triangle arrives as
+    /// Circle, Circle and Square not at all), so the slot takes them from
+    /// here instead.
+    static let mappedStickBytes = (lx: 2, ly: 3, rx: 4, ry: 5)
+    static let mappedTriggerBytes = (l2: 6, r2: 7)
+    static let mappedButtonBytes = (face: 9, shoulders: 10, system: 11)
     static let stickBytes = (x: 19, y: 20)
     static let batteryByte = 38
     static let profileByte = 41
@@ -276,8 +285,13 @@ final class AccessControllerPortService: @unchecked Sendable {
         let identity: SonyPadIdentity
         let buffer: UnsafeMutablePointer<UInt8>
         let overUSB: Bool
+        /// The key under `pads`. Work queued on profileQueue carries this
+        /// number and looks the pad up again when it runs.
+        let location: UInt64
         var axes: [Int: Float] = [:]
         var buttons: [Int: Float] = [:]
+        /// What the active profile sends, from the last full report.
+        var mapped: Mapped?
         /// Every button index seen pressed this connection, for the extras row.
         var seenButtons: Set<Int> = []
         var portDevices: [Int: PortDevice] = [:]
@@ -294,8 +308,8 @@ final class AccessControllerPortService: @unchecked Sendable {
         /// compact report counts here and nowhere else.
         var rawReportsSeen = 0
         var firstReportLogged = false
-        init(device: IOHIDDevice?, identity: SonyPadIdentity, buffer: UnsafeMutablePointer<UInt8>, overUSB: Bool) {
-            self.device = device; self.identity = identity; self.buffer = buffer; self.overUSB = overUSB
+        init(device: IOHIDDevice?, identity: SonyPadIdentity, buffer: UnsafeMutablePointer<UInt8>, overUSB: Bool, location: UInt64) {
+            self.device = device; self.identity = identity; self.buffer = buffer; self.overUSB = overUSB; self.location = location
         }
     }
 
@@ -320,6 +334,9 @@ final class AccessControllerPortService: @unchecked Sendable {
     /// Opens every Access controller's raw HID device, non-seize, next to
     /// gamecontrollerd. Safe to call more than once.
     func start() {
+        #if DEBUG
+        if GameControllerService.ignoresRealPads { return }
+        #endif
         #if DEBUG
         if TestCapture.inTestRun { return }
         #endif
@@ -382,7 +399,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: reportBufferSize)
         buf.initialize(repeating: 0, count: reportBufferSize)
         let pad = Pad(device: device, identity: SonyPadIdentity.of(device: device), buffer: buf,
-                      overUSB: transport.uppercased().contains("USB"))
+                      overUSB: transport.uppercased().contains("USB"), location: loc)
         lock.lock()
         pads[loc] = pad
         deviceToLocation[ObjectIdentifier(device)] = loc
@@ -393,17 +410,21 @@ final class AccessControllerPortService: @unchecked Sendable {
         if let runLoop { IOHIDDeviceScheduleWithRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue) }
         Self.log.notice("attached loc=\(loc, privacy: .public) over \(transport, privacy: .public)")
         if pad.overUSB {
-            profileQueue.async { [weak self] in self?.readProfiles(pad) }
+            profileQueue.async { [weak self] in
+                guard let self, let pad = self.livePad(at: loc) else { return }
+                self.readProfiles(pad)
+            }
         } else {
             profileQueue.async { [weak self] in
-                guard let self else { return }
+                guard let self, let pad = self.livePad(at: loc), let device = pad.device else { return }
                 self.wakeBluetooth(pad, device: device)
-                // Still on the compact report half a second later: once more.
+                // Still on the compact report half a second later: once
+                // more, unless the pad left in the meantime.
                 Thread.sleep(forTimeInterval: 0.5)
                 self.lock.lock()
                 let woke = pad.reportsSeen > 0
                 self.lock.unlock()
-                if !woke {
+                if !woke, self.isLive(pad) {
                     Self.log.notice("Bluetooth pad still compact after the wake; sending it again")
                     self.wakeBluetooth(pad, device: device)
                 }
@@ -452,10 +473,32 @@ final class AccessControllerPortService: @unchecked Sendable {
         lock.unlock()
         guard let pad else { return }
         if let device = pad.device {
+            // A profile exchange on profileQueue may still hold this device;
+            // one in flight while the device is closed under it was a crash.
+            // The pad is already out of `pads`, so readProfileBytes stops at
+            // its next check. This runs on the reader thread (or the main
+            // thread for a synthetic pad), never on profileQueue.
+            dispatchPrecondition(condition: .notOnQueue(profileQueue))
+            profileQueue.sync {}
             if let runLoop { IOHIDDeviceUnscheduleFromRunLoop(device, runLoop, CFRunLoopMode.defaultMode.rawValue) }
             IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         }
         pad.buffer.deallocate()
+    }
+
+    /// Whether `pad` is still the one at its location: false once tearDown
+    /// has taken it out, so a profile exchange on profileQueue stops touching
+    /// a device about to be closed.
+    private func isLive(_ pad: Pad) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return pads.values.contains { $0 === pad }
+    }
+
+    /// The pad registered at a location right now, for work that was
+    /// queued on profileQueue by its number; nil once it has detached.
+    private func livePad(at location: UInt64) -> Pad? {
+        lock.lock(); defer { lock.unlock() }
+        return pads[location]
     }
 
     // MARK: - Profiles (reader thread, USB only)
@@ -470,7 +513,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         // 0 is the controller's built-in base profile (command 0x0F): read
         // for the record, and as the check that the slot number is honored.
         for number in 0...3 {
-            guard let bytes = readProfileBytes(device, number: number) else { continue }
+            guard let bytes = readProfileBytes(pad, device, number: number) else { continue }
             blobs[number] = bytes
             guard let profile = Self.parseProfile(bytes, number: number) else {
                 Self.log.notice("profile \(number, privacy: .public): unexpected data, first byte \(bytes.first ?? 0, privacy: .public)")
@@ -486,7 +529,7 @@ final class AccessControllerPortService: @unchecked Sendable {
                 if let s = profile.stickAssignments[p] { return "E\(p)=\(s == 1 ? "left stick" : "right stick")" }
                 return nil
             }.joined(separator: " ")
-            Self.log.notice("profile \(number, privacy: .public) \"\(profile.name, privacy: .public)\": \(sockets, privacy: .public) \(ports, privacy: .public)")
+            Self.log.notice("profile \(number, privacy: .public) \"\(profile.name, privacy: .private)\": \(sockets, privacy: .public) \(ports, privacy: .public)")
         }
         if let a = blobs[1], let b = blobs[2], let c = blobs[3] {
             Self.log.notice("profiles 1 to 3 \(a == b && b == c ? "are byte-identical copies" : "differ", privacy: .public); base profile \(blobs[0].map { $0 == a ? "matches profile 1" : "differs from profile 1" } ?? "not read", privacy: .public)")
@@ -496,7 +539,10 @@ final class AccessControllerPortService: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func readProfileBytes(_ device: IOHIDDevice, number: Int) -> [UInt8]? {
+    private func readProfileBytes(_ pad: Pad, _ device: IOHIDDevice, number: Int) -> [UInt8]? {
+        // A pad that left while this was queued: tearDown is waiting on
+        // this queue to close the device, so nothing is sent to it.
+        guard isLive(pad) else { return nil }
         // Whatever an earlier exchange left in the data register is read
         // off first: the register's third byte counts the chunks still to
         // come, and a command sent while it is not zero answers with the
@@ -510,6 +556,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         let command = Self.readCommand(number: number)
         let expectedEcho = command[1]
         for attempt in 0..<3 {
+            guard isLive(pad) else { return nil }
             let sent = command.withUnsafeBufferPointer { p in
                 HIDWrite.setReport(device, kIOHIDReportTypeFeature, Self.commandReport, p.baseAddress!, CFIndex(p.count))
             }
@@ -584,6 +631,17 @@ final class AccessControllerPortService: @unchecked Sendable {
         return profile
     }
 
+    /// The name as the controller stores it: at most 39 UTF-16 units, cut
+    /// at a whole character so an emoji or a flag is not left half there.
+    static func storableName(_ name: String) -> String {
+        let utf16 = name.utf16
+        guard utf16.count > nameUnitLimit else { return name }
+        var end = utf16.index(utf16.startIndex, offsetBy: nameUnitLimit)
+        while String.Index(end, within: name) == nil { end = utf16.index(before: end) }
+        return String(name[..<end])
+    }
+    static let nameUnitLimit = 39
+
     /// The 956 bytes to store for a profile: the bytes it was read from
     /// with the edited fields written over them. The name, the button
     /// table's first action, the toggle bits and each port's type and
@@ -593,7 +651,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         if out.count < profileSize { out += [UInt8](repeating: 0, count: profileSize - out.count) }
         out[0] = 0x02
         for i in 4..<84 { out[i] = 0 }
-        for (i, unit) in profile.name.utf16.prefix(39).enumerated() {
+        for (i, unit) in storableName(profile.name).utf16.enumerated() {
             out[4 + 2 * i] = UInt8(unit & 0xFF); out[5 + 2 * i] = UInt8(unit >> 8)
         }
         for b in 0..<10 {
@@ -720,23 +778,48 @@ final class AccessControllerPortService: @unchecked Sendable {
         }
     }
 
+    /// Waits for the data register's chunk count to reach zero, reading it
+    /// every 20 ms for up to a second: the controller stores a profile after
+    /// the last chunk, and a read-back sent before it is done answers with
+    /// the leftovers of the write. False when the second ran out.
+    private func waitForRegisterIdle(_ pad: Pad, _ device: IOHIDDevice) -> Bool {
+        for _ in 0..<50 {
+            // An unplug mid-wait: nothing to wait for, and the device is
+            // about to be closed under this thread.
+            guard isLive(pad) else { return false }
+            var buf = [UInt8](repeating: 0, count: 64)
+            var len: CFIndex = 64
+            let got = buf.withUnsafeMutableBufferPointer { p in
+                HIDRead.getReport(device, kIOHIDReportTypeFeature, Self.dataReport, p.baseAddress!, &len)
+            }
+            if got == kIOReturnSuccess, len >= 3, buf[2] == 0 { return true }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return false
+    }
+
     // MARK: - Profile commands (any thread; the work runs on profileQueue)
 
     /// Makes profile 1...3 the active one on the controller behind a slot.
     func setActiveProfile(_ number: Int, for identity: SonyPadIdentity?, accessSlotCount: Int,
-                          completion: @escaping (Result<Void, ProfileError>) -> Void) {
+                          completion: @escaping @Sendable (Result<Void, ProfileError>) -> Void) {
         lock.lock()
         let pad = pad(for: identity, accessSlotCount: accessSlotCount)
         lock.unlock()
         guard let pad else { completion(.failure(.notConnected)); return }
         guard pad.overUSB else { completion(.failure(.bluetooth)); return }
         guard !pad.switchingDisabled else { completion(.failure(.switchingDisabled)); return }
-        guard let device = pad.device else {
+        guard pad.device != nil else {
             // A synthetic pad has no controller to answer: it switches as the real one would.
             lock.lock(); pad.activeProfile = number; lock.unlock()
             completion(.success(())); return
         }
-        profileQueue.async {
+        let loc = pad.location, want = pad.identity
+        profileQueue.async { [weak self] in
+            // The same pad, not whatever sits at that port by now.
+            guard let self, let pad = self.livePad(at: loc), pad.identity == want, let device = pad.device else {
+                completion(.failure(.notConnected)); return
+            }
             let packet = Self.setActiveCommand(number)
             let sent = packet.withUnsafeBufferPointer { p in
                 HIDWrite.setReport(device, kIOHIDReportTypeFeature, Self.commandReport, p.baseAddress!, CFIndex(p.count))
@@ -750,21 +833,25 @@ final class AccessControllerPortService: @unchecked Sendable {
     /// reads it back and keeps it only when the controller stored exactly
     /// what was sent.
     func writeProfile(_ profile: Profile, for identity: SonyPadIdentity?, accessSlotCount: Int,
-                      completion: @escaping (Result<Void, ProfileError>) -> Void) {
+                      completion: @escaping @Sendable (Result<Void, ProfileError>) -> Void) {
         lock.lock()
         let pad = pad(for: identity, accessSlotCount: accessSlotCount)
         lock.unlock()
         guard let pad else { completion(.failure(.notConnected)); return }
         guard pad.overUSB, (1...3).contains(profile.number) else { completion(.failure(.bluetooth)); return }
-        guard let device = pad.device else {
+        guard pad.device != nil else {
             // A synthetic pad stores exactly what was sent, as a verified write does.
             let bytes = Self.encode(profile)
             guard let parsed = Self.parseProfile(bytes, number: profile.number) else { completion(.failure(.verifyFailed)); return }
             lock.lock(); pad.profiles[profile.number] = parsed; lock.unlock()
             completion(.success(())); return
         }
+        let loc = pad.location, want = pad.identity
         profileQueue.async { [weak self] in
-            guard let self else { return }
+            // The same pad, not whatever sits at that port by now.
+            guard let self, let pad = self.livePad(at: loc), pad.identity == want, let device = pad.device else {
+                completion(.failure(.notConnected)); return
+            }
             let bytes = Self.encode(profile)
             self.drain(device)
             for packet in Self.writePackets(number: profile.number, bytes: bytes) {
@@ -779,11 +866,20 @@ final class AccessControllerPortService: @unchecked Sendable {
             }
             // The controller stores the profile after the last chunk: wait
             // for its register to report nothing left, then read it back.
-            Thread.sleep(forTimeInterval: 0.05)
-            self.drain(device)
-            guard let stored = self.readProfileBytes(device, number: profile.number) else {
-                completion(.failure(.verifyFailed)); return
+            // A read-back that fails outright (refused command, no echo) is
+            // tried twice more before the write counts as unverified.
+            if !self.waitForRegisterIdle(pad, device) {
+                Self.log.notice("profile \(profile.number, privacy: .public): register still busy a second after the write")
             }
+            var stored: [UInt8]?
+            for attempt in 0..<3 {
+                stored = self.readProfileBytes(pad, device, number: profile.number)
+                if stored != nil || !self.isLive(pad) { break }
+                Self.log.notice("profile \(profile.number, privacy: .public): read back failed (attempt \(attempt + 1, privacy: .public))")
+                Thread.sleep(forTimeInterval: 0.05)
+                self.drain(device)
+            }
+            guard let stored else { completion(.failure(.verifyFailed)); return }
             // The timestamp and anything the controller rewrites aside, the
             // edited fields must match.
             let same = stored[0..<948] == bytes[0..<948]
@@ -807,7 +903,11 @@ final class AccessControllerPortService: @unchecked Sendable {
         let pad = pad(for: identity, accessSlotCount: accessSlotCount)
         lock.unlock()
         guard let pad, pad.overUSB else { return }
-        profileQueue.async { [weak self] in self?.readProfiles(pad) }
+        let loc = pad.location
+        profileQueue.async { [weak self] in
+            guard let self, let pad = self.livePad(at: loc) else { return }
+            self.readProfiles(pad)
+        }
     }
 
     // MARK: - Decoding (pure)
@@ -826,6 +926,39 @@ final class AccessControllerPortService: @unchecked Sendable {
         /// profile byte); the 0x05 command is refused while it is on.
         var switchingDisabled = false
         var battery: Battery?
+        /// What the active profile sends, as the slot's standard inputs.
+        var mapped: Mapped?
+    }
+
+    /// The profile-mapped functions in the slot's numbering: buttons 0 to
+    /// 13, axes 0 to 5, and the D-pad as one hat.
+    struct Mapped: Equatable {
+        var buttons: [Int: Float] = [:]
+        var axes: [Int: Float] = [:]
+        var hat: (x: Float, y: Float) = (0, 0)
+        static func == (a: Mapped, b: Mapped) -> Bool {
+            a.buttons == b.buttons && a.axes == b.axes && a.hat.x == b.hat.x && a.hat.y == b.hat.y
+        }
+
+        /// The DualSense bits of the three button bytes, by slot button.
+        static let faceBits: [(mask: UInt8, button: Int)] = [(0x10, 2), (0x20, 0), (0x40, 1), (0x80, 3)]
+        static let shoulderBits: [(mask: UInt8, button: Int)] = [(0x01, 4), (0x02, 5), (0x04, 6), (0x08, 7),
+                                                                 (0x10, 8), (0x20, 9), (0x40, 11), (0x80, 12)]
+        static let systemBits: [(mask: UInt8, button: Int)] = [(0x01, 10), (0x02, 13)]
+        /// The D-pad nibble, 0 up then clockwise, 8 or more centered.
+        static func hat(_ nibble: UInt8) -> (x: Float, y: Float) {
+            switch nibble {
+            case 0: return (0, 1)
+            case 1: return (1, 1)
+            case 2: return (1, 0)
+            case 3: return (1, -1)
+            case 4: return (0, -1)
+            case 5: return (-1, -1)
+            case 6: return (-1, 0)
+            case 7: return (-1, 1)
+            default: return (0, 0)
+            }
+        }
     }
 
     /// Decodes a Bluetooth (0x31, 78 bytes) or USB (0x01, 64 bytes) input
@@ -860,6 +993,28 @@ final class AccessControllerPortService: @unchecked Sendable {
             d.switchingDisabled = p & 0x08 != 0
         }
         if let b = raw(batteryByte) { d.battery = Battery(byte: b) }
+        if let face = raw(mappedButtonBytes.face), let shoulders = raw(mappedButtonBytes.shoulders),
+           let system = raw(mappedButtonBytes.system),
+           let lx = raw(mappedStickBytes.lx), let ly = raw(mappedStickBytes.ly),
+           let rx = raw(mappedStickBytes.rx), let ry = raw(mappedStickBytes.ry),
+           let l2 = raw(mappedTriggerBytes.l2), let r2 = raw(mappedTriggerBytes.r2) {
+            var m = Mapped()
+            for button in 0...13 { m.buttons[button] = 0 }
+            for (mask, button) in Mapped.faceBits where face & mask != 0 { m.buttons[button] = 1 }
+            for (mask, button) in Mapped.shoulderBits where shoulders & mask != 0 { m.buttons[button] = 1 }
+            for (mask, button) in Mapped.systemBits where system & mask != 0 { m.buttons[button] = 1 }
+            // L2 and R2 carry their analog pull, the way GameController
+            // reports a trigger (a trigger or pedal in a port pulls part way);
+            // only with no pull byte does the digital bit count, as full.
+            let l: Float = l2 > 0 ? Float(l2) / 255 : (shoulders & 0x04 != 0 ? 1 : 0)
+            let r: Float = r2 > 0 ? Float(r2) / 255 : (shoulders & 0x08 != 0 ? 1 : 0)
+            m.buttons[6] = l
+            m.buttons[7] = r
+            // The stick down and right positive, as the slot reads Y.
+            m.axes = [0: centered(lx), 1: centered(ly), 2: centered(rx), 3: centered(ry), 4: l, 5: r]
+            m.hat = Mapped.hat(face & 0x0F)
+            d.mapped = m
+        }
         for port in 1...portCount {
             let axes = portAxes(port), at = portBytes(port)
             guard let typeValue = raw(typeByte(forPort: port)), let x = raw(at.x), let y = raw(at.y),
@@ -905,7 +1060,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         }
         defer { pad.reportsSeen += 1 }
         if !decoded.buttons.isEmpty || decoded.axes.values.contains(where: { abs($0) > 0.33 }) {
-            ControllerPowerService.shared.noteAccessActivity()
+            ControllerPowerService.shared.noteAccessActivity(identity: pad.identity)
         }
 
         for index in decoded.buttons where pad.seenButtons.insert(index).inserted {
@@ -952,6 +1107,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         }
         pad.axes = axes
         pad.buttons = Dictionary(uniqueKeysWithValues: buttons.map { ($0, Float(1)) })
+        pad.mapped = decoded.mapped
     }
 
     // MARK: - Synthetic pads (DEBUG)
@@ -980,7 +1136,7 @@ final class AccessControllerPortService: @unchecked Sendable {
         buf.initialize(repeating: 0, count: reportBufferSize)
         var identity = SonyPadIdentity()
         identity.locationID = location
-        let pad = Pad(device: nil, identity: identity, buffer: buf, overUSB: overUSB)
+        let pad = Pad(device: nil, identity: identity, buffer: buf, overUSB: overUSB, location: location)
         pad.profiles = profiles
         lock.lock()
         pads[location] = pad
@@ -1049,6 +1205,13 @@ final class AccessControllerPortService: @unchecked Sendable {
     func buttons(for identity: SonyPadIdentity?, accessSlotCount: Int) -> [Int: Float] {
         lock.lock(); defer { lock.unlock() }
         return pad(for: identity, accessSlotCount: accessSlotCount)?.buttons ?? [:]
+    }
+
+    /// What the active profile sends, read from the controller itself;
+    /// nil before a full report (a Bluetooth pad not yet woken).
+    func mapped(for identity: SonyPadIdentity?, accessSlotCount: Int) -> Mapped? {
+        lock.lock(); defer { lock.unlock() }
+        return pad(for: identity, accessSlotCount: accessSlotCount)?.mapped
     }
 
     /// Every button pressed so far this connection, for the extras row.

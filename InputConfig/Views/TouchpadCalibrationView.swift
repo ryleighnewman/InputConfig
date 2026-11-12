@@ -10,6 +10,7 @@ struct TouchpadCalibrationView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var presetStore: PresetStore
     @Environment(\.appTextScale) private var textScale
+    @Environment(\.regionsCompact) private var regionsCompact
     /// Not observed: its 60 Hz pointer publish re-rendered this whole sheet.
     private var cursorRegions: CursorRegionService { .shared }
 
@@ -79,7 +80,11 @@ struct TouchpadCalibrationView: View {
     /// Where this pad's fingers and pressed regions are read.
     private var padService: TouchpadService { TouchpadService.forSurface(surface, steam: steam) }
 
-    init(embedded: Bool = false, surface: Int? = nil, steam: Bool = false) {
+    /// The input device whose Regions card this is; nil from the menu.
+    private let groupIndex: Int?
+
+    init(embedded: Bool = false, surface: Int? = nil, steam: Bool = false, groupIndex: Int? = nil) {
+        self.groupIndex = groupIndex
         self.embedded = embedded
         self.surface = surface
         self.steam = steam
@@ -129,7 +134,7 @@ struct TouchpadCalibrationView: View {
         }
         }
         .onAppear {
-            MappingEngine.touchpadSetupOpen = true
+            MappingEngine.touchpadSetupOpenCount += 1
             TouchpadService.shared.retain()
             startPolling()
             reloadRegionsForActiveDevice()
@@ -140,7 +145,7 @@ struct TouchpadCalibrationView: View {
             if dragMode == nil, !drawingNewRegion { reloadRegionsForActiveDevice() }
         }
         .onDisappear {
-            MappingEngine.touchpadSetupOpen = false
+            MappingEngine.touchpadSetupOpenCount = max(0, MappingEngine.touchpadSetupOpenCount - 1)
             stopPolling()
             TouchpadService.shared.release()
             saveRegionsOutsideEditor()
@@ -153,7 +158,7 @@ struct TouchpadCalibrationView: View {
     /// hint, the touchpad, the buttons under it, then the list and what a
     /// finger is touching now.
     private var embeddedBody: some View {
-        HStack(alignment: .top, spacing: 28) {
+        regionEditorLayout(compact: regionsCompact).callAsFunction {
             VStack(spacing: 10) {
                 regionsPanel
                     .frame(width: padWidth, height: padWidth / regionsAspect)
@@ -831,7 +836,12 @@ struct TouchpadCalibrationView: View {
                 let bindingRegionID: UUID? = activeDevice.usesCursorRegions
                     ? binding.input.cursorRegionID
                     : binding.input.touchpadRegionID
-                if bindingRegionID == regionID, !binding.outputs.isEmpty {
+                // A macro, hold or tap row is bound too: "Not bound" led to
+                // Bind to, which replaced the row.
+                let does = !binding.outputs.isEmpty || binding.macroSteps?.isEmpty == false
+                    || binding.holdOutputs?.isEmpty == false || binding.doubleTapOutputs?.isEmpty == false
+                    || binding.tripleTapOutputs?.isEmpty == false
+                if bindingRegionID == regionID, does {
                     return outputLabel(for: binding)
                 }
             }
@@ -846,7 +856,10 @@ struct TouchpadCalibrationView: View {
         if let note = binding.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
             return String(localized: "Bound: \(ShippedText.t(note))")
         }
-        let outputNames = OutputAction.names(binding.outputs).joined(separator: " + ")
+        let list = [binding.outputs, binding.holdOutputs ?? [], binding.doubleTapOutputs ?? [], binding.tripleTapOutputs ?? []]
+            .first { !$0.isEmpty }
+        let outputNames = list.map { OutputAction.names($0).joined(separator: " + ") }
+            ?? String(localized: "Macro")
         return String(localized: "Bound: \(outputNames)")
     }
 
@@ -856,6 +869,15 @@ struct TouchpadCalibrationView: View {
     /// region to the target preset's first joystick. Replaces any
     /// existing binding pointing at the same region so the user always
     /// ends up with exactly one wire per region.
+    /// The group new region rows go into: the card's own group, or from
+    /// the menu the first group already holding touch rows of this kind.
+    /// Always group 0 put a DualSense's rows on another pad's group.
+    private func targetGroup(in preset: Preset, type: InputType) -> Int {
+        let last = preset.joysticks.count - 1
+        if let groupIndex { return min(max(groupIndex, 0), last) }
+        return preset.joysticks.firstIndex { $0.bindings.contains { $0.input.type == type } } ?? 0
+    }
+
     private func bindRegion(_ regionID: UUID, toKeyCode keyCode: Int, label: String) {
         withTargetPreset { preset in
             guard !preset.joysticks.isEmpty else { return }
@@ -870,15 +892,17 @@ struct TouchpadCalibrationView: View {
             let newBinding = BindingModel(input: newInput, outputs: [newOutput])
 
             // Remove any prior binding pointing at this region so we don't
-            // stack duplicate wires.
-            for j in 0..<preset.joysticks.count {
+            // stack duplicate wires. A group's own card leaves the other
+            // groups alone: their rows are their pads'.
+            let into = targetGroup(in: preset, type: inputType)
+            for j in groupIndex == nil ? Array(preset.joysticks.indices) : [into] {
                 preset.joysticks[j].bindings.removeAll { b in
                     guard b.input.type == inputType else { return false }
                     let bID = usesCursor ? b.input.cursorRegionID : b.input.touchpadRegionID
                     return bID == regionID
                 }
             }
-            preset.joysticks[0].bindings.append(newBinding)
+            preset.joysticks[into].bindings.append(newBinding)
         }
     }
 
@@ -987,13 +1011,14 @@ struct TouchpadCalibrationView: View {
         withTargetPreset { preset in
             // Wipe prior region bindings of the right type so we replace
             // cleanly rather than stacking.
-            for j in 0..<preset.joysticks.count {
+            let into = targetGroup(in: preset, type: inputType)
+            for j in groupIndex == nil ? Array(preset.joysticks.indices) : [into] {
                 // This pad's rows only: the other Steam trackpad keeps its own.
                 preset.joysticks[j].bindings.removeAll {
                     $0.input.type == inputType && (usesCursor || ($0.input.touchpadSurface == 1) == (surface == 1))
                 }
             }
-            preset.joysticks[0].bindings.append(contentsOf: newBindings)
+            preset.joysticks[into].bindings.append(contentsOf: newBindings)
         }
 
         withAnimation(.easeIn(duration: 0.2)) { showAppliedDefaultsToast = true }
@@ -1012,6 +1037,7 @@ struct TouchpadCalibrationView: View {
         // feel choppier than the underlying data was, because the
         // render pipeline couldn't keep up with the rate at which we
         // were dirtying the view.
+        pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
             pollOnce()
         }

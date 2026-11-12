@@ -13,3 +13,8 @@
 /* Copyright (human-readable) */
 "NSHumanReadableCopyright" = "Copyright © 2026 Ryleigh Newman. Alle rechten voorbehouden.";
 
+/* Privacy - Microphone Usage Description */
+"NSMicrophoneUsageDescription" = "InputConfig luistert naar de spraakzinnen van een preset, alleen zolang die preset actief is of het venster Spraakzinnen open is. Er wordt niets opgenomen of bewaard.";
+
+/* Privacy - Speech Recognition Usage Description */
+"NSSpeechRecognitionUsageDescription" = "InputConfig herkent de spraakzinnen van een preset, op deze Mac als de taal dat toelaat. Er wordt niets opgenomen of bewaard.";

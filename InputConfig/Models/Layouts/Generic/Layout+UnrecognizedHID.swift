@@ -154,7 +154,8 @@ extension ControllerLayout {
                                          unipolar: a.unipolar, digitalButton: a.digitalButton)
                 }
                 for h in report.hats where hats[h.index] == nil {
-                    hats[h.index] = Hat(index: h.index, note: String(localized: "Hat switch \(h.index), \(h.directions) directions"))
+                    // An angle hat (360 or more steps) is read as 8 directions.
+                    hats[h.index] = Hat(index: h.index, note: String(localized: "Hat switch \(h.index), \(h.directions > 16 ? 8 : h.directions) directions"))
                 }
                 for d in report.dpadButtons where hats[d.hatIndex] == nil {
                     let how = d.axisHalf == nil ? String(localized: "four buttons", comment: "A D-pad sent as four buttons") : String(localized: "two axes", comment: "A D-pad sent as two axes")
