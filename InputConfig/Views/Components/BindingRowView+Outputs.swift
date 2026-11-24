@@ -102,11 +102,13 @@ extension BindingRowView {
             .hoverHelp("Switches the profile a PlayStation Access controller has active, as its Profile button does. Over USB-C; over Bluetooth the controller takes only its own button.")
 
         case .typeText:
-            TextField("Text to type", text: outputTextBinding(at: index, in: list))
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                .frame(minWidth: 140)
-                .hoverHelp("Typed exactly as written when the input is pressed. Capitals, symbols, and any language work.")
+            DraftTextField(outputTextBinding(at: index, in: list)) { text in
+                TextField("Text to type", text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .frame(minWidth: 140)
+                    .hoverHelp("Typed exactly as written when the input is pressed. Capitals, symbols, and any language work.")
+            }
 
         case .appAction:
             HStack(spacing: 6) {
@@ -205,20 +207,34 @@ extension BindingRowView {
                     .fixedSize()
                     .hoverHelp("Output speed")
 
-                ThrottledSlider("Output speed",
-                    value: speedBinding(at: index, in: list),
-                    in: 1...50,
-                    step: 1,
-                    onLiveChange: { liveSpeed[liveSpeedKey(index, list)] = $0 }
-                )
-                    .frame(minWidth: 60, idealWidth: 90)
-                    .accessibilityValue(String(localized: "Speed \(Int(speedBinding(at: index, in: list).wrappedValue))"))
+                // The live drag value is the child's own state, so a drag
+                // tick re-runs this slider and its box, not the whole row.
+                let speed = speedBinding(at: index, in: list)
+                LiveDragValue(committed: speed.wrappedValue) { shown, setLive in
+                    HStack(spacing: 6) {
+                        ThrottledSlider("Output speed",
+                            value: speed,
+                            in: 1...50,
+                            step: 1,
+                            onLiveChange: setLive
+                        )
+                            .frame(minWidth: 60, idealWidth: 90)
+                            .accessibilityValue(String(localized: "Speed \(Int(speed.wrappedValue))"))
 
-                TextField("Speed", value: liveSpeedBinding(at: index, in: list), format: .number)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 56 * max(1, textScale))
-                    .controlSize(.small)
-                    .multilineTextAlignment(.center)
+                        TextField("Speed", value: SwiftUI.Binding(
+                            get: { Int(shown) },
+                            set: { newValue in
+                                guard output(at: index, in: list) != nil else { return }
+                                let clamped = max(1, min(50, newValue))
+                                updateOutput(index, in: list) { $0.speed = clamped }
+                                setLive(Double(clamped))
+                            }), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56 * max(1, textScale))
+                            .controlSize(.small)
+                            .multilineTextAlignment(.center)
+                    }
+                }
             }
 
         case .mouseWheelStep:
@@ -655,6 +671,10 @@ extension BindingRowView {
                                              ("optionsText", hasAdvancedOptions ? advancedOptionsSummary : optionsHint)])
         }
         #endif
+        // Once per body, and not while open: the summary is a dozen
+        // localized lookups, and every live row runs this on each pass.
+        let anySet = hasAdvancedOptions
+        let summary = showAdvanced ? "" : advancedOptionsSummary
         return VStack(alignment: .leading, spacing: 0) {
             // The button comes first so it stays put; the panel unfolds
             // below it.
@@ -676,7 +696,7 @@ extension BindingRowView {
                     // links and the purple Automation; bold once something
                     // in it is set.
                     .foregroundStyle(Self.optionsTeal)
-                    .fontWeight(hasAdvancedOptions ? .semibold : .regular)
+                    .fontWeight(anySet ? .semibold : .regular)
                     .fixedSize()
                 }
                 .buttonStyle(.plain)
@@ -685,13 +705,13 @@ extension BindingRowView {
                 .accessibilityLabel("Options")
                 .accessibilityInputLabels([Text("Options"), Text("Options \(displayNumber)")])
                 .accessibilityValue(showAdvanced ? String(localized: "Expanded")
-                                    : (advancedOptionsSummary.isEmpty ? String(localized: "Collapsed") : advancedOptionsSummary))
+                                    : (summary.isEmpty ? String(localized: "Collapsed") : summary))
                 .accessibilityHint("Shows this row's deadzone, press mode, macro, feedback and extra actions")
                 // Collapsed summary of WHICH options are set, replacing the
                 // old bare asterisk that said only that something was; with
                 // nothing set, what opening it offers, in parentheses.
                 if !showAdvanced {
-                    Text(hasAdvancedOptions ? advancedOptionsSummary : optionsHint)
+                    Text(anySet ? summary : optionsHint)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -731,6 +751,16 @@ extension BindingRowView {
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
             showAdvanced.toggle()
         }
+    }
+
+    /// Controls a switch or menu just turned on fade in instead of popping.
+    /// The animation rides on the transition, so only their opacity moves:
+    /// the rows below still take their new places at once, never sliding.
+    /// Gone at once when turned off (a fade out would overlap what moved
+    /// up), and plain under either Reduce Motion.
+    var revealTransition: AnyTransition {
+        reduceMotion ? .identity
+            : .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.18)), removal: .identity)
     }
 
     // MARK: - Advanced Options
@@ -1136,18 +1166,22 @@ extension BindingRowView {
         // chosen, and choosing one opens its box here.
         if macroEditorShown {
             optionsBox("Macro", spotlightID: "macro") { macroEditorSection }
+                .transition(revealTransition)
         }
         if binding.hapticEnabled == true || binding.speechEnabled == true {
             optionsBox("Feedback", spotlightID: "feedback") {
                 advancedFeedbackOptions
                 if binding.speechEnabled == true {
                     speechDetailRow
+                        .transition(revealTransition)
                 }
             }
+            .transition(revealTransition)
         }
         // Last, because a full output editor can open inside it.
         if binding.holdOutputs != nil || binding.doubleTapOutputs != nil || binding.tripleTapOutputs != nil {
             optionsBox("Extra actions", spotlightID: "extra") { tapHoldOptions }
+                .transition(revealTransition)
         }
     }
 
@@ -1215,48 +1249,58 @@ extension BindingRowView {
         .hoverHelp("Vibrate the controller when this binding fires (DualSense, DualSense Edge, and similar).")
 
         if binding.hapticEnabled == true {
-            HStack(spacing: 4) {
-                Text("Strength")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                ThrottledSlider("Vibration strength",
-                    value: hapticIntensityBinding,
-                    in: 0.1...1.0,
-                    step: 0.05,
-                    onLiveChange: { liveHaptic = $0 }
-                )
-                    .frame(width: 60)
-                    .accessibilityValue(String(localized: "\(Int(((liveHaptic ?? Double(binding.hapticIntensity ?? 0.6)) * 100).rounded())) percent"))
-                    .voiceNames("Strength", "Vibration strength")
-                percentField("Strength percent",
-                             shown: liveHaptic ?? Double(binding.hapticIntensity ?? 0.6),
-                             range: 0.1...1.0, style: .hint, width: 30) {
-                    liveHaptic = $0
-                    hapticIntensityBinding.wrappedValue = $0
+            // Each line keeps its drag value in its own state, so a drag
+            // tick re-runs that line, not the row and its Options panel.
+            let intensity = hapticIntensityBinding
+            LiveDragValue(committed: Double(binding.hapticIntensity ?? 0.6)) { shown, setLive in
+                HStack(spacing: 4) {
+                    Text("Strength")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ThrottledSlider("Vibration strength",
+                        value: intensity,
+                        in: 0.1...1.0,
+                        step: 0.05,
+                        onLiveChange: setLive
+                    )
+                        .frame(width: 60)
+                        .accessibilityValue(String(localized: "\(Int((shown * 100).rounded())) percent"))
+                        .voiceNames("Strength", "Vibration strength")
+                    percentField("Strength percent",
+                                 shown: shown,
+                                 range: 0.1...1.0, style: .hint, width: 30) {
+                        setLive($0)
+                        intensity.wrappedValue = $0
+                    }
                 }
             }
-            HStack(spacing: 4) {
-                Text("Duration")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                ThrottledSlider("Vibration duration",
-                    value: hapticDurationBinding,
-                    in: 0...Double(FeedbackService.maxDurationMs),
-                    step: 20,
-                    onLiveChange: { liveHapticDuration = $0 }
-                )
-                    .frame(width: 60)
-                    .accessibilityValue(spokenHapticDuration(liveHapticDuration ?? Double(binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)))
-                    .voiceNames("Duration", "Vibration duration")
-                Text(hapticDurationLabel(liveHapticDuration ?? Double(binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)))
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.hint)
-                    // Room for "Tap" and the unit in every language.
-                    .lineLimit(1)
-                    .fixedSize()
-                    .frame(minWidth: 44, alignment: .leading)
+            .transition(revealTransition)
+            let duration = hapticDurationBinding
+            LiveDragValue(committed: Double(binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)) { shown, setLive in
+                HStack(spacing: 4) {
+                    Text("Duration")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ThrottledSlider("Vibration duration",
+                        value: duration,
+                        in: 0...Double(FeedbackService.maxDurationMs),
+                        step: 20,
+                        onLiveChange: setLive
+                    )
+                        .frame(width: 60)
+                        .accessibilityValue(spokenHapticDuration(shown))
+                        .voiceNames("Duration", "Vibration duration")
+                    Text(hapticDurationLabel(shown))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.hint)
+                        // Room for "Tap" and the unit in every language.
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(minWidth: 44, alignment: .leading)
+                }
+                .hoverHelp("Tap is a single short pulse. Longer settings rumble for that long, up to two seconds.")
             }
-            .hoverHelp("Tap is a single short pulse. Longer settings rumble for that long, up to two seconds.")
+            .transition(revealTransition)
         }
 
         // Speech toggle
@@ -1281,12 +1325,14 @@ extension BindingRowView {
             Text("Phrase")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            TextField("Phrase to speak", text: speechTextBinding)
-                .focused($phraseFocused)
-                .voiceNames("Phrase", "Phrase to speak")
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                .frame(maxWidth: 200)
+            DraftTextField(speechTextBinding) { text in
+                TextField("Phrase to speak", text: text)
+                    .focused($phraseFocused)
+                    .voiceNames("Phrase", "Phrase to speak")
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .frame(maxWidth: 200)
+            }
 
             // No Mac / Controller picker: macOS has no public way to send
             // speech to a controller's speaker, so it always follows the
@@ -1421,12 +1467,12 @@ extension BindingRowView {
                 Button {
                     select(.lightBar)
                 } label: {
-                    Label(OutputType.lightBar.displayName, systemImage: "light.beacon.max.fill")
+                    Label(Self.lightBarChoiceTitle, systemImage: "light.beacon.max.fill")
                 }
                 Button {
                     select(.controllerProfile)
                 } label: {
-                    Label(OutputType.controllerProfile.displayName, systemImage: "person.crop.rectangle.stack")
+                    Label(Self.controllerProfileChoiceTitle, systemImage: "person.crop.rectangle.stack")
                 }
             }
         }
@@ -1456,8 +1502,14 @@ extension BindingRowView {
     }
 
     private var vibrateChoiceTitle: String {
-        binding.hapticEnabled == true ? String(localized: "Vibrate (on)") : String(localized: "Vibrate the controller")
+        binding.hapticEnabled == true ? String(localized: "Vibrate (on)")
+            : String(localized: "Vibrate the controller (controllers with rumble only)")
     }
+
+    /// The output menus name the controllers an output is for, since it
+    /// does nothing on any other.
+    static var lightBarChoiceTitle: String { String(localized: "Light Bar Color (DualSense / DualShock 4 only)") }
+    static var controllerProfileChoiceTitle: String { String(localized: "Controller Profile (Access controller only)") }
 
     private var speakChoiceTitle: String {
         binding.speechEnabled == true ? String(localized: "Speak a phrase (on)") : String(localized: "Speak a phrase")
@@ -1636,9 +1688,9 @@ extension BindingRowView {
             out.append(C(title: String(localized: "Macro, a sequence of steps"), path: String(localized: "Macro")) { makeMacroOutput() })
         }
         if offersOutputType(.lightBar, in: list) {
-            out.append(C(title: OutputType.lightBar.displayName, path: String(localized: "Controller"),
+            out.append(C(title: Self.lightBarChoiceTitle, path: String(localized: "Controller"),
                          systemImage: "light.beacon.max.fill") { select(.lightBar) })
-            out.append(C(title: OutputType.controllerProfile.displayName, path: String(localized: "Controller"),
+            out.append(C(title: Self.controllerProfileChoiceTitle, path: String(localized: "Controller"),
                          systemImage: "person.crop.rectangle.stack") { select(.controllerProfile) })
         }
         let system = String(localized: "System")
@@ -1652,5 +1704,28 @@ extension BindingRowView {
             }
         }
         return out
+    }
+}
+
+/// A slider line's live drag value, held here rather than on the row. A
+/// ThrottledSlider writes the preset only on release; the number beside it
+/// follows the drag through this state, so each tick re-runs the line
+/// `content` builds instead of the whole row and its Options panel. The
+/// live value is dropped once the stored value changes (the release, a
+/// typed number, Undo), as the row's own mirrors were.
+struct LiveDragValue<Content: View>: View {
+    let committed: Double
+    @ViewBuilder let content: (_ shown: Double, _ setLive: @escaping (Double) -> Void) -> Content
+    @State private var live: Double?
+
+    init(committed: Double,
+         @ViewBuilder content: @escaping (_ shown: Double, _ setLive: @escaping (Double) -> Void) -> Content) {
+        self.committed = committed
+        self.content = content
+    }
+
+    var body: some View {
+        content(live ?? committed) { live = $0 }
+            .onChange(of: committed) { _, _ in live = nil }
     }
 }

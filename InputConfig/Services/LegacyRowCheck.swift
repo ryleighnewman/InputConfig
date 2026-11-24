@@ -56,6 +56,25 @@ final class LegacyRowCheck {
         olderInputs = nil
     }
 
+    /// A copy of a preset made before 1.6 is one too: its rows keep their
+    /// ids, so it takes the original's rows as they were then and its place
+    /// in every kind's lists. Without this only the original was offered
+    /// when the pad connected and the copy kept the old rows for good.
+    static func carry(from original: UUID, to copy: UUID, defaults: UserDefaults = .standard) {
+        let from = original.uuidString, to = copy.uuidString
+        for kind in Kind.allCases {
+            for key in [kind.pendingKey, offeredKey(kind)] {
+                guard let list = defaults.stringArray(forKey: key), list.contains(from), !list.contains(to) else { continue }
+                defaults.set(list + [to], forKey: key)
+            }
+        }
+        var rows = defaults.dictionary(forKey: rowsKey) as? [String: [String]] ?? [:]
+        guard let keys = rows[from] else { return }
+        rows[to] = keys
+        defaults.set(rows, forKey: rowsKey)
+        olderInputs = nil
+    }
+
     /// Each remembered preset's rows when it was remembered, as row id and
     /// input; a row whose input changed since was recorded in 1.6.
     nonisolated static let rowsKey = "InputConfig.legacyRowCheck.rows"
@@ -563,7 +582,8 @@ private final class FlippedView: NSView {
 /// sliders on axes 4 and 5 (and buttons 6 and 7), one hat. 1.6 reads many
 /// of these pads through SDL's database or its own descriptor reader, so
 /// rows recorded in 1.5 are paired with 1.6's by where each control sits
-/// in the report. The parser is 1.5's own, unchanged.
+/// in the report. The parser is 1.5's own, unchanged but for the two
+/// ceilings in `parse` that no real pad reaches.
 enum Numbering15 {
     struct Layout {
         var buttonBitOffsets: [Int]
@@ -691,6 +711,14 @@ enum Numbering15 {
         var fieldsByReport: [Int?: [Field]] = [:]
         var cursorByReport: [Int?: Int] = [:]
         var currentReportID: Int? = nil
+        // The per item caps below still let a crafted descriptor repeat a
+        // maximal INPUT thousands of times: millions of fields, built on
+        // the main actor. Past the ceilings the current reader has
+        // (HIDDescriptorParser.collectFields) there is no old numbering to
+        // compare; a real pad has a few hundred fields at most.
+        let maxFieldsTotal = 4096
+        let maxReportBits = 64 * 1024 * 8
+        var fieldTotal = 0
 
         let bytes = Array(descriptor)
         var i = 0
@@ -776,6 +804,11 @@ enum Numbering15 {
                         break
                     }
                     let totalBits = mulResult
+                    if !isConstant && isVariable {
+                        fieldTotal += state.reportCount
+                        if fieldTotal > maxFieldsTotal { return nil }
+                    }
+                    if cursorByReport[currentReportID, default: 0] + totalBits > maxReportBits { return nil }
 
                     if !isConstant && isVariable {
                         // Distribute usages across the report count.

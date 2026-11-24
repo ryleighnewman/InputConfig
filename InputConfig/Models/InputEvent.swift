@@ -211,6 +211,10 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
     /// clockwise for the + direction and counterclockwise for -. Built
     /// for volume-up/down, brightness, and stepped scrolling.
     case relative
+    /// A press per message: every message on the CC is one short press,
+    /// whatever value it carries. For a foot switch or a pad that sends
+    /// the same value each time it is pressed and nothing on release.
+    case trigger
 
     var id: String { rawValue }
 
@@ -219,6 +223,7 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
         case .threshold: return String(localized: "Switch (past halfway)")
         case .centered:  return String(localized: "Dial (speed from center)")
         case .relative:  return String(localized: "Turn (nudge per step)")
+        case .trigger:   return String(localized: "Trigger (a press per message)")
         }
     }
 
@@ -228,6 +233,7 @@ enum MIDICCMode: String, Codable, CaseIterable, Identifiable {
         case .threshold: return nil
         case .centered:  return String(localized: "Dial")
         case .relative:  return String(localized: "Turn")
+        case .trigger:   return String(localized: "midi.ccMode.trigger", defaultValue: "Trigger", comment: "Badge for the MIDI knob mode that fires a press per message; not a controller trigger")
         }
     }
 }
@@ -385,6 +391,26 @@ enum AxisDirection: String, Codable, CaseIterable, Identifiable {
     /// Stored as no direction, which the engine has always read that way.
     static let bothDisplayName = "+/-"
     static var bothSpokenName: String { String(localized: "plus and minus") }
+
+    /// The directions a row on this axis can be given. A trigger reads 0
+    /// to 1 and only ever moves one way.
+    static func choices(forAxis index: Int) -> [AxisDirection] {
+        InputEvent.isTriggerAxis(index) ? [.positive] : allCases
+    }
+}
+
+extension InputEvent {
+    /// Axis 4 and 5 are the triggers.
+    static func isTriggerAxis(_ index: Int) -> Bool { index == 4 || index == 5 }
+
+    /// A trigger reads 0 to 1. A minus row on it never fires, and one with
+    /// no direction rests a CC at 64 and a followed volume at half, where
+    /// the row has no menu choice that shows or mends it. Either becomes a
+    /// plus row; every other row is left as it is.
+    mutating func normalizeTriggerDirection() {
+        guard type == .axis, InputEvent.isTriggerAxis(index), axisDirection != .positive else { return }
+        axisDirection = .positive
+    }
 }
 
 /// Direction for hat (D-pad) inputs
@@ -1088,10 +1114,22 @@ struct ButtonSequenceRecognizer {
     private(set) var progress = 0
     private var wasDown: Set<Int> = []
     private var lastPressAt: Double = 0
+    /// False until the first poll: a button down then was down before this
+    /// recognizer was made (the press that switched to its preset, a thumb
+    /// resting through a resume), so it is not a press of the sequence.
+    private var primed = false
+
+    /// A recognizer fed a press at a time (key downs) rather than polled:
+    /// nothing was held before its first press, so that press counts.
+    static func forEvents() -> ButtonSequenceRecognizer {
+        var r = ButtonSequenceRecognizer()
+        r.primed = true
+        return r
+    }
 
     /// One poll. Returns true on the poll the last press of `steps` lands.
     mutating func feed(down: Set<Int>, now: Double, steps: [Int]) -> Bool {
-        guard !steps.isEmpty else { wasDown = down; return false }
+        guard primed, !steps.isEmpty else { primed = true; wasDown = down; return false }
         if progress > 0, now - lastPressAt > Double(windowMs) / 1000 { progress = 0 }
         let pressed = down.subtracting(wasDown)
         wasDown = down
@@ -1130,7 +1168,7 @@ struct ButtonSequenceRecognizer {
         return fired
     }
 
-    mutating func reset() { progress = 0; wasDown = [] }
+    mutating func reset() { progress = 0; wasDown = []; primed = false }
 }
 
 /// Recognizes stick gestures from the stick's position, frame by frame. A
@@ -1150,6 +1188,9 @@ struct StickGestureRecognizer {
     private var peak = (x: 0.0, y: 0.0, m: 0.0)
     private var heldTooLong = false
     private var lastStepAt: Double = 0
+    /// False until the first frame: a stick out then was out before this
+    /// recognizer was made, so letting it go is not a flick.
+    private var primed = false
 
     /// Distance from the middle that counts as back at rest.
     var restRadius: Double { min(0.35, reach * 0.5) }
@@ -1165,8 +1206,9 @@ struct StickGestureRecognizer {
         if progress > 0, !out, now - lastStepAt > Double(windowMs) / 1000 { progress = 0 }
         if !out {
             if m >= reach {
-                out = true; outStart = now; peak = (x, y, m); heldTooLong = false
+                out = true; outStart = now; peak = (x, y, m); heldTooLong = !primed
             }
+            primed = true
             return false
         }
         if m > peak.m { peak = (x, y, m) }
@@ -1191,7 +1233,7 @@ struct StickGestureRecognizer {
     }
 
     /// Forget a gesture under way.
-    mutating func reset() { progress = 0; out = false; heldTooLong = false }
+    mutating func reset() { progress = 0; out = false; heldTooLong = false; primed = false }
 
     /// Whether a flick's farthest point fits a step: a direction by angle,
     /// a zone by the zone's own shape.

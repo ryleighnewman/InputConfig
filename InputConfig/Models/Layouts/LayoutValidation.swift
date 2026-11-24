@@ -65,17 +65,29 @@ enum LayoutValidation {
             guard let a, let va = a.variants, let vb = b.variants else { return true }
             return !va.isDisjoint(with: vb)
         }
-        // An input placed twice (outside a declared overlay).
-        var seen: [Int: String] = [:]
-        for c in layout.controls where c.readable != .notReported("") {
-            if case .notReported = c.readable { continue }
-            for b in c.inputs.allButtons {
-                if let other = seen[b], layout.control(other)?.overlayOf != c.id, c.overlayOf != other,
-                   shareVariant(layout.control(other), c) {
-                    add("btn \(b) is on both \(other) and \(c.id)")
+        // An input placed twice (outside a declared overlay): as the layout
+        // is written, and again on every read path a control has its own
+        // inputs for. A duplicate can sit on one path only: read from its
+        // descriptor, the Standard gamepad had Home and the left stick
+        // press both on btn 10.
+        func placedTwice(_ read: ControllerLayout, on path: ReadPath?) {
+            let onPath = path.map { " on \($0)" } ?? ""
+            var seen: [Int: String] = [:]
+            for c in read.controls {
+                if case .notReported = c.readable { continue }
+                for b in c.inputs.allButtons {
+                    if let other = seen[b], read.control(other)?.overlayOf != c.id, c.overlayOf != other,
+                       shareVariant(read.control(other), c) {
+                        add("btn \(b) is on both \(other) and \(c.id)\(onPath)")
+                    }
+                    seen[b] = c.id
                 }
-                seen[b] = c.id
             }
+        }
+        placedTwice(layout, on: nil)
+        let paths = Set(layout.controls.flatMap { $0.pathInputs.keys })
+        for path in paths.sorted(by: { "\($0)" < "\($1)" }) {
+            placedTwice(layout.reading(on: path), on: path)
         }
         return issues
     }

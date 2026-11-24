@@ -54,6 +54,10 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
             let pid = Int32(m[7]) | Int32(m[8]) << 8
             return products.contains(pid) ? pid : nil
         }
+        // Another maker's data: no Nintendo controller, whatever its name
+        // says, so the name is not asked ("XYZ GameCube Adapter" was
+        // connected and held for as long as it was near).
+        if let m = manufacturerData, m.count >= 2, !(m[0] == 0x53 && m[1] == 0x05) { return nil }
         let n = (name ?? "").lowercased()
         if n.contains("joy-con") || n.contains("joycon") {
             if n.contains("(l)") || n.hasSuffix(" l") { return Int32(Switch2USBEnabler.joyConLeftProductID) }
@@ -81,6 +85,17 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         let flags = featureFlags(productID: productID)
         return [[0x0C, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, flags, 0x00, 0x00, 0x00],
                 [0x0C, 0x91, 0x01, 0x04, 0x00, 0x04, 0x00, 0x00, flags, 0x00, 0x00, 0x00]]
+    }
+
+    /// The start-up writes and when each goes, in seconds after the
+    /// characteristics are found: the feature mask, the same flags switched
+    /// on, then the player light. A controller that gets them back to back
+    /// takes the first and drops the rest, and its motion bytes stay zero
+    /// (OZORDI/JoyCon2Mac BLEManager.mm, seen on Joy-Con 2; TheFrano/
+    /// joycon2cpp waits between the two as well).
+    static func startCommands(productID: Int32) -> [(after: TimeInterval, bytes: [UInt8])] {
+        let features = featureCommands(productID: productID)
+        return [(0.5, features[0]), (1.0, features[1]), (1.2, playerOneLightCommand)]
     }
 
     /// The HID report a notification stands for: input report 0x05 with
@@ -113,6 +128,16 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
     /// Peripherals whose link closed before their pad was listed: the
     /// attach hop still on its way to the main actor detaches at once.
     private var closedBeforeAttach: Set<UUID> = []
+    /// Devices that matched by name, were connected and turned out to be no
+    /// Switch 2 controller: not connected again while this search runs.
+    private var refused: Set<UUID> = []
+    /// Where reports go, kept from the first attach so the Bluetooth queue
+    /// reaches the report thread without a turn of the main queue.
+    private var reportSink: RawHIDGamepadService?
+    /// The state the central last told (with the central it came from), and
+    /// whether this preset's search has said its notice. Main actor.
+    private var lastState: (central: ObjectIdentifier, state: CBManagerState)?
+    private var noticed = false
 
     private override init() { super.init() }
 
@@ -129,7 +154,46 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
     func startForPreset() {
         guard !heldByPreset else { return }
         heldByPreset = true
+        noticed = false
         if !UserDefaults.standard.bool(forKey: Self.enabledKey) { apply(true) }
+        // The Settings switch had the search running already: its central
+        // tells its state no second time.
+        sayNotice()
+    }
+
+    /// What the Activity Log is told when Bluetooth cannot look while a
+    /// preset holds the search: the caption in Settings was the only word,
+    /// and a preset started from the menu bar or Siri ran with no
+    /// controller and no reason given. Nil for a state that can look, and
+    /// with no preset holding the search (Settings shows its caption).
+    static func notice(for state: CBManagerState, held: Bool) -> String? {
+        guard held else { return nil }
+        switch state {
+        case .poweredOff: return String(localized: "Bluetooth is off")
+        case .unauthorized: return String(localized: "Bluetooth is not allowed for InputConfig; allow it in System Settings, Privacy & Security, Bluetooth")
+        default: return nil
+        }
+    }
+
+    /// Main actor. Once per preset's search.
+    private func sayNotice() {
+        lock.lock()
+        let current = central.map(ObjectIdentifier.init)
+        lock.unlock()
+        guard !noticed, let last = lastState, last.central == current,
+              let text = Self.notice(for: last.state, held: heldByPreset) else { return }
+        noticed = true
+        ActivityLog.shared.warning("Devices", text)
+    }
+
+    /// From the Bluetooth queue: the state lands on the main actor, where
+    /// `heldByPreset` lives.
+    private func noteState(_ central: CBCentralManager) {
+        let id = ObjectIdentifier(central), state = central.state
+        DispatchQueue.main.async {
+            self.lastState = (id, state)
+            self.sayNotice()
+        }
     }
 
     /// The preset stopped: the search stops too, unless Settings has it on.
@@ -159,9 +223,11 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         }
         let c = central
         let open = links
-        if !on { central = nil; links = [:]; pending = [:]; closedBeforeAttach = [] }
+        if !on { central = nil; links = [:]; pending = [:]; closedBeforeAttach = []; refused = [] }
         lock.unlock()
         guard !on else { return }
+        // The next central tells its own state.
+        lastState = nil
         c?.stopScan()
         for link in open.values {
             c?.cancelPeripheralConnection(link.peripheral)
@@ -226,6 +292,7 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
                 self.lock.lock()
                 let stillLinked = self.links[id]?.generation == generation
                 if stillLinked { self.links[id]?.key = key }
+                if self.reportSink == nil { self.reportSink = RawHIDGamepadService.shared }
                 self.lock.unlock()
                 if !stillLinked {
                     // Closed between the check and the listing.
@@ -261,11 +328,28 @@ final class Switch2BluetoothService: NSObject, @unchecked Sendable {
         }
     }
 
-    private func inject(_ key: UInt64, _ data: Data) {
-        let bytes = [UInt8](Self.report(fromNotification: data))
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated { RawHIDGamepadService.shared.injectExternal(key: key, reportID: 0x05, bytes: bytes) }
-        }
+    /// One notification to the report thread, straight from the Bluetooth
+    /// queue. Through the main queue first, a pad's input waited out every
+    /// stall of the main thread and then arrived in a burst. The order
+    /// holds (this serial queue into the serial report thread), and the
+    /// dispatcher drops a report for a key that is already detached.
+    static func deliver(_ data: Data, key: UInt64, to raw: RawHIDGamepadService) {
+        raw.dispatchOnReportThread(key: key, reportID: 0x05, bytes: [UInt8](report(fromNotification: data)))
+    }
+
+    /// A device that matched by name and is no Switch 2 controller is let
+    /// go of and not connected again while this search runs. Left as it
+    /// was, the link stayed open with no pad listed for as long as the
+    /// device was near.
+    private func refuse(_ peripheral: CBPeripheral) {
+        lock.lock()
+        let link = links.removeValue(forKey: peripheral.identifier)
+        pending.removeValue(forKey: peripheral.identifier)
+        refused.insert(peripheral.identifier)
+        let c = central
+        lock.unlock()
+        if let key = link?.key { detach(key) }
+        c?.cancelPeripheralConnection(peripheral)
     }
 }
 
@@ -285,6 +369,7 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         default:
             break
         }
+        noteState(central)
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
@@ -292,7 +377,8 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
         guard let productID = Self.productID(name: name, manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data) else { return }
         lock.lock()
-        guard enabled, links[peripheral.identifier] == nil, pending[peripheral.identifier] == nil else { lock.unlock(); return }
+        guard enabled, links[peripheral.identifier] == nil, pending[peripheral.identifier] == nil,
+              !refused.contains(peripheral.identifier) else { lock.unlock(); return }
         if let idled = idledAt[peripheral.identifier] {
             let now = Date()
             let woken = idledSeenAt[peripheral.identifier].map { now.timeIntervalSince($0) > 5 } ?? false
@@ -348,6 +434,9 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.nintendoService }) else {
             ActivityLog.shared.warning("Devices", "\(peripheral.name ?? "Switch 2 controller"): no Nintendo service over Bluetooth LE")
+            // Read through with no error: it has none. (With an error the
+            // link is closing by itself, and a real pad is not refused.)
+            if error == nil { refuse(peripheral) }
             return
         }
         peripheral.discoverCharacteristics(nil, for: service)
@@ -356,7 +445,10 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         let characteristics = service.characteristics ?? []
         guard let input = characteristics.first(where: { $0.uuid == Self.inputCharacteristic })
-                ?? characteristics.first(where: { $0.properties.contains(.notify) }) else { return }
+                ?? characteristics.first(where: { $0.properties.contains(.notify) }) else {
+            if error == nil { refuse(peripheral) }
+            return
+        }
         peripheral.setNotifyValue(true, for: input)
         let command = characteristics.first { $0.uuid == Self.commandCharacteristic }
         lock.lock()
@@ -367,10 +459,20 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
         if let command, let link {
             // The feature flags (motion on), then the player light, on the
             // basic command channel, where BlueRetro sends its lights and
-            // flash reads.
+            // flash reads. Each at its own time, and only to the link it
+            // was meant for, still open.
             let type: CBCharacteristicWriteType = command.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-            for bytes in Self.featureCommands(productID: link.productID) + [Self.playerOneLightCommand] {
-                peripheral.writeValue(Data(bytes), for: command, type: type)
+            let id = peripheral.identifier, generation = link.generation
+            for step in Self.startCommands(productID: link.productID) {
+                queue.asyncAfter(deadline: .now() + step.after) { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    let current = self.links[id]
+                    self.lock.unlock()
+                    guard let current, current.generation == generation, let command = current.command,
+                          current.peripheral.state == .connected else { return }
+                    current.peripheral.writeValue(Data(step.bytes), for: command, type: type)
+                }
             }
         }
         if let link { attach(productID: link.productID, name: link.name, id: peripheral.identifier, generation: link.generation) }
@@ -382,9 +484,10 @@ extension Switch2BluetoothService: CBCentralManagerDelegate, CBPeripheralDelegat
               let value = characteristic.value, value.count >= 16 else { return }
         lock.lock()
         let key = links[peripheral.identifier]?.key
+        let raw = reportSink
         lock.unlock()
-        guard let key else { return }
-        inject(key, value)
+        guard let key, let raw else { return }
+        Self.deliver(value, key: key, to: raw)
     }
 }
 

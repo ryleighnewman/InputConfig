@@ -7,12 +7,17 @@ enum RawHIDReportApplier {
     /// not something the user just did. `steam2026` takes the 2026 Steam
     /// Controller's reports, which carry more than state (the service's
     /// handler; the bench passes nil and such reports are dropped).
+    /// `sawGuidePacket`: an Xbox pad over Bluetooth that has sent its Xbox
+    /// button in a report 0x02 (see XboxBluetoothLayout.decode).
+    /// `calibration`: which Switch 2 calibration the report is read through
+    /// (the stored one unless a bench run says otherwise).
     /// Returns true when the report was the pad's own input report and was
     /// applied to it; false when it went elsewhere or was not one.
     @discardableResult
     nonisolated static func apply(data: Data, to pad: RawHIDGamepad, profile: ControllerProfile,
                                   players: [Int: RawHIDGamepad]?, replay: Bool,
-                                  steam2026: ((Data) -> Void)?) -> Bool {
+                                  steam2026: ((Data) -> Void)?, sawGuidePacket: Bool = false,
+                                  calibration: Switch2Calibration.Choice = .stored) -> Bool {
         if profile.layout == .steamController2026 {
             steam2026?(data)
             return false
@@ -43,15 +48,20 @@ enum RawHIDReportApplier {
             // left a button held when the pad was unplugged held for good.
             pad.resetState()
         } else if RawHIDGamepadService.isSwitch2Layout(profile.layout) {
-            var decoded = HIDReportDecoder.decode(report: data, profile: profile)
-            // The pad's flash calibration already centers the sticks; the
-            // learned rest point is the fallback for a pad whose flash was
-            // not read.
-            if Switch2Calibration.current(product: pad.productID) == nil { pad.removeStickRest(&decoded) }
+            var decoded = HIDReportDecoder.decode(report: data, profile: profile, calibration: calibration)
+            // The pad's flash calibration already centers a stick; the
+            // learned rest point is the fallback for a stick whose
+            // calibration was not read. Decided per stick: a read that
+            // brought one stick, or the triggers alone, switched this off
+            // for the whole pad and left the other stick off center and
+            // reading up to 1.2.
+            let rest = HIDReportDecoder.switch2SticksWithoutCalibration(
+                layout: profile.layout, calibration: calibration.resolve(product: pad.productID))
+            pad.removeStickRest(&decoded, first: rest.first, second: rest.second)
             // A GameCube controller for Switch 2 an older preset was made on
             // keeps its B and Y as they were then, so those rows still fire.
-            if profile.layout == .switch2GameCube,
-               HIDDeviceRegistry.keepsLegacyNumbering(vendorID: pad.vendorID, productID: pad.productID) {
+            // The pad holds the answer from attach.
+            if profile.layout == .switch2GameCube, pad.keepsLegacyNumbering {
                 let b = decoded.buttons[1], y = decoded.buttons[3]
                 decoded.buttons[1] = y; decoded.buttons[3] = b
             }
@@ -72,8 +82,14 @@ enum RawHIDReportApplier {
                 pad.updateState(HIDReportDecoder.decode(report: data, profile: profile), pulsing: format.oneShotSlots)
             }
         } else {
-            var decoded = HIDReportDecoder.decode(report: data, profile: profile)
+            var decoded = HIDReportDecoder.decode(report: data, profile: profile, sawGuidePacket: sawGuidePacket)
             processMotion(&decoded, pad: pad)
+            if replay, case .generic = profile.layout {
+                // The saved report may be the last turn of a knob; played
+                // again it would be a turn nobody made. Its buttons and its
+                // other axes still come back.
+                for axis in pad.relativeAxes { decoded.axes.removeValue(forKey: axis) }
+            }
             applyDecoded(decoded, to: pad, profile: profile)
         }
         return true

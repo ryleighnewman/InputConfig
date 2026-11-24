@@ -345,6 +345,9 @@ extension ContentView {
                           isHighlighted: tutorialFeatureSpotlight == kind) {
             presentedDemoKind = kind
         }
+        // The window's body runs for the store, the controllers and the
+        // tour; the 28 cards run again only when their highlight changes.
+        .equatable()
         .modifier(ConditionalSpotlightAnchor(
             active: tutorialFeatureSpotlight == kind,
             id: SpotlightID.welcomeCard))
@@ -356,7 +359,7 @@ extension ContentView {
     /// tiles. Lifted out of `demoCard` because tracking a hover state
     /// requires its own `@State`, and embedding @State inside a
     /// `@ViewBuilder func` doesn't compose well.
-    private struct FeatureCardButton: View {
+    private struct FeatureCardButton: View, Equatable {
         @Environment(\.appReduceMotion) private var appReduceMotion
         let kind: FeatureDemoKind
         let icon: String
@@ -366,6 +369,12 @@ extension ContentView {
         let onTap: () -> Void
         @State private var hovering: Bool = false
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        /// The title, detail and tint are fixed per kind at the one call
+        /// site; onTap only sets the window's state, from any copy.
+        nonisolated static func == (a: Self, b: Self) -> Bool {
+            a.kind == b.kind && a.isHighlighted == b.isHighlighted && a.icon == b.icon
+        }
 
         var body: some View {
             // TimelineView gives us a continuous time stream so the
@@ -380,7 +389,9 @@ extension ContentView {
                                     paused: !isHighlighted || reduceMotion || appReduceMotion)) { context in
                 let pulse: Double = {
                     guard isHighlighted else { return 0 }
-                    if reduceMotion { return 1.0 }
+                    // Either setting: the paused clock left the app's own
+                    // Reduce Motion at whatever strength it stopped on.
+                    if reduceMotion || appReduceMotion { return 1.0 }
                     return (sin(context.date.timeIntervalSinceReferenceDate * 2.4) + 1) / 2
                 }()
                 Button(action: onTap) {
@@ -575,6 +586,7 @@ extension ContentView {
             Self.restoreTourBorrow(original, in: presetStore)
         }
         tutorialPresetSnapshot = nil
+        tutorialDemoID = nil
         tutorialFeatureSpotlight = nil
         HelpGuideWindowController.shared.closeForTour()
         showingMotionCalibrationFromMenu = false
@@ -638,15 +650,38 @@ extension ContentView {
         // hardware plugged in. Cleaned up when the user finishes or
         // skips.
         controllerService.enableTutorialFakeController()
+        tutorialDemoID = Self.tourDemoPick(presetStore.presets, running: presetStore.activePresetId)?.id
         tutorialState.start(steps: tutorialSteps)
     }
 
     /// Pick the first non-empty preset we can find. Used by the tutorial
     /// to land the user on something meaningful even if their first
-    /// preset is empty.
+    /// preset is empty. The one chosen as the tour started, while it lasts.
     private func tutorialDemoPreset() -> Preset? {
-        return presetStore.presets.first(where: { !$0.joysticks.isEmpty })
-            ?? presetStore.presets.first
+        if let id = tutorialDemoID, let chosen = presetStore.presets.first(where: { $0.id == id }) {
+            return chosen
+        }
+        return Self.tourDemoPick(presetStore.presets, running: presetStore.activePresetId)
+    }
+
+    /// The tour's demo preset: the first with groups that is not running,
+    /// then the first with groups, then the first. The tour sets its demo's
+    /// device kind, and on the running preset that save re-applied it in
+    /// the middle of use.
+    static func tourDemoPick(_ presets: [Preset], running: UUID?) -> Preset? {
+        presets.first(where: { !$0.joysticks.isEmpty && $0.id != running })
+            ?? presets.first(where: { !$0.joysticks.isEmpty })
+            ?? presets.first
+    }
+
+    /// Whether the tour may set a group's device kind on a preset: not when
+    /// the group already has it (nothing to save or put back), and never on
+    /// the running preset, where each save re-applies it and lets go of
+    /// what is held.
+    static func tourMayBorrow(_ preset: Preset, slot: Int, kind: SlotInputKind, running: UUID?) -> Bool {
+        if preset.id == running { return false }
+        if slot < preset.joysticks.count, preset.joysticks[slot].inputKind == kind { return false }
+        return true
     }
 
     /// Pull the Minecraft seeded preset so the interactive walkthrough
@@ -670,8 +705,8 @@ extension ContentView {
     /// the store. Used by the Live Visualizer step to flip the demo
     /// preset's first slot into controller mode so the visualizer
     /// shows controller widgets even when no controller is connected.
-    /// Idempotent - calling with the same kind a second time is a
-    /// no-op write (still touches modifiedAt but harmless).
+    /// Idempotent: calling with the same kind a second time writes
+    /// nothing.
     /// Runs an editor step's action in the tour's editor, opening it first
     /// when Back arrived from a step that had closed it ("We opened the
     /// first row's Options" with no editor open).
@@ -690,6 +725,8 @@ extension ContentView {
                                          kind: SlotInputKind) {
         guard var updated = presetStore.presets.first(where: { $0.id == presetID })
             else { return }
+        guard Self.tourMayBorrow(updated, slot: slot, kind: kind, running: presetStore.activePresetId)
+            else { return }
         // Remembered once, so the tour's change is undone when it ends: it
         // used to rewrite the user's own preset for good.
         if tutorialPresetSnapshot == nil {
@@ -703,7 +740,8 @@ extension ContentView {
         }
         updated.joysticks[slot].inputKind = kind
         updated.modifiedAt = Date()
-        presetStore.savePreset(updated)
+        // No kept version for the tour's own change, as its undo takes none.
+        presetStore.savePreset(updated, skipSnapshot: true)
     }
 
     /// Sequence of guided steps. Each action mutates ContentView state so
@@ -820,7 +858,10 @@ extension ContentView {
                     // only way to drive it from outside.
                     if let firstID = tutorialDemoPreset()?
                         .joysticks.first?.bindings.first?.id {
+                        // Not once the person moved on.
+                        let at = TutorialState.shared.stepIndex
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            guard TutorialState.shared.isActive, TutorialState.shared.stepIndex == at else { return }
                             NotificationCenter.default.post(
                                 name: .inputConfigExpandBindingOptions,
                                 object: firstID)
@@ -976,8 +1017,12 @@ extension ContentView {
                     // Brief beat so a previously-open sheet has time to
                     // dismiss before we present the next one - otherwise
                     // SwiftUI quietly skips the second presentation.
+                    // Only while the tour is still on this step: a fast
+                    // Next or Back put the sheet up over the step after.
+                    let at = TutorialState.shared.stepIndex
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        if TutorialState.shared.isActive { showingMotionCalibrationFromMenu = true }
+                        guard TutorialState.shared.isActive, TutorialState.shared.stepIndex == at else { return }
+                        showingMotionCalibrationFromMenu = true
                     }
                 }
             ),
@@ -1171,7 +1216,10 @@ extension ContentView {
                         name: .inputConfigScrollToFirstBinding, object: "top")
                     if let firstID = tutorialMinecraftPreset()?
                         .joysticks.first?.bindings.first?.id {
+                        // Not once the person moved on.
+                        let at = TutorialState.shared.stepIndex
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                            guard TutorialState.shared.isActive, TutorialState.shared.stepIndex == at else { return }
                             NotificationCenter.default.post(
                                 name: .inputConfigExpandBindingOptions,
                                 object: firstID)
@@ -1680,6 +1728,8 @@ extension ContentView {
     }
 
     func sharePreset(_ preset: Preset) {
+        // With the name, tag and notes still being typed, as Export does.
+        let preset = committed(preset)
         // A copy made for sharing, named after the preset: the library file
         // is named by its UUID and carries this Mac's state (running flag,
         // folder, order, auto-launch paths, apps that switch to it).

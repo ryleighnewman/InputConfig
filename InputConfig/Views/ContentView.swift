@@ -200,7 +200,7 @@ struct ContentView: View {
     nonisolated static let lastSeenVersionKey = "InputConfig.lastSeenVersion"
     #endif
     @AppStorage(ContentView.lastSeenVersionKey) private var lastSeenVersion: String = ""
-    @AppStorage(SimpleLauncherView.enabledKey) private var simpleView = false
+    @AppStorage(SimpleLauncherView.enabledKey) var simpleView = false
     /// Version the user last saw notes for, so the popup can list every
     /// release since. nil shows only the current release.
     @State private var whatsNewSince: String?
@@ -224,7 +224,15 @@ struct ContentView: View {
     @State var showingImportSheet = false
     @State var presentedDemoKind: FeatureDemoKind?
     @State var showingStats: Bool = false
-    var canPresentSheet: Bool { editingPreset == nil && !anotherSheetIsUp }
+    /// Also not under a sheet the flags do not count: the print panel is
+    /// attached to the library window by AppKit, with no flag of ours.
+    var canPresentSheet: Bool {
+        Self.canPresent(editorOpen: editingPreset != nil, flagged: anotherSheetIsUp,
+                        sheetAttached: MenuBarController.mainWindow?.attachedSheet != nil)
+    }
+    nonisolated static func canPresent(editorOpen: Bool, flagged: Bool, sheetAttached: Bool) -> Bool {
+        !editorOpen && !flagged && !sheetAttached
+    }
 
     /// A sheet asked for from a menu or the menu bar: only when none is up.
     private func requestSheet(_ kind: MenuBarController.PendingMainAction) {
@@ -276,6 +284,9 @@ struct ContentView: View {
             alert.runModal()
             return
         }
+        // The tour points at the library, which Simple View covers and
+        // disables: it comes off first.
+        if simpleView { simpleView = false }
         startTutorial()
     }
 
@@ -402,6 +413,9 @@ struct ContentView: View {
     @State var folderPendingDelete: UUID?
     /// The preset the Quick Tour borrowed, as it was before, to put back.
     @State var tutorialPresetSnapshot: Preset?
+    /// The preset the Quick Tour shows, chosen once as it starts, so a
+    /// preset started or stopped mid-tour does not move the tour to another.
+    @State var tutorialDemoID: UUID?
     @Environment(\.openWindow) private var openWindow
     /// Whether outputs were already paused when the editor opened.
     @State var outputsPausedBeforeEdit = false
@@ -586,7 +600,7 @@ struct ContentView: View {
             Text("\"\(preset.shownName)\" will be moved to the Trash at the bottom of the sidebar. Restore it from there; the Trash keeps the last 60 presets.")
         }
         .modifier(OpenAboutObserver(tab: $settingsSheetTab,
-                                    canPresent: { editingPreset == nil && !anotherSheetIsUp }))
+                                    canPresent: { canPresentSheet }))
         .modifier(QuitSheetCloser(close: closeSheetsForQuit))
         .modifier(TutorialPlumbing(
             state: tutorialState,
@@ -602,6 +616,13 @@ struct ContentView: View {
             requestSheet(.smartMaker)
         }
         .onReceive(NotificationCenter.default.publisher(for: .inputConfigToggleActivePreset)) { _ in
+            // Not under Simple View: the selection is hidden there, and the
+            // key started or stopped a preset nobody could see.
+            guard !simpleView else {
+                NSSound.beep()
+                AccessibilityNotification.Announcement(String(localized: "Turn off Simple View in the View menu first")).post()
+                return
+            }
             // Toggle the sidebar-selected preset, if any.
             if let pid = selectedPresetId,
                let preset = presetStore.presets.first(where: { $0.id == pid }) {
@@ -677,7 +698,14 @@ struct ContentView: View {
             // window appears. Over another sheet the editor could not show,
             // and the running preset's outputs would pause behind it.
             let wanted = MenuBarController.takePendingMainAction(.newPreset)
-            guard wanted, editingPreset == nil, !anotherSheetIsUp else { return }
+            guard wanted, canPresentSheet else { return }
+            // Nor under Simple View, which covers the library the new
+            // preset would land in.
+            guard !simpleView else {
+                NSSound.beep()
+                AccessibilityNotification.Announcement(String(localized: "Turn off Simple View in the View menu first")).post()
+                return
+            }
             createNewPreset()
         }
         .onReceive(NotificationCenter.default.publisher(
@@ -748,7 +776,7 @@ struct ContentView: View {
             if MenuBarController.takePendingMainAction(.about), !showingWhatsNew { settingsSheetTab = .about }
             takePendingSheets()
             var openedEditor = false
-            if MenuBarController.takePendingMainAction(.newPreset), editingPreset == nil, !anotherSheetIsUp {
+            if MenuBarController.takePendingMainAction(.newPreset), editingPreset == nil, !anotherSheetIsUp, !simpleView {
                 createNewPreset()
                 openedEditor = true
             }
@@ -932,12 +960,24 @@ struct ContentView: View {
     @State var flashingGroupID: UUID?
     /// The folder header last clicked. Drawn inside the folder's own outline;
     /// the system selection pill sat at a different inset and radius and cut
-    /// across the outline.
-    @State var selectedFolderID: UUID?
+    /// across the outline. Kept in `sidebarState` (see SidebarState).
+    var selectedFolderID: UUID? {
+        get { sidebarState.selectedFolderID }
+        // Only a real change: an Observable notifies on every set, and each
+        // preset click clears it.
+        nonmutating set { if sidebarState.selectedFolderID != newValue { sidebarState.selectedFolderID = newValue } }
+    }
     /// The preset or folder the Move to Folder sheet is moving.
     @State var sidebarMoveTarget: SidebarMoveTarget?
-    /// The sidebar's search field.
-    @State var sidebarQuery = ""
+    /// The sidebar's search field. Kept in `sidebarState` (see SidebarState).
+    var sidebarQuery: String {
+        get { sidebarState.query }
+        nonmutating set { if sidebarState.query != newValue { sidebarState.query = newValue } }
+    }
+    /// For the search field, which takes a Binding.
+    var sidebarQueryBinding: Binding<String> { Bindable(sidebarState).query }
+    /// The search text and the highlighted folder; read only in the sidebar.
+    @State var sidebarState = SidebarState()
     /// Put Back from Trash, the keyboard path to one Trash entry.
     @State var showingTrashSheet = false
     /// Every folder as a path, for the rows' Move to Group menus; worked
@@ -1591,6 +1631,17 @@ struct FolderOutlineSegment: View {
 }
 
 
+/// The sidebar's search text and highlighted folder. As State on ContentView
+/// a change of either (each keystroke in the search field, a folder click)
+/// re-ran the whole window body and the preset page beside the list, since
+/// the sidebar's scope is made by that body. Observable, and read only inside
+/// the sidebar's SelectionScope, a change re-runs that scope alone.
+@MainActor @Observable
+final class SidebarState {
+    var query = ""
+    var selectedFolderID: UUID?
+}
+
 /// The preset selected in the sidebar (ContentView.selectedPresetId).
 /// Observable, so only a view that reads `id` re-runs when it changes.
 @MainActor @Observable
@@ -2210,11 +2261,15 @@ enum SidebarSmoothScroll {
 /// did nothing while the arrow keys still moved it. These views take no clicks
 /// at all; one local monitor sees the press on its way to the list and passes
 /// it on. The action runs before the list selects, so it reads the row as it
-/// was.
+/// was. Where two of these views lie under one press (a row and a control
+/// inside it), the smaller runs first: the row's own action selects the row,
+/// and the inner one has to read it before that.
 @MainActor
 enum SidebarClicks {
     final class Target: NSView {
         var action: () -> Void = {}
+        /// Whether it sits in the library window, which Simple View covers.
+        var library = true
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -2247,19 +2302,43 @@ enum SidebarClicks {
     /// anywhere near fired it.
     static func fire(at point: NSPoint, in window: NSWindow?) {
         guard let window, window.attachedSheet == nil else { return }
-        let hit = targets.allObjects.filter { $0.window === window && $0.bounds.intersection($0.visibleRect).contains($0.convert(point, from: nil)) }
-        hit.forEach { $0.action() }
+        // Read where the switch is stored: the monitor is app wide and
+        // outlives the view that owns the switch.
+        let simple = UserDefaults.standard.bool(forKey: SimpleLauncherView.enabledKey)
+        let hit = targets.allObjects.filter { takesPress(library: $0.library, simpleView: simple) && $0.window === window && $0.bounds.intersection($0.visibleRect).contains($0.convert(point, from: nil)) }
+        innerFirst(hit).forEach { $0.action() }
+    }
+
+    /// Whether a target answers a press. Simple View lays its cards over the
+    /// sidebar, and the rows under them, disabled and hidden, still ran
+    /// their actions: a press on a card moved the hidden selection. Help has
+    /// its own window and keeps working.
+    nonisolated static func takesPress(library: Bool, simpleView: Bool) -> Bool {
+        !(library && simpleView)
+    }
+
+    /// The targets under one press, smallest first. The table that holds
+    /// them keeps no order, and a row's action ran before the action of the
+    /// description inside it, which then read the row as already selected.
+    static func innerFirst(_ hit: [Target]) -> [Target] {
+        hit.sorted { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
     }
 }
 
 struct SidebarClickTarget: NSViewRepresentable {
+    /// False outside the library window (Help), where Simple View covers nothing.
+    var library = true
     let action: () -> Void
     func makeNSView(context: Context) -> SidebarClicks.Target {
         let v = SidebarClicks.Target()
+        v.library = library
         v.action = action
         return v
     }
-    func updateNSView(_ nsView: SidebarClicks.Target, context: Context) { nsView.action = action }
+    func updateNSView(_ nsView: SidebarClicks.Target, context: Context) {
+        nsView.library = library
+        nsView.action = action
+    }
 }
 
 /// The anchor a preset row carries so the sidebar can find it.

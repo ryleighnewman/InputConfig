@@ -128,6 +128,13 @@ struct RegionMapView: View {
     private var cursorService: CursorRegionService { CursorRegionService.shared }
     @Environment(\.visualizerSuspended) private var suspended
     @State private var tracking = false
+    /// The regions the live pointer is inside, kept by a small view that
+    /// follows the pointer and written only when the set changes: the map
+    /// redraws when the pointer enters or leaves a region, not on each move.
+    @State private var pointerInside: Set<UUID> = []
+
+    /// The map follows the real pointer now (not under the editor).
+    private var followsPointer: Bool { liveCursor && !suspended }
 
     private func setTracking(_ on: Bool) {
         guard on != tracking else { return }
@@ -202,8 +209,7 @@ struct RegionMapView: View {
 
     @ViewBuilder
     private var mapBody: some View {
-        let hot = inside
-        let point = livePoint
+        let hot = followsPointer ? pointerInside : inside
         VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
                 if !title.isEmpty {
@@ -290,13 +296,11 @@ struct RegionMapView: View {
                     }
 
                     // The live point, only while the pointer is on this display.
-                    if pointerIsHere {
-                        Circle()
-                            .fill(Color.white.opacity(0.9))
-                            .frame(width: 8, height: 8)
-                            .shadow(color: .black.opacity(0.5), radius: 2)
-                            .position(x: min(max(0, point.x), 1) * w,
-                                      y: min(max(0, point.y), 1) * h)
+                    // Following the pointer, it alone redraws on each move.
+                    if followsPointer {
+                        LivePointerReader { pointDot(w: w, h: h) }
+                    } else {
+                        pointDot(w: w, h: h)
                     }
                 }
                 .frame(width: w, height: h)
@@ -318,7 +322,38 @@ struct RegionMapView: View {
                                 : String(localized: "\(pointLabel) inside \(regions.filter { hot.contains($0.id) }.map(\.shownName).joined(separator: ", "))"))
         }
         .padding(.top, 4)
+        .background {
+            if followsPointer {
+                LivePointerReader {
+                    Color.clear
+                        .onChange(of: inside, initial: true) { _, now in
+                            if pointerInside != now { pointerInside = now }
+                        }
+                }
+            }
+        }
     }
+
+    @ViewBuilder
+    private func pointDot(w: CGFloat, h: CGFloat) -> some View {
+        if pointerIsHere {
+            let point = livePoint
+            Circle()
+                .fill(Color.white.opacity(0.9))
+                .frame(width: 8, height: 8)
+                .shadow(color: .black.opacity(0.5), radius: 2)
+                .position(x: min(max(0, point.x), 1) * w,
+                          y: min(max(0, point.y), 1) * h)
+        }
+    }
+}
+
+/// Re-renders only its content as the pointer moves, so a screen map's dot
+/// and its lit-region check follow the pointer without the map around them.
+private struct LivePointerReader<Content: View>: View {
+    @ObservedObject private var pointer = CursorRegionService.shared.livePointer
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
 }
 
 
@@ -535,7 +570,7 @@ struct ScreenVoiceStatusView: View {
             readings = ScreenTextService.shared.readings
             lastHeard = VoicePhraseService.shared.lastHeard
             transcript = VoicePhraseService.shared.transcript
-            listening = VoicePhraseService.shared.listening
+            listening = VoicePhraseService.shared.listening && !VoicePhraseService.shared.captureSilent
             problem = VoicePhraseService.shared.problem
             screenRunning = ScreenPixelService.shared.isTracking || ScreenTextService.shared.isTracking
             voiceRunning = VoicePhraseService.shared.isTracking

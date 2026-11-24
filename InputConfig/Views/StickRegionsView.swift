@@ -76,19 +76,18 @@ struct StickRegionsView: View {
     @FocusState private var renameFocused: Bool
     @State private var renamingText: String = ""
 
-    /// Live stick position, polled at 30 Hz so the binding-editor
-    /// preview can show where the connected controller's stick is
-    /// sitting right now. Only updates while at least one controller
-    /// is connected; otherwise stays at (0.5, 0.5) i.e. center.
-    @State private var liveStickPosition: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    /// Whether a controller's reading reaches the drawing. It changes
+    /// rarely, so it stays on the card.
     @State private var liveStickActive: Bool = false
-    /// The shown axis's reading as a fraction of its travel, for bands.
-    @State private var liveFraction: Double = 0
     @State private var pollTimer: Timer?
-    /// The live stick in the app's axes, and its recent path, for the plot.
-    @State private var liveX: Float = 0
-    @State private var liveY: Float = 0
-    @State private var trail: [(x: Float, y: Float)] = []
+    /// The live stick or axis and the stick's recent path, polled at 60 Hz.
+    /// Held, not observed: as the card's own state, each sample ran the
+    /// whole card and, in the editor, laid its Zones section out again.
+    /// Only the views drawn over fixed-size room watch it.
+    @State private var live = StickRegionLive()
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     private static let maxRegions = 16
 
@@ -160,7 +159,7 @@ struct StickRegionsView: View {
         .onChange(of: regionKey) { _, _ in
             selectedRegionID = nil; renamingRegionID = nil
             drawingNewRegion = false; dragStart = nil; dragCurrent = nil
-            trail.removeAll()
+            live.trail.removeAll()
         }
     }
 
@@ -293,14 +292,31 @@ struct StickRegionsView: View {
         }
     }
 
-    /// The live readings, as the Adjust live sheet shows them.
+    /// The live readings, as the Adjust live sheet shows them. Each is drawn
+    /// over unseen room for its widest value, so a reading that changes
+    /// many times a second never lays the card out again.
     @ViewBuilder
     private var statBlocks: some View {
-        statBlock("Current", DeadzoneCalibrationView.percent(liveAmount))
-        statBlock("In region", occupiedRegion?.shownName ?? String(localized: "None"))
+        let regions = svc.regions(forStick: regionKey)
+        Self.statBlock("Current", DeadzoneCalibrationView.percent(1))
+            .hidden()
+            .accessibilityHidden(true)
+            .overlay(alignment: .leading) {
+                StickRegionLiveStat(live: live, region: false, regions: regions, bands: showsBands, active: liveStickActive)
+            }
+        ZStack(alignment: .leading) {
+            ForEach(Array(([String(localized: "None")] + regions.map(\.shownName)).enumerated()), id: \.offset) { _, name in
+                Self.statBlock("In region", name)
+            }
+        }
+        .hidden()
+        .accessibilityHidden(true)
+        .overlay(alignment: .leading) {
+            StickRegionLiveStat(live: live, region: true, regions: regions, bands: showsBands, active: liveStickActive)
+        }
     }
 
-    private func statBlock(_ label: LocalizedStringKey, _ value: String) -> some View {
+    fileprivate static func statBlock(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.caption2)
@@ -314,20 +330,13 @@ struct StickRegionsView: View {
 
     private var resetTrailButton: some View {
         Button {
-            trail.removeAll()
+            live.trail.removeAll()
         } label: {
             Label("Reset Trail", systemImage: "arrow.counterclockwise")
                 .font(.caption)
         }
         .buttonStyle(.solidSecondaryCompact)
         .controlSize(.small)
-    }
-
-    /// How far the stick is pushed, or the axis pulled, 0 to 1.
-    private var liveAmount: Double {
-        guard liveStickActive else { return 0 }
-        if showsBands { return liveFraction }
-        return min(1, Double(hypot(liveX, liveY)))
     }
 
     private var footer: some View {
@@ -348,28 +357,24 @@ struct StickRegionsView: View {
 
     /// The stick, drawn exactly as the Adjust live sheet draws it, with
     /// this preset's regions on it and the drawing layer on top.
+    /// The live plot sits in an overlay on its own square, so its 60 Hz
+    /// redraws stay inside it.
     private var regionsPanel: some View {
         let size = plotSize
         let regions = svc.regions(forStick: regionKey)
-        let inside = occupiedRegion?.id
-        return StickPlot(size: size, x: liveX, y: liveY, trail: trail, showsDot: liveStickActive,
-                         deadzones: rowDeadzones, fullPush: rowFullPush, zones: regions,
-                         lit: { $0.id == inside }, selected: selectedRegionID) {
-            drawingLayer(size: CGSize(width: size, height: size), regions: regions)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Stick region canvas")
-        .accessibilityValue(panelAccessibilityValue)
-        .accessibilityHint("The stick's travel, the center at rest. Contains the defined regions and a live indicator of the connected stick's position.")
-        // Non-drag path so keyboard and switch users can create and
-        // remove regions without a pointer drag.
-        .accessibilityAction(named: Text("Add region in the center")) {
-            addCenteredRegion()
-        }
-        .accessibilityAction(named: Text("Delete selected region")) {
-            // Asked first, as the row's Delete is.
-            if let id = selectedRegionID { pendingDeleteRegionID = id }
-        }
+        let layer = drawingLayer(size: CGSize(width: size, height: size), regions: regions)
+        return Color.clear
+            .frame(width: size, height: size)
+            .overlay {
+                StickRegionLivePlot(live: live, size: size, active: liveStickActive, regions: regions,
+                                    deadzones: rowDeadzones, fullPush: rowFullPush, selected: selectedRegionID,
+                                    // Non-drag path so keyboard and switch users can create and
+                                    // remove regions without a pointer drag.
+                                    addCentered: { addCenteredRegion() },
+                                    // Asked first, as the row's Delete is.
+                                    deleteSelected: { if let id = selectedRegionID { pendingDeleteRegionID = id } },
+                                    layer: layer)
+            }
     }
 
     private var plotSize: CGFloat { 260 * scale }
@@ -673,7 +678,10 @@ struct StickRegionsView: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(Color.accentColor)
+                .opacity(isSelected ? 0.15 : 0)
+                // The highlight fades to the picked row instead of jumping.
+                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isSelected)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -905,30 +913,30 @@ struct StickRegionsView: View {
         // reads itself (not through Game Controller) shows here too, with
         // the rest the engine removes already removed.
         guard let state = controllerService.peekControllerState(at: slot), !state.axes.isEmpty else {
-            liveStickActive = false
+            if liveStickActive { liveStickActive = false }
             return
         }
         if showsBands {
-            guard let v = state.axes[bandAxis] else { liveStickActive = false; return }
+            guard let v = state.axes[bandAxis] else { if liveStickActive { liveStickActive = false }; return }
             let oneWay = StickRegionService.axisIsOneWay(bandAxis)
                 || controllerService.axisReadsOneWay(slot: slot, index: bandAxis)
-            liveFraction = StickRegionService.travelFraction(axis: bandAxis, value: v, oneWay: oneWay)
-            liveStickActive = true
+            let fraction = StickRegionService.travelFraction(axis: bandAxis, value: v, oneWay: oneWay)
+            // Published only when it moved: a trigger at rest redraws nothing.
+            if live.fraction != fraction { live.fraction = fraction }
+            if !liveStickActive { liveStickActive = true }
             return
         }
         // The app reads stick Y with down positive, the canvas's own way.
         let fx = state.axes[selectedStick * 2] ?? 0, fy = state.axes[selectedStick * 2 + 1] ?? 0
         // A resting stick's jitter redrew the whole card 60 times a second.
-        guard !liveStickActive || abs(fx - liveX) > 0.002 || abs(fy - liveY) > 0.002 else { return }
-        let x = Double(fx), y = Double(fy)
-        liveStickPosition = CGPoint(x: (x + 1.0) / 2.0, y: (y + 1.0) / 2.0)
-        liveX = fx; liveY = fy
-        liveStickActive = true
+        guard !liveStickActive || abs(fx - live.x) > 0.002 || abs(fy - live.y) > 0.002 else { return }
+        live.x = fx; live.y = fy
+        if !liveStickActive { liveStickActive = true }
         // The trail the sheet keeps: only past half the smallest deadzone, so
         // the resting stick does not pile dots in the middle.
         if hypot(fx, fy) > Float(rowDeadzones.first ?? 0.25) * 0.5 {
-            trail.append((x: fx, y: fy))
-            if trail.count > 200 { trail.removeFirst(trail.count - 200) }
+            live.trail.append((x: fx, y: fy))
+            if live.trail.count > 200 { live.trail.removeFirst(live.trail.count - 200) }
         }
     }
 
@@ -947,55 +955,6 @@ struct StickRegionsView: View {
             return String(localized: "Ring from \(pct(ring.inner)) to \(pct(ring.outer)) percent of the way out, from \(Int(ring.start.rounded())) to \(Int((ring.start + ring.span).rounded()) % 360) degrees, where 0 is right and 90 is up.")
         }
         return String(localized: "Horizontal \(pct(region.minX)) to \(pct(region.maxX)) percent, vertical \(pct(region.minY)) to \(pct(region.maxY)) percent, where 0 is left and top.")
-    }
-
-    /// Value spoken for the whole canvas: how many regions it holds, plus
-    /// which named region the live stick currently occupies (if any).
-    private var panelAccessibilityValue: String {
-        let regions = svc.regions(forStick: regionKey)
-        var parts: [String] = []
-        if regions.isEmpty {
-            parts.append(String(localized: "No regions defined"))
-        } else {
-            parts.append(regions.count == 1 ? String(localized: "1 region defined") : String(localized: "\(regions.count) regions defined"))
-        }
-        parts.append(stickAccessibilityValue)
-        return parts.joined(separator: ". ")
-    }
-
-    /// Value describing the live stick: no controller, at center, or the
-    /// name of the region it is currently inside.
-    private var stickAccessibilityValue: String {
-        guard liveStickActive else { return String(localized: "No controller connected") }
-        // A trigger or axis travel bar is no stick: it said "Stick centered"
-        // at any pull no band covered.
-        if showsBands {
-            return occupiedRegion.map { String(localized: "In band \($0.shownName)") }
-                ?? String(localized: "Pulled \(DeadzoneCalibrationView.percent(liveFraction)), outside all bands")
-        }
-        if let occupied = occupiedRegion {
-            return String(localized: "Stick in region \(occupied.shownName)")
-        }
-        let dx = liveStickPosition.x - 0.5
-        let dy = liveStickPosition.y - 0.5
-        if abs(dx) < 0.03 && abs(dy) < 0.03 {
-            return String(localized: "Stick centered")
-        }
-        return String(localized: "Stick outside all regions")
-    }
-
-    /// The region the live stick position currently falls inside, if any.
-    /// Uses the same 0...1 canvas convention as `liveStickPosition`.
-    private var occupiedRegion: TouchpadRegion? {
-        guard liveStickActive else { return nil }
-        if showsBands {
-            return svc.regions(forStick: regionKey).first { $0.containsTravel(liveFraction) }
-        }
-        // The same test the engine makes, so a ring and a shared edge read
-        // here as they fire.
-        let x = liveStickPosition.x
-        let y = liveStickPosition.y
-        return svc.regions(forStick: regionKey).first { $0.contains(normalizedX: x, y: y) }
     }
 
     /// Non-drag region creation for keyboard and switch users. Adds a
@@ -1025,32 +984,34 @@ struct StickRegionsView: View {
 
     /// One axis's travel, drawn exactly as the Adjust live sheet draws a
     /// trigger: the bar fills with the pull, the low end at the bottom.
+    /// The live gauge sits in an overlay on the gauge's own frame (the bar
+    /// and its label column), so its 60 Hz redraws stay inside it.
     private var bandPanel: some View {
         let h = gaugeHeight, w: CGFloat = 90
         let regions = svc.regions(forStick: regionKey)
-        let inside = occupiedRegion?.id
         let trigger = bandAxis == 4 || bandAxis == 5
         let pct = DeadzoneCalibrationView.percent
-        var labels: [(color: Color, text: String)] = [
+        var above: [(color: Color, text: String)] = [
             (.secondary, trigger ? String(localized: "\(pct(1)) Top", comment: "The top of the deadzone bar, 100%")
                                  : "\(pct(1)) \(bandEnds.high)")]
-        if rowFullPush < 0.99 { labels.append((.green, String(localized: "Full push at \(pct(rowFullPush))"))) }
-        if let dz = rowDeadzones.first { labels.append((.red, String(localized: "Deadzone \(pct(dz))"))) }
-        labels.append((.accentColor, String(localized: "Current \(pct(liveAmount))")))
-        labels.append((.secondary, trigger ? String(localized: "\(pct(0)) Rest", comment: "The bottom of the deadzone bar, 0%, the stick at rest")
-                                           : "\(pct(0)) \(bandEnds.low)"))
-        return TriggerGauge(width: w, height: h, pulled: liveAmount, deadzones: rowDeadzones, fullPush: rowFullPush,
-                            bands: regions, lit: { $0.id == inside }, selected: selectedRegionID, labels: labels) {
-            drawingLayer(size: CGSize(width: w, height: h), regions: regions)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Travel bar for \(StickRegionService.axisDisplayName(bandAxis))")
-        .accessibilityValue(panelAccessibilityValue)
-        .accessibilityHint("The low end of the travel is at the bottom. Contains the bands and a line at the axis's live reading.")
-        .accessibilityAction(named: Text("Add region in the center")) { addCenteredRegion() }
-        .accessibilityAction(named: Text("Delete selected region")) {
-            if let id = selectedRegionID { pendingDeleteRegionID = id }
-        }
+        if rowFullPush < 0.99 { above.append((.green, String(localized: "Full push at \(pct(rowFullPush))"))) }
+        if let dz = rowDeadzones.first { above.append((.red, String(localized: "Deadzone \(pct(dz))"))) }
+        // The live Current line goes between these, drawn by the gauge view.
+        var below: [(color: Color, text: String)] = []
+        below.append((.secondary, trigger ? String(localized: "\(pct(0)) Rest", comment: "The bottom of the deadzone bar, 0%, the stick at rest")
+                                          : "\(pct(0)) \(bandEnds.low)"))
+        let layer = drawingLayer(size: CGSize(width: w, height: h), regions: regions)
+        // TriggerGauge's own size: the bar, its 16 point gap, the label column.
+        return Color.clear
+            .frame(width: w + 16 + 110 * max(1, textScale), height: h)
+            .overlay {
+                StickRegionLiveGauge(live: live, width: w, height: h, active: liveStickActive, regions: regions,
+                                     deadzones: rowDeadzones, fullPush: rowFullPush, selected: selectedRegionID,
+                                     above: above, below: below, axisName: StickRegionService.axisDisplayName(bandAxis),
+                                     addCentered: { addCenteredRegion() },
+                                     deleteSelected: { if let id = selectedRegionID { pendingDeleteRegionID = id } },
+                                     layer: layer)
+            }
     }
 
     private func bandExtentDescription(_ region: TouchpadRegion) -> String {
@@ -1401,14 +1362,18 @@ struct StickGestureRecorder: View {
 
     private func tick() {
         guard let state = controllerService.peekControllerState(at: slot), !state.axes.isEmpty else {
-            hasPad = false; return
+            if hasPad { hasPad = false }
+            return
         }
-        hasPad = true
+        if !hasPad { hasPad = true }
         var x = Double(state.axes[stick == 1 ? 2 : 0] ?? 0)
         var y = Double(state.axes[stick == 1 ? 3 : 1] ?? 0)
         guard x.isFinite, y.isFinite else { return }
         if inverted { x = -x; y = -y }
-        point = CGPoint(x: (max(-1, min(1, x)) + 1) / 2, y: (max(-1, min(1, y)) + 1) / 2)
+        // Written only when the dot would move: every tick of a stick at
+        // rest ran the whole sheet again.
+        let next = CGPoint(x: (max(-1, min(1, x)) + 1) / 2, y: (max(-1, min(1, y)) + 1) / 2)
+        if abs(next.x - point.x) > 0.001 || abs(next.y - point.y) > 0.001 { point = next }
         let now = CACurrentMediaTime()
         if !steps.isEmpty, !out, !finished, now - lastFlickAt > quietEnd {
             finishRecording()
@@ -1764,4 +1729,159 @@ extension EnvironmentValues {
 func regionEditorLayout(compact: Bool) -> AnyLayout {
     compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 28))
+}
+
+// MARK: - The zone editor's live views
+//
+// The 60 Hz reading lives on an object of its own that the card holds but
+// does not watch. The plot, the gauge and the two readings watch it, each
+// drawn in an overlay on room of a fixed size: an overlay takes no part in
+// its parent's layout, so a moving stick redraws them and nothing else.
+
+/// The live stick or axis reading of the zone editor, and the stick's trail.
+@MainActor
+private final class StickRegionLive: ObservableObject {
+    /// The live stick in the app's axes (down positive).
+    @Published var x: Float = 0
+    @Published var y: Float = 0
+    /// The shown axis's reading as a fraction of its travel, for bands.
+    @Published var fraction: Double = 0
+    @Published var trail: [(x: Float, y: Float)] = []
+
+    /// How far the stick is pushed, or the axis pulled, 0 to 1.
+    func amount(bands: Bool, active: Bool) -> Double {
+        guard active else { return 0 }
+        if bands { return fraction }
+        return min(1, Double(hypot(x, y)))
+    }
+
+    /// The region the live reading falls inside, if any: the same test the
+    /// engine makes, so a ring and a shared edge read here as they fire.
+    /// The stick in the canvas's 0...1 convention, y down.
+    func occupied(_ regions: [TouchpadRegion], bands: Bool, active: Bool) -> TouchpadRegion? {
+        guard active else { return nil }
+        if bands { return regions.first { $0.containsTravel(fraction) } }
+        let px = (Double(x) + 1.0) / 2.0, py = (Double(y) + 1.0) / 2.0
+        return regions.first { $0.contains(normalizedX: px, y: py) }
+    }
+
+    /// Value spoken for the whole canvas: how many regions it holds, plus
+    /// which named region the live stick currently occupies (if any).
+    func panelValue(_ regions: [TouchpadRegion], bands: Bool, active: Bool) -> String {
+        var parts: [String] = []
+        if regions.isEmpty {
+            parts.append(String(localized: "No regions defined"))
+        } else {
+            parts.append(regions.count == 1 ? String(localized: "1 region defined") : String(localized: "\(regions.count) regions defined"))
+        }
+        parts.append(stickValue(regions, bands: bands, active: active))
+        return parts.joined(separator: ". ")
+    }
+
+    /// Value describing the live stick: no controller, at center, or the
+    /// name of the region it is currently inside.
+    private func stickValue(_ regions: [TouchpadRegion], bands: Bool, active: Bool) -> String {
+        guard active else { return String(localized: "No controller connected") }
+        // A trigger or axis travel bar is no stick: it said "Stick centered"
+        // at any pull no band covered.
+        if bands {
+            return occupied(regions, bands: true, active: active).map { String(localized: "In band \($0.shownName)") }
+                ?? String(localized: "Pulled \(DeadzoneCalibrationView.percent(fraction)), outside all bands")
+        }
+        if let inside = occupied(regions, bands: false, active: active) {
+            return String(localized: "Stick in region \(inside.shownName)")
+        }
+        let dx = (Double(x) + 1.0) / 2.0 - 0.5
+        let dy = (Double(y) + 1.0) / 2.0 - 0.5
+        if abs(dx) < 0.03 && abs(dy) < 0.03 {
+            return String(localized: "Stick centered")
+        }
+        return String(localized: "Stick outside all regions")
+    }
+}
+
+/// The stick drawing with this preset's regions, lit by the live stick,
+/// and the drawing layer (built by the card) on top.
+private struct StickRegionLivePlot<Layer: View>: View {
+    @ObservedObject var live: StickRegionLive
+    let size: CGFloat
+    let active: Bool
+    let regions: [TouchpadRegion]
+    let deadzones: [Double]
+    let fullPush: Double
+    let selected: UUID?
+    let addCentered: () -> Void
+    let deleteSelected: () -> Void
+    let layer: Layer
+
+    var body: some View {
+        let inside = live.occupied(regions, bands: false, active: active)?.id
+        return StickPlot(size: size, x: live.x, y: live.y, trail: live.trail, showsDot: active,
+                         deadzones: deadzones, fullPush: fullPush, zones: regions,
+                         lit: { $0.id == inside }, selected: selected) {
+            layer
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Stick region canvas")
+        .accessibilityValue(live.panelValue(regions, bands: false, active: active))
+        .accessibilityHint("The stick's travel, the center at rest. Contains the defined regions and a live indicator of the connected stick's position.")
+        .accessibilityAction(named: Text("Add region in the center")) { addCentered() }
+        .accessibilityAction(named: Text("Delete selected region")) { deleteSelected() }
+    }
+}
+
+/// One axis's travel bar with its bands, lit and filled by the live pull,
+/// and the drawing layer (built by the card) on top.
+private struct StickRegionLiveGauge<Layer: View>: View {
+    @ObservedObject var live: StickRegionLive
+    let width: CGFloat
+    let height: CGFloat
+    let active: Bool
+    let regions: [TouchpadRegion]
+    let deadzones: [Double]
+    let fullPush: Double
+    let selected: UUID?
+    /// The label column above and below the live Current line.
+    let above: [(color: Color, text: String)]
+    let below: [(color: Color, text: String)]
+    let axisName: String
+    let addCentered: () -> Void
+    let deleteSelected: () -> Void
+    let layer: Layer
+
+    var body: some View {
+        let amount = live.amount(bands: true, active: active)
+        let inside = live.occupied(regions, bands: true, active: active)?.id
+        var labels = above
+        labels.append((.accentColor, String(localized: "Current \(DeadzoneCalibrationView.percent(amount))")))
+        labels.append(contentsOf: below)
+        return TriggerGauge(width: width, height: height, pulled: amount, deadzones: deadzones, fullPush: fullPush,
+                            bands: regions, lit: { $0.id == inside }, selected: selected, labels: labels) {
+            layer
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Travel bar for \(axisName)")
+        .accessibilityValue(live.panelValue(regions, bands: true, active: active))
+        .accessibilityHint("The low end of the travel is at the bottom. Contains the bands and a line at the axis's live reading.")
+        .accessibilityAction(named: Text("Add region in the center")) { addCentered() }
+        .accessibilityAction(named: Text("Delete selected region")) { deleteSelected() }
+    }
+}
+
+/// The Current or In region reading under the drawing.
+private struct StickRegionLiveStat: View {
+    @ObservedObject var live: StickRegionLive
+    /// In region, or else Current.
+    let region: Bool
+    let regions: [TouchpadRegion]
+    let bands: Bool
+    let active: Bool
+
+    var body: some View {
+        if region {
+            StickRegionsView.statBlock("In region", live.occupied(regions, bands: bands, active: active)?.shownName ?? String(localized: "None"))
+        } else {
+            StickRegionsView.statBlock("Current", DeadzoneCalibrationView.percent(live.amount(bands: bands, active: active)))
+        }
+    }
 }

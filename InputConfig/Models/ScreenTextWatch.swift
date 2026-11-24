@@ -32,8 +32,23 @@ struct ScreenTextWatch: Identifiable, Codable, Hashable {
     var maxY: Double = 0.75
     /// The words to look for. Matched ignoring case, accents and extra spaces.
     var text: String = ""
-    var mode: ScreenTextMode = .shows
+    var mode: ScreenTextMode = .shows {
+        // A mode picked here is the user's answer and replaces one this
+        // build could not read.
+        didSet { rawMode = nil }
+    }
     var colorIndex: Int = 0
+    /// The mode as the file names it, when this build has no such mode (a
+    /// newer version's). While it is set the watch does not fire (see
+    /// `ScreenTextService.isPressed`) and it is written back in place of
+    /// `mode`: read as Shows, the watch fired on the wrong condition and
+    /// the next save made that permanent.
+    var rawMode: String? = nil
+    /// False for a watch whose mode this build cannot read.
+    var canFire: Bool { rawMode == nil }
+    /// Fields this build has no key for (written by a newer version),
+    /// kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
 
     static let maxWatches = 16
 
@@ -70,7 +85,7 @@ struct ScreenTextWatch: Identifiable, Codable, Hashable {
         return w
     }
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, display, minX, minY, maxX, maxY, text, mode, colorIndex
     }
 
@@ -86,8 +101,14 @@ struct ScreenTextWatch: Identifiable, Codable, Hashable {
         maxX = (try? c.decode(Double.self, forKey: .maxX)) ?? 0.75
         maxY = (try? c.decode(Double.self, forKey: .maxY)) ?? 0.75
         text = (try? c.decode(String.self, forKey: .text)) ?? ""
-        mode = (try? c.decode(ScreenTextMode.self, forKey: .mode)) ?? .shows
+        if let known = try? c.decode(ScreenTextMode.self, forKey: .mode) {
+            mode = known
+        } else {
+            mode = .shows
+            rawMode = try? c.decode(String.self, forKey: .mode)
+        }
         colorIndex = (try? c.decode(Int.self, forKey: .colorIndex)) ?? 0
+        extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = clampedValues()
     }
 
@@ -101,8 +122,9 @@ struct ScreenTextWatch: Identifiable, Codable, Hashable {
         try c.encode(maxX, forKey: .maxX)
         try c.encode(maxY, forKey: .maxY)
         try c.encode(text, forKey: .text)
-        try c.encode(mode, forKey: .mode)
+        try c.encode(rawMode ?? mode.rawValue, forKey: .mode)
         try c.encode(colorIndex, forKey: .colorIndex)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 }
 
@@ -115,6 +137,9 @@ struct VoicePhrase: Identifiable, Codable, Hashable {
     /// as whole words.
     var phrase: String = ""
     var colorIndex: Int = 0
+    /// Fields this build has no key for (written by a newer version),
+    /// kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
 
     static let maxPhrases = 32
 
@@ -125,7 +150,7 @@ struct VoicePhrase: Identifiable, Codable, Hashable {
         return p.isEmpty ? String(localized: "Voice phrase") : "\u{201C}\(p)\u{201D}"
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, phrase, colorIndex }
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, name, phrase, colorIndex }
 
     init() {}
 
@@ -135,6 +160,7 @@ struct VoicePhrase: Identifiable, Codable, Hashable {
         name = (try? c.decode(String.self, forKey: .name)) ?? ""
         phrase = (try? c.decode(String.self, forKey: .phrase)) ?? ""
         colorIndex = max(0, (try? c.decode(Int.self, forKey: .colorIndex)) ?? 0)
+        extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -143,5 +169,6 @@ struct VoicePhrase: Identifiable, Codable, Hashable {
         try c.encode(name, forKey: .name)
         try c.encode(phrase, forKey: .phrase)
         try c.encode(colorIndex, forKey: .colorIndex)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 }

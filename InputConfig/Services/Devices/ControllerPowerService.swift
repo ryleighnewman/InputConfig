@@ -29,6 +29,10 @@ final class ControllerPowerService: @unchecked Sendable {
     private let lock = NSLock()
     /// Last real input per GameController pad and per raw pad key.
     private var lastGC: [ObjectIdentifier: Date] = [:]
+    /// Controllers GameController has passed a real use from since they
+    /// connected. One that never has may be a pad macOS lists and reads
+    /// nothing from (RawHIDGamepadService.silentPadsReadableDirectly).
+    private var usedGC: Set<ObjectIdentifier> = []
     private var lastRaw: [UInt64: Date] = [:]
     /// When a raw pad's changed report was last decoded for the idle count
     /// while nothing else decoded it (noteRawReport).
@@ -108,7 +112,14 @@ final class ControllerPowerService: @unchecked Sendable {
     func noteActivity(controller: GCController?, element: GCControllerElement) {
         guard let controller, Self.isRealUse(element) else { return }
         let id = ObjectIdentifier(controller)
-        lock.lock(); lastGC[id] = Date(); lock.unlock()
+        lock.lock(); lastGC[id] = Date(); usedGC.insert(id); lock.unlock()
+    }
+
+    /// Whether GameController has passed a press, a stick or trigger move or
+    /// a D-pad direction from this controller since it connected.
+    func hasPassedInput(_ controller: GCController) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return usedGC.contains(ObjectIdentifier(controller))
     }
 
     /// The Access controller's own report showed a press or the stick
@@ -176,7 +187,9 @@ final class ControllerPowerService: @unchecked Sendable {
     /// Pure, for the bench: whether a pad unused for `idle` seconds goes.
     static func shouldDisconnect(idle: TimeInterval, minutes: Int, presetRunning: Bool, whileRunning: Bool) -> Bool {
         if presetRunning && !whileRunning { return false }
-        return idle >= TimeInterval(minutes * 60)
+        // Multiplied as seconds, not as Int: a preset file may carry any
+        // whole number here, and a huge one times 60 would trap.
+        return idle >= TimeInterval(minutes) * 60
     }
 
     #if DEBUG
@@ -197,6 +210,7 @@ final class ControllerPowerService: @unchecked Sendable {
         // Forget pads that left; a new one starts its count now.
         let live = Set(pads.map(ObjectIdentifier.init))
         lastGC = lastGC.filter { live.contains($0.key) }
+        usedGC.formIntersection(live)
         cannot = cannot.intersection(live)
         for id in live where lastGC[id] == nil { lastGC[id] = now }
         let liveRaw = Set(raws.map(\.id))
@@ -329,11 +343,22 @@ final class ControllerPowerService: @unchecked Sendable {
         if reason == "preset" { Switch2BluetoothService.shared.startIfEnabled() }
     }
 
+    /// Pure, for the bench: whether a preset start asks waiting controllers
+    /// to connect. The preset's own choice asks even with a controller
+    /// already on, as its caption says; the Settings switch alone asks only
+    /// when none is.
+    static func shouldAskReconnect(preset: Bool?, setting: Bool, connected: Int) -> Bool {
+        guard preset ?? setting else { return false }
+        if preset != true, connected > 0 { return false }
+        return true
+    }
+
     /// A preset started: a paired controller that is waiting may connect.
     @MainActor func presetStarted() {
         // The preset's own choice (Utilities, Reconnect controllers) first.
         let mine = MappingEngine.current?.activePreset?.automation.reconnectOnStart
-        guard mine ?? autoReconnectOn, GCController.controllers().isEmpty else { return }
+        guard mine ?? autoReconnectOn,
+              Self.shouldAskReconnect(preset: mine, setting: autoReconnectOn, connected: GCController.controllers().count) else { return }
         attemptReconnect(reason: "preset", asked: mine == true)
     }
 

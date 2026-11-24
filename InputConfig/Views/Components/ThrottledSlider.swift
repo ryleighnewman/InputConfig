@@ -41,19 +41,50 @@ where V.Stride: BinaryFloatingPoint {
         self._localValue = State(initialValue: value.wrappedValue)
     }
 
+    /// Past this many steps the slider is given no `step` at all. SwiftUI
+    /// builds one tick mark for every step, and it lays all of them out
+    /// again on each frame the slider is scrolled: the seven driving
+    /// sliders, at a thousand steps each, cost about 8 ms a frame. That
+    /// many ticks are closer together than a point and read as nothing,
+    /// so a fine slider runs continuous and the value is rounded to its
+    /// step here instead.
+    private static var tickLimit: Double { 100 }
+
+    private var isFine: Bool {
+        guard step > 0 else { return false }
+        return Double(range.upperBound - range.lowerBound) / Double(step) > Self.tickLimit
+    }
+
+    /// `raw` on the nearest step, counted from the low end as `Slider` does.
+    private func snapped(_ raw: V) -> V {
+        guard step > 0 else { return raw }
+        let steps = (Double(raw - range.lowerBound) / Double(step)).rounded()
+        let onStep = range.lowerBound + V(steps * Double(step))
+        return min(max(onStep, range.lowerBound), range.upperBound)
+    }
+
+    private func editingChanged(_ editing: Bool) {
+        isDragging = editing
+        if !editing {
+            // Commit the final value once the user releases the thumb.
+            value = localValue
+        }
+    }
+
+    @ViewBuilder private var slider: some View {
+        if isFine {
+            Slider(
+                value: Binding(get: { localValue }, set: { localValue = snapped($0) }),
+                in: range,
+                onEditingChanged: editingChanged
+            )
+        } else {
+            Slider(value: $localValue, in: range, step: step, onEditingChanged: editingChanged)
+        }
+    }
+
     var body: some View {
-        Slider(
-            value: $localValue,
-            in: range,
-            step: step,
-            onEditingChanged: { editing in
-                isDragging = editing
-                if !editing {
-                    // Commit the final value once the user releases the thumb.
-                    value = localValue
-                }
-            }
-        )
+        slider
         .onChange(of: localValue) { _, newValue in
             onLiveChange?(newValue)
             // A change with no drag (arrow keys, VoiceOver increment) never

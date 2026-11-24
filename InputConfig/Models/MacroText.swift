@@ -293,7 +293,13 @@ enum MacroText {
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return "{}" }
         object["id"] = nil
         guard let out = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return "{}" }
+        // The writer leaves these three line breaks as they are, and the
+        // reader ends a line at each: escaped, the step stays on its line
+        // and decodes to the same text.
         return String(decoding: out, as: UTF8.self)
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+            .replacingOccurrences(of: "\u{85}", with: "\\u0085")
     }
 
     /// The output a `step` line's JSON decodes to, or nil when it is not

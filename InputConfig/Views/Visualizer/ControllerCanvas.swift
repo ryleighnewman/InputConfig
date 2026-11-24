@@ -81,6 +81,24 @@ struct ControllerCanvas: View {
     /// lines change (KeyLook).
     @Environment(\.legibilityWeight) private var legibilityWeight
     @Environment(\.displayScale) private var displayScale
+    /// Reduce Motion, macOS's or the app's: no glide and no release fade.
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// Off while the zoomed map is drawn as one picture (SharpZoom), which a
+    /// glide would draw again on every display frame.
+    @Environment(\.visualizerDisplayRate) private var displayRate
+
+    /// Readings arrive 30 times a second. A stick dot, a wheel mark and a
+    /// trigger's fill glide over one reading's time, so they move at the
+    /// display's own rate while the cell still redraws only per reading.
+    private var liveGlide: Animation? {
+        systemReduceMotion || appReduceMotion || !displayRate ? nil : .linear(duration: 1.0 / 30)
+    }
+
+    /// A press lights at once; a release fades out instead of blinking off.
+    private func pressFade(_ on: Bool) -> Animation? {
+        on || systemReduceMotion || appReduceMotion ? nil : .easeOut(duration: 0.12)
+    }
 
     /// What VoiceOver calls a control.
     private func spoken(_ c: PlacedControl, _ fallback: String) -> String {
@@ -251,6 +269,9 @@ struct ControllerCanvas: View {
         // Looked up, not worked out again: a redraw for a press changes
         // nothing the bands, the key or the words come from (FrozenLayer).
         let layer = frozenLayer
+        // The layer's own controls read as they did when it was made: each
+        // is drawn and lit as the layout reads it now (asRead).
+        let now: [String: PlacedControl] = layer == nil ? [:] : readNow
         let canvas = layer.map { withLayer($0) } ?? self
         let m = layer?.metrics ?? metrics
         let keyed = m.keyed, kf = m.kf, bands = m.bands
@@ -264,7 +285,7 @@ struct ControllerCanvas: View {
             let atSize = layer.map { sized($0, keyed: keyed, bands: bands, tops: laid.tops, width: w, height: w * total, key: kf) }
             // From the layer a press only relights a line, as a hit in the
             // key's own cache does.
-            let entries = atSize.map { relit($0.entries, layer: layer) }
+            let entries = atSize.map { relit($0.entries, layer: layer, now: now) }
                 ?? (keyed ? keyEntries(bands: bands, tops: laid.tops, width: w, height: w * total, key: kf) : [])
             ZStack(alignment: .topLeading) {
                 // Leader lines first, so the controls sit on top of them.
@@ -276,7 +297,8 @@ struct ControllerCanvas: View {
                             .foregroundStyle(.hint)
                             .position(x: w / 2, y: (laid.tops[n] - backLabel / 2) * w)
                     }
-                    ForEach(b.controls) { control in
+                    ForEach(b.controls) { made in
+                        let control = Self.asRead(made, now)
                         let frame = atSize?.frames[control.id] ?? canvas.controlFrame(control, band: b, top: laid.tops[n], width: w)
                         canvas.controlView(control, size: frame.size)
                             // What it does here, and its deadzone, for
@@ -360,8 +382,24 @@ struct ControllerCanvas: View {
     /// What the per-drawing caches are keyed by: the model and variant, and
     /// the controls themselves, which the Access controller changes as
     /// devices come and go on its expansion ports.
-    private var cacheSignature: String {
-        "\(layout.id.rawValue)|\(variant ?? "")|" + layout.controls.map { "\($0.id):\($0.kind)" }.joined(separator: ",")
+    private var cacheSignature: String { Self.cacheSignature(layout, variant: variant) }
+    /// Where each control sits, its size and its shape are part of it: an
+    /// Access controller cap moves and reshapes a socket under the same id
+    /// and kind, and the key and its leader lines stayed as first drawn.
+    /// The hash is seeded per launch, like the caches it keys.
+    static func cacheSignature(_ layout: ControllerLayout, variant: String?) -> String {
+        var geometry = Hasher()
+        for c in layout.controls {
+            let shape = shapeTag(c.shape)
+            geometry.combine(c.center.x)
+            geometry.combine(c.center.y)
+            geometry.combine(c.size)
+            geometry.combine(c.height)
+            geometry.combine(shape.tag)
+            geometry.combine(shape.value)
+        }
+        return "\(layout.id.rawValue)|\(variant ?? "")|\(geometry.finalize())|"
+            + layout.controls.map { "\($0.id):\($0.kind)" }.joined(separator: ",")
     }
 
     private var crowdedPills: Set<String> {
@@ -1401,6 +1439,7 @@ struct ControllerCanvas: View {
                 .lineLimit(1)
                 .fixedSize()
         }
+        .animation(pressFade(on), value: on)
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken(c, word))
@@ -1436,6 +1475,7 @@ struct ControllerCanvas: View {
                     .padding(.horizontal, 2)
             }
         }
+        .animation(pressFade(on), value: on)
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken(c, String(localized: "Button")))
@@ -1482,6 +1522,7 @@ struct ControllerCanvas: View {
                 .fill(Color.accentColor)
                 .frame(width: max(6, d * 0.19), height: max(6, d * 0.19))
                 .offset(x: CGFloat(xAxis) * d * 0.36, y: CGFloat(yAxis) * d * 0.36)
+                .animation(liveGlide, value: CGPoint(x: CGFloat(xAxis), y: CGFloat(yAxis)))
             // The rings' lines again over the dot, which is about as wide as
             // a 25% deadzone and would hide it at rest.
             if let dz = deadzone(c) { deadzoneRings(dz, travel: travel, fill: false).frame(width: d, height: d) }
@@ -1723,7 +1764,10 @@ struct ControllerCanvas: View {
         return ZStack(alignment: .bottom) {
             shape.fill(Color.secondary.opacity(0.15))
             shape.fill(tint.gradient)
-                .mask(alignment: .bottom) { Rectangle().frame(height: size.height * value) }
+                .mask(alignment: .bottom) {
+                    Rectangle().frame(height: size.height * value)
+                        .animation(liveGlide, value: value)
+                }
             // The calibration sheet's bands over the fill: red where the
             // trigger is ignored, green where it already counts as full.
             if let dz {
@@ -1838,6 +1882,7 @@ struct ControllerCanvas: View {
                 .frame(width: max(3, d * 0.03), height: d * 0.12)
                 .offset(y: -d / 2 + d * 0.06)
                 .rotationEffect(.degrees(angle))
+                .animation(liveGlide, value: angle)
             Text(reading)
                 .font(.system(size: max(9, min(13, d * 0.05)), weight: .semibold, design: .rounded))
                 .monospacedDigit()
@@ -1877,7 +1922,10 @@ struct ControllerCanvas: View {
         func clamp(_ v: Float) -> CGFloat { CGFloat(min(1, max(0, v))) }
         return ZStack(alignment: .bottom) {
             shape.fill(Color.secondary.opacity(0.15))
-            shape.fill(Color.accentColor.gradient).mask(alignment: .bottom) { Rectangle().frame(height: size.height * level) }
+            shape.fill(Color.accentColor.gradient).mask(alignment: .bottom) {
+                Rectangle().frame(height: size.height * level)
+                    .animation(liveGlide, value: level)
+            }
             // The calibration sheet's bands: red where the control is
             // ignored (from rest on a pedal, around the middle on a slider
             // that runs both ways), green where it already counts as full.
@@ -2154,12 +2202,26 @@ extension ControllerCanvas {
     }
 
     /// The key's lines lit by what is in use now.
-    private func relit(_ entries: [KeyEntry], layer: FrozenLayer?) -> [KeyEntry] {
+    private func relit(_ entries: [KeyEntry], layer: FrozenLayer?, now: [String: PlacedControl]) -> [KeyEntry] {
         entries.map { e in
             var e = e
-            if let c = layer?.controls[e.id] { e.active = keyActive(c) }
+            if let c = layer?.controls[e.id] { e.active = keyActive(Self.asRead(c, now)) }
             return e
         }
+    }
+
+    /// The layout's controls by id, as they read now.
+    private var readNow: [String: PlacedControl] {
+        Dictionary(layout.controls.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// A layer's control as the layout reads it now. A layer is looked up
+    /// by what it draws, not by what each control reads, so one made while
+    /// the pad was away (the standard inputs) is found again once the pad
+    /// is read another way (a generic pad from its descriptor). Drawn from
+    /// the layer's own copy, a press lit the control of the old numbering.
+    private static func asRead(_ c: PlacedControl, _ now: [String: PlacedControl]) -> PlacedControl {
+        now[c.id] ?? c
     }
 
     private static func kindTag(_ k: ControlKind) -> Int {
@@ -2423,6 +2485,65 @@ extension ControllerCanvas {
         }
         return (drawn, differ, remade)
     }
+
+    /// The Standard gamepad's layer made with the pad away (the standard
+    /// inputs), then looked up for the pad read from its descriptor with
+    /// btn 1 held, which is A there and B on the standard inputs: whether
+    /// the look up found that layer, the controls and the key lines it
+    /// lights, whether the key has a line for A, and whether the picture
+    /// matches one worked out with the layer off. For the Test Bench.
+    static func debugLayerReadsNowCheck() -> (hit: Bool, lit: [String], keyLit: [String], keyHasA: Bool, same: Bool) {
+        func pixels(_ view: some View) -> [UInt8]? {
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            guard let image = renderer.cgImage else { return nil }
+            let w = image.width, h = image.height
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            let drawn = bytes.withUnsafeMutableBytes { raw -> Bool in
+                guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                          bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
+            return drawn ? bytes + [UInt8(w & 0xFF), UInt8(w >> 8)] : nil
+        }
+        let away = ControllerLayout.genericGamepad
+        // The same canvas but for what it reads: as in the panel, a legend
+        // describes the physical control (its standard inputs), and the
+        // captions go by the control's id, so both look up one layer.
+        func canvas(_ layout: ControllerLayout, _ state: ControllerState) -> ControllerCanvas {
+            ControllerCanvas(
+                layout: layout, state: state,
+                legend: { c in
+                    CanvasLegend.legend(for: away.control(c.id) ?? c, in: away, family: away.family,
+                                        model: away.modelNames, choice: .automatic)
+                },
+                caption: { c in c.kind == .port || c.kind == .light ? nil : "Left click \(c.id)" },
+                lightColor: .blue,
+                threshold: { _ in 0.25 },
+                inspect: { _, v in v })
+        }
+        var held = ControllerState()
+        held.buttons[1] = 1
+        let read = canvas(away.reading(on: .rawDescriptor), held)
+        freezeOff = true
+        let worked = pixels(read.frame(width: 600))
+        freezeOff = false
+        _ = pixels(canvas(away, ControllerState()).frame(width: 600))
+        let misses = frozenMisses
+        let looked = pixels(read.frame(width: 600))
+        guard let layer = read.frozenLayer, frozenMisses == misses else { return (false, [], [], false, false) }
+        let now = read.readNow
+        let lit = layer.metrics.bands.flatMap(\.controls).map { asRead($0, now) }.filter { read.isOn($0) }.map(\.id)
+        let entries = layer.sized.values.first?.entries ?? []
+        let keyLit = read.relit(entries, layer: layer, now: now).filter(\.active).map(\.id)
+        let same: Bool = {
+            guard let worked, let looked, worked.count == looked.count else { return false }
+            return zip(worked, looked).allSatisfy { abs(Int($0) - Int($1)) <= 24 }
+        }()
+        return (true, lit, keyLit, entries.contains { $0.id == "a" }, same)
+    }
     #endif
 }
 
@@ -2609,6 +2730,18 @@ extension ControlInputs {
         }
         if let p = pressure { out.append(.axis(p, direction: .positive)) }
         return out
+    }
+}
+
+/// Whether live motion in the drawing follows the display's refresh: off
+/// while the zoomed map is drawn as one picture (SharpZoom).
+private struct VisualizerDisplayRateKey: EnvironmentKey {
+    static let defaultValue = true
+}
+extension EnvironmentValues {
+    var visualizerDisplayRate: Bool {
+        get { self[VisualizerDisplayRateKey.self] }
+        set { self[VisualizerDisplayRateKey.self] = newValue }
     }
 }
 

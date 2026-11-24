@@ -46,5 +46,17 @@ extension HIDFixtureCorpus {
                   "0x00 full left or up, 0xFF full right or down"),
         ultimate2("ultimate2w.hat.upright", ultimate2Report(hat: 1),
                   [.hat(0, x: 0.707, y: 0.707)], "byte 1 value 1: up and right"),
+        // The other two report IDs SDL reads the same way, and the shortest
+        // report the decoder takes.
+        ultimate2("8bitdo.enhanced.bt.01", [0x01] + ultimate2Report(hat: 1, face: 0x01 | 0x40, system: 0x10, back: 0x01).dropFirst(),
+                  [.button(0, 1), .button(4, 1), .button(10, 1), .button(16, 1), .buttonAbsent(17), .buttonAbsent(1), .hat(0, x: 0.707, y: 0.707)],
+                  "report ID 0x01, the enhanced mode Bluetooth report: same bytes as 0x03"),
+        ultimate2("8bitdo.enhanced.usb.04", [0x04] + ultimate2Report(sticks: [0x00, 0x7F, 0x7F, 0xFF], rt: 0xFF, face: 0x02 | 0x80, back: 0x02).dropFirst(),
+                  [.button(1, 1), .button(5, 1), .button(17, 1), .buttonAbsent(16), .buttonAbsent(0), .button(7, 1), .buttonAbsent(6),
+                   .axis(0, -1, tolerance: 0.001), .axis(3, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001), .axis(4, 0, tolerance: 0.001)],
+                  "report ID 0x04, the enhanced mode USB report: same bytes as 0x03"),
+        ultimate2("8bitdo.short10", Array(ultimate2Report(face: 0x08 | 0x10, system: 0x04 | 0x08, back: 0x03).prefix(10)),
+                  [.button(2, 1), .button(3, 1), .button(8, 1), .button(9, 1), .buttonAbsent(16), .buttonAbsent(17), .buttonAbsent(0)],
+                  "a 10 byte report ends before byte 10: the face and system bytes are read, no back paddle"),
     ]
 }

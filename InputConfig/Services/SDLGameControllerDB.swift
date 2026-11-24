@@ -45,8 +45,9 @@ enum SDLGameControllerDB {
         let fitting = rows.filter { fits($0, elements) }
         let v = version ?? 0
         // Nearest version; on a tie the newer firmware's row, which tends to
-        // name more controls.
-        return fitting.min { (abs($0.version - v), -$0.version) < (abs($1.version - v), -$1.version) }
+        // name more controls. Compared as Int: a device can report any 32
+        // bit version, and the difference of two Int32 can overflow.
+        return fitting.min { (abs(Int($0.version) - Int(v)), -Int($0.version)) < (abs(Int($1.version) - Int(v)), -Int($1.version)) }
     }
 
     /// Whether every source a row names (b3, a1, +a2, a1~, h0.4) exists on
@@ -293,16 +294,22 @@ enum SDLGameControllerDB {
         // A row that names no stick (the Hori Pokken row GP2040-CE's Switch
         // mode inherits) on a device whose descriptor has X, Y and Z, Rz or
         // Rx, Ry: those go on the stick slots the plain layout would use.
+        // A stick is filled only as a pair. One spare axis with no partner
+        // (a USB SNES pad, 0079:0011, has a spare X and its D-pad on the
+        // rest) is no stick, and a byte that rests off center there would
+        // hold the stick over; it stays on an extra slot below.
         if ["leftx", "lefty", "rightx", "righty"].allSatisfy({ mapping.entries[$0] == nil }) {
             func unused(_ usage: Int) -> Int? {
                 elements.axes.indices.first { !usedAxes.contains($0) && elements.axes[$0].usagePage == 0x01 && elements.axes[$0].usage == usage }
             }
-            let pairs: [(Int, Int)] = [(0x30, 0), (0x31, 1)]
-                + ((unused(0x32) != nil && unused(0x35) != nil) ? [(0x32, 2), (0x35, 3)] : [(0x33, 2), (0x34, 3)])
-            for (usage, slot) in pairs {
-                guard let n = unused(usage) else { continue }
-                axes.append((elements.axes[n].reportID, axis(elements.axes[n], slot: slot, unipolar: false, half: nil, inverted: false)))
-                usedAxes.insert(n)
+            let left: [(Int, Int)] = [(0x30, 0), (0x31, 1)]
+            let right: [(Int, Int)] = (unused(0x32) != nil && unused(0x35) != nil) ? [(0x32, 2), (0x35, 3)] : [(0x33, 2), (0x34, 3)]
+            for stick in [left, right] where stick.allSatisfy({ unused($0.0) != nil }) {
+                for (usage, slot) in stick {
+                    guard let n = unused(usage) else { continue }
+                    axes.append((elements.axes[n].reportID, axis(elements.axes[n], slot: slot, unipolar: false, half: nil, inverted: false)))
+                    usedAxes.insert(n)
+                }
             }
         }
 

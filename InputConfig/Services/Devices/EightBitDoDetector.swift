@@ -71,7 +71,6 @@ final class EightBitDoDetector: ObservableObject {
     static let vendorID: Int32 = 0x2DC8
 
     private var manager: IOHIDManager?
-    private let queue = DispatchQueue(label: "com.inputconfig.8bitdo")
     private var rescanTimer: Timer?
     private var gcObservers: [NSObjectProtocol] = []
 
@@ -172,6 +171,9 @@ final class EightBitDoDetector: ObservableObject {
             MainActor.assumeIsolated { self?.rescan() }
         }
         if let timer = rescanTimer {
+            // A safety net has no exact moment to keep: the slack lets the
+            // system fold this wake into another one.
+            timer.tolerance = 3
             RunLoop.main.add(timer, forMode: .common)
         }
     }

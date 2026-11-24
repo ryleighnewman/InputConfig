@@ -275,22 +275,39 @@ struct ScreenTextsView: View {
 
     private func tickCountdown() {
         guard countdown > 0 else { return }
-        countdown -= 1
-        guard countdown == 0, let id = selectedID, var w = svc.watch(with: id),
+        let step = Self.countTick(countdown: countdown, marking: marking)
+        countdown = step.countdown
+        marking = step.marking
+        // The corner asked for is kept while the count runs.
+        guard step.due else { return }
+        guard let id = selectedID, var w = svc.watch(with: id),
               let place = ScreenTextService.pointerPlace() else { marking = 0; return }
         w.display = place.display
-        if marking == 1 {
-            w.minX = place.x; w.minY = place.y
-            if w.maxX <= w.minX { w.maxX = min(1, w.minX + 0.1) }
-            if w.maxY <= w.minY { w.maxY = min(1, w.minY + 0.05) }
-        } else {
-            w.maxX = place.x; w.maxY = place.y
-            if w.minX >= w.maxX { w.minX = max(0, w.maxX - 0.1) }
-            if w.minY >= w.maxY { w.minY = max(0, w.maxY - 0.05) }
-        }
+        Self.mark(&w, corner: marking, x: place.x, y: place.y)
         svc.upsert(w)
         marking = 0
         AccessibilityNotification.Announcement(String(localized: "Marked")).post()
+    }
+
+    /// One second of the count: what is left, the corner still being
+    /// marked, and whether the mark is due now.
+    nonisolated static func countTick(countdown: Int, marking: Int) -> (countdown: Int, marking: Int, due: Bool) {
+        let left = max(0, countdown - 1)
+        return (left, marking, left == 0)
+    }
+
+    /// Moves corner 1 (top left) or 2 (bottom right) of the area to a
+    /// place, pushing the other corner out when the area would turn over.
+    nonisolated static func mark(_ w: inout ScreenTextWatch, corner: Int, x: Double, y: Double) {
+        if corner == 1 {
+            w.minX = x; w.minY = y
+            if w.maxX <= w.minX { w.maxX = min(1, w.minX + 0.1) }
+            if w.maxY <= w.minY { w.maxY = min(1, w.minY + 0.05) }
+        } else {
+            w.maxX = x; w.maxY = y
+            if w.minX >= w.maxX { w.minX = max(0, w.maxX - 0.1) }
+            if w.minY >= w.maxY { w.minY = max(0, w.maxY - 0.05) }
+        }
     }
 }
 

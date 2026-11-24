@@ -2698,7 +2698,7 @@ final class EmergencyStopService: @unchecked Sendable {
             InputSimulator.shared.releaseAll()
             MIDIService.shared.releaseAllNotes()
             InProcessLightWriter.shared.stopMotors()
-            MainActor.assumeIsolated { RawHIDGamepadService.shared.stopSteamController2026Rumble(); RawHIDGamepadService.shared.stopEightBitDoRumble() }
+            MainActor.assumeIsolated { XInputUSBService.shared.stopMotors(); RawHIDGamepadService.shared.stopSteamController2026Rumble(); RawHIDGamepadService.shared.stopEightBitDoRumble() }
             MainActor.assumeIsolated { FeedbackService.shared.clearHapticEngines() }
             // A row's phrase stops too, so it does not talk over the stop.
             MainActor.assumeIsolated { FeedbackService.shared.stopSpeaking() }
@@ -2905,6 +2905,9 @@ final class MouseWheelShaper: @unchecked Sendable {
     private var trackpadSpeed = 1.0
     /// Lines left over from a scaled notch, per axis; tap thread only.
     private var lineCarry: (x: Double, y: Double) = (0, 0)
+    /// Points left over from a scaled trackpad or Magic Mouse scroll, per
+    /// axis, until the fingers lift; tap thread only.
+    private var pointCarry: (x: Double, y: Double) = (0, 0)
     private var smooth = false
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
@@ -3046,6 +3049,7 @@ final class MouseWheelShaper: @unchecked Sendable {
             self.disabledOnPurpose = false
             // A fraction left from an earlier speed starts over.
             self.lineCarry = (0, 0)
+            self.pointCarry = (0, 0)
             self.lock.unlock()
             // Made while held back: off until the preset shapes again.
             self.applyTapEnabled()
@@ -3106,16 +3110,42 @@ final class MouseWheelShaper: @unchecked Sendable {
             let x = pixels(line: .scrollWheelEventDeltaAxis2, point: .scrollWheelEventPointDeltaAxis2)
             if InputSimulator.shared.glideWheel(x: x * kX, y: y * kY) { return nil }
         }
-        if kY != 1 { Self.scale(event, by: kY, carry: &lineCarry.y, line: .scrollWheelEventDeltaAxis1, point: .scrollWheelEventPointDeltaAxis1, fixed: .scrollWheelEventFixedPtDeltaAxis1) }
-        if kX != 1 { Self.scale(event, by: kX, carry: &lineCarry.x, line: .scrollWheelEventDeltaAxis2, point: .scrollWheelEventPointDeltaAxis2, fixed: .scrollWheelEventFixedPtDeltaAxis2) }
+        if kY != 1 { Self.scale(event, by: kY, carry: &lineCarry.y, points: &pointCarry.y, continuous: continuous, line: .scrollWheelEventDeltaAxis1, point: .scrollWheelEventPointDeltaAxis1, fixed: .scrollWheelEventFixedPtDeltaAxis1) }
+        if kX != 1 { Self.scale(event, by: kX, carry: &lineCarry.x, points: &pointCarry.x, continuous: continuous, line: .scrollWheelEventDeltaAxis2, point: .scrollWheelEventPointDeltaAxis2, fixed: .scrollWheelEventFixedPtDeltaAxis2) }
+        // The fingers lifted, or the coasting after them ran out (scroll
+        // phase 4 ended or 8 canceled, momentum phase 3 end): the next
+        // scroll starts with nothing owed.
+        if continuous, Self.scrollEnded(phase: event.getIntegerValueField(.scrollWheelEventScrollPhase),
+                                        momentum: event.getIntegerValueField(.scrollWheelEventMomentumPhase)) {
+            pointCarry = (0, 0)
+        }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// Pure, for the bench: one event's point delta at a speed, the
+    /// fraction kept in `carry` for the next event. A slow finger sends a
+    /// point or two an event, and each rounded on its own came out as all
+    /// or nothing, so the distance did not follow the speed.
+    static func carriedPoints(_ points: Int64, by k: Double, carry: inout Double) -> Int64 {
+        let scaled = Double(points) * k + carry
+        let whole = scaled.rounded()
+        carry = scaled - whole
+        return Int64(max(-100_000, min(100_000, whole)))
+    }
+
+    /// Pure, for the bench: this event closes a trackpad or Magic Mouse
+    /// scroll (CGScrollPhase ended or canceled, CGMomentumScrollPhase end).
+    static func scrollEnded(phase: Int64, momentum: Int64) -> Bool {
+        phase == 4 || phase == 8 || momentum == 3
     }
 
     /// Flips and speeds up or slows down one axis. All three readings
     /// first: writing the line delta makes macOS work the point delta out
     /// again, so a point flipped after it came back pointing the old way.
-    /// Whole lines only, the rest carried, so a slowed notch still adds up.
-    private static func scale(_ event: CGEvent, by k: Double, carry: inout Double,
+    /// Whole lines only, the rest carried, so a slowed notch still adds up;
+    /// and whole points with the rest carried for a trackpad or Magic
+    /// Mouse (`continuous`; a notched wheel rounds each event as before).
+    private static func scale(_ event: CGEvent, by k: Double, carry: inout Double, points: inout Double, continuous: Bool,
                               line: CGEventField, point: CGEventField, fixed: CGEventField) {
         let l = event.getIntegerValueField(line)
         let p = event.getIntegerValueField(point)
@@ -3125,7 +3155,11 @@ final class MouseWheelShaper: @unchecked Sendable {
         carry = l == 0 ? carry : lines - whole
         event.setIntegerValueField(line, value: Int64(max(-10_000, min(10_000, whole))))
         event.setDoubleValueField(fixed, value: f * k)
-        event.setIntegerValueField(point, value: Int64(max(-100_000, min(100_000, (Double(p) * k).rounded()))))
+        if continuous {
+            event.setIntegerValueField(point, value: carriedPoints(p, by: k, carry: &points))
+        } else {
+            event.setIntegerValueField(point, value: Int64(max(-100_000, min(100_000, (Double(p) * k).rounded()))))
+        }
     }
 }
 
@@ -3297,11 +3331,25 @@ final class SystemActionService: @unchecked Sendable {
     /// sixteen steps from silent to full.
     private let volumeStep: Float = 1.0 / 16.0
 
+    /// The release half of the kinds that act while held: the microphone
+    /// goes back to how the press found the row's purpose, muted after On
+    /// While Held and live after Muted While Held.
+    func letGo(_ kind: SystemActionKind, parameter: String?) {
+        switch kind {
+        case .microphoneOnWhileHeld: MicrophoneSwitch.set(muted: true, parameter)
+        case .microphoneMutedWhileHeld: MicrophoneSwitch.set(muted: false, parameter)
+        default: break
+        }
+    }
+
     func perform(_ kind: SystemActionKind, parameter: String?) {
         switch kind {
         case .volumeUp: nudgeVolume(by: volumeStep)
         case .volumeDown: nudgeVolume(by: -volumeStep)
         case .muteToggle: toggleMute()
+        case .microphoneToggle: MicrophoneSwitch.toggle(parameter)
+        case .microphoneOnWhileHeld: MicrophoneSwitch.set(muted: false, parameter)
+        case .microphoneMutedWhileHeld: MicrophoneSwitch.set(muted: true, parameter)
         case .playPause: postAuxKey(16)      // NX_KEYTYPE_PLAY
         case .nextTrack: postAuxKey(19)      // NX_KEYTYPE_FAST
         case .previousTrack: postAuxKey(20)  // NX_KEYTYPE_REWIND

@@ -154,7 +154,9 @@ final class ScreenPixelService: ObservableObject {
     /// True while the watch's row should read as held. False when nothing
     /// samples (the last color would be stale) or the watch is unknown.
     func isPressed(_ id: UUID) -> Bool {
-        guard timer != nil, let w = watch(with: id) else { return false }
+        // A mode this build cannot read never fires: `mode` is then only
+        // a stand-in.
+        guard timer != nil, let w = watch(with: id), w.canFire else { return false }
         switch w.mode {
         case .match: return pressed.contains(id)
         case .change:

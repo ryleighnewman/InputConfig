@@ -27,6 +27,14 @@ final class FeedbackService {
     /// The phrase spoken last, normalized the way VoicePhraseService
     /// normalizes what it hears, so only that phrase is dropped as an echo.
     @MainActor static var lastSpokenNormalized: String?
+    /// Until when words said outside this service (see noteSpokenElsewhere)
+    /// may still be heard: the end of the app's own speech does not pull
+    /// that in.
+    static var elsewhereUntil: TimeInterval = 0
+    /// When the window closes once the app's own speech has ended at `now`.
+    static func windowEnd(speechEndedAt now: TimeInterval, elsewhereUntil: TimeInterval) -> TimeInterval {
+        max(now + speakingTail, elsewhereUntil)
+    }
     /// The phrases said in the open speaking window (see speakingUntil).
     @MainActor static var spokenInWindow: [String] = []
     /// How many phrases may wait behind the one being spoken.
@@ -150,6 +158,15 @@ final class FeedbackService {
                                                 target: SonyPadIdentity.of(controller: controller))
             return
         }
+        // An 8BitDo pad macOS lists and has no haptics for: its own motor
+        // report, written beside GameController (rumbleListedEightBitDo).
+        if name.contains("8bitdo") {
+            let ms = durationMs > 0 ? max(durationMs, Self.rumblePulseMs) : Self.rumblePulseMs
+            if RawHIDGamepadService.shared.rumbleListedEightBitDo(controller: controller, intensity: intensity, durationMs: ms) {
+                Self.debugLastPath = "8bitdo report intensity=\(intensity) ms=\(ms) name=\(name)"
+                return
+            }
+        }
         Self.debugLastPath = "apple intensity=\(intensity) ms=\(durationMs) sony=\(sony) name=\(name)"
         vibrateUsingEngine(controller: controller, intensity: intensity, sharpness: sharpness, durationMs: durationMs)
     }
@@ -171,17 +188,24 @@ final class FeedbackService {
             } catch {
                 return
             }
+            // Which engine this is, in a form that can cross to main.
+            let id = ObjectIdentifier(new)
             new.resetHandler = { [weak self, weak new] in
                 guard let new = new else { return }
-                try? new.start()
-                _ = self
+                do {
+                    try new.start()
+                } catch {
+                    // The haptic server is not back yet and no stopped
+                    // notice follows: forgotten like a stopped engine.
+                    DispatchQueue.main.async { self?.forgetEngine(id, for: key) }
+                }
             }
             // A stopped engine (audio interruption, the system tearing it
             // down) is forgotten so the next buzz builds a fresh one,
             // instead of every later player.start throwing into silence
             // until the app is relaunched.
             new.stoppedHandler = { [weak self] _ in
-                DispatchQueue.main.async { self?.hapticEngines.removeValue(forKey: key) }
+                DispatchQueue.main.async { self?.forgetEngine(id, for: key) }
             }
             hapticEngines[key] = new
             engine = new
@@ -215,8 +239,23 @@ final class FeedbackService {
                 try? p.stop(atTime: CHHapticTimeImmediate)
             }
         } catch {
-            // Best effort; ignore failures
+            // Best effort for this buzz. An engine that cannot play is not
+            // kept, so the next buzz builds a fresh one.
+            forgetEngine(ObjectIdentifier(engine), for: key)
         }
+    }
+
+    /// Forgets an engine only while it is still the one kept for its pad:
+    /// a notice from an old engine that lands after a new one was built
+    /// leaves the new one alone.
+    private func forgetEngine(_ id: ObjectIdentifier, for key: ObjectIdentifier) {
+        Self.forget(id, for: key, in: &hapticEngines)
+    }
+
+    /// Pure, for the bench: the rule above on any cache of objects.
+    nonisolated static func forget<E: AnyObject>(_ id: ObjectIdentifier, for key: ObjectIdentifier,
+                                                 in cache: inout [ObjectIdentifier: E]) {
+        if let held = cache[key], ObjectIdentifier(held) == id { cache[key] = nil }
     }
 
     /// Drop one controller's engine when it disconnects.
@@ -355,7 +394,8 @@ final class FeedbackService {
     static func noteSpokenElsewhere(_ phrase: String) {
         if CACurrentMediaTime() >= speakingUntil { spokenInWindow = [] }
         spokenInWindow.append(ScreenTextWatch.normalized(phrase))
-        speakingUntil = max(speakingUntil, CACurrentMediaTime() + 1.5)
+        elsewhereUntil = max(elsewhereUntil, CACurrentMediaTime() + 1.5)
+        speakingUntil = max(speakingUntil, elsewhereUntil)
     }
 
     /// An utterance ended or was cut: the next System Voice phrase, if one
@@ -372,7 +412,7 @@ final class FeedbackService {
         }
         guard !speech.isSpeaking, !systemSpeech.isSpeaking else { return }
         speakingPhrase = nil
-        Self.speakingUntil = CACurrentMediaTime() + Self.speakingTail
+        Self.speakingUntil = Self.windowEnd(speechEndedAt: CACurrentMediaTime(), elsewhereUntil: Self.elsewhereUntil)
     }
 
     /// An utterance started: heard until it ends, at the latest the cap.

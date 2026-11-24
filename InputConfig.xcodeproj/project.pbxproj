@@ -157,6 +157,7 @@
 		FB1001001FKBDIAGRAM0000001 /* KeyboardDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB2001001FKBDIAGRAM0000001 /* KeyboardDiagramView.swift */; };
 		FB10010020MOUSEDIAGRAM00001 /* MouseDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010020MOUSEDIAGRAM00001 /* MouseDiagramView.swift */; };
 		FB10010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */; };
+		FB10010099XINPUTUSBSERVIC1 /* XInputUSBService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010099XINPUTUSBSERVIC1 /* XInputUSBService.swift */; };
 		FB10010100APPICONICONFILE1 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = FB20010100APPICONICONFILE1 /* AppIcon.icon */; };
 		FB10010100CRASHRECOVERY00 /* CrashRecoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */; };
 		FB10010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */; };
@@ -428,6 +429,7 @@
 		FB2001001FKBDIAGRAM0000001 /* KeyboardDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardDiagramView.swift; sourceTree = "<group>"; };
 		FB20010020MOUSEDIAGRAM00001 /* MouseDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseDiagramView.swift; sourceTree = "<group>"; };
 		FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Switch2USBEnabler.swift; sourceTree = "<group>"; };
+		FB20010099XINPUTUSBSERVIC1 /* XInputUSBService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XInputUSBService.swift; sourceTree = "<group>"; };
 		FB20010100APPICONICONFILE1 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		FB20010100CRASHRECOVERY00 /* CrashRecoveryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryService.swift; sourceTree = "<group>"; };
 		FB20010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDLGameControllerDB.swift; sourceTree = "<group>"; };
@@ -792,6 +794,7 @@
 				8C438EA563776AC7D1DBC878 /* Switch2BluetoothService.swift */,
 				5B0D7E76B702C51EF3B20590 /* ControllerPowerService.swift */,
 				FB20010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift */,
+				FB20010099XINPUTUSBSERVIC1 /* XInputUSBService.swift */,
 			);
 			path = Devices;
 			sourceTree = "<group>";
@@ -1261,6 +1264,7 @@
 				FB10010013HIDREPORTDEC0001 /* HIDReportDecoder.swift in Sources */,
 				FB10010014RAWHIDGAMESVC001 /* RawHIDGamepadService.swift in Sources */,
 				FB10010099SWITCH2USBENABL1 /* Switch2USBEnabler.swift in Sources */,
+				FB10010099XINPUTUSBSERVIC1 /* XInputUSBService.swift in Sources */,
 				FB10010100SDLGCDBLOOKUP01 /* SDLGameControllerDB.swift in Sources */,
 				76DB322ADB1DBA5E69826630 /* VisualizerWidgets.swift in Sources */,
 				FB1LAYRESOLVE001 /* ControllerLayoutResolver.swift in Sources */,
@@ -1356,7 +1360,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 				DEVELOPMENT_TEAM = 65JK8K8VGM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = InputConfig/Info.plist;
@@ -1364,7 +1368,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;
@@ -1447,7 +1451,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = InputConfig/InputConfig.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 39;
+				CURRENT_PROJECT_VERSION = 40;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = 65JK8K8VGM;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1456,7 +1460,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.inputconfig.app;
 				PRODUCT_MODULE_NAME = InputConfig;
 				PRODUCT_NAME = InputConfig;

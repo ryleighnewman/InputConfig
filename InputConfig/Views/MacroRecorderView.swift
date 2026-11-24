@@ -91,8 +91,7 @@ struct MacroRecorderView: View {
                     .disabled(recorder.isRecording)
                     .hoverHelp("A key that stops the recording from the other app and brings you back, beside Escape twice and the Stop button on the recording panel. Pick one the macro does not use; it is never recorded.")
                 if recorder.stopKeyCode >= 0 {
-                    KeyCodePicker(selectedCode: $recorder.stopKeyCode, voiceRole: "Stop key")
-                        .frame(width: 110)
+                    KeyCodePicker(selectedCode: $recorder.stopKeyCode, voiceRole: "Stop key", minWidth: 110)
                         .disabled(recorder.isRecording)
                         .accessibilityLabel("Stop key")
                 }
@@ -127,9 +126,12 @@ struct MacroRecorderView: View {
                             .foregroundStyle(.hint)
                     }
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, step in
-                        Text("\(index + 1). \(Self.describe(step))")
+                        // Once per step: up to 200 of them, each several
+                        // localized lookups, on every pass of this sheet.
+                        let line = Self.describe(step)
+                        Text("\(index + 1). \(line)")
                             .font(.callout.monospacedDigit())
-                            .accessibilityLabel(String(localized: "Step \(index + 1): \(Self.describe(step))"))
+                            .accessibilityLabel(String(localized: "Step \(index + 1): \(line)"))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -28,6 +28,14 @@ struct VoicePhrasesView: View {
     /// The recognizer's languages, sorted once: the list does not change
     /// while the app runs, and the sort is not free.
     @MainActor private static let locales = VoicePhraseService.supportedLocales()
+    /// Each language's name in the app's language, looked up once: the
+    /// menu is built again on each tick of the sheet's 0.2 s clock, and
+    /// looked every name up again each time.
+    @MainActor private static let localeNames: [String] = locales.map {
+        Locale.current.localizedString(forIdentifier: $0.identifier) ?? $0.identifier
+    }
+    @MainActor private static let thisMacsLanguage: String =
+        Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? Locale.current.identifier
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -144,9 +152,9 @@ struct VoicePhrasesView: View {
         HStack(spacing: 8) {
             Text("Language").font(.caption).foregroundStyle(.secondary)
             Picker("Language", selection: $localeID) {
-                Text(String(localized: "This Mac's (\(Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? Locale.current.identifier))")).tag("")
-                ForEach(Self.locales, id: \.identifier) { l in
-                    Text(Locale.current.localizedString(forIdentifier: l.identifier) ?? l.identifier).tag(l.identifier)
+                Text(String(localized: "This Mac's (\(Self.thisMacsLanguage))")).tag("")
+                ForEach(Self.locales.indices, id: \.self) { i in
+                    Text(Self.localeNames[i]).tag(Self.locales[i].identifier)
                 }
             }
             .labelsHidden()
@@ -155,7 +163,7 @@ struct VoicePhrasesView: View {
                 VoicePhraseService.setLocale(id.isEmpty ? nil : Locale(identifier: id))
                 svc.restartForLanguage()
             }
-            if svc.listening {
+            if (svc.listening && !svc.captureSilent) {
                 Text(svc.onDevice ? "On this Mac" : "Through Apple's servers")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -166,8 +174,8 @@ struct VoicePhrasesView: View {
     private var listeningRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Circle().fill(svc.listening ? Color.green : Color.secondary).frame(width: 8, height: 8)
-                Text(svc.listening ? "Listening" : "Not listening")
+                Circle().fill((svc.listening && !svc.captureSilent) ? Color.green : Color.secondary).frame(width: 8, height: 8)
+                Text((svc.listening && !svc.captureSilent) ? "Listening" : "Not listening")
                     .font(.caption.weight(.semibold))
             }
             if let problem = svc.problem {

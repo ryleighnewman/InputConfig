@@ -47,9 +47,13 @@ struct PresetDetailView: View {
     /// The visualizer's Connected pick: the group reads that controller,
     /// as when it is picked from the editor's device menu.
     private func setGroupDevice(_ name: String?, slot: Int) {
-        while preset.joysticks.count <= slot { preset.joysticks.append(JoystickMapping(tag: "")) }
-        preset.joysticks[slot].customName = name
-        preset.joysticks[slot].inputKind = name == nil ? .auto : .controller
+        // One change, saved once: each write here is a save, and a save
+        // restarts this preset when it is the one running.
+        var updated = preset
+        while updated.joysticks.count <= slot { updated.joysticks.append(JoystickMapping(tag: "")) }
+        updated.joysticks[slot].customName = name
+        updated.joysticks[slot].inputKind = name == nil ? .auto : .controller
+        preset = updated
     }
 
     /// The visualizer's Controller menu: the group's model, and the button
@@ -707,9 +711,12 @@ struct PresetDetailView: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { showVisualizer.toggle() }
                 } label: {
-                    Image(systemName: showVisualizer ? "chevron.up" : "chevron.down")
+                    // One chevron, turned: the collapse's animation turns it
+                    // with the card instead of crossfading two symbols.
+                    Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(showVisualizer ? 180 : 0))
                 }
                 .buttonStyle(.plain)
                 .accessibilityHidden(true)
@@ -875,6 +882,12 @@ struct PresetDetailView: View {
                             VisualizerHeaderControls(control: visualizerControl(for: slot))
                         }
                     }
+                    // Skipped when nothing it draws changed: a keystroke in
+                    // the name, tag or notes re-runs this page, and each run
+                    // rebuilt the whole drawing. Its actions read the preset
+                    // from the store when they run, so a skip leaves none stale.
+                    let panelControl = visualizerControl(for: slot)
+                    VisualizerPanelSkip(preset: preset, slot: slot, control: panelControl) {
                     VirtualControllerView(
                         preset: preset,
                         onJump: { target in
@@ -891,7 +904,13 @@ struct PresetDetailView: View {
                                 brightness: presetBinding.lightBarBrightness,
                                 rainbow: presetBinding.lightBarRainbow,
                                 rainbowSpeed: presetBinding.lightBarRainbowSpeed,
-                                onChanged: pushPresetLightBarLive)
+                                onChanged: pushPresetLightBarLive,
+                                // Each a single write: field by field a
+                                // color was two saves and "Controller's
+                                // color" four, each one a restart of this
+                                // preset when it is running.
+                                onPick: { rgb in preset = PresetLightBarPopover.picked(rgb, in: preset) },
+                                onClear: { preset = PresetLightBarPopover.cleared(preset) })
                         },
                         lightBarTint: presetLightBarSwiftUIColor,
                         lightBarRainbow: preset.lightBarRainbow == true,
@@ -910,9 +929,11 @@ struct PresetDetailView: View {
                             setGroupDevice(name, slot: slot)
                         },
                         onChangeTriggerFeel: { left, level in setPresetTriggerFeel(left: left, level: level) },
-                        control: visualizerControl(for: slot)
+                        control: panelControl
                     )
                     .environmentObject(controllerService)
+                    }
+                    .equatable()
                 }
 
             }
@@ -1040,7 +1061,8 @@ struct PresetDetailView: View {
         }
         updated.joysticks[slot].inputKind = kind
         updated.modifiedAt = Date()
-        preset = updated
+        // Saved once: writing the page's preset is a save too, and the two
+        // restarted a running preset twice.
         presetStore.savePreset(updated)
     }
 
@@ -1551,6 +1573,25 @@ struct PresetDetailView: View {
 
 }
 
+// MARK: - Visualizer panel
+
+/// One Live Visualizer panel, run again only when what it draws from the
+/// page changes: the preset, its slot, or its control state. The panel
+/// observes the controllers, its control state and the environment itself,
+/// so live input and a pad connecting still redraw it.
+private struct VisualizerPanelSkip<Content: View>: View, Equatable {
+    let preset: Preset
+    let slot: Int
+    let control: VisualizerControlState
+    @ViewBuilder let content: () -> Content
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.slot == b.slot && a.control === b.control && a.preset == b.preset
+    }
+
+    var body: some View { content() }
+}
+
 // MARK: - Previous versions
 
 /// "Previous versions" under the page's Storage row. The list is read once
@@ -1678,6 +1719,27 @@ struct PresetLightBarPopover: View {
     @SwiftUI.Binding var rainbow: Bool?
     @SwiftUI.Binding var rainbowSpeed: Double?
     var onChanged: () -> Void = {}
+    /// A color, and "Controller's color", as one write each when the owner
+    /// gives them; else through the bindings, field by field.
+    var onPick: ((RGBLightColor) -> Void)? = nil
+    var onClear: (() -> Void)? = nil
+
+    /// The preset with a color chosen: a color replaces the rainbow.
+    nonisolated static func picked(_ rgb: RGBLightColor, in preset: Preset) -> Preset {
+        var updated = preset
+        updated.lightBarColor = rgb
+        updated.lightBarRainbow = nil
+        return updated
+    }
+    /// The preset with the light left to the controller's general color.
+    nonisolated static func cleared(_ preset: Preset) -> Preset {
+        var updated = preset
+        updated.lightBarColor = nil
+        updated.lightBarBrightness = nil
+        updated.lightBarRainbow = nil
+        updated.lightBarRainbowSpeed = nil
+        return updated
+    }
 
     @State private var customColor = Color.blue
 
@@ -1707,10 +1769,14 @@ struct PresetLightBarPopover: View {
                 Spacer()
                 if color != nil || isRainbow {
                     Button("Controller's color") {
-                        color = nil
-                        brightness = nil
-                        rainbow = nil
-                        rainbowSpeed = nil
+                        if let onClear {
+                            onClear()
+                        } else {
+                            color = nil
+                            brightness = nil
+                            rainbow = nil
+                            rainbowSpeed = nil
+                        }
                         onChanged()
                     }
                     .buttonStyle(.solidSecondaryCompact)
@@ -1837,8 +1903,12 @@ struct PresetLightBarPopover: View {
 
     /// A color replaces the rainbow.
     private func set(_ rgb: RGBLightColor) {
-        color = rgb
-        rainbow = nil
+        if let onPick {
+            onPick(rgb)
+        } else {
+            color = rgb
+            rainbow = nil
+        }
         onChanged()
     }
 }

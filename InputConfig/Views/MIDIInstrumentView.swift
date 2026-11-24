@@ -40,6 +40,10 @@ struct MIDIInstrumentView: View {
     @State private var deviceSignature: String = ""
     @State private var openInspector: String?
     @State private var stripWidthEstimate: CGFloat = 600
+    /// Made once per view. Built inline in body, onReceive got a new timer
+    /// on every refresh and every parent redraw, each one restarting the
+    /// 33 ms wait, so a parent redrawing that often starved the panel.
+    @State private var refreshClock = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
     /// Keyboard strip range: C0...C8, seven octaves.
     private static let lowNote = 24, highNote = 108
@@ -61,7 +65,7 @@ struct MIDIInstrumentView: View {
             MIDIInputService.shared.start()
             refresh(force: true)
         }
-        .onReceive(Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()) { _ in
+        .onReceive(refreshClock) { _ in
             // Paused while another app is in front and this window is
             // covered. Kept live when it is still on screen: the usual setup
             // is this window beside a DAW, playing with the DAW in front.
@@ -273,15 +277,7 @@ struct MIDIInstrumentView: View {
             }
 
             // Octave labels under every C.
-            HStack(spacing: 0) {
-                let whites = (Self.lowNote...Self.highNote).filter { !Self.isBlackKey($0) }
-                ForEach(whites, id: \.self) { note in
-                    Text(note % 12 == 0 ? MIDIService.noteName(note) : "")
-                        .font(.system(size: 7, weight: .medium).monospaced())
-                        .foregroundStyle(.hint)
-                        .frame(maxWidth: .infinity)
-                }
-            }
+            OctaveLabels()
             // The same from the keyboard and by voice: a menu of the bound notes.
             if !bound.isEmpty {
                 Menu {
@@ -348,6 +344,7 @@ struct MIDIInstrumentView: View {
                 switch binding.input.midiCCMode {
                 case .centered: return (String(localized: "Dial"), .orange)
                 case .relative: return (String(localized: "Turn"), .indigo)
+                case .trigger: return (String(localized: "midi.ccMode.trigger", defaultValue: "Trigger", comment: "Badge for the MIDI knob mode that fires a press per message; not a controller trigger"), .pink)
                 default: return (String(localized: "Switch"), .secondary)
                 }
             }
@@ -588,6 +585,23 @@ struct MIDIInstrumentView: View {
     private func inspectorPresented(prefix: String) -> Binding<Bool> {
         Binding(get: { openInspector?.hasPrefix(prefix) == true },
                 set: { if !$0 { openInspector = nil } })
+    }
+
+    /// The note names under the keys. A view of its own with no inputs, so
+    /// a refresh while playing (up to 30 a second) skips its 50 labels.
+    private struct OctaveLabels: View {
+        var body: some View {
+            HStack(spacing: 0) {
+                let whites = (MIDIInstrumentView.lowNote...MIDIInstrumentView.highNote)
+                    .filter { !MIDIInstrumentView.isBlackKey($0) }
+                ForEach(whites, id: \.self) { note in
+                    Text(note % 12 == 0 ? MIDIService.noteName(note) : "")
+                        .font(.system(size: 7, weight: .medium).monospaced())
+                        .foregroundStyle(.hint)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
     }
 
     private struct MIDIBindingMatch: Identifiable {

@@ -34,16 +34,7 @@ class MappingEngine: ObservableObject {
             // Bluetooth while it runs, without changing the Settings switch.
             // Weighed after this turn of the run loop: a reload or a switch
             // stops and starts in one turn, and the link must not drop.
-            if isRunning != oldValue {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    if self.isRunning, let preset = self.activePreset, Self.wantsSwitch2Bluetooth(preset) {
-                        Switch2BluetoothService.shared.startForPreset()
-                    } else {
-                        Switch2BluetoothService.shared.stopForPreset()
-                    }
-                }
-            }
+            if isRunning != oldValue { weighSwitch2SearchSoon() }
             #if DEBUG
             if isRunning { Self.debugRunning[ObjectIdentifier(self)] = activePreset?.name ?? "?" } else { Self.debugRunning.removeValue(forKey: ObjectIdentifier(self)) }
             #endif
@@ -67,6 +58,31 @@ class MappingEngine: ObservableObject {
         return preset.joysticks.contains { group in
             guard let m = group.controllerModel else { return false }
             return models.contains(ControllerModelID(m).base)
+        }
+    }
+
+    /// Whether a preset holds the Switch 2 search: one made for such a
+    /// controller runs, or the restart hold is watched for one that
+    /// stopped. The hold has to come from that controller, and with its
+    /// link closed at the stop it never could: the way back was lost for
+    /// someone who runs the Mac from that controller alone.
+    static func holdsSwitch2Search(running: Bool, presetWants: Bool, restartWatched: Bool, watchedWants: Bool) -> Bool {
+        running ? presetWants : restartWatched && watchedWants
+    }
+
+    /// Asks it after this turn of the run loop, when a stop and the start
+    /// or the restart watch that follows it in the same turn are done.
+    private func weighSwitch2SearchSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if Self.holdsSwitch2Search(running: self.isRunning,
+                                       presetWants: self.activePreset.map(Self.wantsSwitch2Bluetooth) ?? false,
+                                       restartWatched: self.restartWatch != nil,
+                                       watchedWants: self.restartWatchWantsSwitch2) {
+                Switch2BluetoothService.shared.startForPreset()
+            } else {
+                Switch2BluetoothService.shared.stopForPreset()
+            }
         }
     }
 
@@ -1624,6 +1640,11 @@ class MappingEngine: ObservableObject {
     private var rezeroObserver: NSObjectProtocol?
     private var tiltSignObserver: NSObjectProtocol?
 
+    /// Whether a slot that held nothing now holds a pad.
+    nonisolated static func slotGained(old: [Int: String], new: [Int: String]) -> Bool {
+        new.keys.contains { old[$0] == nil }
+    }
+
     /// Wipe per-bindKey state for any controller slot whose index is
     /// now out of range. Re-runs after refreshControllers() so the
     /// connected-controllers count is up to date. Belt-and-suspenders:
@@ -1652,7 +1673,14 @@ class MappingEngine: ObservableObject {
         let changedSlots = Set(slotOccupants.compactMap { slot, old in occupants[slot] != old ? slot : nil })
         let previousOccupants = slotOccupants
         slotOccupants = occupants
-        guard !changedSlots.isEmpty else { return }
+        guard !changedSlots.isEmpty else {
+            // A pad arriving in a slot that was empty changes no slot that
+            // held one, but a group pinned to it by name is still on its
+            // stand-in: the next poll works out the slots again, rather
+            // than up to 60 polls later.
+            if Self.slotGained(old: previousOccupants, new: occupants) { slotResolveTick = 60 }
+            return
+        }
         // A pad that came back is a new controller with a fresh tilt
         // estimate; the old anchor would make the pointer leap. Only when a
         // slot did change: dropping every anchor on each controller list
@@ -1675,7 +1703,7 @@ class MappingEngine: ObservableObject {
             return before != now
         }
         // Pads moved between slots: the next poll works out again which
-        // slot each group reads, rather than up to a second later, when a
+        // slot each group reads, rather than up to 60 polls later, when a
         // group would read whatever pad moved into its old number.
         slotResolveTick = 60
         // Drive follows its own slot, read even when no group's rows do:
@@ -1847,14 +1875,15 @@ class MappingEngine: ObservableObject {
                 default:
                     codes = []
                 }
-                for code in Set(codes) where keyCanBlock(code) {
+                // Keyed as the tap reads the key (KeyCodeMap.canonicalInputCode).
+                for code in Set(codes.map(KeyCodeMap.canonicalInputCode)) where keyCanBlock(code) {
                     out[code, default: []].append(row.modifiers)
                 }
             }
             // A held key blocked for its chord: every time, no condition.
             for row in group.bindings where row.blockHeldControls == true {
                 for m in row.modifiers where heldControlCanBlock(m) && m.type == .extKey {
-                    out[m.index, default: []].append([])
+                    out[KeyCodeMap.canonicalInputCode(m.index), default: []].append([])
                 }
             }
         }
@@ -1928,12 +1957,15 @@ class MappingEngine: ObservableObject {
                     if row.blockOriginal == true {
                         switch row.input.type {
                         case .extKey where readable:
-                            if runs { running[row.input.index, default: []].append(row.modifiers) }
-                            if pointer { pointerKeys[row.input.index, default: []].append(row.modifiers) }
+                            // Keyed as the tap reads the key, like the block set.
+                            let key = KeyCodeMap.canonicalInputCode(row.input.index)
+                            if runs { running[key, default: []].append(row.modifiers) }
+                            if pointer { pointerKeys[key, default: []].append(row.modifiers) }
                         case .keySequence where readable:
-                            if runs { for code in Set(row.input.sequenceSteps ?? []) { running[code, default: []].append(row.modifiers) } }
+                            let keys = Set((row.input.sequenceSteps ?? []).map(KeyCodeMap.canonicalInputCode))
+                            if runs { for code in keys { running[code, default: []].append(row.modifiers) } }
                             // Its keys are pointer keys too when it clicks.
-                            if pointer { for code in Set(row.input.sequenceSteps ?? []) { pointerKeys[code, default: []].append(row.modifiers) } }
+                            if pointer { for code in keys { pointerKeys[code, default: []].append(row.modifiers) } }
                         case .extMouse where Self.blocksMouseButton(row):
                             // A pad's Second control cannot be read from the
                             // tap: kept on every press, as the block set does
@@ -1950,8 +1982,9 @@ class MappingEngine: ObservableObject {
                     if row.blockHeldControls == true, runs || pointer {
                         for m in row.modifiers where Self.heldControlCanBlock(m) {
                             if m.type == .extKey {
-                                if runs { running[m.index, default: []].append([]) }
-                                if pointer { pointerKeys[m.index, default: []].append([]) }
+                                let key = KeyCodeMap.canonicalInputCode(m.index)
+                                if runs { running[key, default: []].append([]) }
+                                if pointer { pointerKeys[key, default: []].append([]) }
                             } else if m.type == .extMouse {
                                 if runs { buttons[m.index, default: []].append([]) }
                                 if pointer { pointerButtons[m.index, default: []].append([]) }
@@ -2273,6 +2306,13 @@ class MappingEngine: ObservableObject {
             TouchpadService.shared.retain()
             TouchpadService.second.retain()
             TouchpadService.steamRight.retain()
+            // A view that already held the pad (the Live Visualizer, the
+            // Touchpad Regions sheet) kept the motion swiped while no
+            // preset ran: drained here, or it goes out as one jump on the
+            // first poll.
+            TouchpadService.shared.endFrame()
+            TouchpadService.second.endFrame()
+            TouchpadService.steamRight.endFrame()
             usesTouchpadInput = true
             log("Touchpad input enabled")
         } else {
@@ -2482,7 +2522,7 @@ class MappingEngine: ObservableObject {
         let usesExtKey = inputTypes.contains(.extKey) || inputTypes.contains(.keySequence)
         keySequenceRows = preset.joysticks.flatMap(\.bindings)
             .filter { $0.input.type == .keySequence && !($0.input.sequenceSteps ?? []).isEmpty }
-            .map { ($0.id, $0.input.serialized, $0.input.sequenceSteps ?? [], max(150, min(3000, $0.gestureWindowMs ?? 600))) }
+            .map { ($0.id, $0.input.serialized, ($0.input.sequenceSteps ?? []).map(KeyCodeMap.canonicalInputCode), max(150, min(3000, $0.gestureWindowMs ?? 600))) }
         if usesExtMouse || usesExtKey {
             externalEventSubscription = ExternalInputDeviceService.shared.events
                 .receive(on: DispatchQueue.main)
@@ -2868,14 +2908,25 @@ class MappingEngine: ObservableObject {
     /// are dropped so a stick held across the deadzone edge does not flood
     /// the log.
     private var lastActivityAt: [String: CFTimeInterval] = [:]
-    private func activity(_ text: String, key: String? = nil, joystick: Int? = nil) {
+    /// The text is built only when the line is written: a row that fires
+    /// many times a second (turbo, a stick resting on its deadzone edge)
+    /// used to build its localized line on every press and then drop it.
+    private func activity(_ text: @autoclosure () -> String, key: String? = nil, joystick: Int? = nil) {
         if quietRun { return }
         if let key {
             let now = CACurrentMediaTime()
             if let last = lastActivityAt[key], now - last < 0.5 { return }
             lastActivityAt[key] = now
         }
-        ActivityLog.shared.event("Engine", text, slot: joystick)
+        ActivityLog.shared.event("Engine", text(), slot: joystick)
+    }
+
+    /// Whether a line under this key would be written now. Asked before a
+    /// caller builds the parts of its line.
+    private func activityDue(_ key: String) -> Bool {
+        if quietRun { return false }
+        guard let last = lastActivityAt[key] else { return true }
+        return CACurrentMediaTime() - last >= 0.5
     }
 
     /// Outputs for the log, keys named as they are sent (Command Z for
@@ -2889,9 +2940,19 @@ class MappingEngine: ObservableObject {
         return zip(outputs, shown).map { o, name in o.type == .key ? name : o.logName }
     }
 
-    private func log(_ message: String, joystick: Int? = nil) {
+    private func log(_ message: String, joystick: Int? = nil, level known: ActivityLog.Level? = nil) {
         if quietRun { return }
         debugLineCount += 1
+        // The poll's own lines say what they are: sorting them by their
+        // words lowercased and searched every line, on every press and
+        // release, and a key named "Error" turned its line red.
+        if let known {
+            ActivityLog.shared.post(known, "Engine", message, slot: joystick)
+            #if DEBUG
+            print("[MappingEngine] \(message)")
+            #endif
+            return
+        }
         // The same line goes to the app-wide activity log, classified so
         // the developer log can color and count it.
         let level: ActivityLog.Level
@@ -3186,7 +3247,11 @@ class MappingEngine: ObservableObject {
         lastSlotState.removeAll(keepingCapacity: true)
         stateByReadSlot.removeAll(keepingCapacity: true)
         oneShotFrame.removeAll(keepingCapacity: true)
-        // Refresh the group-to-controller map twice a second.
+        // The MIDI presses that last one poll (a Program Change, a tapped
+        // note, a pedal that sends on the press only) are handed to this one.
+        MIDIInputService.shared.beginPoll()
+        // Refresh the group-to-controller map every 60 polls (half a
+        // second at 120 Hz, two seconds at 30 Hz).
         slotResolveTick += 1
         if slotResolveTick >= 60 || slotForGroup.isEmpty {
             slotResolveTick = 0
@@ -3485,7 +3550,7 @@ class MappingEngine: ObservableObject {
                     if isActive && !wasActive {
                         let isToggledOn = toggleStates[bindKey] ?? false
                         if isToggledOn {
-                            if debugEnabled { log("TOGGLE OFF: \(inputKey)", joystick: joystickIndex) }
+                            if debugEnabled { log("TOGGLE OFF: \(inputKey)", joystick: joystickIndex, level: .info) }
                             // An auto-click pulse still down is let go here
                             // with the rest; its own release would send a
                             // second Note Off (see TURBO END).
@@ -3509,7 +3574,7 @@ class MappingEngine: ObservableObject {
                             // left the next press only switching it off.
                         } else {
                             if debugEnabled {
-                                log("TOGGLE ON: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex)
+                                log("TOGGLE ON: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex, level: .info)
                             }
                             // A macro binding with Toggle enabled fires its
                             // chain on the ON transition. The toggle branch
@@ -3593,7 +3658,7 @@ class MappingEngine: ObservableObject {
                     if isActive {
                         if !wasActive {
                             if debugEnabled {
-                                log("TURBO START: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex)
+                                log("TURBO START: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex, level: .info)
                             }
                             fireFeedback(for: binding, joystickIndex: joystickIndex)
                             // A light bar color follows the physical hold, not
@@ -3606,7 +3671,7 @@ class MappingEngine: ObservableObject {
                             fireContinuousOutputs(binding.outputs, input: binding.input, state: s, binding: binding)
                         }
                     } else if wasActive {
-                        if debugEnabled { log("TURBO END: \(inputKey)", joystick: joystickIndex) }
+                        if debugEnabled { log("TURBO END: \(inputKey)", joystick: joystickIndex, level: .info) }
                         // Only what is still down: the last pulse if it has
                         // not been let go, and on a stick a CC or bend's rest
                         // value (pulses leave those out). Everything else was
@@ -3626,13 +3691,13 @@ class MappingEngine: ObservableObject {
                     if isActive && !wasActive {
                         StatsService.shared.recordButtonPress(inputKey: inputKey)
                         if debugEnabled {
-                            log("PRESS: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex)
+                            log("PRESS: \(inputKey) -> \(Self.logNames(binding.outputs))", joystick: joystickIndex, level: .event)
                         }
                         // Motion and touchpad rows are continuous; their edges
                         // are not events anyone wants a line for. Nor is a
                         // press made during Pause: nothing goes out for it.
                         if binding.input.type != .motion, binding.input.type != .touchpad,
-                           !outputsBlocked || pointerOnly {
+                           !outputsBlocked || pointerOnly, activityDue(bindKey) {
                             let what: String
                             if let steps = binding.macroSteps, !steps.isEmpty {
                                 what = (steps.count == 1 ? String(localized: "macro, 1 step") : String(localized: "macro, \(steps.count) steps"))
@@ -3729,7 +3794,7 @@ class MappingEngine: ObservableObject {
                             let taps = tapCount.removeValue(forKey: bindKey) ?? 1
                             pulseTaps(binding, count: taps, bindKey: bindKey)
                         }
-                        if debugEnabled { log("HOLD: \(inputKey)", joystick: joystickIndex) }
+                        if debugEnabled { log("HOLD: \(inputKey)", joystick: joystickIndex, level: .info) }
                         if !outputsBlocked || pointerOnly {
                             activity(String(localized: "\(binding.input.displayName) held \u{2192} \(Self.describe(hold))"), joystick: joystickIndex)
                         }
@@ -3749,7 +3814,7 @@ class MappingEngine: ObservableObject {
                         fireContinuousOutputs(hold.filter { $0.type == .mouseMotion || $0.type == .mouseWheel },
                                               input: binding.input, state: s, binding: binding)
                     } else if !isActive && wasActive {
-                        if debugEnabled { log("RELEASE: \(inputKey)", joystick: joystickIndex) }
+                        if debugEnabled { log("RELEASE: \(inputKey)", joystick: joystickIndex, level: .event) }
                         if usesDeferred {
                             if forcedOff, !holdFired.contains(bindKey) {
                                 // Taken over by a chord or a region, not let
@@ -4068,7 +4133,7 @@ class MappingEngine: ObservableObject {
         case .midi:
             switch input.midiKind ?? .note {
             case .programChange, .transport: return true
-            case .cc: return input.midiCCMode == .relative
+            case .cc: return input.midiCCMode == .relative || input.midiCCMode == .trigger
             default: return false
             }
         default: return false
@@ -4203,6 +4268,17 @@ class MappingEngine: ObservableObject {
         for c in controllerService.connectedControllers {
             FeedbackService.shared.vibrate(controller: c, intensity: intensity, durationMs: ms)
         }
+        // The pads read directly that have a motor path, the way a Vibrate
+        // row reaches them (see fireFeedback): a preset run from one of
+        // these alone got no warning before the stop. Any other raw pad has
+        // no motor path and stays still.
+        for pad in controllerService.rawHIDGamepadSlots.values {
+            if pad.profile?.layout == .steamController2026 {
+                RawHIDGamepadService.shared.rumbleSteamController2026(gamepadID: pad.id, intensity: intensity, durationMs: ms)
+            } else if !XInputUSBService.shared.rumble(key: pad.id, intensity: intensity, durationMs: ms) {
+                RawHIDGamepadService.shared.rumbleEightBitDo(gamepadID: pad.id, intensity: intensity, durationMs: ms)
+            }
+        }
     }
 
     /// Whether the controller emergency hold is held on any pad right now:
@@ -4287,8 +4363,11 @@ class MappingEngine: ObservableObject {
     /// rested longer than it.
     private var restartAction: (() -> Void)?
     private var restartReleased = false
+    /// The watched preset is made for a Switch 2 controller: its Bluetooth
+    /// link stays for as long as the watch does (see holdsSwitch2Search).
+    private var restartWatchWantsSwitch2 = false
 
-    func watchForRestartHold(_ restart: @escaping () -> Void) {
+    func watchForRestartHold(for preset: Preset? = nil, _ restart: @escaping () -> Void) {
         restartWatch?.invalidate()
         restartHoldStart = nil
         restartAction = restart
@@ -4317,6 +4396,11 @@ class MappingEngine: ObservableObject {
         }
         RunLoop.main.add(watch, forMode: .common)
         restartWatch = watch
+        // Armed in the turn of the stop, the weighing that stop queued sees
+        // it; armed later, the search starts again here.
+        let wants = preset.map(Self.wantsSwitch2Bluetooth) ?? false
+        if wants || restartWatchWantsSwitch2 { weighSwitch2SearchSoon() }
+        restartWatchWantsSwitch2 = wants
     }
 
     private func restartTick() {
@@ -4347,6 +4431,12 @@ class MappingEngine: ObservableObject {
         AppActivity.shared.release("restartHold")
         // A start sets them again itself.
         if !isRunning { controllerService.emergencyButtons = [] }
+        // The Switch 2 link the watch kept: weighed once the start that
+        // ended the watch (if one did) has run.
+        if restartWatchWantsSwitch2 {
+            restartWatchWantsSwitch2 = false
+            weighSwitch2SearchSoon()
+        }
     }
 
 
@@ -4403,7 +4493,7 @@ class MappingEngine: ObservableObject {
         guard !keySequenceRows.isEmpty else { return }
         let now = CACurrentMediaTime()
         for row in keySequenceRows {
-            var r = keySequenceRecognizers[row.key] ?? ButtonSequenceRecognizer()
+            var r = keySequenceRecognizers[row.key] ?? .forEvents()
             r.windowMs = row.windowMs
             // One key down is one press: down, then up again at once.
             let fired = r.feed(down: [code], now: now, steps: row.steps)
@@ -4482,7 +4572,8 @@ class MappingEngine: ObservableObject {
     private func checkExternalInput(_ input: InputEvent) -> Bool {
         switch input.type {
         case .extKey:
-            let hidCode = input.index
+            // As the key arrives: two list entries are read under a twin.
+            let hidCode = KeyCodeMap.canonicalInputCode(input.index)
             if let dev = input.extDeviceID {
                 return externalKeysDown[dev]?.contains(hidCode) ?? false
             }
@@ -4615,12 +4706,21 @@ class MappingEngine: ObservableObject {
         return pollCount <= entry.pressedUntilPoll
     }
 
+    /// A button's value as held or not. A trigger scanned as a button
+    /// reports how far it is pulled: a row already held lets go a little
+    /// below the half pull that pressed it, so a trigger resting near half
+    /// is not a press and release on every reading. A plain button reads 0
+    /// or 1 and is the same either way.
+    nonisolated static func buttonHeld(_ value: Float, wasHeld: Bool) -> Bool {
+        value > (wasHeld ? 0.45 : 0.5)
+    }
+
     private func checkInput(_ input: InputEvent, state: ControllerState, binding: BindingModel? = nil) -> Bool {
         let axisThreshold = binding?.deadzone ?? defaultAxisThreshold
 
         switch input.type {
         case .button:
-            return (state.buttons[input.index] ?? 0) > 0.5
+            return Self.buttonHeld(state.buttons[input.index] ?? 0, wasHeld: hysteresisActive)
 
         case .axis:
             guard let value = axisReading(state, input, binding) else { return false }
@@ -4961,6 +5061,24 @@ class MappingEngine: ObservableObject {
         return v < 0 ? -mag : mag
     }
 
+    /// The side of the stick, for a row set to both ways ("+/-") that
+    /// drives an output with a direction of its own (Mouse Motion, Mouse
+    /// Wheel): -1 on the stick's negative side, where the output runs the
+    /// other way, else 1. A row with a direction stored is always 1: the
+    /// output's own direction stands.
+    nonisolated static func bothWaysSide(_ value: Float, direction: AxisDirection?) -> Float {
+        direction == nil && value < 0 ? -1 : 1
+    }
+
+    /// The same for a row at full speed (Variable Sensitivity off), which
+    /// keeps running with the stick let go when it is latched on: below
+    /// the point where the row lets go (`restBelow`) the reading is a
+    /// resting stick's noise and no side, so the output's own direction
+    /// stands, as it did before the side counted.
+    nonisolated static func bothWaysSide(_ value: Float, direction: AxisDirection?, restBelow: Float) -> Float {
+        abs(value) > restBelow ? bothWaysSide(value, direction: direction) : 1
+    }
+
     private func bipolarValue(_ v: Float, binding: BindingModel?) -> Float {
         Self.bipolarValue(v, inner: binding?.deadzone ?? defaultAxisThreshold, outer: binding?.outerDeadzone ?? 1.0)
     }
@@ -5007,14 +5125,20 @@ class MappingEngine: ObservableObject {
                 // binding uses the halfway point as the press threshold -
                 // that matches how a sustain pedal or a switch-style CC
                 // (0 = off, 127 = on) behaves, which is the common case.
+                // A control that sends the same value on every press and
+                // nothing between (a foot switch sending 127 each time) is
+                // read as one press per message: the service knows which.
+                if input.axisDirection != .negative {
+                    return service.ccSwitchDown(input.index, channel: channel, deviceID: device)
+                }
                 guard let value = service.ccValue(input.index, channel: channel, deviceID: device) else {
                     return false
                 }
-                let normalized = Float(value) / 127.0
-                switch input.axisDirection {
-                case .negative: return normalized < 0.5
-                default:        return normalized >= 0.5
-                }
+                return Float(value) / 127.0 < 0.5
+
+            case .trigger:
+                // Every message is one press, whatever its value.
+                return service.ccTriggerDown(input.index, channel: channel, deviceID: device)
 
             case .centered:
                 // Dial mode: center (64) is zero and the binding behaves
@@ -5180,9 +5304,9 @@ class MappingEngine: ObservableObject {
                 // grows toward 0 and is signed for the half-axis filter.
                 if input.axisDirection == .negative { return -(1 - Float(v) / 127.0) }
                 return Float(v) / 127.0
-            case .relative:
-                // Turn mode has no standing position; it is consumed as
-                // discrete steps in checkMIDIInput.
+            case .relative, .trigger:
+                // Turn and Trigger have no standing position; they are
+                // read as presses in checkMIDIInput.
                 return nil
             }
         case .pitchBend:
@@ -5615,8 +5739,20 @@ class MappingEngine: ObservableObject {
                 // Fire on press only - a system function has no release
                 // half. Hold + turbo and Turn-mode knobs repeat naturally
                 // because each pulse is a fresh press edge.
-                if press, let kind = output.systemActionKind {
-                    SystemActionService.shared.perform(kind, parameter: output.text)
+                // The two microphone kinds that act while held are the
+                // exception: their release undoes the press, and only a
+                // press that was made here is undone.
+                if let kind = output.systemActionKind {
+                    if press {
+                        SystemActionService.shared.perform(kind, parameter: output.text)
+                        if kind.actsWhileHeld {
+                            heldSystemActions.removeAll { $0.owner == owner }
+                            heldSystemActions.append((owner, kind, output.text))
+                        }
+                    } else if kind.actsWhileHeld, let i = heldSystemActions.firstIndex(where: { $0.owner == owner }) {
+                        let held = heldSystemActions.remove(at: i)
+                        SystemActionService.shared.letGo(held.kind, parameter: held.parameter)
+                    }
                 }
 
             case .mouseMotion, .mouseWheel:
@@ -5710,6 +5846,8 @@ class MappingEngine: ObservableObject {
     /// slots each one colored. The newest one on a slot is what it shows;
     /// letting it go shows the one under it, or puts the light back.
     private var heldLights: [(owner: String, slots: [Int], color: RGBLightColor)] = []
+    /// The System Functions that act while held and are down now, by row.
+    private var heldSystemActions: [(owner: String, kind: SystemActionKind, parameter: String?)] = []
 
     /// The slots a row's light output colors: the controller its group
     /// reads, when that one has a light bar. A group that reads the Mac's
@@ -5777,6 +5915,11 @@ class MappingEngine: ObservableObject {
     private func releaseHeldLights(withPrefix prefix: String? = nil) {
         let owners = heldLights.map(\.owner).filter { prefix == nil || $0.hasPrefix(prefix!) }
         for owner in owners { releaseHeldLight(owner: owner) }
+        // A microphone held on or held muted is let go with them, so a
+        // preset that stops mid-press leaves no microphone open.
+        let held = heldSystemActions.filter { prefix == nil || $0.owner.hasPrefix(prefix!) }
+        heldSystemActions.removeAll { prefix == nil || $0.owner.hasPrefix(prefix!) }
+        for entry in held { SystemActionService.shared.letGo(entry.kind, parameter: entry.parameter) }
     }
 
     /// Execute a macro sequence asynchronously.
@@ -5913,6 +6056,13 @@ class MappingEngine: ObservableObject {
             } else {
                 // Wait out the window before firing this count's action, in
                 // case another tap arrives.
+                // A tap that starts a new chain while the one before is
+                // still parked (its window is over, its late block has not
+                // run yet): the parked count is paid here, since the token
+                // below calls that block off and the tap was lost.
+                if !chained, lastTapTime[bindKey] != nil {
+                    pulseTaps(binding, count: tapCount[bindKey] ?? 1, bindKey: bindKey)
+                }
                 lastTapTime[bindKey] = now
                 tapCount[bindKey] = count
                 let token = (pendingSingleTapToken[bindKey] ?? 0) + 1
@@ -6421,11 +6571,16 @@ class MappingEngine: ObservableObject {
 
                 var magnitude: Float = 1.0
                 var signedMagnitude: Float = 1.0   // for touchpad / motion: sign indicates direction of motion
+                // A stick row set to both ways ("+/-") moves the way the
+                // output says on the stick's positive side and the other
+                // way on its negative side. Any other row stays at 1.
+                var side: Float = 1
                 if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding, smoothed: true) {
                     // Only this row's half of the stick: a toggled-on row runs
                     // every frame, and the other half moved it its own way.
                     if input.axisDirection == .positive { axisValue = max(0, axisValue) }
                     else if input.axisDirection == .negative { axisValue = min(0, axisValue) }
+                    side = Self.bothWaysSide(axisValue, direction: input.axisDirection)
                     let rawMag = min(abs(axisValue), 1.0)
                     // Apply inner/outer deadzone remap before the curve so
                     // the curve operates on the post-deadzone normalized
@@ -6434,6 +6589,11 @@ class MappingEngine: ObservableObject {
                     if let curve = binding?.sensitivityCurve {
                         magnitude = abs(curve.apply(magnitude))
                     }
+                } else if input.type == .axis, input.axisDirection == nil, let axisValue = axisReading(state, input, binding) {
+                    // Full speed past the deadzone: the stick's side still
+                    // counts. Not for a latched row with the stick at rest
+                    // (below the release point checkInput uses).
+                    side = Self.bothWaysSide(axisValue, direction: nil, restBelow: (binding?.deadzone ?? defaultAxisThreshold) * 0.9)
                 } else if input.type == .touchpad,
                           let tpAxis = input.touchpadAxis {
                     let finger = input.touchpadFinger ?? input.index
@@ -6610,7 +6770,7 @@ class MappingEngine: ObservableObject {
                     let raw = abs(signedMagnitude) * Float(speed) / 6.0
                     scaledSpeed = raw.isFinite ? raw : 0
                 } else {
-                    let raw = Float(speed) * magnitude
+                    let raw = Float(speed) * magnitude * side
                     scaledSpeed = raw.isFinite ? raw : 0
                 }
                 // Everything reaches the pump as a rate: sticks and dials by
@@ -6640,16 +6800,22 @@ class MappingEngine: ObservableObject {
                 let useVariable = binding?.variableSensitivity ?? (input.type == .axis || input.type == .midi)
 
                 var magnitude: Float = 1.0
+                // A both ways ("+/-") stick row scrolls the other way on the
+                // stick's negative side, as in Mouse Motion above.
+                var side: Float = 1
                 if useVariable, input.type == .axis, var axisValue = axisReading(state, input, binding, smoothed: true) {
                     // Only this row's half of the stick: a toggled-on row runs
                     // every frame, and the other half moved it its own way.
                     if input.axisDirection == .positive { axisValue = max(0, axisValue) }
                     else if input.axisDirection == .negative { axisValue = min(0, axisValue) }
+                    side = Self.bothWaysSide(axisValue, direction: input.axisDirection)
                     let rawMag = min(abs(axisValue), 1.0)
                     magnitude = remapMagnitude(rawMag, binding: binding)
                     if let curve = binding?.sensitivityCurve {
                         magnitude = abs(curve.apply(magnitude))
                     }
+                } else if input.type == .axis, input.axisDirection == nil, let axisValue = axisReading(state, input, binding) {
+                    side = Self.bothWaysSide(axisValue, direction: nil, restBelow: (binding?.deadzone ?? defaultAxisThreshold) * 0.9)
                 }
                 // MIDI dial: scroll speed proportional to how far off
                 // center the knob sits, same shaping as the mouse path.
@@ -6670,7 +6836,7 @@ class MappingEngine: ObservableObject {
                 // Same NaN guard as the mouse-motion path above. Stick-driven
                 // scrolling is time-scaled like the pointer; a dial's value is
                 // a position, not a rate, and is left alone.
-                let rawScroll = Float(speed) * magnitude
+                let rawScroll = Float(speed) * magnitude * side
                 // Clamp before Int32(): an absurd imported scroll speed would
                 // otherwise trap even though isFinite is true.
                 let scaledSpeed = rawScroll.isFinite
@@ -6839,6 +7005,10 @@ class MappingEngine: ObservableObject {
             RawHIDGamepadService.shared.rumbleSteamController2026(
                 gamepadID: pad.id, intensity: binding.hapticIntensity ?? 0.6,
                 durationMs: binding.hapticDurationMs ?? FeedbackService.defaultDurationMs)
+        } else if binding.hapticEnabled == true, let pad = controllerService.rawHIDGamepadSlots[slot],
+                  XInputUSBService.shared.rumble(key: pad.id, intensity: binding.hapticIntensity ?? 0.6,
+                                                 durationMs: binding.hapticDurationMs ?? FeedbackService.defaultDurationMs) {
+            // An Xbox 360 class pad over USB: its own motor message, sent.
         } else if binding.hapticEnabled == true, let pad = controllerService.rawHIDGamepadSlots[slot] {
             // An 8BitDo pad read directly whose motors are proven (see
             // RawHIDGamepadService.eightBitDoRumbleProducts); any other raw

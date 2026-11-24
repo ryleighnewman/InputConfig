@@ -171,8 +171,9 @@ enum ControllerTypeDetector {
 
     /// The brand a controller's name (vendor and product category) says,
     /// or nil when the name says none. The Test Bench checks this same
-    /// function, so its brand tests exercise the shipped logic.
-    static func brand(fromName name: String) -> ControllerBrand? {
+    /// function, so its brand tests exercise the shipped logic. `vendorID`
+    /// is the USB vendor when the caller has one (nil or 0: not known).
+    static func brand(fromName name: String, vendorID: Int32? = nil) -> ControllerBrand? {
         let combined = name.lowercased()
 
         // 8BitDo first: in its other modes an 8BitDo pad can report an Xbox
@@ -196,8 +197,13 @@ enum ControllerTypeDetector {
             return .joyConPair
         }
 
-        if combined.contains("switch pro") || combined.contains("pro controller") ||
-           combined.contains("nintendo") {
+        // A real Switch Pro Controller names itself just "Pro Controller",
+        // and so do other makers' pads (Nacon's Revolution Pro Controller
+        // is a PlayStation pad): the bare name counts only from Nintendo's
+        // vendor ID, or when no vendor ID is known.
+        let nintendoOrUnknown = vendorID == nil || vendorID == 0 || vendorID == 0x057E
+        if combined.contains("switch pro") || combined.contains("nintendo") ||
+           (combined.contains("pro controller") && nintendoOrUnknown) {
             return .switchPro
         }
 

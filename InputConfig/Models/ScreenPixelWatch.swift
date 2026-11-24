@@ -40,10 +40,25 @@ struct ScreenPixelWatch: Identifiable, Codable, Hashable {
     var green: Int = 255
     var blue: Int = 255
     var tolerance: Double = ScreenPixelWatch.defaultTolerance
-    var mode: ScreenPixelMode = .match
+    var mode: ScreenPixelMode = .match {
+        // A mode picked here is the user's answer and replaces one this
+        // build could not read.
+        didSet { rawMode = nil }
+    }
     /// Palette slot, shared with the region maps so a row and its watch
     /// show the same color.
     var colorIndex: Int = 0
+    /// The mode as the file names it, when this build has no such mode (a
+    /// newer version's). While it is set the watch does not fire (see
+    /// `ScreenPixelService.isPressed`) and it is written back in place of
+    /// `mode`: read as Match, the watch fired on the wrong condition and
+    /// the next save made that permanent.
+    var rawMode: String? = nil
+    /// False for a watch whose mode this build cannot read.
+    var canFire: Bool { rawMode == nil }
+    /// Fields this build has no key for (written by a newer version),
+    /// kept and written back so saving here does not delete them.
+    var extraFields: [String: JSONValue] = [:]
 
     static let defaultTolerance = 0.12
     static let maxWatches = 32
@@ -89,7 +104,7 @@ struct ScreenPixelWatch: Identifiable, Codable, Hashable {
 
     // Tolerant decoding: a field a newer build adds, or one left out of a
     // hand-edited file, never drops the watch.
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, display, x, y, red, green, blue, tolerance, mode, colorIndex
     }
 
@@ -114,8 +129,14 @@ struct ScreenPixelWatch: Identifiable, Codable, Hashable {
         green = (try? c.decode(Int.self, forKey: .green)) ?? 255
         blue = (try? c.decode(Int.self, forKey: .blue)) ?? 255
         tolerance = (try? c.decode(Double.self, forKey: .tolerance)) ?? Self.defaultTolerance
-        mode = (try? c.decode(ScreenPixelMode.self, forKey: .mode)) ?? .match
+        if let known = try? c.decode(ScreenPixelMode.self, forKey: .mode) {
+            mode = known
+        } else {
+            mode = .match
+            rawMode = try? c.decode(String.self, forKey: .mode)
+        }
         colorIndex = (try? c.decode(Int.self, forKey: .colorIndex)) ?? 0
+        extraFields = JSONValue.unknownFields(from: decoder, known: Set(CodingKeys.allCases.map(\.stringValue)))
         self = clampedValues()
     }
 
@@ -130,7 +151,8 @@ struct ScreenPixelWatch: Identifiable, Codable, Hashable {
         try c.encode(green, forKey: .green)
         try c.encode(blue, forKey: .blue)
         try c.encode(tolerance, forKey: .tolerance)
-        try c.encode(mode, forKey: .mode)
+        try c.encode(rawMode ?? mode.rawValue, forKey: .mode)
         try c.encode(colorIndex, forKey: .colorIndex)
+        try JSONValue.encodeUnknownFields(extraFields, to: encoder)
     }
 }

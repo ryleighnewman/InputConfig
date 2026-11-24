@@ -55,6 +55,13 @@ struct Switch2Calibration: Equatable {
     static let userLeftStickAddress: UInt32 = 0x1FC040
     static let userRightStickAddress: UInt32 = 0x1FC080
     static let addresses: [UInt32] = [leftStickAddress, rightStickAddress, triggerZeroAddress, userLeftStickAddress, userRightStickAddress]
+    /// The blocks read from one product. The trigger rest block is the
+    /// GameCube controller's alone, as in SDL (SDL_hidapi_switch2.c reads
+    /// 0x13140 for that product only); a Pro Controller or a Joy-Con 2 has
+    /// no analog trigger to rest.
+    static func addresses(product: Int32) -> [UInt32] {
+        product == 0x2073 ? addresses : addresses.filter { $0 != triggerZeroAddress }
+    }
 
     /// The 16 byte vendor command that reads a 0x40 byte flash block:
     /// `02 91 00 01 00 08 00 00` then the address little endian at 12 to
@@ -133,8 +140,32 @@ struct Switch2Calibration: Equatable {
         return byProduct[product]
     }
 
+    /// Which calibration a decode reads. `stored` is the one read from the
+    /// pad's flash, what every live report uses. `constants` is the fixed
+    /// fallback numbers whatever is stored: the fixtures were written
+    /// against those, and once a Switch 2 controller had been plugged in
+    /// they decoded through its calibration and failed.
+    enum Choice {
+        case stored
+        case constants
+        case given(Switch2Calibration)
+
+        func resolve(product: Int32) -> Switch2Calibration? {
+            switch self {
+            case .stored: return Switch2Calibration.current(product: product)
+            case .constants: return nil
+            case .given(let calibration): return calibration
+            }
+        }
+    }
+
+    /// `nil` forgets the product's calibration. A read that brought
+    /// nothing (the pad was already streaming and did not answer) keeps
+    /// what an earlier read stored: replaced by nothing, the sticks of a
+    /// pad in use jumped to the fallback constants.
     static func store(_ cal: Switch2Calibration?, product: Int32) {
         lock.lock(); defer { lock.unlock() }
-        if let cal, cal.left != nil || cal.right != nil || cal.triggerZeroL != nil { byProduct[product] = cal } else { byProduct.removeValue(forKey: product) }
+        guard let cal else { byProduct.removeValue(forKey: product); return }
+        if cal.left != nil || cal.right != nil || cal.triggerZeroL != nil { byProduct[product] = cal }
     }
 }

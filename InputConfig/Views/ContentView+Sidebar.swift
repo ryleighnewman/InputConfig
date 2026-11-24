@@ -11,6 +11,10 @@ extension ContentView {
     var sidebarView: some View {
         VStack(spacing: 0) {
             let _ = LaunchSignpost.once("Sidebar.body")
+            // Read here, in the scope's own body: the rows' key reads it inside
+            // the ScrollViewReader's closure, and a folder click must re-run
+            // this scope, which makes that key again (see SidebarState).
+            let _ = selectedFolderID
             controllerStatusBar
                 // Picking a preset moves the highlight off the folder.
                 .onChange(of: selectedPresetId) { _, _ in selectedFolderID = nil }
@@ -248,7 +252,7 @@ extension ContentView {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                TextField("Search presets", text: $sidebarQuery)
+                TextField("Search presets", text: sidebarQueryBinding)
                     .textFieldStyle(.plain)
                     .font(.callout)
                     .accessibilityLabel("Search presets")
@@ -562,10 +566,15 @@ extension ContentView {
     /// selected folder (a clicked header, else the selected preset's).
     private func handleSidebarCommand(_ command: SidebarCommand) {
         // Nothing acts behind an open sheet: a second sheet cannot show, and
-        // a reorder behind the editor went unseen.
-        guard canPresentSheet else {
+        // a reorder behind the editor went unseen. Nor under Simple View,
+        // where the selection these act on is hidden.
+        guard canPresentSheet, !simpleView else {
             NSSound.beep()
-            AccessibilityNotification.Announcement(String(localized: "Close the open window or dialog first")).post()
+            // Say which of the two is in the way: under Simple View there is
+            // no window or dialog to close.
+            AccessibilityNotification.Announcement(canPresentSheet
+                ? String(localized: "Turn off Simple View in the View menu first")
+                : String(localized: "Close the open window or dialog first")).post()
             return
         }
         let preset = selectedPresetId.flatMap { id in presetStore.presets.first { $0.id == id } }
@@ -584,7 +593,7 @@ extension ContentView {
         switch command {
         case .duplicate: if let preset { duplicateAndAnnounce(preset) } else { refuse(noPreset) }
         case .export: if let preset { exportPreset(preset) } else { refuse(noPreset) }
-        case .print: if let preset { PresetPrint.run(preset, controllers: controllerService) } else { refuse(noPreset) }
+        case .print: if let preset { PresetPrint.run(committed(preset), controllers: controllerService) } else { refuse(noPreset) }
         case .favorite: if let preset { toggleFavoriteAndAnnounce(preset) } else { refuse(noPreset) }
         case .delete: if let preset { confirmDelete(preset) } else { refuse(noPreset) }
         case .moveToFolder: if let preset { sidebarMoveTarget = .preset(preset.id) } else { refuse(noPreset) }
@@ -599,13 +608,16 @@ extension ContentView {
             guard !isSearching else {
                 refuse(String(localized: "Clear the search to reorder presets")); return
             }
-            let list = presetStore.presets(in: preset.groupID)
+            // The list it is shown in: a preset whose folder is gone sits
+            // with the folderless ones.
+            let home = presetStore.container(of: preset.groupID)
+            let list = presetStore.presets(in: home)
             guard let i = list.firstIndex(where: { $0.id == preset.id }) else { return }
             let up = command == .moveUp
             guard up ? i > 0 : i < list.count - 1 else {
                 refuse(up ? String(localized: "Already first") : String(localized: "Already last")); return
             }
-            presetStore.movePresets(in: preset.groupID, fromOffsets: IndexSet(integer: i), toOffset: up ? i - 1 : i + 2)
+            presetStore.movePresets(in: home, fromOffsets: IndexSet(integer: i), toOffset: up ? i - 1 : i + 2)
             AccessibilityNotification.Announcement(String(localized: "Moved to position \(up ? i : i + 2)")).post()
         case .renameFolder:
             if let folder { renameGroupName = ShippedText.t(folder.name); renamingGroup = folder } else { refuse(noFolder) }
@@ -662,10 +674,10 @@ extension ContentView {
             }
             AccessibilityNotification.Announcement(opening ? String(localized: "Expanded") : String(localized: "Collapsed")).post()
         case .expandAll:
-            for g in presetStore.groups where !g.isExpanded { presetStore.setGroupExpanded(g.id, true) }
+            presetStore.setAllGroupsExpanded(true)
             AccessibilityNotification.Announcement(String(localized: "All folders expanded")).post()
         case .collapseAll:
-            for g in presetStore.groups where g.isExpanded { presetStore.setGroupExpanded(g.id, false) }
+            presetStore.setAllGroupsExpanded(false)
             // The target becomes the top-level folder it sits in, which is
             // still on screen.
             var top = folderID
@@ -1130,7 +1142,7 @@ extension ContentView {
             onConvert: { source, dest in
                 // Shown and said, as Duplicate does: under Favorites only the
                 // new copy was hidden and nothing changed on screen.
-                let copy = presetStore.convertPreset(preset, from: source, to: dest)
+                let copy = presetStore.convertPreset(committed(preset), from: source, to: dest)
                 revealPreset(copy.id)
                 AccessibilityNotification.Announcement(String(localized: "Converted to \(copy.shownName)")).post()
             },

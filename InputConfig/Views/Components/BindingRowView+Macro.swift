@@ -206,7 +206,9 @@ extension BindingRowView {
     private func macroStepsList(_ steps: [MacroStep]) -> some View {
         VStack(spacing: 3) {
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                // An added or duplicated step fades in where it lands.
                 macroStepRow(index: index, step: step)
+                    .transition(revealTransition)
             }
         }
     }
@@ -273,8 +275,8 @@ extension BindingRowView {
             } else if step.action.type == .key {
                 KeyCodePicker(selectedCode: macroStepKeyBinding(at: index),
                               inShortcut: !(macroStep(at: index)?.modifiers ?? []).allSatisfy { !KeyCodeMap.shortcutModifierCodes.contains($0) },
-                              voiceRole: "Step \(index + 1) key")
-                    .frame(width: 80 * max(1, textScale))
+                              voiceRole: "Step \(index + 1) key",
+                              minWidth: 80 * max(1, textScale))
                     .accessibilityLabel("Step \(index + 1) key")
                 ShortcutModifierToggles(outputs: macroStepShortcutBinding(at: index), defaultKey: 4)
             } else if step.action.type == .mouseButton {
@@ -292,11 +294,13 @@ extension BindingRowView {
                 .controlSize(.small)
                 .frame(width: 90 * max(1, textScale))
             } else if step.action.type == .typeText {
-                TextField("Text to type", text: macroStepTextBinding(at: index))
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .frame(minWidth: 140, maxWidth: 260)
-                    .accessibilityLabel("Step \(index + 1) text")
+                DraftTextField(macroStepTextBinding(at: index)) { text in
+                    TextField("Text to type", text: text)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                        .frame(minWidth: 140, maxWidth: 260)
+                        .accessibilityLabel("Step \(index + 1) text")
+                }
             } else if step.action.type == .mouseWheelStep {
                 Picker("Scroll direction", selection: macroStepScrollBinding(at: index)) {
                     Text("Up").tag("1 -")
@@ -347,12 +351,14 @@ extension BindingRowView {
                 // past the window.
                 .frame(width: 110 * max(1, textScale))
                 if [.runShortcut, .openApp, .openURL].contains(step.action.systemActionKind ?? .playPause) {
-                    TextField(step.action.systemActionKind == .openURL ? "https:// or any URL scheme"
-                              : step.action.systemActionKind == .openApp ? "App name or full path" : "Shortcut name",
-                              text: macroStepTextBinding(at: index))
-                        .textFieldStyle(.roundedBorder)
-                        .controlSize(.small)
-                        .frame(minWidth: 80, idealWidth: 110, maxWidth: 240)
+                    DraftTextField(macroStepTextBinding(at: index)) { text in
+                        TextField(step.action.systemActionKind == .openURL ? "https:// or any URL scheme"
+                                  : step.action.systemActionKind == .openApp ? "App name or full path" : "Shortcut name",
+                                  text: text)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .frame(minWidth: 80, idealWidth: 110, maxWidth: 240)
+                    }
                 }
             }
 

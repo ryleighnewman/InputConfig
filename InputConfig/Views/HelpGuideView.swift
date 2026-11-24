@@ -40,10 +40,17 @@ struct HelpGuideView: View {
         // NSString haystacks: a Swift String is bridged whole to NSString on
         // every range(of:), 292 KB twice per keystroke; the search itself
         // is the same call.
+        // Word by word: "light bar color" finds a guide that holds all three
+        // words anywhere, where the whole phrase found it only when the
+        // guide wrote them side by side. One language has to hold them all.
         let options: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        let words = q.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return HelpGuideLibrary.localizedAll }
+        func holdsAll(_ text: NSString) -> Bool {
+            words.allSatisfy { text.range(of: $0, options: options).location != NSNotFound }
+        }
         return zip(HelpGuideLibrary.localizedAll, zip(searchLocalized, searchEnglish))
-            .filter { $0.1.0.range(of: q, options: options).location != NSNotFound
-                || (HelpLocalizer.isTranslated && $0.1.1.range(of: q, options: options).location != NSNotFound) }.map(\.0)
+            .filter { holdsAll($0.1.0) || (HelpLocalizer.isTranslated && holdsAll($0.1.1)) }.map(\.0)
     }
 
     @MainActor private static let searchLocalized: [NSString] = HelpGuideLibrary.localizedAll.map { $0.searchText as NSString }
@@ -91,7 +98,7 @@ struct HelpGuideView: View {
                                 // The guide that is already selected behind
                                 // Overview opens too: picking it again does
                                 // not change the selection.
-                                .background(SidebarClickTarget {
+                                .background(SidebarClickTarget(library: false) {
                                     if selectedGuideID == guide.id { showingHome = false }
                                 })
                                 .accessibilityAction {
@@ -100,6 +107,13 @@ struct HelpGuideView: View {
                                 }
                         }
                     }
+                }
+                // A search with no match says so: the list was simply
+                // empty. No tag, so the row cannot be selected.
+                if visibleGuides.isEmpty {
+                    Text("No matching guides")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .navigationTitle("")

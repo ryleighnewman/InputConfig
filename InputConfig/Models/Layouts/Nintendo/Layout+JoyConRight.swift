@@ -53,7 +53,7 @@ extension ControllerLayout {
             // A Joy-Con 2 (R) read directly (USB grip or Bluetooth LE)
             // takes this drawing with the same numbering.
             [.rawProfileLayout("switch2JoyConRight")],
-            [.vidPid(vendor: 0x057E, products: [0x2067])],
+            [.vidPid(vendor: 0x057E, products: [Switch2USBEnabler.joyConRightProductID])],
         ],
         matchPriority: 10,
         readability: .partial("On a first Joy-Con (R) R, ZR and the stick press never reach the Mac; a Joy-Con 2 is read directly (USB grip or Bluetooth LE) with R, ZR, C, GR and its motion sensors, not yet checked on one"),
@@ -126,8 +126,10 @@ extension ControllerLayout {
         PlacedControl(id: "home", kind: .homeButton, center: CGPoint(x: 0.18, y: 0.31), size: 0.062,
                       symbol: "house", inputs: .button(10),
                       note: "macOS keeps its system gesture off HOME while InputConfig reads the pad", callout: .below),
+        // A Joy-Con 2 read directly sends the stick press as btn 12.
         PlacedControl(id: "stick", kind: .stick, center: CGPoint(x: 0.415, y: 0.5), size: 0.145,
                       inputs: ControlInputs(axes: [.x(0), .y(1)], hat: 0),
+                      pathInputs: [.rawProfile: ControlInputs(axes: [.x(0), .y(1)], hat: 0, press: 12)],
                       note: "macOS reports it as Direction Pad: axes 0 and 1 and hat 0. Its press is not in Apple's single Joy-Con profile",
                       callout: .below),
 

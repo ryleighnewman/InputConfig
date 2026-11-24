@@ -517,6 +517,7 @@ final class TouchpadService: @unchecked Sendable {
         // A region under a resting finger has no deadline, so it has to be
         // cleared here too or it stays pressed into the next preset.
         regionPressExpiry.removeAll()
+        regionPressStart.removeAll()
         lock.unlock()
     }
 
@@ -961,10 +962,21 @@ final class TouchpadService: @unchecked Sendable {
     /// A gesture no row read within half a second is dropped: with nothing
     /// consuming it (no preset bound to it) the flag stayed set for good
     /// and kept its row highlighted in the editor.
+    /// One a row read once and never again (its preset stopped inside the
+    /// hold window) is dropped a quarter second past that window, for the
+    /// same reason.
     private func expireStaleGestureLocked() {
-        guard pendingGesture != nil, gestureFiredAt == nil,
-              CACurrentMediaTime() - pendingGestureAt > 0.5 else { return }
+        guard pendingGesture != nil,
+              Self.gestureIsStale(firedAt: gestureFiredAt, pendingAt: pendingGestureAt,
+                                  now: CACurrentMediaTime(), holdWindow: gestureHoldWindow) else { return }
         pendingGesture = nil
+        gestureFiredAt = nil
+    }
+
+    nonisolated static func gestureIsStale(firedAt: CFTimeInterval?, pendingAt: CFTimeInterval,
+                                           now: CFTimeInterval, holdWindow: CFTimeInterval) -> Bool {
+        if let firedAt { return now - firedAt > holdWindow + 0.25 }
+        return now - pendingAt > 0.5
     }
 
     /// Run the gesture state machine against the latest finger state.
@@ -1071,6 +1083,7 @@ final class TouchpadService: @unchecked Sendable {
         let ids = Set(newRegions.map(\.id))
         pressedRegions = pressedRegions.filter { ids.contains($0) }
         regionPressExpiry = regionPressExpiry.filter { ids.contains($0.key) }
+        regionPressStart = regionPressStart.filter { ids.contains($0.key) }
         // A finger resting still sends nothing, so test it against the new
         // bounds now: a zone moved off it lets go at once.
         recomputePressedRegions(f0Active: currentF0 != nil, f0X: currentF0?.x ?? 0, f0Y: currentF0?.y ?? 0,
@@ -1104,6 +1117,18 @@ final class TouchpadService: @unchecked Sendable {
     /// so quick regional taps silently did nothing.
     private let regionPressLatch: TimeInterval = 0.04
     private var regionPressExpiry: [UUID: TimeInterval] = [:]
+    /// When the press of each region under a finger began. Guarded by `lock`.
+    private var regionPressStart: [UUID: TimeInterval] = [:]
+
+    /// When a region the finger just left lets go. The latch promises only
+    /// that a press lasts `latch` from its start: a tap shorter than that
+    /// is kept until then, and a region held longer lets go on the sample
+    /// where the finger leaves. Started at the leave whatever the press had
+    /// lasted, a slide from one region into the next read both pressed for
+    /// the length of the latch.
+    nonisolated static func regionLatchEnd(pressStart: TimeInterval, left: TimeInterval, latch: TimeInterval) -> TimeInterval {
+        max(left, pressStart + latch)
+    }
 
     /// Recompute which regions are currently pressed based on the latest
     /// finger positions. Called from `updateCurrentPositions`.
@@ -1112,6 +1137,7 @@ final class TouchpadService: @unchecked Sendable {
         guard !regions.isEmpty else {
             pressedRegions.removeAll()
             regionPressExpiry.removeAll()
+            regionPressStart.removeAll()
             return
         }
         var held = Set<UUID>()
@@ -1127,12 +1153,20 @@ final class TouchpadService: @unchecked Sendable {
         }
         // A region under a finger stays pressed with no deadline: a finger
         // held still sends no new events, and a 40 ms expiry let go of the
-        // region while it was still held. The short latch starts when the
-        // finger leaves, so a quick tap still lasts a poll frame.
+        // region while it was still held. When the finger leaves, the short
+        // latch runs from the start of the press, so a quick tap still
+        // lasts a poll frame and a longer press lets go at once.
         for (id, expiry) in regionPressExpiry where expiry == .infinity && !held.contains(id) {
-            regionPressExpiry[id] = now + regionPressLatch
+            regionPressExpiry[id] = Self.regionLatchEnd(pressStart: regionPressStart[id] ?? now, left: now,
+                                                        latch: regionPressLatch)
+            regionPressStart[id] = nil
         }
-        for id in held { regionPressExpiry[id] = .infinity }
+        for id in held {
+            // A press begins when the finger arrives, also when it comes
+            // back inside the latch of the press before.
+            if regionPressExpiry[id] != .infinity { regionPressStart[id] = now }
+            regionPressExpiry[id] = .infinity
+        }
         var pressed = held
         for (id, expiry) in regionPressExpiry where expiry > now {
             pressed.insert(id)

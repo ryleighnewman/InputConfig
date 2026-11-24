@@ -11,6 +11,9 @@ struct TouchpadCalibrationView: View {
     @EnvironmentObject private var presetStore: PresetStore
     @Environment(\.appTextScale) private var textScale
     @Environment(\.regionsCompact) private var regionsCompact
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
     /// Not observed: its 60 Hz pointer publish re-rendered this whole sheet.
     private var cursorRegions: CursorRegionService { .shared }
 
@@ -541,7 +544,10 @@ struct TouchpadCalibrationView: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(Color.accentColor)
+                .opacity(isSelected ? 0.15 : 0)
+                // The highlight fades to the picked row instead of jumping.
+                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isSelected)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -751,13 +757,19 @@ struct TouchpadCalibrationView: View {
     /// TouchpadWidget doesn't have that problem because its trail uses
     /// a TimelineView whose updates don't go through parent @State.
     ///
-    /// This subview adopts the same pattern: TimelineView ticks at
-    /// 60 Hz from the display refresh, reads TouchpadService directly,
-    /// and renders only the dots. The parent's @State is unaffected
-    /// so the rest of the sheet stays static between ticks.
+    /// This subview adopts the same pattern: TimelineView ticks with
+    /// the display refresh, reads TouchpadService directly, and renders
+    /// only the dots. The parent's @State is unaffected so the rest of
+    /// the sheet stays static between ticks. The dots sit in an overlay
+    /// on a clear view of the panel's size, which takes no part in the
+    /// layout around it, so their ticks never lay the editor's Zones
+    /// section out again.
     @ViewBuilder
     private func fingerDots(in size: CGSize) -> some View {
-        FingerDotsOverlay(size: size, service: padService)
+        Color.clear
+            .frame(width: size.width, height: size.height)
+            .overlay { FingerDotsOverlay(size: size, service: padService) }
+            .allowsHitTesting(false)
     }
 
 
@@ -920,7 +932,9 @@ struct TouchpadCalibrationView: View {
         guard preset.touchpadRegions != before.touchpadRegions
                 || preset.cursorRegions != before.cursorRegions
                 || preset.stickRegions != before.stickRegions else { return }
-        presetStore.presets[idx] = preset
+        // The store puts the preset in its list itself. Written there
+        // first, the save found nothing changed and kept no Previous
+        // version of the regions as they were.
         presetStore.savePreset(preset)
     }
 
@@ -957,7 +971,7 @@ struct TouchpadCalibrationView: View {
         var preset = presetStore.presets[idx]
         change(&preset)
         preset.captureRegionsFromServices()
-        presetStore.presets[idx] = preset
+        // Not written into the store's list first: see `saveRegionsOutsideEditor`.
         presetStore.savePreset(preset)
     }
 
@@ -1076,6 +1090,8 @@ private struct FingerDotsOverlay: View {
     /// allocation-free.
     private let surfaceWidth: CGFloat
     private let surfaceHeight: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
 
     init(size: CGSize, service: TouchpadService = .shared) {
         self.size = size
@@ -1086,7 +1102,10 @@ private struct FingerDotsOverlay: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { _ in
+        // Every frame of the display, 120 a second on ProMotion, so a finger
+        // is followed as smoothly as the pad reports it; 60 a second under
+        // either Reduce Motion, as before.
+        TimelineView(.animation(minimumInterval: systemReduceMotion || appReduceMotion ? 1.0 / 60.0 : nil, paused: false)) { _ in
             ZStack {
                 if let p = service.currentPosition(finger: 0) {
                     Circle()

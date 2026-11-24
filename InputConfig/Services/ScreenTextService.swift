@@ -165,7 +165,9 @@ final class ScreenTextService: ObservableObject {
     static let pulseSeconds: TimeInterval = 0.15
 
     func isPressed(_ id: UUID) -> Bool {
-        guard timer != nil, let w = watch(with: id) else { return false }
+        // A mode this build cannot read never fires: `mode` is then only
+        // a stand-in.
+        guard timer != nil, let w = watch(with: id), w.canFire else { return false }
         switch w.mode {
         case .shows: return pressed.contains(id)
         case .appears:
@@ -219,12 +221,10 @@ final class ScreenTextService: ObservableObject {
                     // same text: Vision runs only on a changed capture.
                     let preferred = Locale.preferredLanguages
                     let hash = Self.pixelHash(image)
-                    let text: String
-                    if let hash, let last, last.hash == hash, last.words == w.text, last.preferred == preferred {
-                        text = last.text
-                    } else {
-                        text = Self.recognizeText(in: image, lookingFor: w.text, preferred: preferred)
-                    }
+                    // nil: the recognition failed, which says nothing of
+                    // the words on screen.
+                    let text = Self.reusedText(last, hash: hash, words: w.text, preferred: preferred)
+                        ?? Self.recognizeText(in: image, lookingFor: w.text, preferred: preferred)
                     Task { @MainActor in
                         guard let self, self.run == run else { return }
                         self.inFlight.remove(w.id)
@@ -233,13 +233,31 @@ final class ScreenTextService: ObservableObject {
                         // state back.
                         guard self.watch(with: w.id) == w else { return }
                         self.saidMissing.remove(w.id)
+                        self.lastRead[w.id] = Self.readToKeep(hash: hash, words: w.text, preferred: preferred, text: text)
+                        // A failed recognition is not "no words": kept, the
+                        // same pixels gave it back until they changed. The
+                        // row stays as it is and the capture is read again.
+                        guard let text else { self.noteFailedRead(w.id); return }
                         self.failedReads[w.id] = nil
-                        self.lastRead[w.id] = hash.map { LastRead(hash: $0, words: w.text, preferred: preferred, text: text) }
                         self.apply(text: text, to: w)
                     }
                 }
             }
         }
+    }
+
+    /// The text of the last read when the pixels, the words looked for and
+    /// the languages are all the same as then, else nil: Vision reads.
+    nonisolated static func reusedText(_ last: LastRead?, hash: UInt64?, words: String, preferred: [String]) -> String? {
+        guard let hash, let last, last.hash == hash, last.words == words, last.preferred == preferred else { return nil }
+        return last.text
+    }
+
+    /// What a read leaves for the next capture: nothing without a hash,
+    /// and nothing when the recognition failed.
+    nonisolated static func readToKeep(hash: UInt64?, words: String, preferred: [String], text: String?) -> LastRead? {
+        guard let hash, let text else { return nil }
+        return LastRead(hash: hash, words: words, preferred: preferred, text: text)
     }
 
     private func apply(text: String, to w: ScreenTextWatch) {
@@ -298,14 +316,14 @@ final class ScreenTextService: ObservableObject {
     /// correction, so a label is read as printed; the level and languages
     /// come from recognitionPlan.
     nonisolated static func recognizeText(in image: CGImage, lookingFor words: String,
-                                          preferred: [String] = Locale.preferredLanguages) -> String {
+                                          preferred: [String] = Locale.preferredLanguages) -> String? {
         let plan = recognitionPlan(for: words, preferred: preferred)
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = plan.accurate ? .accurate : .fast
         request.recognitionLanguages = plan.languages
         request.usesLanguageCorrection = false
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
-        guard (try? handler.perform([request])) != nil else { return "" }
+        guard (try? handler.perform([request])) != nil else { return nil }
         // Lines first: sweeping down the boxes, one joins the open line
         // when its bottom sits within half the smaller box's height of the
         // line's first box, else it starts the next line. (Against the

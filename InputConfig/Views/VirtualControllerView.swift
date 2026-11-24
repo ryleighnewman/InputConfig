@@ -33,9 +33,12 @@ enum SpokenLive {
         default: return String(localized: "\(step) percent")
         }
     }
-    /// An angle to the nearest 15 degrees.
+    /// An angle to the nearest 15 degrees. Non-finite reads 0 and a wild
+    /// one is held to a hundred turns: Int(NaN) traps, and so does a
+    /// number past Int's range.
     static func degrees(_ radians: Float) -> Int {
-        Int(((radians * 180 / .pi) / 15).rounded()) * 15
+        guard radians.isFinite else { return 0 }
+        return Int((min(36000, max(-36000, radians * 180 / .pi)) / 15).rounded()) * 15
     }
 }
 
@@ -198,6 +201,10 @@ struct VirtualControllerView<Trailing: View>: View {
     @ObservedObject private var accessibility = AccessibilityPermissionService.shared
     /// Redraws the light bar chip when Settings changes the switch.
     @AppStorage(GameControllerService.leaveLightBarKey) var lightBarLeftToSystem = false
+    /// What the chip says: the preset's own choice comes before the switch.
+    var lightBarLeft: Bool {
+        LightBarChipLabel.leftToSystem(preset: preset.automation.leaveLightBar, setting: lightBarLeftToSystem)
+    }
     /// This instance's name on the keyboard / mouse monitor. Unique per
     /// instance: when a preset changes, the old visualizer's disappear
     /// can run after the new one's appear, and a shared name let that
@@ -531,27 +538,32 @@ struct VirtualControllerView<Trailing: View>: View {
                 including: control.editMode ? .subviews : .all
             )
             .overlay(alignment: .bottomLeading) {
-                if panOffset != .zero || control.scale != 1 {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            panOffset = .zero
-                            control.scale = 1
+                Group {
+                    if panOffset != .zero || control.scale != 1 {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                panOffset = .zero
+                                control.scale = 1
+                            }
+                            saveView()
+                        } label: {
+                            Label("Reset View", systemImage: "arrow.counterclockwise")
+                                .font(.caption)
                         }
-                        saveView()
-                    } label: {
-                        Label("Reset View", systemImage: "arrow.counterclockwise")
-                            .font(.caption)
+                        .buttonStyle(.solidSecondaryCompact)
+                        .help("Put the map back in the middle at its normal size")
+                        // Panning without a drag, for VoiceOver, Switch Control
+                        // and keyboard users with the map zoomed in.
+                        .accessibilityAction(named: "Pan left") { pan(dx: 40, dy: 0) }
+                        .accessibilityAction(named: "Pan right") { pan(dx: -40, dy: 0) }
+                        .accessibilityAction(named: "Pan up") { pan(dx: 0, dy: 40) }
+                        .accessibilityAction(named: "Pan down") { pan(dx: 0, dy: -40) }
+                        .padding(10)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottomLeading)))
                     }
-                    .buttonStyle(.solidSecondaryCompact)
-                    .help("Put the map back in the middle at its normal size")
-                    // Panning without a drag, for VoiceOver, Switch Control
-                    // and keyboard users with the map zoomed in.
-                    .accessibilityAction(named: "Pan left") { pan(dx: 40, dy: 0) }
-                    .accessibilityAction(named: "Pan right") { pan(dx: -40, dy: 0) }
-                    .accessibilityAction(named: "Pan up") { pan(dx: 0, dy: 40) }
-                    .accessibilityAction(named: "Pan down") { pan(dx: 0, dy: -40) }
-                    .padding(10)
                 }
+                // Comes in as the map leaves its place instead of popping in.
+                .animation(.snappy(duration: 0.2), value: panOffset != .zero || control.scale != 1)
             }
             .contextMenu {
                 if control.scale != 1 || panOffset != .zero {
@@ -638,12 +650,19 @@ struct VirtualControllerView<Trailing: View>: View {
             if liveDrag != nil { liveDrag = nil }
             if dragInProgress != .zero { dragInProgress = .zero }
             if gyroResetFeedback != nil { gyroResetFeedback = nil }
-            if accessProfileEditing != nil { accessProfileEditing = nil }
-            if accessEditorSelection != nil { accessEditorSelection = nil }
-            if accessEditorSaving { accessEditorSaving = false }
-            if accessEditorError != nil { accessEditorError = nil }
-            if accessEditorOriginal != nil { accessEditorOriginal = nil }
-            if accessEditorDevice != nil { accessEditorDevice = nil }
+            // The profile editor is about the controller, not the preset:
+            // with a write out or edits in it, it stays (a hotkey or an app
+            // rule switching presets dropped the edits unasked, and cleared
+            // the saving mark under a write in flight). It still closes when
+            // the pad or the drawing changes, below.
+            if AccessProfileEditorPanel.closesOnPresetSwitch(edited: accessProfileEditing != accessEditorOriginal,
+                                                             saving: accessEditorSaving) {
+                if accessProfileEditing != nil { accessProfileEditing = nil }
+                if accessEditorSelection != nil { accessEditorSelection = nil }
+                if accessEditorError != nil { accessEditorError = nil }
+                if accessEditorOriginal != nil { accessEditorOriginal = nil }
+                if accessEditorDevice != nil { accessEditorDevice = nil }
+            }
             if fixedSlot == nil, slotState != 0 { slotState = 0 }
         }
         // The pad behind the panel changed (a Connected pick, pads shifting
@@ -2175,10 +2194,12 @@ struct VirtualControllerView<Trailing: View>: View {
 
 /// Re-renders only its content when the Mac's keyboard or mouse input
 /// changes, so the views around it do not.
-/// Redraws its content as the pointer moves over a screen map.
+/// Redraws a screen map when the display under the pointer changes. Not on
+/// every pointer move: the map's dot and its lit regions follow the pointer
+/// in views of their own (LivePointerReader), so a move redraws the dot,
+/// not every region with its inspector.
 struct CursorRegionObserver<Content: View>: View {
     @ObservedObject private var cursorService = CursorRegionService.shared
-    @ObservedObject private var pointer = CursorRegionService.shared.livePointer
     @ViewBuilder let content: () -> Content
     var body: some View { content() }
 }
@@ -2217,7 +2238,9 @@ extension EnvironmentValues {
 private struct SharpZoom: ViewModifier {
     let active: Bool
     func body(content: Content) -> some View {
-        if active { content.drawingGroup() } else { content }
+        // No display rate glides inside: each frame of one would draw the
+        // whole picture again.
+        if active { content.environment(\.visualizerDisplayRate, false).drawingGroup() } else { content }
     }
 }
 

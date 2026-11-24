@@ -125,6 +125,16 @@ struct DevicesMenuContent: View {
             // Its own helper reads it as a controller; its keyboard and
             // mouse interfaces are only lizard mode.
             Text("\(entry.name) (read automatically as a Steam Controller)")
+        } else if ownedBySystem, let device, gamepads.mayReadInsteadOfGameController(device) {
+            // GameController reads it, but for some third-party pads it
+            // passes along nothing, or less than the pad sends. Reading it
+            // here instead switches GameController's copy off, so no press
+            // arrives twice; unticking it here goes back to GameController.
+            Menu("\(entry.name) (read by macOS GameController)") {
+                Button("Read Directly Instead") {
+                    gamepads.readInsteadOfGameController(device)
+                }
+            }
         } else if ownedBySystem {
             // GameController already reads it and it shows up as a
             // controller on its own. Connecting it here too would double

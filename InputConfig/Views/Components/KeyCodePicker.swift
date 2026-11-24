@@ -16,6 +16,13 @@ struct KeyCodePicker: View {
     /// What Voice Control answers to after the key shown: "click A" or
     /// "click Key".
     var voiceRole: LocalizedStringKey = "Key"
+    /// The least width the picker keeps in a row that is short of room. Set,
+    /// the picker shows the whole name where the row has the room and cuts
+    /// it with an ellipsis where it has not. Unset, it always takes the
+    /// name's full width. Never put it in a fixed frame narrower than a name:
+    /// a long one ("# ~ (ISO, next to Return)") is then drawn past the frame
+    /// and over the next control.
+    var minWidth: CGFloat? = nil
     /// Key names follow the input source; a change to it redraws the picker.
     @ObservedObject private var keyboardLayout = KeyboardLayoutService.shared
 
@@ -24,6 +31,9 @@ struct KeyCodePicker: View {
     }
 
     var body: some View {
+        // Looked up once: the name is shown, spoken and listened for below,
+        // and each lookup reads the layout, a setting and the strings table.
+        let name = displayName
         SearchableMenu(choices: {
             KeyCodeMap.groups.flatMap { group in
                 (KeyCodeMap.keysByGroup[group] ?? []).map { key in
@@ -46,7 +56,7 @@ struct KeyCodePicker: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(displayName)
+                Text(name)
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -57,13 +67,30 @@ struct KeyCodePicker: View {
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)
-        .fixedSize()
+        .modifier(KeyPickerWidth(minWidth: minWidth, name: name))
         // Expose the selected key as the accessibility VALUE so call sites can
         // set a role label (for example "Accelerate key") without erasing the
         // key name for VoiceOver.
         // A lone mark ("," or "-") by name: VoiceOver drops it otherwise.
-        .accessibilityValue(HotKeySpec.spokenKey(displayName))
-        .accessibilityInputLabels([Text(displayName), Text(voiceRole)])
+        .accessibilityValue(HotKeySpec.spokenKey(name))
+        .accessibilityInputLabels([Text(name), Text(voiceRole)])
+    }
+}
+
+/// How wide a key picker is: the name's own width, or, given a least width,
+/// whatever the row can spare down to it. A menu with no least width folds
+/// to a bare ellipsis in a tight row, which is why one or the other applies.
+private struct KeyPickerWidth: ViewModifier {
+    let minWidth: CGFloat?
+    let name: String
+
+    func body(content: Content) -> some View {
+        if let minWidth {
+            // A name cut short is still readable under the pointer.
+            content.frame(minWidth: minWidth).help(name)
+        } else {
+            content.fixedSize()
+        }
     }
 }
 
@@ -92,20 +119,36 @@ enum MenuSearch {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
     }
 
+    /// A menu's choices with their words folded once, when Search opens:
+    /// folding every choice again on each keystroke and arrow key was most
+    /// of the panel's typing cost.
+    struct Prepared {
+        let choices: [MenuSearchChoice]
+        fileprivate let folded: [(title: String, text: String, titleWords: [Substring])]
+
+        init(_ choices: [MenuSearchChoice] = []) {
+            self.choices = choices
+            folded = choices.map { choice in
+                let title = MenuSearch.fold(choice.title)
+                return (title, title + " " + MenuSearch.fold(choice.path) + " " + MenuSearch.fold(choice.keywords),
+                        title.split { !$0.isLetter && !$0.isNumber })
+            }
+        }
+    }
+
     /// The choices that hold every typed word, in their name, their place
     /// in the menu or their other words, best first: the exact name, then
     /// a name that starts with what was typed, then a word in the name
     /// that does, then the rest in menu order.
-    static func matches(_ choices: [MenuSearchChoice], query: String) -> [Int] {
+    static func matches(_ prepared: Prepared, query: String) -> [Int] {
         let words = fold(query).split(whereSeparator: \.isWhitespace).map(String.init)
-        guard let first = words.first else { return Array(choices.indices) }
+        guard let first = words.first else { return Array(prepared.choices.indices) }
         let whole = words.joined(separator: " ")
         var ranked: [(rank: Int, index: Int)] = []
-        for (index, choice) in choices.enumerated() {
-            let title = fold(choice.title)
-            let text = title + " " + fold(choice.path) + " " + fold(choice.keywords)
-            guard words.allSatisfy({ text.contains($0) }) else { continue }
-            let titleWords = title.split { !$0.isLetter && !$0.isNumber }
+        for (index, folded) in prepared.folded.enumerated() {
+            let title = folded.title
+            guard words.allSatisfy({ folded.text.contains($0) }) else { continue }
+            let titleWords = folded.titleWords
             let rank = title == whole ? 0
                 : title.hasPrefix(whole) ? 1
                 : titleWords.contains(where: { $0.hasPrefix(first) }) ? 2
@@ -125,6 +168,9 @@ struct SearchableMenu<Content: View, MenuLabel: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewBuilder let label: () -> MenuLabel
     @State private var searching = false
+    /// The choices as they were when Search opened, built and folded once
+    /// rather than again each time the row redraws under the open panel.
+    @State private var opened = MenuSearch.Prepared()
 
     init(choices: @escaping () -> [MenuSearchChoice],
          @ViewBuilder content: @escaping () -> Content,
@@ -139,7 +185,10 @@ struct SearchableMenu<Content: View, MenuLabel: View>: View {
             Button {
                 // Once the menu has closed: a popover asked for while it is
                 // still open is dismissed along with it.
-                DispatchQueue.main.async { searching = true }
+                DispatchQueue.main.async {
+                    opened = MenuSearch.Prepared(choices())
+                    searching = true
+                }
             } label: {
                 Label("Search\u{2026}", systemImage: "magnifyingglass")
             }
@@ -148,8 +197,16 @@ struct SearchableMenu<Content: View, MenuLabel: View>: View {
         } label: {
             label()
         }
-        .popover(isPresented: $searching, arrowEdge: .bottom) {
-            MenuSearchPanel(choices: choices(), close: { searching = false })
+        // The popover is attached only while Search is open: an idle one on
+        // every dropdown of every row was graph work on each editor edit.
+        // Same anchor, the dropdown's own frame.
+        .background {
+            if searching {
+                Color.clear
+                    .popover(isPresented: $searching, arrowEdge: .bottom) {
+                        MenuSearchPanel(search: opened, close: { searching = false })
+                    }
+            }
         }
     }
 }
@@ -157,8 +214,9 @@ struct SearchableMenu<Content: View, MenuLabel: View>: View {
 /// The panel Search opens: a field, then the choices that match. Up and
 /// Down move through them, Return picks the highlighted one, Escape closes.
 struct MenuSearchPanel: View {
-    let choices: [MenuSearchChoice]
+    let search: MenuSearch.Prepared
     let close: () -> Void
+    private var choices: [MenuSearchChoice] { search.choices }
     @State private var query = ""
     @State private var highlighted = 0
     @Environment(\.appTextScale) private var textScale
@@ -167,7 +225,7 @@ struct MenuSearchPanel: View {
     private var rowHeight: CGFloat { 24 * max(1, textScale) }
 
     var body: some View {
-        let hits = MenuSearch.matches(choices, query: query)
+        let hits = MenuSearch.matches(search, query: query)
         VStack(spacing: 0) {
             MenuSearchField(text: $query,
                             move: { step in
@@ -203,7 +261,7 @@ struct MenuSearchPanel: View {
         .frame(width: 340 * min(1.6, max(1, textScale)))
         .onChange(of: query) { _, _ in
             highlighted = 0
-            announce(hits: MenuSearch.matches(choices, query: query))
+            announce(hits: MenuSearch.matches(search, query: query))
         }
         .onChange(of: highlighted) { _, _ in announce(hits: hits) }
     }

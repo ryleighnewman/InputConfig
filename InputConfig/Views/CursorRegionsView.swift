@@ -21,7 +21,9 @@ import Combine
 /// on the left and the region list on the right, sixteen regions at most.
 struct CursorRegionsView: View {
     @ObservedObject private var svc = CursorRegionService.shared
-    @ObservedObject private var externalInput = ExternalInputDeviceService.shared
+    // ExternalInputDeviceService is not observed here: it publishes on every
+    // key press and release, and the card ran its whole body for each. Only
+    // TrackpadPressureReader, which draws the pressure, watches it.
 
     /// Drives the live pointer dot while this view is visible.
     private let cursorPollTimer = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
@@ -29,6 +31,9 @@ struct CursorRegionsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTextScale) private var textScale
     @Environment(\.regionsCompact) private var regionsCompact
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    private var reduceMotion: Bool { systemReduceMotion || appReduceMotion }
 
     /// Opened from a screen region row: the display that region belongs to,
     /// shown alone (nil is every display), with no display menu.
@@ -65,8 +70,14 @@ struct CursorRegionsView: View {
 
     /// Regions that count on the shown display: every-display ones plus
     /// that display's own.
-    private var regionsOnCanvas: [TouchpadRegion] {
-        regions.filter { $0.display == nil || $0.display == shownDisplay }
+    private var regionsOnCanvas: [TouchpadRegion] { Self.onCanvas(regions, shown: shownDisplay) }
+    nonisolated static func onCanvas(_ regions: [TouchpadRegion], shown: DisplayKey?) -> [TouchpadRegion] {
+        regions.filter { $0.display == nil || $0.display == shown }
+    }
+    /// The selected region, only while it is on the canvas shown.
+    nonisolated static func selected(_ id: UUID?, onCanvas: [TouchpadRegion]) -> TouchpadRegion? {
+        guard let id else { return nil }
+        return onCanvas.first { $0.id == id }
     }
 
     /// The pointer dot is only true when the pointer is on the display the
@@ -186,11 +197,24 @@ struct CursorRegionsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 regionsList
                 HStack(spacing: 20) {
-                    LivePointerReader { _ in statBlock("Pointer", pointerOnly) }
+                    // The pointer and the pressure are drawn over unseen room
+                    // for their widest value: they change with every move of
+                    // the pointer, and the card around them stays put.
+                    statRoom("Pointer", [pointerIsOnShownDisplay
+                                         ? "\(DeadzoneCalibrationView.percent(1)), \(DeadzoneCalibrationView.percent(1))"
+                                         : String(localized: "On another display")])
+                        .overlay(alignment: .leading) {
+                            LivePointerReader { _ in statBlock("Pointer", pointerOnly) }
+                        }
                     statBlock("In region", pressedNames.isEmpty ? String(localized: "None") : pressedNames.formatted(.list(type: .and)))
-                    statBlock("Trackpad pressure", externalInput.trackpadPressureStage >= 2
-                              ? String(localized: "Deep")
-                              : DeadzoneCalibrationView.percent(Double(min(max(externalInput.trackpadPressure, 0), 1))))
+                    statRoom("Trackpad pressure", [DeadzoneCalibrationView.percent(1), String(localized: "Deep")])
+                        .overlay(alignment: .leading) {
+                            TrackpadPressureReader { pressure, stage in
+                                statBlock("Trackpad pressure", stage >= 2
+                                          ? String(localized: "Deep")
+                                          : DeadzoneCalibrationView.percent(Double(min(max(pressure, 0), 1))))
+                            }
+                        }
                     Spacer(minLength: 0)
                 }
             }
@@ -199,6 +223,16 @@ struct CursorRegionsView: View {
     }
 
     private var pressedNames: [String] { regionsOnCanvas.filter { svc.isRegionPressed($0.id) }.map(\.shownName) }
+
+    /// Room for a reading's widest values, unseen, so the live reading
+    /// drawn over it changes without laying the card out again.
+    private func statRoom(_ label: LocalizedStringKey, _ values: [String]) -> some View {
+        ZStack(alignment: .leading) {
+            ForEach(Array(values.enumerated()), id: \.offset) { _, v in statBlock(label, v) }
+        }
+        .hidden()
+        .accessibilityHidden(true)
+    }
 
     private func statBlock(_ label: LocalizedStringKey, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -230,11 +264,21 @@ struct CursorRegionsView: View {
 
                     Spacer(minLength: 8)
 
-                    LivePointerReader { _ in
-                        Text(cursorReadout)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.hint)
-                    }
+                    // Over unseen room for its widest value, so a moving
+                    // pointer does not lay the sheet out again.
+                    Text(pointerIsOnShownDisplay
+                         ? String(localized: "Pointer: \(String(format: "%.0f%%", 100.0)), \(String(format: "%.0f%%", 100.0))")
+                         : String(localized: "Pointer on another display"))
+                        .font(.caption.monospacedDigit())
+                        .hidden()
+                        .accessibilityHidden(true)
+                        .overlay(alignment: .trailing) {
+                            LivePointerReader { _ in
+                                Text(cursorReadout)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.hint)
+                            }
+                        }
 
                     Text("\(regions.count) / \(Self.maxRegions) regions")
                         .font(.caption)
@@ -391,30 +435,32 @@ struct CursorRegionsView: View {
                 // over this window, bindable as Pressure and Deep Press on
                 // the Mouse input type. The editor shows it under the display.
                 if !embedded {
-                HStack(spacing: 5) {
-                    Image(systemName: "hand.tap.fill")
-                        .font(.caption2)
-                        .accessibilityHidden(true)
-                    ProgressView(value: Double(min(max(externalInput.trackpadPressure, 0), 1)))
-                        .frame(width: 64)
-                    Text(externalInput.trackpadPressureStage >= 2
-                         ? String(localized: "Deep")
-                         : String(format: "%.0f%%", externalInput.trackpadPressure * 100))
-                        .font(.caption2.monospacedDigit())
-                        .frame(width: 34, alignment: .leading)
+                TrackpadPressureReader { pressure, stage in
+                    HStack(spacing: 5) {
+                        Image(systemName: "hand.tap.fill")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        ProgressView(value: Double(min(max(pressure, 0), 1)))
+                            .frame(width: 64)
+                        Text(stage >= 2
+                             ? String(localized: "Deep")
+                             : String(format: "%.0f%%", pressure * 100))
+                            .font(.caption2.monospacedDigit())
+                            .frame(width: 34, alignment: .leading)
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.4)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .padding(8)
+                    .allowsHitTesting(false)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Trackpad pressure")
+                    .accessibilityValue(stage >= 2
+                                        ? String(localized: "Deep press")
+                                        : String(localized: "\(Int(pressure * 100)) percent"))
                 }
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.black.opacity(0.4)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .padding(8)
-                .allowsHitTesting(false)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Trackpad pressure")
-                .accessibilityValue(externalInput.trackpadPressureStage >= 2
-                                    ? String(localized: "Deep press")
-                                    : String(localized: "\(Int(externalInput.trackpadPressure * 100)) percent"))
                 }
 
                 if let id = selectedRegionID, let r = regionsOnCanvas.first(where: { $0.id == id }) {
@@ -457,7 +503,10 @@ struct CursorRegionsView: View {
     private var regionsList: some View {
         VStack(alignment: .leading, spacing: 8) {
             regionsListBody
-            if let id = selectedRegionID, let region = svc.region(with: id) {
+            // Only for a region on the canvas shown: moved to another
+            // display from its row, or left behind when "Every display"
+            // followed the pointer, it kept live fields nobody could see.
+            if let region = Self.selected(selectedRegionID, onCanvas: regionsOnCanvas) {
                 // Only while the region is still there: committing after it
                 // was deleted would add it back.
                 RegionBoundsFields(region: region) { updated in
@@ -576,7 +625,10 @@ struct CursorRegionsView: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+                .fill(Color.accentColor)
+                .opacity(isSelected ? 0.15 : 0)
+                // The highlight fades to the picked row instead of jumping.
+                .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isSelected)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -750,6 +802,14 @@ private struct LivePointerReader<Content: View>: View {
     @ObservedObject private var pointer = CursorRegionService.shared.livePointer
     @ViewBuilder let content: (CGPoint) -> Content
     var body: some View { content(pointer.normalized) }
+}
+
+/// What shows the Mac trackpad's Force Touch pressure and stage, redrawn
+/// alone as they change.
+private struct TrackpadPressureReader<Content: View>: View {
+    @ObservedObject private var input = ExternalInputDeviceService.shared
+    @ViewBuilder let content: (Float, Int) -> Content
+    var body: some View { content(input.trackpadPressure, input.trackpadPressureStage) }
 }
 
 /// A region's place and size as typed numbers, in percent of the area it is

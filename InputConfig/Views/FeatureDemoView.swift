@@ -389,7 +389,7 @@ struct FeatureDemoView: View {
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ShowcaseArrowStyle(reduceMotion: reduceMotion))
         .focusRingForKeyboardUsers()
         .padding(8)
         .help(forward ? String(localized: "Next showcase") : String(localized: "Previous showcase"))
@@ -571,6 +571,33 @@ struct FeatureDemoView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 200)
+    }
+}
+
+/// The showcase arrows answer the pointer: a slight lift on hover and a
+/// give on press, so a click reads at once over the moving demo. The dimmed
+/// press of a plain button is kept; the motion is off under Reduce Motion.
+private struct ShowcaseArrowStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        ShowcaseArrowLabel(configuration: configuration, reduceMotion: reduceMotion)
+    }
+}
+
+private struct ShowcaseArrowLabel: View {
+    let configuration: ButtonStyleConfiguration
+    let reduceMotion: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        let pressed = configuration.isPressed
+        configuration.label
+            .opacity(pressed ? 0.75 : 1)
+            .scaleEffect(reduceMotion ? 1 : (pressed ? 0.9 : (hovering ? 1.08 : 1)))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.15), value: pressed)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
     }
 }
 

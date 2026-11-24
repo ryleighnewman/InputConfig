@@ -78,11 +78,15 @@ enum ControllerLayoutResolver {
             guard let base = matched ?? (path == .gameController ? ControllerLayoutCatalog.layout(.genericGamepad) : chosenLayout)
             else { return nil }
             // The Access controller is drawn with what is in each of its
-            // expansion ports right now.
+            // expansion ports right now, and with what its sockets send:
+            // from its stored profile when that was read (USB), else from
+            // what its own reports showed.
+            let accessProfile = base.id == .psAccess ? service.accessProfile(forSlot: slot).profile : nil
             let layout = base.id == .psAccess
                 ? ControllerLayout.applyingAccessCaps(AccessCapStore.shared.caps(for: service.accessCapsUnit(forSlot: slot)),
                                                       to: ControllerLayout.psAccess(ports: service.accessPortDevices(forSlot: slot),
-                                                                                    profile: service.accessProfile(forSlot: slot).profile))
+                                                                                    profile: accessProfile,
+                                                                                    learned: accessProfile == nil ? service.accessLearnedActions(forSlot: slot) : nil))
                 : base
             var note: String? = matched == nil ? String(localized: "Model not recognized; showing a standard gamepad.") : nil
             if matched == nil, path != .gameController, let chosenLayout {

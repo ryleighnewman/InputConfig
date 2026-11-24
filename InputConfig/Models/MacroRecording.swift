@@ -209,6 +209,8 @@ struct MacroRecording: Equatable {
 
     /// Scrolls the same way within this long of each other are one step.
     static let scrollMergeSeconds = 0.15
+    /// The most lines one scroll step plays.
+    static let maxScrollLines = 100
     /// Path samples arrive at least 0.1 s apart while the pointer moves; a
     /// longer gap between two moves is a pause, not a glide.
     static let maxGlideSeconds = 0.5
@@ -223,15 +225,42 @@ struct MacroRecording: Equatable {
     /// wait kept before a step (nil keeps them all); holds are never cut.
     func steps(keepTiming: Bool = true, capWaitMs: Int? = nil) -> [MacroStep] {
         var all = spans
-        // Consecutive scrolls the same way merge into one step of more lines.
+        // Scrolls the same way close together merge into one step of more
+        // lines. A scroll on the other axis between two of them does not
+        // part them (a finger path that is not straight gave a step per
+        // event, and the take filled in a second or two); a key or button
+        // going down or up between them does, so lines scrolled after a
+        // modifier is let go are not played under it. A step holds 100
+        // lines at most, so a longer scroll goes on in a step of its own.
         var merged: [Span] = []
+        // Where the latest scroll span of each axis and direction sits in
+        // `merged`, while only scrolls have followed it.
+        var latest: [Int: Int] = [:]
+        // The releases of everything that is held, in time order.
+        let releases = all.filter { !$0.control.isInstant }.map(\.up).sorted()
+        var nextRelease = 0
+        var lastRelease = -Double.infinity
         for span in all {
-            if case .scroll(let axis, let lines) = span.control, let last = merged.last,
-               case .scroll(let lastAxis, let lastLines) = last.control,
-               axis == lastAxis, (lines > 0) == (lastLines > 0), span.down - last.up <= Self.scrollMergeSeconds {
-                merged[merged.count - 1].control = .scroll(axis: axis, lines: lastLines + lines)
-                merged[merged.count - 1].up = span.up
+            guard case .scroll(let axis, let lines) = span.control else {
+                merged.append(span)
+                latest.removeAll()
+                continue
+            }
+            while nextRelease < releases.count, releases[nextRelease] <= span.down {
+                lastRelease = releases[nextRelease]
+                nextRelease += 1
+            }
+            let way = (axis == .vertical ? 0 : 2) + (lines > 0 ? 0 : 1)
+            if let at = latest[way], case .scroll(_, let lastLines) = merged[at].control,
+               span.down - merged[at].up <= Self.scrollMergeSeconds, lastRelease <= merged[at].down,
+               abs(lastLines + lines) <= Self.maxScrollLines {
+                merged[at].control = .scroll(axis: axis, lines: lastLines + lines)
+                merged[at].up = span.up
             } else {
+                // The other way on this axis ends the run it turned from,
+                // so the order of the turns is kept.
+                latest[way ^ 1] = nil
+                latest[way] = merged.count
                 merged.append(span)
             }
         }
@@ -354,7 +383,7 @@ struct MacroRecording: Equatable {
                 switch item.span.control {
                 case .scroll(_, let lines):
                     out.append(MacroStep(action: item.span.control.action, delayMs: wait, holdMs: 0,
-                                         eventKind: nil, modifiers: nil, count: min(100, max(1, abs(lines)))))
+                                         eventKind: nil, modifiers: nil, count: min(Self.maxScrollLines, max(1, abs(lines)))))
                 case .move:
                     // A move glides until the next move when the path was
                     // recorded; one right before a click is a jump. Samples

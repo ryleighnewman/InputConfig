@@ -31,6 +31,17 @@ struct ButtonSequenceRecorder: View {
     /// up the sample before, as in the recognizer.
     @State private var prevDown: [Int: Set<Int>] = [:]
     @State private var timer: Timer?
+    /// The row's group reads one controller and it gave nothing to read on
+    /// the last sample (it is away, while another pad may be connected).
+    /// The status line then says so, like the stick gesture recorder's.
+    @State private var rowPadAway = false
+
+    /// Whether the row's own pad is away: the row has a slot and that slot
+    /// gave nothing. Another pad is never read in its place, since the row
+    /// would then record names from a different layout.
+    static func padIsAway(rowSlot: Int?, slotsRead: Int) -> Bool {
+        rowSlot != nil && slotsRead == 0
+    }
 
     /// Recording ends once the row's time between presses has passed,
     /// with a floor so a slow hand still finishes its sequence.
@@ -104,6 +115,9 @@ struct ButtonSequenceRecorder: View {
            controllerService.steamControllerSlot == nil, controllerService.racingWheelSlots.isEmpty {
             return String(localized: "No controller is reading. Connect one to record.")
         }
+        // Another pad is connected, but not the one this row reads: it
+        // read "Waiting for the first press." and took nothing.
+        if rowPadAway, !finished { return String(localized: "The controller this row reads is not connected.") }
         if finished {
             return isFull
                 ? String(localized: "\(steps.count) of \(InputEvent.maxSequenceSteps), full. Use this sequence, or start over.")
@@ -139,13 +153,21 @@ struct ButtonSequenceRecorder: View {
         guard !finished else { return }
         let now = CACurrentMediaTime()
         let slots = slot.map { [$0] } ?? controllerService.currentStates.keys.sorted()
+        var slotsRead = 0
+        defer {
+            let away = Self.padIsAway(rowSlot: slot, slotsRead: slotsRead)
+            if away != rowPadAway { rowPadAway = away }
+        }
         for slot in slots where controllerService.rawHIDGamepadSlots[slot]?.isPointingDevice != true {
             guard let state = controllerService.peekControllerState(at: slot) else { continue }
+            slotsRead += 1
             let down = ButtonSequenceRecognizer.downSet(state).subtracting(controllerService.sequenceTouchCodes(slot: slot))
             // A slot's first sample is where it rests: a button already
             // held when recording begins is not a press.
             guard let was = prevDown[slot] else { prevDown[slot] = down; continue }
-            prevDown[slot] = down
+            // Only when it changed: this runs 60 times a second, and each
+            // write of the state re-ran the sheet's body and layout.
+            if down != was { prevDown[slot] = down }
             for code in down.subtracting(was).sorted() where !isFull {
                 if !steps.isEmpty, now - lastPressAt > Double(windowMs) / 1000 { tooSlow = true }
                 steps.append(code)

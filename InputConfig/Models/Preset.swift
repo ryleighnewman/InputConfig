@@ -1018,6 +1018,47 @@ extension JSONValue {
         var c = encoder.container(keyedBy: AnyCodingKey.self)
         for (key, value) in extras { try c.encode(value, forKey: AnyCodingKey(key)) }
     }
+
+    /// The deepest nesting of arrays and objects a preset file may have.
+    /// A file this app wrote nests about a dozen levels.
+    static let maxNestingDepth = 64
+
+    /// True when the JSON text nests arrays and objects deeper than
+    /// `limit`: one pass over the bytes, brackets inside strings not
+    /// counted. Asked before every decode of a file, since a kept unknown
+    /// field costs far more than its size once it nests in the hundreds
+    /// (each level pays the failed tries of `init(from:)` again), and a
+    /// file of a few kilobytes held the thread reading it for seconds.
+    static func nestsTooDeep(_ data: Data, limit: Int = maxNestingDepth) -> Bool {
+        data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Bool in
+            var depth = 0
+            var inString = false
+            var escaped = false
+            for byte in bytes {
+                if inString {
+                    if escaped { escaped = false }
+                    else if byte == 0x5C { escaped = true }
+                    else if byte == 0x22 { inString = false }
+                    continue
+                }
+                switch byte {
+                case 0x22: inString = true
+                case 0x5B, 0x7B:
+                    depth += 1
+                    if depth > limit { return true }
+                case 0x5D, 0x7D: depth -= 1
+                default: break
+                }
+            }
+            return false
+        }
+    }
+
+    /// The error a file refused by `nestsTooDeep` fails with.
+    static var nestingError: DecodingError {
+        .dataCorrupted(.init(codingPath: [],
+                             debugDescription: "Nested deeper than \(maxNestingDepth) levels."))
+    }
 }
 
 /// A coding key for field names not known at compile time.
@@ -1501,6 +1542,18 @@ struct Preset: Identifiable, Codable, Hashable {
     /// save so a round trip through this build does not delete them.
     var extraFields: [String: JSONValue] = [:]
     var unreadableJoysticks: [JSONValue] = []
+    /// Zones this build could not read (a newer version shaped one of
+    /// their fields differently), kept as they were and written back after
+    /// the readable zones of the same list, so a save here does not delete
+    /// them: by list ("touchpadRegions", "cursorRegions"), and for stick
+    /// zones by stick key.
+    var unreadableRegions: [String: [JSONValue]] = [:]
+    var unreadableStickRegions: [String: [JSONValue]] = [:]
+    /// How many zones are kept that way.
+    var unreadableRegionCount: Int {
+        unreadableRegions.values.reduce(0) { $0 + $1.count }
+            + unreadableStickRegions.values.reduce(0) { $0 + $1.count }
+    }
 
     init(name: String = "New Preset", tag: String = "No tag", joysticks: [JoystickMapping] = [],
          filename: String = "", isActive: Bool = false, groupID: UUID? = nil) {
@@ -1640,19 +1693,31 @@ struct Preset: Identifiable, Codable, Hashable {
         self.driveConfig = (try? c.decodeIfPresent(DriveConfig.self, forKey: .driveConfig)) ?? nil
         self.activateHotKey = (try? c.decodeIfPresent(HotKeySpec.self, forKey: .activateHotKey)) ?? nil
         self.sortOrder = (try? c.decodeIfPresent(Int.self, forKey: .sortOrder)) ?? nil
-        // One region at a time: a region missing a field drops only itself,
-        // not the whole preset.
-        func regions(_ key: CodingKeys) -> [TouchpadRegion] {
-            guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return [] }
+        // One region at a time: a region this build cannot read (a field
+        // missing, or shaped differently by a newer version) leaves only
+        // itself out, not the whole preset. It is kept as raw JSON and
+        // written back: stepped over, it vanished without a word and the
+        // next save deleted it from the file.
+        func zones(_ list: inout UnkeyedDecodingContainer) -> (read: [TouchpadRegion], raw: [JSONValue]) {
             var out: [TouchpadRegion] = []
+            var raw: [JSONValue] = []
             while !list.isAtEnd {
                 if let r = try? list.decode(TouchpadRegion.self) { out.append(r) }
-                else if (try? list.decode(JSONValue.self)) == nil { break }
+                else if let kept = try? list.decode(JSONValue.self) { raw.append(kept) }
+                else { break }
             }
-            return out
+            return (out, raw)
+        }
+        var rawRegions: [String: [JSONValue]] = [:]
+        func regions(_ key: CodingKeys) -> [TouchpadRegion] {
+            guard var list = try? c.nestedUnkeyedContainer(forKey: key) else { return [] }
+            let got = zones(&list)
+            if !got.raw.isEmpty { rawRegions[key.stringValue] = got.raw }
+            return got.read
         }
         self.touchpadRegions = regions(.touchpadRegions)
         self.cursorRegions = regions(.cursorRegions)
+        self.unreadableRegions = rawRegions
         // Same tolerance for the watches: one bad entry never drops the rest.
         if var list = try? c.nestedUnkeyedContainer(forKey: .screenPixels) {
             var out: [ScreenPixelWatch] = []
@@ -1678,20 +1743,23 @@ struct Preset: Identifiable, Codable, Hashable {
             }
             self.voicePhrases = out
         }
+        var rawStickRegions: [String: [JSONValue]] = [:]
         if let byStick = try? c.nestedContainer(keyedBy: AnyKey.self, forKey: .stickRegions) {
             var out: [String: [TouchpadRegion]] = [:]
             for k in byStick.allKeys {
                 guard var list = try? byStick.nestedUnkeyedContainer(forKey: k) else { continue }
-                var rs: [TouchpadRegion] = []
-                while !list.isAtEnd {
-                    if let r = try? list.decode(TouchpadRegion.self) { rs.append(r) }
-                    else if (try? list.decode(JSONValue.self)) == nil { break }
-                }
-                out[k.stringValue] = rs
+                let got = zones(&list)
+                out[k.stringValue] = got.read
+                if !got.raw.isEmpty { rawStickRegions[k.stringValue] = got.raw }
             }
             self.stickRegions = out
         } else {
             self.stickRegions = [:]
+        }
+        self.unreadableStickRegions = rawStickRegions
+        let rawZones = (Array(rawRegions.values) + Array(rawStickRegions.values)).reduce(0) { $0 + $1.count }
+        if rawZones > 0 {
+            NSLog("Preset \(name): \(rawZones) zone(s) this build cannot read, kept as written")
         }
         if version < 3 {
             for g in joysticks.indices {
@@ -1762,14 +1830,34 @@ struct Preset: Identifiable, Codable, Hashable {
         try c.encode(automation, forKey: .automation)
         try c.encodeIfPresent(driveConfig, forKey: .driveConfig)
         try c.encodeIfPresent(sortOrder, forKey: .sortOrder)
-        try c.encode(touchpadRegions, forKey: .touchpadRegions)
-        try c.encode(cursorRegions, forKey: .cursorRegions)
+        // A list with zones kept raw is written by hand, the raw ones after
+        // the readable; every other list as it always was.
+        func writeRegions(_ regions: [TouchpadRegion], _ key: CodingKeys) throws {
+            guard let raw = unreadableRegions[key.stringValue], !raw.isEmpty else {
+                try c.encode(regions, forKey: key)
+                return
+            }
+            var list = c.nestedUnkeyedContainer(forKey: key)
+            for r in regions { try list.encode(r) }
+            for r in raw { try list.encode(r) }
+        }
+        try writeRegions(touchpadRegions, .touchpadRegions)
+        try writeRegions(cursorRegions, .cursorRegions)
         // Written only when there are some, so a preset from before 1.9
         // round-trips byte for byte.
         if !screenPixels.isEmpty { try c.encode(screenPixels, forKey: .screenPixels) }
         if !screenTexts.isEmpty { try c.encode(screenTexts, forKey: .screenTexts) }
         if !voicePhrases.isEmpty { try c.encode(voicePhrases, forKey: .voicePhrases) }
-        try c.encode(stickRegions, forKey: .stickRegions)
+        if unreadableStickRegions.allSatisfy({ $0.value.isEmpty }) {
+            try c.encode(stickRegions, forKey: .stickRegions)
+        } else {
+            var byStick = c.nestedContainer(keyedBy: AnyCodingKey.self, forKey: .stickRegions)
+            for key in Set(stickRegions.keys).union(unreadableStickRegions.keys) {
+                var list = byStick.nestedUnkeyedContainer(forKey: AnyCodingKey(key))
+                for r in stickRegions[key] ?? [] { try list.encode(r) }
+                for r in unreadableStickRegions[key] ?? [] { try list.encode(r) }
+            }
+        }
         try c.encodeIfPresent(activateHotKey, forKey: .activateHotKey)
         try c.encode(formatVersion, forKey: .formatVersion)
         try c.encodeIfPresent(buttonFamily, forKey: .buttonFamily)
@@ -2106,6 +2194,7 @@ extension Preset {
     var needsAccessibility: Bool {
         // Mute writes the audio device directly, as the volume steps do.
         let quiet: Set<SystemActionKind> = [.openApp, .openURL, .runShortcut, .volumeUp, .volumeDown, .muteToggle,
+                                            .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld,
                                             .missionControl, .launchpad]
         let postsEvents = allOutputs.contains { output in
             switch output.type {
@@ -2269,6 +2358,13 @@ extension Preset {
         // Nor the sharer's own system-wide shortcut: registered here unseen,
         // it took that chord from every app (a Command V one stopped paste).
         p.activateHotKey = nil
+        // Nor the device options for while it runs, which the review never
+        // names: a file could set controllers to disconnect after a minute
+        // unused, to be asked to connect at start, or to leave the light bar
+        // alone. They follow this Mac's Settings instead.
+        p.automation.leaveLightBar = nil
+        p.automation.idleDisconnectMinutes = nil
+        p.automation.reconnectOnStart = nil
         // Device fingerprints only mean something on the Mac that made them.
         for g in p.joysticks.indices { p.joysticks[g].deviceFingerprint = nil }
         // Rows, groups and fields this build cannot read are not carried
@@ -2280,12 +2376,20 @@ extension Preset {
             p.joysticks[g].rowExtraFields = [:]
         }
         p.unreadableJoysticks = []
+        p.unreadableRegions = [:]
+        p.unreadableStickRegions = [:]
         p.extraFields = [:]
         p.automation.extraFields = [:]
         p.driveConfig?.extraFields = [:]
         p.touchpadRegions = p.touchpadRegions.map { var r = $0; r.extraFields = [:]; return r }
         p.cursorRegions = p.cursorRegions.map { var r = $0; r.extraFields = [:]; return r }
         p.stickRegions = p.stickRegions.mapValues { $0.map { var r = $0; r.extraFields = [:]; return r } }
+        // A watch keeps the name of a mode this build cannot read (one
+        // word, so it stays a watch that does not fire here and not one of
+        // another kind); the fields beside it are not carried in.
+        p.screenPixels = p.screenPixels.map { var w = $0; w.extraFields = [:]; return w }
+        p.screenTexts = p.screenTexts.map { var w = $0; w.extraFields = [:]; return w }
+        p.voicePhrases = p.voicePhrases.map { var w = $0; w.extraFields = [:]; return w }
         if removingOpeners {
             for g in p.joysticks.indices {
                 for r in p.joysticks[g].bindings.indices {
@@ -2677,6 +2781,14 @@ extension InputEvent {
         e.touchpadSurface = e.touchpadSurface?.clamped(0...1)
         e.midiChannel = e.midiChannel?.clamped(1...16)
         e.midiTurnStep = e.midiTurnStep?.clamped(1...32)
+        // A trigger row with no direction (a "+/-" row moved onto L2, or
+        // a pasted "axi 4 b") fires like a plus row but rests a CC at 64,
+        // and its menu cannot show the state: it becomes a plus row.
+        // A stored minus is left alone here; the editor mends it when the
+        // row is next changed.
+        if e.type == .axis, InputEvent.isTriggerAxis(e.index), e.axisDirection == nil {
+            e.axisDirection = .positive
+        }
         if let steps = e.gestureSteps { e.gestureSteps = Array(steps.prefix(GestureStep.maxSteps)) }
         if let steps = e.sequenceSteps {
             // Buttons and hat codes stop at 255; key codes run past it
@@ -2764,10 +2876,12 @@ extension Preset {
         }
         for i in screenPixels.indices {
             screenPixels[i].name = cap(screenPixels[i].name, labelLimit)
+            screenPixels[i].rawMode = screenPixels[i].rawMode.map { cap($0, labelLimit) }
         }
         for i in screenTexts.indices {
             screenTexts[i].name = cap(screenTexts[i].name, labelLimit)
             screenTexts[i].text = cap(screenTexts[i].text, labelLimit)
+            screenTexts[i].rawMode = screenTexts[i].rawMode.map { cap($0, labelLimit) }
         }
         for i in voicePhrases.indices {
             voicePhrases[i].name = cap(voicePhrases[i].name, labelLimit)

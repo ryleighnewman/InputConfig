@@ -299,8 +299,8 @@ struct Controller3DSceneView: NSViewRepresentable {
     /// only needed to present small per-frame deltas during motion; when the
     /// controller is still there is nothing to present, so we drop to
     /// on-demand rendering and let SceneKit hold the last frame. This stops the
-    /// SCNView's independent 30 fps CVDisplayLink from running forever whenever
-    /// a motion controller is merely connected.
+    /// SCNView's own display link from running forever whenever a motion
+    /// controller is merely connected.
     var isMoving: Bool = true
 
     func makeNSView(context: Context) -> SCNView {
@@ -310,7 +310,11 @@ struct Controller3DSceneView: NSViewRepresentable {
         view.allowsCameraControl = false
         view.autoenablesDefaultLighting = false
         view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 30
+        // The display's rate while moving (SceneKit caps it at what the
+        // screen can do): at 30 the model stepped beside the horizon and
+        // pointer, which SwiftUI draws at 120 Hz on ProMotion. Still idle
+        // when the model is still, through rendersContinuously below.
+        view.preferredFramesPerSecond = 120
         // Start continuous so the very first frame is guaranteed to present;
         // updateNSView (called immediately after, and on every angle change)
         // then gates it to `isMoving`. isPlaying stays on so on-demand redraws
@@ -341,7 +345,7 @@ struct Controller3DSceneView: NSViewRepresentable {
     /// DualSense-style silhouette (a bezier outline extruded and chamfered)
     /// with a dark face plate, two sticks, the touchpad with its light bar,
     /// face buttons, D-pad, menu buttons, and the shoulders and triggers on
-    /// the back edge. Low-poly enough to stay cheap at 30 fps.
+    /// the back edge. Low-poly enough to stay cheap at the display's rate.
     static func buildScene(fieldOfView: CGFloat) -> SCNScene {
         let scene = SCNScene()
 

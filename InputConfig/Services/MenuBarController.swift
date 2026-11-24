@@ -43,10 +43,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// being a one-shot that can never be seen again once dismissed.
     func showWhatsNew() {
         Self.pendingMainAction = .whatsNew
-        openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: Self.showWhatsNewNotification, object: nil)
-        }
+        openMainThenPost(Self.showWhatsNewNotification)
     }
 
     #if DEBUG
@@ -88,7 +85,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 // or the menu bar clicked with the controller's pointer
                 // leaves that person just as stuck.
                 guard wasRunning, EmergencyStopService.shared.controllerHoldEnabled, let last, let engine = mappingEngine else { return }
-                engine.watchForRestartHold { [weak presetStore, weak engine] in
+                engine.watchForRestartHold(for: presetStore?.presets.first(where: { $0.id == last })) { [weak presetStore, weak engine] in
                     guard let store = presetStore, let engine,
                           let preset = store.presets.first(where: { $0.id == last }) else { return }
                     MenuBarController.activate(preset, store: store, engine: engine, background: true)
@@ -275,11 +272,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // the single-preset delete stopped it before, so deleting a folder
         // that held the running preset left it sending keys and clicks
         // with nothing shown as active.
+        // Against the library as it is now, not the list this change
+        // carried: the change arrives a moment after it was made, and a
+        // preset created and started in between was missing from it, so a
+        // preset started right behind a delete stopped at once.
         presetStore.$presets
             .receive(on: DispatchQueue.main)
-            .sink { [weak mappingEngine] presets in
+            .sink { [weak mappingEngine, weak presetStore] _ in
                 guard let engine = mappingEngine, engine.isRunning,
                       let running = engine.activePreset?.id,
+                      let presets = presetStore?.presets,
                       !presets.contains(where: { $0.id == running }) else { return }
                 ActivityLog.shared.info("Engine", "Stopped: the running preset was removed")
                 engine.stop()
@@ -403,11 +405,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// either way, like the way macOS menu bar icons adapt.
     private static func makeMenuBarImage(running: Bool,
                                          blocked: Bool = false,
+                                         tinted: Bool = tintsRunning,
                                          appearance: NSAppearance) -> NSImage? {
         guard let (base, size) = baseImage(for: iconChoice) else { return nil }
         // Colored while a preset runs unless Settings turns that off; a
         // blocked preset still shows orange, it is a warning.
-        if running && (blocked || tintsRunning) {
+        if running && (blocked || tinted) {
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let fill: NSColor = blocked
                 ? (isDark ? NSColor.systemOrange : NSColor(srgbRed: 0.72, green: 0.36, blue: 0.0, alpha: 1.0))
@@ -453,10 +456,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             let template = base.copy() as? NSImage
             template?.isTemplate = true
             template?.size = size
-            template?.accessibilityDescription = "InputConfig"
+            // The words say a preset is running whether or not the color does.
+            template?.accessibilityDescription = running ? String(localized: "InputConfig (running)") : "InputConfig"
             return template
         }
     }
+
+    #if DEBUG
+    /// The icon's words for a state, for the Test Bench. Draws nothing.
+    static func debugIconWords(running: Bool, blocked: Bool, tinted: Bool) -> String? {
+        makeMenuBarImage(running: running, blocked: blocked, tinted: tinted,
+                         appearance: NSAppearance(named: .aqua) ?? NSApp.effectiveAppearance)?.accessibilityDescription
+    }
+    #endif
 
     /// Show or hide the status item without removing it. Safe to call from
     /// SwiftUI .onChange handlers.
@@ -475,6 +487,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let presetStore, let mappingEngine else { return }
         autoClose?.cancel()
         autoClose = nil
+        searchTyped = false
         handBackAfterModal = false
         // The app in front before the pop-up, to hand the focus back to
         // when it closes: activating for the pop-up raised the main window.
@@ -494,6 +507,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             mappingEngine: mappingEngine,
             controllerService: controllerService,
             onToggle: { [weak self] preset in self?.toggle(preset) },
+            onUse: { [weak self] typed in self?.popoverUsed(typed: typed) },
             onOpen: { [weak self] in self?.dismissThen { self?.openMainWindow() } },
             onSettings: { [weak self] in self?.dismissThen { self?.openSettings() } },
             onHelp: { [weak self] in self?.dismissThen { self?.openHelpGuides() } },
@@ -515,6 +529,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         SystemStatsService.shared.release()
         autoClose?.cancel()
         autoClose = nil
+        releaseClosedContent()
         // Closed under a confirmation a start from the pop-up raised: the
         // hand-back waits for it, or the person was left in InputConfig.
         if NSApp.modalWindow != nil, appBeforePopover != nil {
@@ -526,6 +541,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// After a start from the pop-up that raised a modal.
     private var handBackAfterModal = false
+
+    /// Lets go of the closed pop-up's views: kept as the popover's content,
+    /// they went on following the library, the engine and the CPU readout
+    /// (which a running preset keeps sampling every second) with nothing
+    /// showing them. Each open builds them anew. In the default run loop
+    /// mode only, so never while an alert or a menu that one of the
+    /// pop-up's own button actions is still waiting on is up.
+    private func releaseClosedContent() {
+        guard let closed = popover?.contentViewController else { return }
+        RunLoop.main.perform(inModes: [.default]) { [weak self, weak closed] in
+            MainActor.assumeIsolated {
+                guard let pop = self?.popover, !pop.isShown, let closed,
+                      pop.contentViewController === closed else { return }
+                pop.contentViewController = nil
+            }
+        }
+    }
 
     private func handBackFocus() {
         // Back to the app that was in front, unless the pop-up was closed
@@ -605,7 +637,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     static func armRestartHold(for preset: Preset, store: PresetStore, engine: MappingEngine) {
         guard MappingEngine.hasPointerOutputs(preset), EmergencyStopService.shared.controllerHoldEnabled else { return }
         let id = preset.id
-        engine.watchForRestartHold { [weak store, weak engine] in
+        engine.watchForRestartHold(for: preset) { [weak store, weak engine] in
             guard let store, let engine, let preset = store.presets.first(where: { $0.id == id }) else { return }
             Self.activate(preset, store: store, engine: engine, background: true)
             // Refused: nothing started, so nothing says it did.
@@ -633,15 +665,54 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         // The pop-up stays open so the check mark shows the change, then
         // closes on its own a few seconds later, or when clicked away.
-        autoClose?.cancel()
-        let close = DispatchWorkItem { [weak self] in self?.popover?.performClose(nil) }
-        autoClose = close
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: close)
+        autoCloseAt = ProcessInfo.processInfo.systemUptime + Self.autoCloseDelay
+        armAutoClose(after: Self.autoCloseDelay)
     }
 
     /// The pending close after a preset was started or stopped from the
     /// pop-up; canceled when the pop-up opens again.
     private var autoClose: DispatchWorkItem?
+    /// When that close is due. Typing in the search field and the pointer
+    /// moving over the pop-up push it on: the wait is for nothing happening.
+    private var autoCloseAt: TimeInterval = 0
+    /// Something is typed in the pop-up's search field.
+    private var searchTyped = false
+    private static let autoCloseDelay: TimeInterval = 3
+
+    private func armAutoClose(after delay: TimeInterval) {
+        autoClose?.cancel()
+        let close = DispatchWorkItem { [weak self] in self?.autoCloseDue() }
+        autoClose = close
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: close)
+    }
+
+    private func autoCloseDue() {
+        autoClose = nil
+        switch Self.autoCloseStep(now: ProcessInfo.processInfo.systemUptime, due: autoCloseAt, typed: searchTyped) {
+        case .wait(let more): armAutoClose(after: more)
+        case .stay: break
+        case .close: popover?.performClose(nil)
+        }
+    }
+
+    /// The person is still using the pop-up: a letter in the search field,
+    /// or the pointer moving over it.
+    private func popoverUsed(typed: Bool) {
+        searchTyped = typed
+        guard autoClose != nil else { return }
+        autoCloseAt = ProcessInfo.processInfo.systemUptime + Self.autoCloseDelay
+    }
+
+    enum AutoCloseStep: Equatable { case wait(TimeInterval), stay, close }
+
+    /// What the close does when its time comes: waits out what the person
+    /// did since, stays open over typed text (the next letters would land
+    /// in the app behind), closes otherwise.
+    nonisolated static func autoCloseStep(now: TimeInterval, due: TimeInterval, typed: Bool) -> AutoCloseStep {
+        let left = due - now
+        if left > 0.05 { return .wait(left) }
+        return typed ? .stay : .close
+    }
 
     // MARK: - App actions (controller-triggered runtime control)
 
@@ -823,9 +894,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     @objc func openSettings() {
         Self.pendingMainAction = .settings
+        openMainThenPost(.inputConfigOpenSettings)
+    }
+
+    /// Brings the main window up, then asks it for a sheet. A window that is
+    /// already on screen is listening, so it is asked on the next turn; the
+    /// fixed wait is only for a window SwiftUI has to make first (which also
+    /// takes `pendingMainAction` itself when it appears). Command Comma and
+    /// Command N waited that 0.15 s every time, window open or not.
+    private func openMainThenPost(_ name: Notification.Name) {
+        let windowUp = Self.mainWindow?.isVisible == true
         openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: .inputConfigOpenSettings, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (windowUp ? 0 : 0.15)) {
+            NotificationCenter.default.post(name: name, object: nil)
         }
     }
 
@@ -842,37 +923,25 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // Taken by the window when it appears, for a window that was closed
         // and subscribes after the notification went out.
         Self.pendingMainAction = .about
-        openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: .inputConfigOpenAbout, object: nil)
-        }
+        openMainThenPost(.inputConfigOpenAbout)
     }
 
     /// Bring the main window forward and open the Statistics sheet.
     @objc private func openStatistics() {
         Self.pendingMainAction = .statistics
-        openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: .inputConfigShowStats, object: nil)
-        }
+        openMainThenPost(.inputConfigShowStats)
     }
 
     /// Bring the main window forward and open the Smart Preset Maker.
     @objc private func openSmartMaker() {
         Self.pendingMainAction = .smartMaker
-        openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: .inputConfigOpenSmartMaker, object: nil)
-        }
+        openMainThenPost(.inputConfigOpenSmartMaker)
     }
 
     /// Create a fresh preset and bring the app forward to edit it.
     @objc private func newPreset() {
         Self.pendingMainAction = .newPreset
-        openMainWindow()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            NotificationCenter.default.post(name: .inputConfigNewPreset, object: nil)
-        }
+        openMainThenPost(.inputConfigNewPreset)
     }
 
     /// Cmd-N: the same path, from the File menu.
@@ -906,6 +975,8 @@ private struct MenuBarPopoverView: View {
     @ObservedObject var mappingEngine: MappingEngine
     weak var controllerService: GameControllerService?
     let onToggle: (Preset) -> Void
+    /// The pop-up is in use; true with something in the search field.
+    let onUse: (Bool) -> Void
     @State private var query = ""
     let onOpen: () -> Void
     let onSettings: () -> Void
@@ -913,8 +984,9 @@ private struct MenuBarPopoverView: View {
     let onSupport: () -> Void
     let onQuit: () -> Void
 
-    @ObservedObject private var stats = SystemStatsService.shared
     @ObservedObject private var permission = AccessibilityPermissionService.shared
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
     private var activePreset: Preset? { presetStore.presets.first { $0.isActive } }
     private var running: Bool { mappingEngine.isRunning }
 
@@ -932,6 +1004,11 @@ private struct MenuBarPopoverView: View {
         .frame(width: 320 * min(max(1, popoverTextScale), 1.6))
         .symbolRenderingMode(.hierarchical)
         .focusRingForKeyboardUsers()
+        // Typing or a moving pointer holds off the close after a start.
+        .onChange(of: query) { onUse(!query.isEmpty) }
+        .onContinuousHover { phase in
+            if case .active = phase { onUse(!query.isEmpty) }
+        }
         // THE glass: the same window-container frosted material YapToText uses,
         // which fills the whole popover window (not just behind the content the
         // way a plain .background does), so the liquid-glass look matches.
@@ -954,6 +1031,10 @@ private struct MenuBarPopoverView: View {
                 .padding(.top, 2)
             Spacer()
             enginePill
+                // Start and Stop trade places with a short fade instead of
+                // a jump; off with either Reduce Motion.
+                .animation(systemReduceMotion || appReduceMotion ? nil : .snappy(duration: 0.2),
+                           value: activePreset?.id)
         }
     }
 
@@ -1000,38 +1081,7 @@ private struct MenuBarPopoverView: View {
 
     private var selectorRow: some View {
         HStack(spacing: 8) {
-            Menu {
-                // Starred presets first; with Favorites Only on (the same
-                // switch as the sidebar's star), nothing else.
-                let favorites = presetStore.favoritePresets
-                if !favorites.isEmpty {
-                    Section("Favorites") { ForEach(favorites) { presetMenuButton($0) } }
-                }
-                if favorites.isEmpty || !presetStore.showFavoritesOnly {
-                    ForEach(presetStore.inSidebarOrder(presetStore.groups.filter {
-                        !presetStore.hideBuiltInPresets || !presetStore.isInBuiltInFolder($0.id) })) { group in
-                        let ps = presetStore.presets(in: group.id)
-                        if !ps.isEmpty { Section(ShippedText.t(group.name)) { ForEach(ps) { presetMenuButton($0) } } }
-                    }
-                    let ungrouped = presetStore.presets(in: nil)
-                    if !ungrouped.isEmpty {
-                        Section(presetStore.groups.isEmpty ? String(localized: "Presets") : String(localized: "Ungrouped")) {
-                            ForEach(ungrouped) { presetMenuButton($0) }
-                        }
-                    }
-                }
-                if !favorites.isEmpty {
-                    Divider()
-                    Toggle("Favorites Only", isOn: $presetStore.showFavoritesOnly)
-                }
-            } label: {
-                selectorLabel(String(localized: "Preset"), icon: "slider.horizontal.3", value: activePreset?.shownName ?? String(localized: "No preset"))
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            // The name too, since a long one is cut off on the pill.
-            .help(String(localized: "\(String(localized: "Switch the active preset")): \(activePreset?.shownName ?? String(localized: "No preset"))"))
-            .accessibilityInputLabels([Text(activePreset?.shownName ?? String(localized: "No preset")), Text("Preset")])
-
+            PresetSwitchMenu(presetStore: presetStore, onToggle: onToggle).equatable()
             Menu {
                 if let svc = controllerService, !svc.controllerDetails.isEmpty {
                     Section("Connected") {
@@ -1051,23 +1101,12 @@ private struct MenuBarPopoverView: View {
                     Button("No controller connected") {}.disabled(true)
                 }
             } label: {
-                selectorLabel(String(localized: "Controller"), icon: "gamecontroller.fill", value: primaryControllerName)
+                Self.selectorLabel(String(localized: "Controller"), icon: "gamecontroller.fill", value: primaryControllerName)
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
             .help(String(localized: "\(String(localized: "Connected controllers")): \(primaryControllerName)"))
             .accessibilityInputLabels([Text(primaryControllerName), Text("Controller")])
         }
-    }
-
-    @ViewBuilder private func presetMenuButton(_ preset: Preset) -> some View {
-        Button { onToggle(preset) } label: {
-            Label(preset.shownName,
-                  systemImage: preset.isActive ? "checkmark"
-                      : (preset.isRunnable ? "circle" : "circle.dashed"))
-        }
-        // The running one in words, not only by its checkmark.
-        .accessibilityLabel(preset.isActive ? String(localized: "\(preset.shownName), running") : preset.shownName)
-        .disabled(!preset.isRunnable && !preset.isActive)
     }
 
     private var primaryControllerName: String {
@@ -1077,7 +1116,7 @@ private struct MenuBarPopoverView: View {
     }
 
     /// The capsule selector pill, identical to YapToText's selectorLabel token.
-    private func selectorLabel(_ label: String, icon: String, value: String) -> some View {
+    fileprivate static func selectorLabel(_ label: String, icon: String, value: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon).font(.caption).iconTint(.accentColor)
             Text(value).font(.caption.weight(.semibold)).foregroundStyle(.primary)
@@ -1253,10 +1292,7 @@ private struct MenuBarPopoverView: View {
                 Circle().fill(dot.opacity(0.85)).frame(width: 7, height: 7)
                 Text(label).font(.caption)
                 Spacer(minLength: 8)
-                Text(String(format: String(localized: "CPU %.0f%%, RAM %.0f MB"), locale: .current,
-                            stats.current.smoothedCpuPercent,
-                            Double(stats.current.residentMemoryBytes) / 1_048_576.0))
-                    .font(.caption2.monospacedDigit()).foregroundStyle(.hint)
+                PopoverStatsReadout()
             }
             if running && !permission.isTrusted && activePreset?.needsAccessibility == true {
                 Button {
@@ -1351,12 +1387,97 @@ private extension View {
     }
 }
 
+/// The Preset pill and its menu of every preset in the library. Its own
+/// view, compared by its store alone, so a letter typed in the search field,
+/// an engine change or the pop-up's own updates no longer build a menu item
+/// for every preset again; it still follows every change the store publishes.
+private struct PresetSwitchMenu: View, Equatable {
+    @ObservedObject private var presetStore: PresetStore
+    private let onToggle: (Preset) -> Void
+    /// The store, plain, for the comparison: the only input that matters.
+    /// The pop-up hands over the same toggle for as long as it is open.
+    private let storeID: ObjectIdentifier
+
+    init(presetStore: PresetStore, onToggle: @escaping (Preset) -> Void) {
+        _presetStore = ObservedObject(wrappedValue: presetStore)
+        self.onToggle = onToggle
+        storeID = ObjectIdentifier(presetStore)
+    }
+
+    nonisolated static func == (a: PresetSwitchMenu, b: PresetSwitchMenu) -> Bool {
+        a.storeID == b.storeID
+    }
+
+    private var activePreset: Preset? { presetStore.presets.first { $0.isActive } }
+
+    var body: some View {
+        Menu {
+            // Starred presets first; with Favorites Only on (the same
+            // switch as the sidebar's star), nothing else.
+            let favorites = presetStore.favoritePresets
+            if !favorites.isEmpty {
+                Section("Favorites") { ForEach(favorites) { presetMenuButton($0) } }
+            }
+            if favorites.isEmpty || !presetStore.showFavoritesOnly {
+                ForEach(presetStore.inSidebarOrder(presetStore.groups.filter {
+                    !presetStore.hideBuiltInPresets || !presetStore.isInBuiltInFolder($0.id) })) { group in
+                    let ps = presetStore.presets(in: group.id)
+                    if !ps.isEmpty { Section(ShippedText.t(group.name)) { ForEach(ps) { presetMenuButton($0) } } }
+                }
+                let ungrouped = presetStore.presets(in: nil)
+                if !ungrouped.isEmpty {
+                    Section(presetStore.groups.isEmpty ? String(localized: "Presets") : String(localized: "Ungrouped")) {
+                        ForEach(ungrouped) { presetMenuButton($0) }
+                    }
+                }
+            }
+            if !favorites.isEmpty {
+                Divider()
+                Toggle("Favorites Only", isOn: $presetStore.showFavoritesOnly)
+            }
+        } label: {
+            MenuBarPopoverView.selectorLabel(String(localized: "Preset"), icon: "slider.horizontal.3", value: activePreset?.shownName ?? String(localized: "No preset"))
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        // The name too, since a long one is cut off on the pill.
+        .help(String(localized: "\(String(localized: "Switch the active preset")): \(activePreset?.shownName ?? String(localized: "No preset"))"))
+        .accessibilityInputLabels([Text(activePreset?.shownName ?? String(localized: "No preset")), Text("Preset")])
+    }
+
+    @ViewBuilder private func presetMenuButton(_ preset: Preset) -> some View {
+        Button { onToggle(preset) } label: {
+            Label(preset.shownName,
+                  systemImage: preset.isActive ? "checkmark"
+                      : (preset.isRunnable ? "circle" : "circle.dashed"))
+        }
+        // The running one in words, not only by its checkmark.
+        .accessibilityLabel(preset.isActive ? String(localized: "\(preset.shownName), running") : preset.shownName)
+        .disabled(!preset.isRunnable && !preset.isActive)
+    }
+}
+
+/// The CPU and memory readout, on its own so the 1 Hz sample redraws this
+/// one line and not the whole pop-up.
+private struct PopoverStatsReadout: View {
+    @ObservedObject private var stats = SystemStatsService.shared
+
+    var body: some View {
+        Text(String(format: String(localized: "CPU %.0f%%, RAM %.0f MB"), locale: .current,
+                    stats.current.smoothedCpuPercent,
+                    Double(stats.current.residentMemoryBytes) / 1_048_576.0))
+            .font(.caption2.monospacedDigit()).foregroundStyle(.hint)
+    }
+}
+
 /// One preset in the menu bar's list: its name, whether it is running,
 /// and a click starts or stops it.
 private struct MenuPresetRow: View {
     let preset: Preset
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    private var calm: Bool { systemReduceMotion || appReduceMotion }
 
     var body: some View {
         Button(action: action) {
@@ -1364,6 +1485,9 @@ private struct MenuPresetRow: View {
                 Image(systemName: preset.isActive ? "checkmark.circle.fill" : (preset.isRunnable ? "circle" : "circle.dashed"))
                     .font(.caption)
                     .foregroundStyle(preset.isActive ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                    // The circle turns into the check as the preset starts.
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(calm ? nil : .snappy(duration: 0.22), value: preset.isActive)
                     .accessibilityHidden(true)
                 Text(preset.shownName)
                     .font(.caption)
@@ -1374,6 +1498,8 @@ private struct MenuPresetRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .hoverFill(hovering)
+            // The fill fades in and out under the pointer rather than blinking.
+            .animation(calm ? nil : .easeOut(duration: 0.12), value: hovering)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1467,6 +1593,11 @@ final class StatusHUD {
     static let shared = StatusHUD()
     private var panel: NSPanel?
     private var hideWork: DispatchWorkItem?
+    /// Bumped by every show and hide, so a fade-out that a new line
+    /// overtook does not take that line away when it finishes.
+    private var fadeGeneration = 0
+    /// Either Reduce Motion: the line comes and goes at once.
+    private var calm: Bool { AppA11y.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     func show(_ text: String, seconds: TimeInterval = 6) {
         #if DEBUG
@@ -1502,12 +1633,38 @@ final class StatusHUD {
             let f = screen.visibleFrame
             p.setFrameOrigin(NSPoint(x: f.midX - box.frame.width / 2, y: f.maxY - box.frame.height - 24))
         }
+        // Fades in over the game rather than blinking on; a line already
+        // up (or still fading out) goes straight back to full.
+        fadeGeneration &+= 1
+        let still = calm
+        if !p.isVisible { p.alphaValue = still ? 1 : 0 }
         p.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = still ? 0 : 0.15
+            p.animator().alphaValue = 1
+        }
         panel = p
         hideWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.panel?.orderOut(nil) }
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func hide() {
+        guard let p = panel else { return }
+        fadeGeneration &+= 1
+        if calm { p.orderOut(nil); return }
+        let generation = fadeGeneration
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            p.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // Called on the main thread.
+            MainActor.assumeIsolated {
+                guard let self, self.fadeGeneration == generation else { return }
+                self.panel?.orderOut(nil)
+            }
+        })
     }
 }
 

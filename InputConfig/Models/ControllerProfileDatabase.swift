@@ -44,13 +44,12 @@ enum ControllerProfileDatabase {
 
         // MARK: Microsoft
 
-        // NOT REACHABLE ON STOCK macOS. Wired Xbox 360 pads (and nearly
-        // every third-party XInput pad: PowerA, Hori, Mad Catz, Logitech F
-        // series in X mode) use the vendor-class XUSB interface, not HID,
-        // so IOHIDManager never reports them and this profile never
-        // matches a real device. `HIDDeviceRegistry` lists such pads in the
-        // Devices menu with how to switch them to a readable mode. Kept
-        // only as the test bench's XInput decoder fixture. The Logitech
+        // Wired Xbox 360 pads (and nearly every third-party XInput pad:
+        // PowerA, Hori, Mad Catz, Logitech F series in X mode) use the
+        // vendor-class XUSB interface, not HID, so IOHIDManager never
+        // reports them and no HID device matches this profile.
+        // XInputUSBService reads them over USB and lists every one of them
+        // with this profile, whatever its IDs. The Logitech
         // C21F, PowerA 24C6:53xx-55xx (24C6:5500-5510 are Hori pads), and
         // Mad Catz 0738:47xx entries that used to follow were the same
         // XUSB class and were removed.
@@ -116,7 +115,7 @@ enum ControllerProfileDatabase {
             identifier: "nintendo-switch2-joycon-left",
             displayName: "Joy-Con 2 (L) (Experimental)",
             vendorID: 0x057E,
-            productMatches: [.exact(0x2066)],
+            productMatches: [.exact(Int32(Switch2USBEnabler.joyConLeftProductID))],
             layout: .switch2JoyConLeft,
             physicalButtonNames: switch2JoyConLeftButtonNames
         ),
@@ -124,7 +123,7 @@ enum ControllerProfileDatabase {
             identifier: "nintendo-switch2-joycon-right",
             displayName: "Joy-Con 2 (R) (Experimental)",
             vendorID: 0x057E,
-            productMatches: [.exact(0x2067)],
+            productMatches: [.exact(Int32(Switch2USBEnabler.joyConRightProductID))],
             layout: .switch2JoyConRight,
             physicalButtonNames: switch2JoyConRightButtonNames
         ),

@@ -265,6 +265,8 @@ struct FaceButtonGlyph: View {
 
 struct TouchpadWidget: View {
     @Environment(\.visualizerSuspended) private var suspended
+    /// Off while the zoomed map is drawn as one picture (see trailCanvas).
+    @Environment(\.visualizerDisplayRate) private var displayRate
     /// Touchpad button (index 13) state. When the user physically pushes
     /// the touchpad down (not just touches it), this flips to true and the
     /// widget glows green to signal a click vs a swipe.
@@ -512,12 +514,16 @@ struct TouchpadWidget: View {
     /// as an offscreen pass per view; ~130 of those per frame swamped
     /// the GPU).
     private var trailCanvas: some View {
-        // Pause the 60 Hz clock when there is nothing to animate. With both
+        // Pause the clock when there is nothing to animate. With both
         // trail buffers empty the Canvas was repainting an empty pad 60x/sec
         // for the whole time a touchpad controller is connected. A finger-down
         // appends to trailF0/trailF1 (@State), which re-runs body and resumes
         // this same-identity timeline on the same render pass (no added latency).
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0,
+        // The fade runs at the display's rate (120 Hz on ProMotion), not a
+        // fixed 60: a few dozen dots in one Canvas, only while a trail fades.
+        // 60 while zoomed, where the whole map is one picture drawn again
+        // on every frame of it.
+        TimelineView(.animation(minimumInterval: displayRate ? nil : 1.0 / 60.0,
                                 paused: suspended || (trailF0.isEmpty && trailF1.isEmpty))) { context in
             Canvas { ctx, _ in
                 drawTrail(into: ctx, points: trailF0,
@@ -775,9 +781,10 @@ struct MotionWidget: View {
         // pad with an accelerometer, and one test across all three read
         // that as "has attitude", so roll and yaw showed a flat zero on
         // pads without Apple's attitude.
-        let roll  = abs(rawRoll)  > 0.0001 ? rawRoll  : integratedRoll
-        let pitch = state.motion[.pitchAngle] != nil ? rawPitch : integratedPitch
-        let yaw   = abs(rawYaw)   > 0.0001 ? rawYaw   : integratedYaw
+        // A non-finite sample is no angle: the integrated one stands in.
+        let roll  = rawRoll.isFinite && abs(rawRoll) > 0.0001 ? rawRoll : integratedRoll
+        let pitch = state.motion[.pitchAngle] != nil && rawPitch.isFinite ? rawPitch : integratedPitch
+        let yaw   = rawYaw.isFinite && abs(rawYaw) > 0.0001 ? rawYaw : integratedYaw
 
         return GyroVisualizationView(
             gyroX: state.motion[.gyroX] ?? 0,
@@ -807,6 +814,10 @@ struct LightBarChipLabel: View {
     /// The Settings switch that leaves the light to macOS: the chip says
     /// so instead of a color the controller will not show.
     var leftToSystem: Bool = false
+    /// Whether this preset leaves the light to macOS: its own choice
+    /// (Utilities, Light bar), which stands in for Settings while it runs,
+    /// else the Settings switch.
+    nonisolated static func leftToSystem(preset: Bool?, setting: Bool) -> Bool { preset ?? setting }
     @Environment(\.canvasCaptionSize) private var canvasCaptionSize
     private var fs: CGFloat { canvasCaptionSize ?? 12 }
 

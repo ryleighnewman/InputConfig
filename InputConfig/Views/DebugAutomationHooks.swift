@@ -1216,6 +1216,9 @@ final class DebugMarketing: ObservableObject {
     @Published var expandOptions = false
     @Published var editLayout = false
     @Published var oneStick = false
+    /// With `oneStick`: the panel opens but the demo car is left to its
+    /// input, for measuring the panel at rest (the editor probe).
+    var oneStickParked = false
     @Published var fakeController = false
     /// Each post of inputconfig.debug.fakeswap swaps the synthetic pads' slots.
     @Published var fakeSwaps = 0
@@ -1585,6 +1588,14 @@ final class DebugReplay {
             let pressed = buttons.filter { $0.value > 0.5 }.keys.sorted()
             let portText = ports.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
             out += "access pad: axes \(axisText.joined(separator: " ")) pressed \(pressed) ports {\(portText.joined(separator: ", "))} activeProfile \(active.number) \(active.profile?.name ?? "")\n"
+            // What the sockets were seen to send, and the buttons each
+            // drawn socket lights on with that.
+            let learned = access.learnedActions(for: nil, accessSlotCount: 1) ?? [:]
+            let mapped = access.mapped(for: nil, accessSlotCount: 1)
+            let down = (mapped?.buttons ?? [:]).filter { $0.value > 0 }.keys.sorted()
+            let drawn = ControllerLayout.psAccess(ports: ports, profile: active.profile, learned: active.profile == nil ? learned : nil)
+            let sockets = (1...8).map { n in "\(n):\(drawn.control("socket\(n)")?.inputs.buttons ?? [])" }
+            out += "access functions down \(down) learned \(learned.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }) sockets light on \(sockets.joined(separator: " ")) stick axes \(drawn.control("stick")?.inputs.axes.count ?? 0)\n"
         }
         return out
     }

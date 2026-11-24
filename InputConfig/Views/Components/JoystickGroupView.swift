@@ -43,6 +43,9 @@ struct JoystickGroupView: View {
     /// Preset list for the App Action target picker, passed as plain values
     /// so the row views stay store-subscription free.
     var availablePresets: [(id: UUID, name: String)] = []
+    /// A hash of that list (PresetEditorView.choicesVersion), worked out
+    /// once by the editor: the rows compare it in place of the list.
+    var presetsVersion: Int = 0
     /// A hash of the names and colors of the preset's regions, watches and
     /// phrases, so rows that show one by lookup redraw when it changes.
     var namesVersion: Int = 0
@@ -94,6 +97,18 @@ struct JoystickGroupView: View {
     /// once the first rows have settled.
     @State private var revealedRows = JoystickGroupView.firstReveal
     static let firstReveal = 8
+    /// Bumped to start the reveal task again for rows added in one go to a
+    /// group already open (see `addScaffold`).
+    @State private var revealRun = 0
+
+    /// The row count a group builds at once after it is folded or opened.
+    /// Folding puts the count back to the first reveal: the state outlives
+    /// the fold, and left at everything, the next open built every row in
+    /// one animated frame. Opening changes nothing; the reveal task, which
+    /// starts again with the rows, carries on from there.
+    static func revealCount(afterExpandedBecomes open: Bool, from revealed: Int) -> Int {
+        open ? revealed : firstReveal
+    }
 
     /// Builds the rows down to the jump target now, so the editor can
     /// scroll to it; the staged reveal carries on below it.
@@ -141,6 +156,8 @@ struct JoystickGroupView: View {
     @State private var zonesGlow: UUID?
     /// Moves the VoiceOver cursor to the card when a jump lands on it.
     @AccessibilityFocusState private var zonesHeaderFocused: Bool
+    /// The part column's highlight, which slides to the chosen part.
+    @Namespace private var zonePartSpace
     /// The row that opened the section, for its Back button.
     @State private var zonesReturnRow: UUID?
     @State private var newSectionPopoverOpen = false
@@ -163,6 +180,12 @@ struct JoystickGroupView: View {
                 // Older presets were born with this placeholder as their
                 // tag; it is not a tag, so clear it on sight.
                 .onAppear { if joystick.tag == "Add bindings here" { joystick.tag = "" } }
+                // Outside the `if`, so it also runs as the rows go away. A
+                // jump or a zone request into a folded group still builds
+                // down to its target at once (`revealForJump`), by design.
+                .onChange(of: joystick.isExpanded) { _, open in
+                    revealedRows = Self.revealCount(afterExpandedBecomes: open, from: revealedRows)
+                }
 
             if joystick.isExpanded {
                 // Compute the per-slot extras snapshot ONCE per render and reuse
@@ -205,21 +228,44 @@ struct JoystickGroupView: View {
                     .padding(.bottom, 4)
                     .accessibilityHidden(true)
                 }
+                // The rows read once for this pass: every read of
+                // `joystick` goes through the editor's binding, and the
+                // closure below read it several times for each row.
+                let rows = joystick.bindings
+                let chords = RowLightChords(rows)
+                // A group with no zone rows has no zone that takes a
+                // direction row over: the walk below would only find none.
+                let hasZoneRows = rows.contains { $0.input.type == .stickRegion }
+                let group = $joystick
+                let frames = rowHeights
+                // Shared by every row's closures, so a row's closures hold
+                // these and its id, not a copy of this whole view each.
+                let scan = onScanInput, scanModifier = onScanModifierInput
+                let remove = onRemoveBinding, duplicate = onDuplicateBinding
+                let drag: (UUID, Int, CGFloat) -> Void = { id, index, dy in dragRow(id, at: index, by: dy) }
+                let drop: () -> Void = { dropRow() }
+                let move: (UUID, Int) -> Void = { id, step in moveRow(id, by: step) }
+                let rename: (Int, String, String) -> Void = { index, old, name in renameSection(startingAt: index, from: old, to: name) }
+                let addToSection: (Int) -> Void = { index in addRow(toSectionEndingAt: sectionRun(startingAt: index).upperBound - 1) }
+                let dissolve: (Int) -> Void = { index in dissolveSection(startingAt: index) }
                 // Each binding is its own box with a gap between them, so a
                 // long preset reads as a stack of cards, not a wall of text.
                 VStack(spacing: Self.rowGap) {
                     // Keyed by the row, so a move moves it instead of
                     // rebuilding both rows: focus and an open Options stay.
-                    ForEach(Array(joystick.bindings.prefix(revealedRows).enumerated()), id: \.element.id) { index, binding in
+                    ForEach(Array(rows.prefix(revealedRows).enumerated()), id: \.element.id) { index, binding in
+                        let id = binding.id
                         // A heading above the first row of each run of rows
                         // that share a section name.
                         if let section = binding.section, !section.isEmpty,
-                           index == 0 || joystick.bindings[index - 1].section != section {
-                            SectionHeadingRow(
+                           index == 0 || rows[index - 1].section != section {
+                            EquatableSectionHeading(
                                 name: section,
-                                onRename: { renameSection(startingAt: index, from: section, to: $0) },
-                                onAddRow: { addRow(toSectionEndingAt: sectionRun(startingAt: index).upperBound - 1) },
-                                onDissolve: { dissolveSection(startingAt: index) })
+                                start: index,
+                                onRename: { rename(index, section, $0) },
+                                onAddRow: { addToSection(index) },
+                                onDissolve: { dissolve(index) })
+                            .equatable()
                         }
                         // Serialize the input once and reuse it across the three
                         // highlight membership checks (was rebuilt 3x per row).
@@ -235,18 +281,19 @@ struct JoystickGroupView: View {
                         // active. The Equatable shell compares value inputs
                         // only, so unchanged rows skip body entirely.
                         EquatableBindingRow(
-                            binding: bindingAt(index),
+                            binding: Self.rowBinding(binding, in: group),
                             snapshot: binding,
                             // The row lights itself from LiveRowLights, by
                             // the engine's chord rules (see RowLight).
-                            liveKey: LiveRowLights.RowLight(binding, in: joystick.bindings, inputKey: inputKey),
+                            liveKey: LiveRowLights.RowLight(binding, inputKey: inputKey,
+                                                            rivals: chords.rivals(of: id, on: inputKey)),
                             displayNumber: index + 1,
                             zoneOverlap: binding.input.type == .stickRegion
-                                ? StickRegionService.shared.directionRowsOverlapping(binding, in: joystick.bindings) : [],
+                                ? StickRegionService.shared.directionRowsOverlapping(binding, in: rows) : [],
                             zoneZoneOverlap: binding.input.type == .stickRegion
-                                ? StickRegionService.shared.zoneRowsOverlapping(binding, in: joystick.bindings) : [],
-                            zoneTakenBy: binding.input.type == .axis
-                                ? StickRegionService.shared.zoneRowsTakingOver(binding, in: joystick.bindings) : [],
+                                ? StickRegionService.shared.zoneRowsOverlapping(binding, in: rows) : [],
+                            zoneTakenBy: binding.input.type == .axis && hasZoneRows
+                                ? StickRegionService.shared.zoneRowsTakingOver(binding, in: rows) : [],
                             isPulsing: pulsingBindingID == binding.id,
                             takesFocus: focusBindingID == binding.id,
                             // Named extras (paddles/FN/mute/Home) for the
@@ -255,33 +302,21 @@ struct JoystickGroupView: View {
                             // the service itself.
                             extraButtons: rowExtras,
                             availablePresets: availablePresets,
+                            presetsVersion: presetsVersion,
                             slot: deviceSlot,
                             faceChoice: faceChoice,
                             namesVersion: namesVersion,
-                            onScan: { onScanInput(index) },
-                            onScanModifier: { onScanModifierInput(index, $0) },
-                            onRemove: { onRemoveBinding(index) },
-                            onDuplicate: { onDuplicateBinding(index) },
-                            onDragChanged: { dy in dragRow(binding.id, at: index, by: dy) },
-                            onDragEnded: { dropRow() },
-                            onMove: { (step: Int) in moveRow(binding.id, by: step) }
+                            onScan: { scan(index) },
+                            onScanModifier: { scanModifier(index, $0) },
+                            onRemove: { remove(index) },
+                            onDuplicate: { duplicate(index) },
+                            onDragChanged: { dy in drag(id, index, dy) },
+                            onDragEnded: drop,
+                            onMove: { (step: Int) in move(id, step) },
+                            frames: frames
                         )
                         .equatable()
-                        // Reordering without a pointer, for VoiceOver and
-                        // Full Keyboard Access: rows moved only by dragging.
-                        .accessibilityAction(named: "Move up") { moveRow(binding.id, by: -1) }
-                        .accessibilityAction(named: "Move down") { moveRow(binding.id, by: 1) }
-                        .background(GeometryReader { geo in
-                            // Real position in the list, not a running total of
-                            // heights: cumulative sums drift as soon as one row
-                            // is a different size than assumed, and the drag
-                            // then lands in the wrong slot.
-                            Color.clear.onChange(of: geo.frame(in: .named(Self.listSpace)),
-                                                 initial: true) { _, f in
-                                rowHeights[binding.id] = f
-                            }
-                        })
-                        .modifier(RowDragLift(lift: rowDrag.lift(for: binding.id)))
+                        .modifier(RowDragLift(lift: rowDrag.lift(for: id)))
                     }
                 }
                 .padding(.horizontal, Self.rowInset)
@@ -291,23 +326,23 @@ struct JoystickGroupView: View {
                 .animation(nil, value: joystick.bindings.count)
                 .coordinateSpace(name: Self.listSpace)
                 // The first rows come with the sheet; the rest follow in
-                // small batches once it has slid in. Building every row in
-                // the first frame (about 24 ms each) held the editor back
-                // for most of a second on a full preset.
+                // one step once it has slid in. Building every row in the
+                // first frame (about 24 ms each) held the editor back for
+                // most of a second on a full preset. One step, not several:
+                // each update of this list costs about 60 ms on top of its
+                // new rows, and small batches ran back to back with no
+                // frame drawn between them, so they only added that cost
+                // (about 200 ms on a 25 row group).
                 .onChange(of: revealThrough) { _, _ in revealForJump() }
                 .onChange(of: revealAll) { _, _ in revealForJump() }
                 .onChange(of: joystick.bindings.count) { _, _ in revealForJump() }
-                .task {
+                .task(id: revealRun) {
                     revealForJump()
                     guard revealedRows < joystick.bindings.count else { revealedRows = .max; return }
                     try? await Task.sleep(for: .milliseconds(380))
-                    while revealedRows < joystick.bindings.count {
-                        var t = Transaction(); t.disablesAnimations = true
-                        withTransaction(t) { revealedRows += Self.revealBatch }
-                        try? await Task.sleep(for: .milliseconds(24))
-                        guard !Task.isCancelled else { return }
-                    }
-                    revealedRows = .max
+                    guard !Task.isCancelled else { return }
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { revealedRows = .max }
                 }
 
                 // A fresh group: offer the whole device in one click, so a
@@ -458,16 +493,18 @@ struct JoystickGroupView: View {
     /// The card beside it on the left and Regions on the right.
     @ViewBuilder
     private var regionsRow: some View {
-        let showsZones = joystick.isExpanded && (!zoneParts.isEmpty || zonesPart != nil)
+        // Worked out once per pass: it reads the device's capabilities.
+        let listed = joystick.isExpanded ? zoneParts : []
+        let showsZones = joystick.isExpanded && (!listed.isEmpty || zonesPart != nil)
         if let beside = besideRegions {
             // One structure either way: two branches rebuilt the Automation
             // card whenever the last group folded.
             HStack(alignment: .top, spacing: 10) {
                 beside.frame(maxWidth: .infinity, alignment: .topLeading)
-                if showsZones { zonesSection.frame(maxWidth: .infinity, alignment: .topLeading) }
+                if showsZones { zonesSection(listed).frame(maxWidth: .infinity, alignment: .topLeading) }
             }
         } else if joystick.isExpanded {
-            zonesSection
+            zonesSection(listed)
         }
     }
 
@@ -476,12 +513,13 @@ struct JoystickGroupView: View {
     /// the half-width card beside Automation the editor stacks its drawing
     /// above its list.
     @ViewBuilder
-    private var zonesSection: some View {
-        let listed = zoneParts
+    private func zonesSection(_ listed: [ZonePart]) -> some View {
         let parts = zonesPart.map { listed.contains($0) ? listed : listed + [$0] } ?? listed
         if !parts.isEmpty {
             let shown = zonesPart.flatMap { parts.contains($0) ? $0 : nil } ?? parts[0]
             let compact = besideRegions != nil
+            // Once per pass: each part's title asked for the capabilities.
+            let steam = isSteamGroup
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "circle.dashed")
@@ -492,7 +530,7 @@ struct JoystickGroupView: View {
                             .accessibilityAddTraits(.isHeader)
                             // Several groups each have one: say whose.
                             .accessibilityLabel(String(localized: "Regions of \u{201C}\(resolvedHeaderName)\u{201D}"))
-                            .accessibilityValue(zonesSummary(parts))
+                            .accessibilityValue(zonesSummary(parts, steam: steam))
                             .accessibilityFocused($zonesHeaderFocused)
                         Text("Split a stick, trigger, pad or the screen into areas that each fire their own rows.")
                             .font(.caption)
@@ -515,11 +553,11 @@ struct JoystickGroupView: View {
                     }
                 }
                 HStack(alignment: .top, spacing: compact ? 12 : 16) {
-                    zonePartColumn(parts, shown: shown, width: compact ? 130 : 170)
+                    zonePartColumn(parts, shown: shown, width: compact ? 130 : 170, steam: steam)
                     Divider()
                     HStack {
                         Spacer(minLength: 0)
-                        zoneEditor(shown)
+                        zoneEditor(shown, steam: steam)
                             .id(shown)
                             .environment(\.regionsCompact, compact)
                         Spacer(minLength: 0)
@@ -548,7 +586,7 @@ struct JoystickGroupView: View {
 
     /// The parts of the device, one under the other, each with how many
     /// regions it has; the chosen one is lit.
-    private func zonePartColumn(_ parts: [ZonePart], shown: ZonePart, width: CGFloat) -> some View {
+    private func zonePartColumn(_ parts: [ZonePart], shown: ZonePart, width: CGFloat, steam: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(parts) { part in
                 let count = zoneCount(part)
@@ -556,7 +594,7 @@ struct JoystickGroupView: View {
                     zonesPart = part
                 } label: {
                     HStack(spacing: 8) {
-                        Text(partTitle(part))
+                        Text(partTitle(part, steam: steam))
                             .font(.callout)
                             .foregroundStyle(part == shown ? Color.primary : Color.secondary)
                         Spacer(minLength: 8)
@@ -571,14 +609,23 @@ struct JoystickGroupView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
-                    .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(part == shown ? Color.secondary.opacity(0.18) : Color.clear))
+                    // One highlight that slides to the chosen part.
+                    .background {
+                        if part == shown {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.secondary.opacity(0.18))
+                                .matchedGeometryEffect(id: "shownPart", in: zonePartSpace)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(part == shown ? [.isSelected] : [])
                 .accessibilityValue(count == 1 ? String(localized: "1 region") : String(localized: "\(count) regions"))
             }
         }
+        // The column only: the region editor beside it swaps without
+        // animating its heavy layout.
+        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: shown)
         .frame(width: width * min(1.4, max(1, textScale)), alignment: .leading)
     }
 
@@ -635,16 +682,20 @@ struct JoystickGroupView: View {
     }
 
     /// The line under the title: the parts that have regions, or the parts.
-    private func zonesSummary(_ parts: [ZonePart]) -> String {
+    private func zonesSummary(_ parts: [ZonePart], steam: Bool) -> String {
         let used = parts.filter { zoneCount($0) > 0 }
-        if used.isEmpty { return parts.map(partTitle).joined(separator: ", ") }
-        return used.map { "\(partTitle($0)) \(zoneCount($0))" }.joined(separator: ", ")
+        if used.isEmpty { return parts.map { partTitle($0, steam: steam) }.joined(separator: ", ") }
+        return used.map { "\(partTitle($0, steam: steam)) \(zoneCount($0))" }.joined(separator: ", ")
     }
 
     /// A part's name on this device: a Steam Controller's main touch
     /// surface is its right trackpad.
     private func partTitle(_ part: ZonePart) -> String {
-        part == .touchpad && isSteamGroup ? String(localized: "Right trackpad") : part.title
+        partTitle(part, steam: isSteamGroup)
+    }
+
+    private func partTitle(_ part: ZonePart, steam: Bool) -> String {
+        part == .touchpad && steam ? String(localized: "Right trackpad") : part.title
     }
 
     /// This group reads a Steam Controller, or was made for one.
@@ -653,21 +704,25 @@ struct JoystickGroupView: View {
     }
 
     @ViewBuilder
-    private func zoneEditor(_ part: ZonePart) -> some View {
+    private func zoneEditor(_ part: ZonePart, steam: Bool) -> some View {
         switch part {
         case .touchpad:
-            TouchpadCalibrationView(embedded: true, steam: isSteamGroup, groupIndex: joystickIndex)
+            TouchpadCalibrationView(embedded: true, steam: steam, groupIndex: joystickIndex)
         case .leftTrackpad:
             TouchpadCalibrationView(embedded: true, surface: 1, steam: true, groupIndex: joystickIndex)
         case .screen:
             CursorRegionsView(embedded: true)
         case .stick(let s):
-            StickRegionsView(startKey: s, slot: deviceSlot, embedded: true,
-                             partRows: partRows(part), onJumpToRow: jumpToRow)
+            // Behind an Equatable shell, as the rows are: its closures made
+            // it redraw on every edit to any row.
+            StickRegionsShell(startKey: s, slot: deviceSlot,
+                              partRows: partRows(part), onJumpToRow: jumpToRow)
+                .equatable()
         case .band(let axis):
-            StickRegionsView(startKey: StickRegionService.bandKeyBase + axis, slot: deviceSlot, embedded: true,
-                             partRows: partRows(part), onJumpToRow: jumpToRow,
-                             triggerFeel: triggerFeel, onSetTriggerFeel: readsDualSense ? onSetTriggerFeel : nil)
+            StickRegionsShell(startKey: StickRegionService.bandKeyBase + axis, slot: deviceSlot,
+                              partRows: partRows(part), onJumpToRow: jumpToRow,
+                              triggerFeel: triggerFeel, onSetTriggerFeel: readsDualSense ? onSetTriggerFeel : nil)
+                .equatable()
         }
     }
 
@@ -676,9 +731,15 @@ struct JoystickGroupView: View {
     private var headerView: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation { joystick.isExpanded.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { joystick.isExpanded.toggle() }
             } label: {
-                Image(systemName: joystick.isExpanded ? "chevron.down" : "chevron.forward")
+                // One chevron that turns down as the group opens, rather
+                // than two symbols swapped. Right to left mirrors the
+                // rotation along with the symbol, so 90 points down there
+                // too (-90 pointed up).
+                Image(systemName: "chevron.forward")
+                    .rotationEffect(.degrees(joystick.isExpanded ? 90 : 0))
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: joystick.isExpanded)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(width: 20)
@@ -730,10 +791,12 @@ struct JoystickGroupView: View {
                             .lineLimit(1)
                     }
                 }
-                TextField("What this device does in the preset (optional)", text: .shippedText($joystick.tag))
-                    .font(.callout)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(.secondary)
+                DraftTextField(.shippedText($joystick.tag)) { text in
+                    TextField("What this device does in the preset (optional)", text: text)
+                        .font(.callout)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -856,15 +919,19 @@ struct JoystickGroupView: View {
     /// Everything that used to be a row of icons on the header: inserting
     /// inputs, sections, sorting, stick settings, duplicate, remove.
     private var deviceActionsMenu: some View {
-        Menu {
+        // Once per pass for what the menu shows (each reads the device's
+        // capabilities); the actions still work theirs out when picked.
+        let controls = scaffoldControls
+        let blockable = blockableKeyRows
+        return Menu {
             Button("Automatically insert available inputs") { addScaffold(scaffoldControls) }
-                .disabled(scaffoldControls.isEmpty)
+                .disabled(controls.isEmpty)
             Menu("Insert one part") {
-                ForEach(ControllerScaffold.sections(of: scaffoldControls), id: \.self) { section in
+                ForEach(ControllerScaffold.sections(of: controls), id: \.self) { section in
                     Button(ControllerScaffold.shownSection(section)) { addScaffold(scaffoldControls.filter { $0.section == section }) }
                 }
             }
-            .disabled(scaffoldControls.isEmpty)
+            .disabled(controls.isEmpty)
             Button("New section…") {
                 newSectionName = ""
                 newSectionPopoverOpen = true
@@ -898,9 +965,10 @@ struct JoystickGroupView: View {
             }
             // Every ordinary key row at once: the easy way to stop a
             // remapped keyboard also typing into the game.
-            if !blockableKeyRows.isEmpty {
+            if !blockable.isEmpty {
                 Divider()
-                if blockableKeyRows.allSatisfy({ joystick.bindings[$0].blockOriginal == true }) {
+                let rows = joystick.bindings
+                if blockable.allSatisfy({ rows[$0].blockOriginal == true }) {
                     Button("Let the keys do their own actions too") { setKeyBlocking(false) }
                 } else {
                     Button("Block the keys' own actions") { setKeyBlocking(true) }
@@ -950,6 +1018,14 @@ struct JoystickGroupView: View {
         // Opened, so the new rows show: added to a folded group, nothing on
         // screen changed and a second try made doubles.
         withTransaction(t) {
+            // An open, empty group finished its reveal at everything, so a
+            // whole controller's rows were built in one frame: staged like
+            // a first open, with the reveal task started again to bring in
+            // the rest.
+            if joystick.bindings.isEmpty {
+                revealedRows = Self.firstReveal
+                revealRun &+= 1
+            }
             if !joystick.isExpanded { joystick.isExpanded = true }
             joystick.bindings.append(contentsOf: rows)
         }
@@ -1020,6 +1096,19 @@ struct JoystickGroupView: View {
         joystick.bindings.indices.filter { joystick.bindings[$0].input.type == .axis }
     }
 
+    /// The whole percent the Stick settings slider shows. Rounded, not cut:
+    /// a row at 29% is 0.29 as a Float, a hair under as a Double, and read
+    /// 28 here.
+    static func bulkDeadzonePercent(_ value: Double) -> Int {
+        Int((value * 100).rounded())
+    }
+
+    /// What Apply stores: the whole percent shown, as the row's own slider
+    /// stores it, never a fraction of one.
+    static func bulkDeadzoneStored(_ value: Double) -> Float {
+        Float((value * 100).rounded() / 100)
+    }
+
     private var stickSettingsPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Stick Settings")
@@ -1029,11 +1118,11 @@ struct JoystickGroupView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Slider(value: $bulkDeadzone, in: 0.01...0.9) {
+                Slider(value: $bulkDeadzone, in: 0.01...0.9, step: 0.01) {
                     Text("Deadzone")
                 }
-                .accessibilityValue("\(Int(bulkDeadzone * 100)) percent")
-                Text("\(Int(bulkDeadzone * 100))%")
+                .accessibilityValue("\(Self.bulkDeadzonePercent(bulkDeadzone)) percent")
+                Text("\(Self.bulkDeadzonePercent(bulkDeadzone))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 38 * max(1, textScale), alignment: .trailing)
@@ -1046,11 +1135,12 @@ struct JoystickGroupView: View {
                 }
                 Spacer()
                 Button(axisBindingIndices.count == 1 ? String(localized: "Apply to 1 axis binding") : String(localized: "Apply to \(axisBindingIndices.count) axis bindings")) {
+                    let deadzone = Self.bulkDeadzoneStored(bulkDeadzone)
                     for i in axisBindingIndices {
-                        joystick.bindings[i].deadzone = Float(bulkDeadzone)
+                        joystick.bindings[i].deadzone = deadzone
                         // Full push stays past the deadzone, as in the row's Options.
-                        if let outer = joystick.bindings[i].outerDeadzone, outer < Float(bulkDeadzone) + 0.01 {
-                            let raised = Float(bulkDeadzone) + 0.01
+                        if let outer = joystick.bindings[i].outerDeadzone, outer < deadzone + 0.01 {
+                            let raised = deadzone + 0.01
                             joystick.bindings[i].outerDeadzone = raised >= 0.99 ? nil : raised
                         }
                     }
@@ -1552,20 +1642,21 @@ struct JoystickGroupView: View {
         AccessibilityNotification.Announcement(String(localized: "Moved to row \(to + 1)")).post()
     }
 
-    private static let listSpace = "bindingList"
+    fileprivate static let listSpace = "bindingList"
     private static let rowSpacing: CGFloat = 2
 
     /// Looks the row up by id, not by index: a text field that commits
     /// while its row is being removed would otherwise trap past the end,
     /// or write its value into the row that moved into that slot.
-    private func bindingAt(_ index: Int) -> SwiftUI.Binding<BindingModel> {
-        let snapshot = joystick.bindings[index]
+    /// Holds the group's binding, not this view: a closure that holds the
+    /// view copies all of it, for each row on every pass.
+    private static func rowBinding(_ snapshot: BindingModel, in group: SwiftUI.Binding<JoystickMapping>) -> SwiftUI.Binding<BindingModel> {
         let id = snapshot.id
         return SwiftUI.Binding(
-            get: { joystick.bindings.first(where: { $0.id == id }) ?? snapshot },
+            get: { group.wrappedValue.bindings.first(where: { $0.id == id }) ?? snapshot },
             set: { newValue in
-                guard let i = joystick.bindings.firstIndex(where: { $0.id == id }) else { return }
-                joystick.bindings[i] = newValue
+                guard let i = group.wrappedValue.bindings.firstIndex(where: { $0.id == id }) else { return }
+                group.wrappedValue.bindings[i] = newValue
             }
         )
     }
@@ -1606,6 +1697,8 @@ private struct EquatableBindingRow: View, Equatable {
     let takesFocus: Bool
     let extraButtons: [GameControllerService.ExtraButton]
     let availablePresets: [(id: UUID, name: String)]
+    /// The editor's hash of `availablePresets`, compared in its place.
+    let presetsVersion: Int
     let slot: Int
     let faceChoice: String
     /// Changes when a region, watch or phrase the row names by lookup is
@@ -1618,6 +1711,9 @@ private struct EquatableBindingRow: View, Equatable {
     let onDragChanged: (CGFloat) -> Void
     let onDragEnded: () -> Void
     let onMove: (Int) -> Void
+    /// The group's store of row frames, for the drag (the same box for the
+    /// group's life, so not compared).
+    let frames: RowFrameStore
 
     // nonisolated: Equatable's requirement is not actor-isolated, and the
     // comparison touches only Sendable value-type stored properties (the
@@ -1635,10 +1731,8 @@ private struct EquatableBindingRow: View, Equatable {
             && l.slot == r.slot
             && l.faceChoice == r.faceChoice
             && l.namesVersion == r.namesVersion
+            && l.presetsVersion == r.presetsVersion
             && l.availablePresets.count == r.availablePresets.count
-            && l.availablePresets.elementsEqual(r.availablePresets) {
-                $0.id == $1.id && $0.name == $1.name
-            }
     }
 
     /// Lit while the row's input fires, set from this row's own key only,
@@ -1676,6 +1770,111 @@ private struct EquatableBindingRow: View, Equatable {
                 #endif
             }
         }
+        // Inside the Equatable shell, so a row that did not change skips
+        // these too; outside it, their closures were new for every row on
+        // every edit to any row.
+        // Reordering without a pointer, for VoiceOver and
+        // Full Keyboard Access: rows moved only by dragging.
+        .accessibilityAction(named: "Move up") { onMove(-1) }
+        .accessibilityAction(named: "Move down") { onMove(1) }
+        .background(GeometryReader { geo in
+            // Real position in the list, not a running total of
+            // heights: cumulative sums drift as soon as one row
+            // is a different size than assumed, and the drag
+            // then lands in the wrong slot.
+            Color.clear.onChange(of: geo.frame(in: .named(JoystickGroupView.listSpace)),
+                                 initial: true) { _, f in
+                frames[snapshot.id] = f
+            }
+        })
+    }
+}
+
+/// The group's rows that hold other controls (chords), each with its
+/// input key and held keys, in row order: found once per group pass for
+/// every row's light, where each row used to walk all the rows itself.
+struct RowLightChords {
+    private let chords: [(id: UUID, input: String, held: [String])]
+
+    init(_ rows: [BindingModel]) {
+        chords = rows.compactMap { row in
+            let held = row.modifiers
+            return held.isEmpty ? nil : (id: row.id, input: row.input.serialized, held: held.map(\.serialized))
+        }
+    }
+
+    /// The held controls of every other chord row on this input, as
+    /// RowLight(_:in:inputKey:) finds them.
+    func rivals(of id: UUID, on inputKey: String) -> [[String]] {
+        chords.isEmpty ? [] : chords.filter { $0.id != id && $0.input == inputKey }.map(\.held)
+    }
+}
+
+/// StickRegionsView as the Regions card gives it, compared by every value
+/// it is handed. Its two closures, new on every group pass, made it and
+/// its drawing redraw on every edit to any row. The closures it keeps act
+/// on live state (the group's rows, the editor's preset); the view still
+/// follows its own service and environment as before.
+private struct StickRegionsShell: View, Equatable {
+    let startKey: Int
+    let slot: Int
+    let partRows: [RegionPartRow]
+    let onJumpToRow: (UUID) -> Void
+    let triggerFeel: (left: Int, right: Int)
+    let onSetTriggerFeel: ((_ left: Bool, _ level: Int) -> Void)?
+    /// Whether a feel setter is given, which shows the feel controls.
+    let setsFeel: Bool
+
+    /// StickRegionsView's own defaults when not given, as for a stick.
+    init(startKey: Int, slot: Int, partRows: [RegionPartRow], onJumpToRow: @escaping (UUID) -> Void,
+         triggerFeel: (left: Int, right: Int) = (0, 0),
+         onSetTriggerFeel: ((_ left: Bool, _ level: Int) -> Void)? = nil) {
+        self.startKey = startKey
+        self.slot = slot
+        self.partRows = partRows
+        self.onJumpToRow = onJumpToRow
+        self.triggerFeel = triggerFeel
+        self.onSetTriggerFeel = onSetTriggerFeel
+        self.setsFeel = onSetTriggerFeel != nil
+    }
+
+    // nonisolated, as EquatableBindingRow's: only Sendable values, never
+    // the closures.
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.startKey == r.startKey && l.slot == r.slot
+            && l.triggerFeel == r.triggerFeel
+            && l.setsFeel == r.setsFeel
+            && l.partRows.count == r.partRows.count
+            && zip(l.partRows, r.partRows).allSatisfy { a, b in
+                a.id == b.id && a.number == b.number && a.title == b.title && a.output == b.output
+                    && a.regionID == b.regionID && a.deadzone == b.deadzone && a.fullPush == b.fullPush
+            }
+    }
+
+    var body: some View {
+        StickRegionsView(startKey: startKey, slot: slot, embedded: true,
+                         partRows: partRows, onJumpToRow: onJumpToRow,
+                         triggerFeel: triggerFeel, onSetTriggerFeel: onSetTriggerFeel)
+    }
+}
+
+/// A section heading that redraws only when its name or its first row
+/// changes. Its closures, new on every group pass, made it redraw on every
+/// edit to any row; they act on the rows as they are when clicked, from
+/// the heading's start, which is compared here.
+private struct EquatableSectionHeading: View, Equatable {
+    let name: String
+    let start: Int
+    let onRename: (String) -> Void
+    let onAddRow: () -> Void
+    let onDissolve: () -> Void
+
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.name == r.name && l.start == r.start
+    }
+
+    var body: some View {
+        SectionHeadingRow(name: name, onRename: onRename, onAddRow: onAddRow, onDissolve: onDissolve)
     }
 }
 
@@ -1709,6 +1908,14 @@ final class LiveRowLights {
         let rivals: [[String]]
 
         init(_ row: BindingModel, in rows: [BindingModel], inputKey: String) {
+            self.init(row, inputKey: inputKey,
+                      rivals: rows.filter { $0.id != row.id && !$0.modifiers.isEmpty && $0.input.serialized == inputKey }
+                          .map { $0.modifiers.map(\.serialized) })
+        }
+
+        /// The same light with its rivals already found (RowLightChords),
+        /// so a group pass does not walk every row for every row.
+        init(_ row: BindingModel, inputKey: String, rivals: [[String]]) {
             input = inputKey
             var raw = inputKey
             if row.input.type == .axis || row.input.type == .stickRegion {
@@ -1724,8 +1931,7 @@ final class LiveRowLights {
             }
             rawInput = raw
             held = row.modifiers.map(\.serialized)
-            rivals = rows.filter { $0.id != row.id && !$0.modifiers.isEmpty && $0.input.serialized == inputKey }
-                .map { $0.modifiers.map(\.serialized) }
+            self.rivals = rivals
         }
 
         /// `down` holds the raw keys as they are and the engine's firing
@@ -1748,6 +1954,9 @@ final class LiveRowLights {
         }
     }
     private var subscription: AnyCancellable?
+    /// The keys that just went down, with everything down now, for the
+    /// editor's Scroll to Pressed Input.
+    let pressed = PassthroughSubject<(added: Set<String>, down: Set<String>), Never>()
 
     private init() {
         subscription = Publishers.CombineLatest4(LiveInputStore.shared.$raw, LiveInputStore.shared.$active,
@@ -1790,12 +1999,14 @@ final class LiveRowLights {
     private func update(_ now: Set<String>) {
         guard now != lit else { return }
         let changed = lit.symmetricDifference(now)
+        let added = now.subtracting(lit)
         lit = now
         // Only rows that read a control that changed: their input, a held
         // control, or a rival's held control. The publisher drops repeats.
         for (key, subject) in subjects where key.reads(changed) {
             subject.send(key.isLit(now))
         }
+        if !added.isEmpty { pressed.send((added, now)) }
     }
 }
 

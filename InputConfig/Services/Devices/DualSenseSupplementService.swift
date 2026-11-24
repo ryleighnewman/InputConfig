@@ -97,7 +97,8 @@ final class DualSenseSupplementService: @unchecked Sendable {
     private var lastLoggedByte11: [UInt64: UInt8] = [:]
     private var reportCounter: [UInt64: Int] = [:]
     /// Timestamp of the last streamed (callback-delivered) input report per
-    /// device. The poll timer stands down while the stream is alive.
+    /// device. The poll timer stands down while the stream is alive. Kept
+    /// on time since boot, which never steps the way the wall clock can.
     private var lastStreamAt: [UInt64: TimeInterval] = [:]
     /// GET_REPORT poll timer, running while any DualSense is attached.
     private var pollTimer: DispatchSourceTimer?
@@ -460,11 +461,15 @@ final class DualSenseSupplementService: @unchecked Sendable {
         // The pad's model is read in the same lock section: this runs on
         // the main thread at the pad's report rate (250 a second over USB),
         // and a report used to take the lock three times.
+        // The Bluetooth checksum is worked once, here, before the lock: both
+        // reads of the report below take this answer. It was worked twice a
+        // report, the first time inside the lock the engine waits on.
+        let whole = Self.bluetoothChecksumHolds(reportPointer, length: length)
         lock.lock()
         let firstStream = (lastStreamAt[locationID] == nil)
-        lastStreamAt[locationID] = CFAbsoluteTimeGetCurrent()
+        lastStreamAt[locationID] = ProcessInfo.processInfo.systemUptime
         let isDS4 = Self.dualShock4PIDs.contains(productIDs[locationID] ?? 0)
-        if let main = Self.mainButtons(reportPointer, length: length, isDS4: isDS4) { lastMain[locationID] = main }
+        if let main = Self.mainButtons(reportPointer, length: length, isDS4: isDS4, whole: whole) { lastMain[locationID] = main }
         lock.unlock()
         if firstStream {
             NSLog("[DualSenseSupplement] stream ALIVE (loc=0x%llX) first report id=0x%02X len=%d",
@@ -531,7 +536,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         //     nothing (power-cycling the controller clears it), which
         //     is where the old "Bluetooth gives zero reports" belief
         //     came from.
-        guard let b2 = Self.buttons2(reportPointer, length: length, isDS4: isDS4) else { return }
+        guard let b2 = Self.buttons2(reportPointer, length: length, isDS4: isDS4, whole: whole) else { return }
         applyButtons2(b2, locationID: locationID)
     }
 
@@ -549,11 +554,13 @@ final class DualSenseSupplementService: @unchecked Sendable {
     ///
     /// A Bluetooth report (0x31, 0x11) counts only at its full 78 bytes with
     /// a good CRC, as SDL and the kernel check it: a damaged or short one
-    /// read as PS, FN or paddle presses that never happened.
-    static func buttons2(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool) -> UInt8? {
+    /// read as PS, FN or paddle presses that never happened. A caller that
+    /// has already worked the checksum (`bluetoothChecksumHolds`) passes the
+    /// answer as `whole` and it is not worked again.
+    static func buttons2(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool, whole: Bool? = nil) -> UInt8? {
         if isDS4 {
             if r[0] == 0x01 && length > 7 { return r[7] & 0x01 }
-            if r[0] == 0x11 && bluetoothReportIsWhole(r, length: length) { return r[9] & 0x01 }
+            if r[0] == 0x11 && (whole ?? bluetoothReportIsWhole(r, length: length)) { return r[9] & 0x01 }
             return nil
         }
         // USB 0x01 is 64 bytes with buttons[2] at [10]. Over Bluetooth a pad
@@ -566,7 +573,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
             if length == 10 || length == 78 { return r[7] & 0x03 }
             return nil
         }
-        if r[0] == 0x31 && bluetoothReportIsWhole(r, length: length) { return r[11] }
+        if r[0] == 0x31 && (whole ?? bluetoothReportIsWhole(r, length: length)) { return r[11] }
         return nil
     }
 
@@ -575,15 +582,16 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// and [9], Bluetooth 0x31 at [9] and [10]; DualShock 4 USB 0x01 at [5]
     /// and [6], Bluetooth 0x11 at [7] and [8] (SDL_hidapi_ps5.c and
     /// SDL_hidapi_ps4.c state packets). The simple Bluetooth report a pad
-    /// sends before it is woken is left out.
-    static func mainButtons(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool) -> (UInt8, UInt8)? {
+    /// sends before it is woken is left out. `whole` is the checksum answer
+    /// when the caller has it already, as in `buttons2`.
+    static func mainButtons(_ r: UnsafePointer<UInt8>, length: Int, isDS4: Bool, whole: Bool? = nil) -> (UInt8, UInt8)? {
         if isDS4 {
             if r[0] == 0x01 && length >= 64 { return (r[5], r[6]) }
-            if r[0] == 0x11 && bluetoothReportIsWhole(r, length: length) { return (r[7], r[8]) }
+            if r[0] == 0x11 && (whole ?? bluetoothReportIsWhole(r, length: length)) { return (r[7], r[8]) }
             return nil
         }
         if r[0] == 0x01 && length == 64 { return (r[8], r[9]) }
-        if r[0] == 0x31 && bluetoothReportIsWhole(r, length: length) { return (r[9], r[10]) }
+        if r[0] == 0x31 && (whole ?? bluetoothReportIsWhole(r, length: length)) { return (r[9], r[10]) }
         return nil
     }
 
@@ -604,7 +612,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         guard let identity, let loc = identities.first(where: { $0.value.matches(identity) })?.key,
               let main = lastMain[loc],
               // A stream gone quiet is not the pad's state now.
-              let at = lastStreamAt[loc], CFAbsoluteTimeGetCurrent() - at < 0.25 else { return nil }
+              let at = lastStreamAt[loc], ProcessInfo.processInfo.systemUptime - at < 0.25 else { return nil }
         return Self.pressedMain(main.0, main.1)
     }
 
@@ -619,6 +627,14 @@ final class DualSenseSupplementService: @unchecked Sendable {
     /// the input header byte 0xA1 followed by the first 74.
     static func bluetoothReportIsWhole(_ r: UnsafePointer<UInt8>, length: Int) -> Bool {
         SonyBluetoothCRC.inputReportIsWhole(r, length: length)
+    }
+
+    /// The one checksum pass a streamed report gets: true for a full
+    /// Bluetooth report (0x31 or 0x11) that is whole, false for a damaged
+    /// one and for every other report, which no read checks. `length` is at
+    /// least one.
+    static func bluetoothChecksumHolds(_ r: UnsafePointer<UInt8>, length: Int) -> Bool {
+        (r[0] == 0x31 || r[0] == 0x11) && bluetoothReportIsWhole(r, length: length)
     }
 
 
@@ -711,7 +727,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         supplementalState[location] = [:]
         lastButtons2.removeValue(forKey: location)
         lastMain.removeValue(forKey: location)
-        lastStreamAt[location] = CFAbsoluteTimeGetCurrent()
+        lastStreamAt[location] = ProcessInfo.processInfo.systemUptime
         lock.unlock()
     }
 
@@ -814,7 +830,7 @@ final class DualSenseSupplementService: @unchecked Sendable {
         lock.lock()
         let targets = pollableLocked().filter { (loc, _) in
             // Stand down while streamed reports are arriving for this device.
-            (CFAbsoluteTimeGetCurrent() - (lastStreamAt[loc] ?? 0)) > 1.0
+            (ProcessInfo.processInfo.systemUptime - (lastStreamAt[loc] ?? 0)) > 1.0
         }
         pollTickCount += 1
         let tick = pollTickCount

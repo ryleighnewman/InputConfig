@@ -125,7 +125,7 @@ struct PresetEditorView: View {
         now.stickRegions = now.stickRegions.filter { !$0.value.isEmpty }
         if var opened = openedPreset {
             opened.stickRegions = opened.stickRegions.filter { !$0.value.isEmpty }
-            return Self.ignoringLayout(now) != Self.ignoringLayout(opened)
+            return Self.differsBeyondLayout(now, opened)
         }
         if !undoStack.isEmpty { return true }
         guard owner else { return false }
@@ -158,6 +158,9 @@ struct PresetEditorView: View {
     @State private var revealBindingID: UUID?
     /// The latest jump, so a quicker second click cancels the first.
     @State private var jumpToken = 0
+    /// More menu: pressing a controller button, trigger, stick or D-pad
+    /// direction brings its row into view.
+    @AppStorage("InputConfig.editor.scrollToPressedInput") private var scrollsToPressedInput = false
     /// "Draw a screen region" from the visualizer: the drawing sheet, the
     /// row waiting for its region, and the regions there were before.
     @State private var regionRowAwaitingRegion: UUID?
@@ -196,8 +199,21 @@ struct PresetEditorView: View {
     // undo/redo itself.
     @State private var undoStack: [Preset] = []
     @State private var redoStack: [Preset] = []
+    /// Whether Undo and Redo have a step, for their buttons. The toolbar
+    /// read the stacks themselves, so every edit's new undo step ran the
+    /// whole editor, every group and row, a second time.
+    @State private var canUndo = false
+    @State private var canRedo = false
+    /// Counts the region, watch and phrase edits the history has taken in.
+    /// Read by the body, so such an edit, which lives in the services and
+    /// not in the draft, still runs it and the rows get the new names
+    /// (the undo stack the toolbar read used to do that).
+    @State private var serviceEdits = 0
     @State private var isApplyingHistory: Bool = false
     @State private var lastSnapshot: Preset? = nil
+    /// Which text field the last undo step came from, and when: see
+    /// `recordHistory`.
+    @State private var typingBurst = EditorTypingBurst()
     /// The preset as it was when the editor opened.
     @State private var openedPreset: Preset?
 
@@ -219,13 +235,22 @@ struct PresetEditorView: View {
         MotionSetupAction.perform = nil
     }
 
-    private static func ignoringLayout(_ p: Preset) -> Preset {
-        var copy = p
-        for i in copy.joysticks.indices {
-            copy.joysticks[i].isExpanded = true
-            if copy.joysticks[i].tag == "Add bindings here" { copy.joysticks[i].tag = "" }
+    /// Whether two states of a preset differ in more than layout: a group
+    /// folded or unfolded, or the placeholder tag set or cleared, is not
+    /// an edit. One copy and one compare: this ran as a whole compare,
+    /// two rewritten copies and a second compare on every change.
+    static func differsBeyondLayout(_ a: Preset, _ b: Preset) -> Bool {
+        guard a.joysticks.count == b.joysticks.count else { return true }
+        func plain(_ tag: String) -> String { tag == "Add bindings here" ? "" : tag }
+        // `a` with `b`'s layout wherever the two say the same thing.
+        var aligned = a
+        for i in aligned.joysticks.indices {
+            aligned.joysticks[i].isExpanded = b.joysticks[i].isExpanded
+            if plain(aligned.joysticks[i].tag) == plain(b.joysticks[i].tag) {
+                aligned.joysticks[i].tag = b.joysticks[i].tag
+            }
         }
-        return copy
+        return aligned != b
     }
 
     /// Drives the Calibrate Touchpad sheet. Only shown when at least one
@@ -315,6 +340,7 @@ struct PresetEditorView: View {
                     })
 
                     EditorRunBanner(presetID: preset.id, runnable: preset.isRunnable, part: .notes) {}
+                        .equatable()
 
                     builtInUpdateOffers
 
@@ -346,47 +372,29 @@ struct PresetEditorView: View {
                     // services until Save, and rows showed the old name.
                     // The MIDI device list too: a row pinned to one said
                     // Missing device after it was plugged in.
+                    let _ = serviceEdits
                     let namesVersion = Self.namesVersion(of: fullState) &+ midiDevicesVersion
+                    // The App Action picker's preset list, built once per
+                    // pass (it was built again for every group), and one
+                    // hash of it for the rows to compare in place of the
+                    // list, which every row walked entry by entry.
+                    let presetChoices = presetStore.presets.map { (id: $0.id, name: $0.shownName) }
+                    let presetChoicesVersion = Self.choicesVersion(of: presetChoices)
+                    // Which pad each group reads, worked out once for all the
+                    // groups rather than once for every group.
+                    let readSlots = controllerService.effectiveSlots(for: preset.joysticks)
+                    let automationLive = engineRunning && presetStore.activePresetId == preset.id
+                    let automationPlayStation = presetUsesLightBarPad
                     ForEach(preset.joysticks.indices, id: \.self) { index in
                         // Guard the subscript: while a group is being removed, a
                         // retained JoystickGroupView can re-render (on a live
                         // controller publish) with a now-out-of-range index.
                         if preset.joysticks.indices.contains(index) {
-                            let joystick = preset.joysticks[index]
-                            let readSlot: Int? = controllerService.effectiveSlots(for: preset.joysticks)[index]
-                            JoystickGroupView(
-                                joystick: binding(for: index),
-                                joystickIndex: index,
-                                controllerName: groupControllerName(index, readSlot: readSlot),
-                                onAddBinding: { addBinding(to: index) },
-                                onRemoveBinding: { bindIdx in removeBinding(at: bindIdx, from: index) },
-                                onDuplicateBinding: { bindIdx in duplicateBinding(at: bindIdx, in: index) },
-                                onScanInput: { bindIdx in startScan(joystickIndex: index, bindingIndex: bindIdx) },
-                                onScanModifierInput: { bindIdx, slot in startScan(joystickIndex: index, bindingIndex: bindIdx, forModifier: true, modifierSlot: slot) },
-                                onSortBindings: { sortBindings(in: index) },
-                                onDuplicate: { duplicateJoystick(at: index) },
-                                onRemoveJoystick: { removeJoystick(at: index) },
-                                pulsingBindingID: pulsingBindingID,
-                                focusBindingID: focusBindingID,
-                                revealThrough: revealBindingID,
-                                revealAll: revealBindingID.map { id in
-                                    (preset.joysticks.firstIndex { $0.bindings.contains { $0.id == id } } ?? -1) > index
-                                } ?? false,
-                                resolvedSlot: readSlot,
-                                standInPadName: { controllerService.standInPadName(forGroup: index, in: preset.joysticks) },
-                                besideRegions: index == preset.joysticks.count - 1 ? AnyView(automationCard) : nil,
-                                // Plain values so the row views stay free of
-                                // store subscriptions; used by the App Action
-                                // output's target-preset picker.
-                                availablePresets: presetStore.presets.map { (id: $0.id, name: $0.shownName) },
-                                namesVersion: namesVersion,
-                                triggerFeel: (preset.triggerFeelLeft ?? 0, preset.triggerFeelRight ?? 0),
-                                onSetTriggerFeel: { left, level in
-                                    let value = level == 0 ? nil : level
-                                    if left { preset.triggerFeelLeft = value } else { preset.triggerFeelRight = value }
-                                }
-                            )
-                            .id(joystick.id)
+                            groupShell(index, readSlot: readSlots[index],
+                                       presetChoices: presetChoices, presetChoicesVersion: presetChoicesVersion,
+                                       namesVersion: namesVersion,
+                                       automationLive: automationLive, automationPlayStation: automationPlayStation)
+                                .id(preset.joysticks[index].id)
                         }
                     }
                     // Suppress the implicit remove transition so a deleted group
@@ -463,7 +471,7 @@ struct PresetEditorView: View {
                 // back a little further down, so it does not flicker at the edge.
                 let collapse = headerCollapsed ? bottom < 64 : bottom < 48
                 guard collapse != headerCollapsed else { return }
-                withAnimation(editorReduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86)) {
+                withAnimation(editorReduceMotion ? nil : .smooth(duration: 0.28)) {
                     headerCollapsed = collapse
                 }
             }
@@ -506,6 +514,7 @@ struct PresetEditorView: View {
                 // just saved could only be taken back from Previous versions.
                 if lastSnapshot == nil, undoStack.isEmpty, let kept = EditorHistory.history(for: preset) {
                     undoStack = kept
+                    syncUndoButtons()
                 }
                 if lastSnapshot == nil { lastSnapshot = preset }
                 if openedPreset == nil {
@@ -584,7 +593,7 @@ struct PresetEditorView: View {
             #if DEBUG
             .modifier(EditNoteHook(preset: $preset))
             #endif
-            .modifier(RegionHistoryHooks { recordHistory() })
+            .modifier(RegionHistoryHooks { recordServiceEdit() })
             .modifier(EditorSettingsSheet(presetStore: presetStore, controllerService: controllerService))
             // Stopped on purpose while the editor was open (emergency stop,
             // menu bar, a shortcut): closing it does not start it again.
@@ -664,7 +673,7 @@ struct PresetEditorView: View {
                         Image(systemName: "arrow.uturn.backward")
                     }
                     .buttonStyle(.solidSecondaryCompact)
-                    .disabled(undoStack.isEmpty)
+                    .disabled(!canUndo)
                     .keyboardShortcut("z", modifiers: .command)
                     .help("Undo")
                     .accessibilityLabel("Undo")
@@ -674,7 +683,7 @@ struct PresetEditorView: View {
                         Image(systemName: "arrow.uturn.forward")
                     }
                     .buttonStyle(.solidSecondaryCompact)
-                    .disabled(redoStack.isEmpty)
+                    .disabled(!canRedo)
                     .keyboardShortcut("z", modifiers: [.command, .shift])
                     .help("Redo")
                     .accessibilityLabel("Redo")
@@ -688,7 +697,7 @@ struct PresetEditorView: View {
                     // macOS moved Undo and Redo out of sight into the
                     // overflow menu.
                     HStack(spacing: 4) {
-                        Text("Need help?")
+                        Text("Need help or have a feature request?")
                             .foregroundStyle(.secondary)
                         Button("Open Help") { HelpGuideWindowController.shared.show() }
                             .buttonStyle(.link)
@@ -727,6 +736,8 @@ struct PresetEditorView: View {
 
                         Button("Copy all macros as text") { copyAllMacrosAsText() }
                             .disabled(macroRows.isEmpty)
+
+                        Toggle("Scroll to Pressed Input", isOn: $scrollsToPressedInput)
 
                         Divider()
                         Menu("Convert Controller Type…") {
@@ -940,6 +951,16 @@ struct PresetEditorView: View {
                     performJump(to: target, using: proxy)
                 }
             }
+            .onReceive(LiveRowLights.shared.pressed) { press in
+                guard scrollsToPressedInput, !showingScanOverlay,
+                      let id = Self.pressedRow(added: press.added, down: press.down, in: preset.joysticks)
+                else { return }
+                // No anchor: the list moves only as far as it takes to show
+                // the row, and a row already in view stays where it is.
+                withAnimation(editorReduceMotion ? nil : .smooth(duration: 0.45)) {
+                    proxy.scrollTo(id)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(
                 for: .inputConfigScrollToAutomation)) { _ in
                 withAnimation(editorReduceMotion ? nil : .easeInOut(duration: 0.6)) {
@@ -1021,29 +1042,60 @@ struct PresetEditorView: View {
     private func updateLiveGestures() {
         // Deadzone previews from this editor apply to this preset only.
         MappingEngine.deadzonePreviewPresetID = preset.id
-        controllerService.liveZoneRows = preset.joysticks.flatMap(\.bindings)
-            .filter { $0.input.type == .stickRegion }
-            .compactMap { row in row.input.stickRegionID.map {
-                GameControllerService.LiveZoneRow(id: row.id, key: row.input.index, zone: $0,
-                                                  deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true) } }
-        controllerService.liveTakeoverZones = preset.joysticks.flatMap(\.bindings)
-            .filter { $0.input.type == .stickRegion && $0.zoneSharesStick == false }
-            .compactMap { row in row.input.stickRegionID.map {
-                (key: row.input.index, id: $0, deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true,
-                 rowID: row.id, modifiers: row.modifiers.map(\.serialized)) } }
-        controllerService.liveAxisRows = preset.joysticks.flatMap(\.bindings)
-            .filter { $0.input.type == .axis }
-            .map { GameControllerService.LiveAxisRow(id: $0.id, index: $0.input.index, direction: $0.input.axisDirection,
-                                                     deadzone: $0.deadzone ?? 0.25, invert: $0.invertAxis == true,
-                                                     fullTravel: $0.fullTravel == true, onlyInRegion: $0.onlyInRegion) }
-        controllerService.liveSequences = preset.joysticks.flatMap(\.bindings)
-            .filter { $0.input.type == .buttonSequence }
-            .map { GameControllerService.LiveSequence(input: $0.input, windowMs: max(150, min(3000, $0.gestureWindowMs ?? 600))) }
-        controllerService.liveGestures = preset.joysticks.flatMap(\.bindings)
-            .filter { $0.input.type == .stickGesture }
-            .map { GameControllerService.LiveGesture(input: $0.input, reach: max(0.3, min(1, $0.gestureReach ?? 0.8)),
-                                                     windowMs: $0.gestureWindowMs ?? 600, flickMs: $0.gestureFlickMs ?? 400,
-                                                     invert: $0.invertAxis == true) }
+        let live = Self.liveRows(of: preset)
+        controllerService.liveZoneRows = live.zoneRows
+        controllerService.liveTakeoverZones = live.takeoverZones
+        controllerService.liveAxisRows = live.axisRows
+        controllerService.liveSequences = live.sequences
+        controllerService.liveGestures = live.gestures
+    }
+
+    /// The five lists the live preview reads, in row order.
+    struct LiveRows {
+        var zoneRows: [GameControllerService.LiveZoneRow] = []
+        var takeoverZones: [(key: Int, id: UUID, deadzone: Double, invert: Bool, rowID: UUID, modifiers: [String])] = []
+        var axisRows: [GameControllerService.LiveAxisRow] = []
+        var sequences: [GameControllerService.LiveSequence] = []
+        var gestures: [GameControllerService.LiveGesture] = []
+    }
+
+    /// One walk of the rows fills all five. Each list was its own sweep
+    /// that first copied every row of the preset, on every change.
+    static func liveRows(of preset: Preset) -> LiveRows {
+        var live = LiveRows()
+        for group in preset.joysticks {
+            for row in group.bindings {
+                switch row.input.type {
+                case .stickRegion:
+                    guard let zone = row.input.stickRegionID else { break }
+                    let deadzone = Double(row.deadzone ?? 0.25)
+                    live.zoneRows.append(GameControllerService.LiveZoneRow(
+                        id: row.id, key: row.input.index, zone: zone,
+                        deadzone: deadzone, invert: row.invertAxis == true))
+                    if row.zoneSharesStick == false {
+                        live.takeoverZones.append((key: row.input.index, id: zone, deadzone: deadzone,
+                                                   invert: row.invertAxis == true, rowID: row.id,
+                                                   modifiers: row.modifiers.map(\.serialized)))
+                    }
+                case .axis:
+                    live.axisRows.append(GameControllerService.LiveAxisRow(
+                        id: row.id, index: row.input.index, direction: row.input.axisDirection,
+                        deadzone: row.deadzone ?? 0.25, invert: row.invertAxis == true,
+                        fullTravel: row.fullTravel == true, onlyInRegion: row.onlyInRegion))
+                case .buttonSequence:
+                    live.sequences.append(GameControllerService.LiveSequence(
+                        input: row.input, windowMs: max(150, min(3000, row.gestureWindowMs ?? 600))))
+                case .stickGesture:
+                    live.gestures.append(GameControllerService.LiveGesture(
+                        input: row.input, reach: max(0.3, min(1, row.gestureReach ?? 0.8)),
+                        windowMs: row.gestureWindowMs ?? 600, flickMs: row.gestureFlickMs ?? 400,
+                        invert: row.invertAxis == true))
+                default:
+                    break
+                }
+            }
+        }
+        return live
     }
 
     private func updateCursorTracking() {
@@ -1230,7 +1282,10 @@ struct PresetEditorView: View {
         if savedDraft == nil, let saved = presetStore.presets.first(where: { $0.id == preset.id }) {
             if liveEngine.isRunning {
                 liveEngine.reload(with: saved)
-            } else if runningAtOpen {
+            } else if runningAtOpen, presetStore.activePresetId == saved.id {
+                // Asked of the library as well as the flag: a stop that
+                // came while the sheet was already closing never reached
+                // the flag, and the preset just stopped started again.
                 MenuBarController.activate(saved, store: presetStore, engine: liveEngine, background: true)
             }
         }
@@ -1426,6 +1481,23 @@ struct PresetEditorView: View {
         } else {
             ChassisTapService.shared.release("editor")
         }
+    }
+
+    /// The row a press scrolls the list to: the first row in an open group,
+    /// on a button, stick, trigger or D-pad direction, that the press just
+    /// lit. Keys, the mouse and motion are left out: typing, moving the
+    /// pointer or scrolling the list would move the list themselves.
+    static func pressedRow(added: Set<String>, down: Set<String>, in groups: [JoystickMapping]) -> UUID? {
+        let kinds: Set<InputType> = [.button, .axis, .hat]
+        for group in groups where group.isExpanded {
+            for row in group.bindings where kinds.contains(row.input.type) {
+                let key = row.input.serialized
+                guard added.contains(key) || added.contains("!" + key)
+                        || added.contains(GameControllerService.axisRowKey(row.id)) else { continue }
+                if LiveRowLights.RowLight(row, in: group.bindings, inputKey: key).isLit(down) { return row.id }
+            }
+        }
+        return nil
     }
 
     /// One smooth sequence: let the sheet finish sliding in (scrolling
@@ -1637,13 +1709,14 @@ struct PresetEditorView: View {
         .accessibilityHidden(true)
     }
 
-    private func runActivateButton(announces: Bool) -> EditorRunBanner {
+    private func runActivateButton(announces: Bool) -> some View {
         EditorRunBanner(presetID: preset.id, runnable: preset.isRunnable, part: .button, announces: announces) {
             onToggleActive?(preset)
             // Started from here: run the draft, not the saved copy,
             // once the engine is up.
             scheduleLiveApply()
         }
+        .equatable()
     }
 
     /// Whether any row sends MIDI, for the port line under the search.
@@ -1675,14 +1748,71 @@ struct PresetEditorView: View {
     /// open on activation. Laid beside the last group's Regions card.
     private var automationCard: some View {
         // Another preset running is not this one: its note said On now.
-        PresetAutomationSection(automation: $preset.automation,
-                                isLive: engineRunning && presetStore.activePresetId == preset.id,
-                                usesPlayStation: presetUsesLightBarPad)
-            // The jump lands on a mark above the section, so its
-            // heading stops below the collapsed top row, not under it.
-            .background(alignment: .top) {
-                Color.clear.frame(height: 1).offset(y: -64).id("editor-automation")
+        automationCard(live: engineRunning && presetStore.activePresetId == preset.id,
+                       playStation: presetUsesLightBarPad)
+    }
+
+    private func automationCard(live: Bool, playStation: Bool) -> some View {
+        EditorAutomationCard(automation: $preset.automation, value: preset.automation,
+                             isLive: live, usesPlayStation: playStation)
+            .equatable()
+    }
+
+    /// One device group, in a shell that compares what the group shows, so
+    /// an edit elsewhere (another group, the header, Undo's state, the top
+    /// row collapsing on scroll, a toast) does not run the group and every
+    /// one of its rows again. The closures act on the editor's state by
+    /// index, so the ones from an earlier pass do the same thing.
+    private func groupShell(_ index: Int, readSlot: Int?,
+                            presetChoices: [(id: UUID, name: String)], presetChoicesVersion: Int,
+                            namesVersion: Int, automationLive: Bool, automationPlayStation: Bool) -> some View {
+        let joystick = preset.joysticks[index]
+        let isLast = index == preset.joysticks.count - 1
+        let controllerName = groupControllerName(index, readSlot: readSlot)
+        let revealAll = revealBindingID.map { id in
+            (preset.joysticks.firstIndex { $0.bindings.contains { $0.id == id } } ?? -1) > index
+        } ?? false
+        let feel: (left: Int, right: Int) = (preset.triggerFeelLeft ?? 0, preset.triggerFeelRight ?? 0)
+        let group = JoystickGroupView(
+            joystick: binding(for: index),
+            joystickIndex: index,
+            controllerName: controllerName,
+            onAddBinding: { addBinding(to: index) },
+            onRemoveBinding: { bindIdx in removeBinding(at: bindIdx, from: index) },
+            onDuplicateBinding: { bindIdx in duplicateBinding(at: bindIdx, in: index) },
+            onScanInput: { bindIdx in startScan(joystickIndex: index, bindingIndex: bindIdx) },
+            onScanModifierInput: { bindIdx, slot in startScan(joystickIndex: index, bindingIndex: bindIdx, forModifier: true, modifierSlot: slot) },
+            onSortBindings: { sortBindings(in: index) },
+            onDuplicate: { duplicateJoystick(at: index) },
+            onRemoveJoystick: { removeJoystick(at: index) },
+            pulsingBindingID: pulsingBindingID,
+            focusBindingID: focusBindingID,
+            revealThrough: revealBindingID,
+            revealAll: revealAll,
+            resolvedSlot: readSlot,
+            standInPadName: { controllerService.standInPadName(forGroup: index, in: preset.joysticks) },
+            besideRegions: isLast ? AnyView(automationCard(live: automationLive, playStation: automationPlayStation)) : nil,
+            // Plain values so the row views stay free of
+            // store subscriptions; used by the App Action
+            // output's target-preset picker.
+            availablePresets: presetChoices,
+            presetsVersion: presetChoicesVersion,
+            namesVersion: namesVersion,
+            triggerFeel: feel,
+            onSetTriggerFeel: { left, level in
+                let value = level == 0 ? nil : level
+                if left { preset.triggerFeelLeft = value } else { preset.triggerFeelRight = value }
             }
+        )
+        return EditorGroupShell(
+            group: group, snapshot: joystick, index: index, controllerName: controllerName,
+            pulsingBindingID: pulsingBindingID, focusBindingID: focusBindingID,
+            revealThrough: revealBindingID, revealAll: revealAll, resolvedSlot: readSlot,
+            presetsVersion: presetChoicesVersion, namesVersion: namesVersion,
+            triggerFeelLeft: feel.left, triggerFeelRight: feel.right,
+            automation: isLast ? preset.automation : nil,
+            automationLive: isLast && automationLive, automationPlayStation: isLast && automationPlayStation)
+            .equatable()
     }
 
     private var topLayers: some View {
@@ -1754,20 +1884,24 @@ struct PresetEditorView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize()
                     .gridColumnAlignment(.trailing)
-                TextField("Preset Name", text: .shipped($preset.name))
-                    .voiceNames("Name", "Preset Name")
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedHeaderField, equals: .name)
+                DraftTextField(.shipped($preset.name)) { text in
+                    TextField("Preset Name", text: text)
+                        .voiceNames("Name", "Preset Name")
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedHeaderField, equals: .name)
+                }
             }
             GridRow {
                 Text("Tag:")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize()
-                TextField("Tag / Description", text: .shipped($preset.tag))
-                    .voiceNames("Tag", "Tag / Description")
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedHeaderField, equals: .tag)
+                DraftTextField(.shipped($preset.tag)) { text in
+                    TextField("Tag / Description", text: text)
+                        .voiceNames("Tag", "Tag / Description")
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedHeaderField, equals: .tag)
+                }
             }
             GridRow {
                 Text("Key:")
@@ -1842,19 +1976,42 @@ struct PresetEditorView: View {
     /// the history. Redo is cleared on any fresh edit, like every other
     /// editor on the planet.
     private func recordHistory() {
+        let typed = EditorTyping.take()
+        let keys = EditorTyping.takeKeys()
         guard !isApplyingHistory else { return }
         let now = fullState
-        if let previous = lastSnapshot, previous != now,
-           Self.ignoringLayout(previous) != Self.ignoringLayout(now) {
-            undoStack.append(previous)
-            // Bound the history so a long editing session can't grow an
-            // unbounded stack of whole-preset deep copies.
-            if undoStack.count > 100 {
-                undoStack.removeFirst(undoStack.count - 100)
+        if let previous = lastSnapshot, Self.differsBeyondLayout(previous, now) {
+            // A burst of typing in one text field is one step. Each key
+            // used to be its own: a 150 character note pushed every older
+            // step off the stack, and Undo took it back a letter at a time.
+            let field = typed.flatMap { EditorTyping.changed($0, from: previous, to: now) ? $0 : nil }
+            let time = ProcessInfo.processInfo.systemUptime
+            if typingBurst.startsStep(field: field, from: keys?.first ?? time, to: keys?.last ?? time) {
+                undoStack.append(previous)
+                // Bound the history so a long editing session can't grow an
+                // unbounded stack of whole-preset deep copies.
+                if undoStack.count > 100 {
+                    undoStack.removeFirst(undoStack.count - 100)
+                }
             }
             redoStack.removeAll()
         }
         lastSnapshot = now
+        syncUndoButtons()
+    }
+
+    /// A settled change in the region services: a step of history, and a
+    /// pass of the body when it changed anything, for the rows' names.
+    private func recordServiceEdit() {
+        let before = lastSnapshot
+        recordHistory()
+        if lastSnapshot != before { serviceEdits &+= 1 }
+    }
+
+    /// The buttons' flags, written only when one flips.
+    private func syncUndoButtons() {
+        if canUndo == undoStack.isEmpty { canUndo = !undoStack.isEmpty }
+        if canRedo == redoStack.isEmpty { canRedo = !redoStack.isEmpty }
     }
 
     /// The preset with the regions the region editors are working on: they
@@ -1872,6 +2029,8 @@ struct PresetEditorView: View {
         preset = restored
         if Preset.regionWorkingSetOwner == preset.id { restored.applyRegionsToServices() }
         lastSnapshot = restored
+        // Typing after a step back or forward is a step of its own.
+        typingBurst = EditorTypingBurst()
         // The services announce the load on the next turn; that is not an edit.
         DispatchQueue.main.async {
             lastSnapshot = fullState
@@ -1906,6 +2065,7 @@ struct PresetEditorView: View {
         }
         isApplyingHistory = true
         redoStack.append(fullState)
+        syncUndoButtons()
         restore(previous)
         AccessibilityNotification.Announcement(String(localized: "Undone")).post()
     }
@@ -1919,6 +2079,7 @@ struct PresetEditorView: View {
         }
         isApplyingHistory = true
         undoStack.append(fullState)
+        syncUndoButtons()
         restore(next)
         AccessibilityNotification.Announcement(String(localized: "Redone")).post()
     }
@@ -1953,6 +2114,15 @@ struct PresetEditorView: View {
     /// stick regions, screen pixels and texts, voice phrases and touchpad
     /// regions. Fed to the rows so an edit to one redraws them.
     @State private var midiDevicesVersion = 0
+
+    /// A hash of the preset list the rows' App Action picker shows, in
+    /// order: it moves when a preset is added, removed, renamed or moved,
+    /// and at no other store change.
+    static func choicesVersion(of choices: [(id: UUID, name: String)]) -> Int {
+        var h = Hasher()
+        for choice in choices { h.combine(choice.id); h.combine(choice.name) }
+        return h.finalize()
+    }
 
     private static func namesVersion(of preset: Preset) -> Int {
         var h = Hasher()
@@ -2566,7 +2736,7 @@ private struct ChassisTapWarning: View {
 /// working while the editor is open, so the bar warns and recommends turning
 /// it off, rather than pausing it. Its own view, so only it observes the
 /// engine.
-private struct EditorRunBanner: View {
+private struct EditorRunBanner: View, Equatable {
     let presetID: UUID
     let runnable: Bool
     /// The Activate button, in the header's column; or the line about the
@@ -2578,6 +2748,15 @@ private struct EditorRunBanner: View {
     let onToggle: () -> Void
     @EnvironmentObject private var mappingEngine: MappingEngine
     @EnvironmentObject private var presetStore: PresetStore
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+
+    /// The values the banner shows. The engine and the store redraw it
+    /// themselves, and the action works on the editor's state, so a pass
+    /// of the editor with the same values (every edit) leaves it alone.
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.presetID == r.presetID && l.runnable == r.runnable && l.part == r.part && l.announces == r.announces
+    }
 
     private var isOn: Bool { mappingEngine.isRunning && presetStore.activePresetId == presetID }
     /// Another preset running behind the editor.
@@ -2696,6 +2875,9 @@ private struct EditorRunBanner: View {
                 Text(isOn ? String(localized: "Deactivate") : String(localized: "Activate"))
             } icon: {
                 Image(systemName: isOn ? "stop.fill" : "play.fill").imageScale(.small)
+                    // Play turns into Stop and back in place, rather than swapping.
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(systemReduceMotion || appReduceMotion ? nil : .snappy(duration: 0.2), value: isOn)
             }
             // As wide as the Emergency Stop under it.
             .frame(maxWidth: .infinity)
@@ -2973,6 +3155,226 @@ enum EditorHistory {
 }
 
 
+// MARK: - Typed text, written after a pause
+
+/// The text being typed in one editor field, not yet written to the draft
+/// preset. Every change of the draft re-renders the editor (about 60 ms on
+/// a full preset), so a field bound straight to the draft paid that on
+/// every key, and typing fell behind the keys. The field shows its own
+/// copy at once (see `DraftTextField`); the copy is written through the
+/// field's own binding once the typing pauses, and before anything that
+/// reads the draft: a click, a shortcut, Return, Tab, Escape, Save, Quit.
+@MainActor final class EditorTextDraft {
+    private var write: (() -> Void)?
+    private var timer: Task<Void, Never>?
+    /// When the first and the last key of the text not yet written were
+    /// typed, for the editor's undo steps.
+    private var firstKeyAt = 0.0, lastKeyAt = 0.0
+
+    /// Whether typed text is waiting to be written.
+    var isWaiting: Bool { write != nil }
+
+    /// Keeps the latest text's write for the next pause in the typing.
+    func hold(at time: Double = ProcessInfo.processInfo.systemUptime, _ write: @escaping () -> Void) {
+        if self.write == nil { firstKeyAt = time }
+        lastKeyAt = time
+        self.write = write
+        EditorTextDrafts.add(self)
+        timer?.cancel()
+        timer = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(EditorTextDrafts.pauseMilliseconds))
+            guard !Task.isCancelled else { return }
+            self?.commit()
+        }
+    }
+
+    /// Writes the waiting text now.
+    func commit() {
+        timer?.cancel()
+        timer = nil
+        guard let write else { return }
+        self.write = nil
+        EditorTextDrafts.remove(self)
+        EditorTyping.keys = (firstKeyAt, lastKeyAt)
+        write()
+    }
+
+    /// Forgets the waiting text: its field is gone. Everything that takes
+    /// a field away writes the text first (see `EditorTextDrafts`), and a
+    /// write after the field has gone could land in the row or output
+    /// that took its place.
+    func drop() {
+        timer?.cancel()
+        timer = nil
+        write = nil
+        EditorTextDrafts.remove(self)
+    }
+}
+
+/// Every field holding typed text not yet written to the draft preset.
+@MainActor enum EditorTextDrafts {
+    /// How long after the last key the text is written. Longer than the
+    /// gap between two keys of steady typing, so a run of typing is one
+    /// write; short enough that nothing on screen reads stale for long.
+    static let pauseMilliseconds = 300
+    private static var waiting: [ObjectIdentifier: EditorTextDraft] = [:]
+    private static var monitor: Any?
+
+    static var isEmpty: Bool { waiting.isEmpty }
+
+    static func add(_ draft: EditorTextDraft) {
+        waiting[ObjectIdentifier(draft)] = draft
+        watch()
+    }
+
+    static func remove(_ draft: EditorTextDraft) {
+        waiting[ObjectIdentifier(draft)] = nil
+    }
+
+    /// Writes every waiting text now. Called before anything reads or
+    /// changes the draft preset from outside the field being typed in.
+    static func flushAll() {
+        guard !waiting.isEmpty else { return }
+        for draft in Array(waiting.values) { draft.commit() }
+    }
+
+    /// Whether a key press is more than typing: a shortcut, or a key that
+    /// leaves or ends the field. The text is written before such a key is
+    /// handled, so Undo, Save, Tab and Return all find it in the draft.
+    nonisolated static func keyEndsTyping(keyCode: UInt16, command: Bool, control: Bool) -> Bool {
+        // Return, Tab, Escape, keypad Enter.
+        command || control || [36, 48, 53, 76].contains(keyCode)
+    }
+
+    /// Watches the app's own clicks and keys from the first typed text on.
+    /// A click on a button does not take the focus from a text field on
+    /// the Mac, so the field would not know its text was about to be read.
+    private static func watch() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { event in
+            guard !isEmpty else { return event }
+            if event.type != .keyDown
+                || keyEndsTyping(keyCode: event.keyCode,
+                                 command: event.modifierFlags.contains(.command),
+                                 control: event.modifierFlags.contains(.control)) {
+                flushAll()
+            }
+            return event
+        }
+    }
+}
+
+/// A text field of the editor that keeps what is typed in a copy of its
+/// own and writes it to the draft preset when the typing pauses (see
+/// `EditorTextDraft`). `field` builds the real field around the copy, so
+/// every modifier the field had stays where it was.
+struct DraftTextField<Field: View>: View {
+    private let source: SwiftUI.Binding<String>
+    private let field: (SwiftUI.Binding<String>) -> Field
+    @State private var text: String
+    @State private var draft = EditorTextDraft()
+
+    init(_ source: SwiftUI.Binding<String>, @ViewBuilder field: @escaping (SwiftUI.Binding<String>) -> Field) {
+        self.source = source
+        self.field = field
+        _text = State(initialValue: source.wrappedValue)
+    }
+
+    var body: some View {
+        field(SwiftUI.Binding(get: { text }, set: { typed($0) }))
+            // The draft preset changed under the field (Undo, a name
+            // picked from a list, a limit the binding applies): show that,
+            // unless newer keys are still waiting to be written.
+            .onChange(of: source.wrappedValue) { _, new in
+                if !draft.isWaiting, new != text { text = new }
+            }
+            .onDisappear { draft.drop() }
+    }
+
+    private func typed(_ new: String) {
+        guard new != text else { return }
+        text = new
+        let source = source
+        draft.hold {
+            if source.wrappedValue != new { source.wrappedValue = new }
+        }
+    }
+}
+
+/// A text field of one row whose typing the editor's history folds into
+/// one undo step.
+struct EditorTypingField: Hashable {
+    enum Field: Hashable { case note }
+    let row: UUID
+    let field: Field
+}
+
+/// A text field that writes typing into the preset names itself here
+/// just before it writes, so the editor's history can take a burst of
+/// typing as one undo step. The editor's next history check reads the name
+/// and clears it.
+enum EditorTyping {
+    @MainActor static var pending: EditorTypingField?
+    /// When the first and the last key of the text being written were
+    /// typed (see `EditorTextDraft`): the write comes a moment after the
+    /// keys, and the undo steps are counted from the keys.
+    @MainActor static var keys: (first: Double, last: Double)?
+
+    @MainActor static func take() -> EditorTypingField? {
+        defer { pending = nil }
+        return pending
+    }
+
+    @MainActor static func takeKeys() -> (first: Double, last: Double)? {
+        defer { keys = nil }
+        return keys
+    }
+
+    /// Whether the step from one state to the other changed that field. A
+    /// name left behind by a key that changed nothing must not fold some
+    /// other edit into the typing before it.
+    static func changed(_ field: EditorTypingField, from old: Preset, to new: Preset) -> Bool {
+        func text(in preset: Preset) -> String?? {
+            for joystick in preset.joysticks {
+                if let row = joystick.bindings.first(where: { $0.id == field.row }) {
+                    switch field.field {
+                    case .note: return .some(row.note)
+                    }
+                }
+            }
+            return nil
+        }
+        guard let before = text(in: old), let after = text(in: new) else { return false }
+        return before != after
+    }
+}
+
+/// Which text field the editor's last undo step came from, and when its
+/// last key was typed. A key typed in the same field under a second after
+/// the key before it joins that step, so a run of typing at any speed is
+/// one step; any other edit, or a pause of a second, starts the next.
+struct EditorTypingBurst {
+    static let window = 1.0
+    private var field: EditorTypingField?
+    private var lastKeyAt = 0.0
+
+    /// Whether a change made at `time` (seconds, any steady clock) gets an
+    /// undo step of its own. `field` is nil for every edit but typing.
+    mutating func startsStep(field new: EditorTypingField?, at time: Double) -> Bool {
+        startsStep(field: new, from: time, to: time)
+    }
+
+    /// The same for typing written in one piece after its keys: `first`
+    /// and `last` are when the first and the last key of the piece were
+    /// typed, so a pause is still measured from key to key.
+    mutating func startsStep(field new: EditorTypingField?, from first: Double, to last: Double) -> Bool {
+        let joins = new != nil && new == field && first - lastKeyAt < Self.window
+        field = new
+        lastKeyAt = last
+        return !joins
+    }
+}
+
 /// The inline edit in progress in the editor (a section heading, a row's
 /// note), which Escape ends before it reaches the editor's Cancel.
 enum EditorInlineEdit {
@@ -3051,6 +3453,8 @@ enum EditorInlineEdit {
     /// taken first and written back after, so a field committed inside
     /// that access (a section name, an Automation number) was overwritten.
     @MainActor static func commitField() {
+        // Text typed a moment ago and not yet written (see `EditorTextDraft`).
+        EditorTextDrafts.flushAll()
         commit?()
     }
 
@@ -3075,6 +3479,71 @@ enum EditorInlineEdit {
         end = nil
         owner = nil
         commit = nil
+    }
+}
+
+/// A device group with the values it shows beside it, compared in place of
+/// the group's binding and closures (see `groupShell`). Every input the
+/// group draws from is here; the stand-in pad name is read only when its
+/// button is clicked, through the editor's state, so it is not.
+private struct EditorGroupShell: View, Equatable {
+    let group: JoystickGroupView
+    /// The group as the editor held it at this pass. Not the binding's
+    /// value: old and new shells' bindings read the same storage.
+    let snapshot: JoystickMapping
+    let index: Int
+    let controllerName: String
+    let pulsingBindingID: UUID?
+    let focusBindingID: UUID?
+    let revealThrough: UUID?
+    let revealAll: Bool
+    let resolvedSlot: Int?
+    let presetsVersion: Int
+    let namesVersion: Int
+    let triggerFeelLeft: Int
+    let triggerFeelRight: Int
+    /// The Automation card's values, on the last group only (it sits
+    /// beside that group's Regions card); nil on every other group.
+    let automation: PresetAutomation?
+    let automationLive: Bool
+    let automationPlayStation: Bool
+
+    // nonisolated: Equatable's requirement is not actor-isolated, and the
+    // comparison touches only Sendable value-type stored properties.
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.snapshot == r.snapshot && l.index == r.index && l.controllerName == r.controllerName
+            && l.pulsingBindingID == r.pulsingBindingID && l.focusBindingID == r.focusBindingID
+            && l.revealThrough == r.revealThrough && l.revealAll == r.revealAll
+            && l.resolvedSlot == r.resolvedSlot && l.presetsVersion == r.presetsVersion
+            && l.namesVersion == r.namesVersion
+            && l.triggerFeelLeft == r.triggerFeelLeft && l.triggerFeelRight == r.triggerFeelRight
+            && l.automation == r.automation && l.automationLive == r.automationLive
+            && l.automationPlayStation == r.automationPlayStation
+    }
+
+    var body: some View { group }
+}
+
+/// The Automation card, run again only when its own values change: as a
+/// plain input it ran with every row edit, its binding being new each pass.
+private struct EditorAutomationCard: View, Equatable {
+    let automation: SwiftUI.Binding<PresetAutomation>
+    /// Compared in place of the binding, which reads the live draft.
+    let value: PresetAutomation
+    let isLive: Bool
+    let usesPlayStation: Bool
+
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.value == r.value && l.isLive == r.isLive && l.usesPlayStation == r.usesPlayStation
+    }
+
+    var body: some View {
+        PresetAutomationSection(automation: automation, isLive: isLive, usesPlayStation: usesPlayStation)
+            // The jump lands on a mark above the section, so its
+            // heading stops below the collapsed top row, not under it.
+            .background(alignment: .top) {
+                Color.clear.frame(height: 1).offset(y: -64).id("editor-automation")
+            }
     }
 }
 

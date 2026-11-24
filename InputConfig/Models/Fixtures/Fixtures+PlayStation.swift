@@ -130,7 +130,26 @@ extension HIDFixtureCorpus {
                    hex: HIDFixture.hex(bytes + [UInt8](repeating: 0, count: max(0, 64 - bytes.count))), expect: expect, status: status,
                    citation: HIDFixture.Citation(source: "SDL_hidapi_ps4.c PS4StatePacket_t and HandleStatePacket 1120 to 1127; gp2040ce PS4Descriptors.h", locator: locator, date: "2026-10-20"))
     }
+    /// The same PS4 class state as a Bluetooth report: ID 0x11, 78 bytes,
+    /// the state three bytes in (SDL reads it from `&data[3]`), CRC sealed.
+    /// `state` is the nine bytes that follow the ID of the USB report.
+    private static func ps4BT(_ id: String, _ state: [UInt8], _ expect: [HIDFixture.Expect], _ locator: String) -> HIDFixture {
+        var r = [UInt8](repeating: 0, count: 78)
+        r[0] = 0x11; r[1] = 0xC0
+        for (i, byte) in state.enumerated() { r[3 + i] = byte }
+        SonyBluetoothCRC.sealInputReport(&r)
+        return HIDFixture(id: id, device: "PS4 class pad over Bluetooth", transport: .bluetooth,
+                          route: .rawHID(vendorID: 0x1532, productID: 0x0401, transport: "Bluetooth"), reportID: 0x11,
+                          hex: HIDFixture.hex(r), expect: expect, status: .reconstructed,
+                          citation: HIDFixture.Citation(source: "SDL_hidapi_ps4.c k_EPS4ReportIdBluetoothState1, VerifyCRC and HandleStatePacket from &data[3]", locator: locator, date: "2026-11-09"))
+    }
     static let playStationThirdParty: [HIDFixture] = [
+        ps4BT("ds4.bt.rest", [0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00],
+              [.buttonAbsent(0), .buttonAbsent(13), .hat(0, x: 0, y: 0), .axis(0, 0, tolerance: 0.001), .axis(4, 0, tolerance: 0.001)],
+              "report 0x11 at rest: sticks 3 to 6, buttons 7 to 9, triggers 10 and 11"),
+        ps4BT("ds4.bt.everything", [0xFF, 0xFF, 0xFF, 0xFF, 0xF2, 0xFF, 0x03, 0xFF, 0xFF],
+              (0...13).map { .button($0, 1) } + [.hat(0, x: 1, y: 0), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001), .axis(0, 1, tolerance: 0.001)],
+              "report 0x11 with everything held: the USB numbering, three bytes in"),
         ps4("ps4class.rest", [0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00],
             [.buttonAbsent(0), .buttonAbsent(13), .hat(0, x: 0, y: 0), .axis(0, 0, tolerance: 0.001), .axis(4, 0, tolerance: 0.001)], "PS4S-1"),
         ps4("ps4class.everything", [0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xF2, 0xFF, 0x03, 0xFF, 0xFF],
@@ -139,6 +158,9 @@ extension HIDFixtureCorpus {
         ps4("ps4class.victrix.digitaltriggers", [0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x0C, 0x00, 0x00, 0x00],
             [.button(6, 1), .button(7, 1), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001)],
             "PS4S-3: the digital L2 and R2 bits alone force the triggers full (SDL 1120 to 1127)"),
+        ps4("ps4class.partialtrigger", [0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x0C, 0x00, 0x40, 0x40],
+            [.button(6, 1), .button(7, 1), .axis(4, 0.251, tolerance: 0.001), .axis(5, 0.251, tolerance: 0.001)],
+            "the digital bits with a quarter pull: the axis is the pull, full only when the analog byte is 0 (SDL 1120 to 1127)"),
         ps4("ps4class.counteronly", [0x01, 0x80, 0x80, 0x80, 0x80, 0x08, 0x00, 0xFC, 0x00, 0x00],
             [.buttonAbsent(10), .buttonAbsent(13), .buttonAbsent(0)], "PS4S-4: bits 2 to 7 of byte 7 are the counter"),
         ps4("ps4class.wrongid", [0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], [.ignored], "only report 0x01 (and 0x11 over Bluetooth) is a state"),
@@ -148,6 +170,18 @@ extension HIDFixtureCorpus {
                    expect: (0...13).map { .button($0, 1) } + [.button(15, 1), .hat(0, x: 1, y: 0), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001)],
                    status: .reconstructed,
                    citation: HIDFixture.Citation(source: "SDL_hidapi_ps5.c PS5StatePacketAlt_t", locator: "sticks 1 to 4, triggers 5 and 6, counter 7, buttons 8 to 10 (mute 0x04)", date: "2026-10-20")),
+        HIDFixture(id: "ps5class.partialtrigger", device: "PS5 class pad (GP2040-CE)", transport: .usb,
+                   route: .rawHID(vendorID: 0x2B81, productID: 0x0101, transport: "USB"), reportID: 0x01,
+                   hex: HIDFixture.hex([0x01, 0x80, 0x80, 0x80, 0x80, 0x40, 0x40, 0x00, 0x08, 0x0C, 0x00] + [UInt8](repeating: 0, count: 53)),
+                   expect: [.button(6, 1), .button(7, 1), .axis(4, 0.251, tolerance: 0.001), .axis(5, 0.251, tolerance: 0.001)],
+                   status: .reconstructed,
+                   citation: HIDFixture.Citation(source: "SDL_hidapi_ps5.c HandleStatePacketAlt 1339 to 1349", locator: "the digital L2 and R2 bits with a quarter pull: the axis is the pull, not full", date: "2026-11-09")),
+        HIDFixture(id: "ps5class.digitaltriggers", device: "PS5 class pad (GP2040-CE)", transport: .usb,
+                   route: .rawHID(vendorID: 0x2B81, productID: 0x0101, transport: "USB"), reportID: 0x01,
+                   hex: HIDFixture.hex([0x01, 0x80, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00, 0x08, 0x0C, 0x00] + [UInt8](repeating: 0, count: 53)),
+                   expect: [.button(6, 1), .button(7, 1), .axis(4, 1, tolerance: 0.001), .axis(5, 1, tolerance: 0.001)],
+                   status: .reconstructed,
+                   citation: HIDFixture.Citation(source: "SDL_hidapi_ps5.c HandleStatePacketAlt 1339 to 1349", locator: "the digital bits with the analog bytes at 0 read full", date: "2026-11-09")),
     ]
 
     static let playStationSequences: [HIDSequenceFixture] = []

@@ -69,12 +69,11 @@ struct DeadzoneCalibrationView: View {
 
     /// The live reading, sampled off the view's state: as four @State
     /// values written on every tick, the whole sheet was rebuilt 60 times
-    /// a second with the stick at rest.
-    @StateObject private var live = StickSampler()
-    private var currentX: Float { live.x }
-    private var currentY: Float { live.y }
-    private var trail: [(x: Float, y: Float)] { live.trail }
-    private var maxMagnitude: Float { live.maxMagnitude }
+    /// a second with the stick at rest. Held, not observed: as a
+    /// @StateObject each sample of a moving stick still ran the whole
+    /// sheet (two stepped sliders, two ViewThatFits). Only the drawing and
+    /// the readings watch it, in overlays on room of a fixed size.
+    @State private var live = StickSampler()
 
     // Snapshots of the original values, captured on appear. If the user
     // presses Cancel, we restore these so the binding model doesn't keep
@@ -129,7 +128,8 @@ struct DeadzoneCalibrationView: View {
              : String(localized: "Anything in the green band counts as pushed all the way. The row keeps working there, at full strength.")
     }
 
-    private func zoneIsLit(_ r: TouchpadRegion) -> Bool {
+    /// Whether a zone is lit at the reading `currentX`, `currentY`.
+    private func zoneIsLit(_ r: TouchpadRegion, _ currentX: Float, _ currentY: Float) -> Bool {
         // The zones are drawn as the stick reads; this row's Invert mirrors
         // only its own dot.
         let sx = isInverted ? -currentX : currentX, sy = isInverted ? -currentY : currentY
@@ -392,8 +392,16 @@ struct DeadzoneCalibrationView: View {
     // MARK: - 2D Visualizer
 
     private var twoDVisualizer: some View {
-        StickPlot(size: canvasSize, x: currentX, y: currentY, trail: trail,
-                  deadzones: [inner], fullPush: outer, zones: shownZones, lit: zoneIsLit) { EmptyView() }
+        let zones = shownZones, dz = inner, full = outer, size = canvasSize
+        let lit = { (r: TouchpadRegion, x: Float, y: Float) in zoneIsLit(r, x, y) }
+        return Color.clear
+            .frame(width: size, height: size)
+            .overlay {
+                DeadzoneLiveReading(live: live) { s in
+                    StickPlot(size: size, x: s.x, y: s.y, trail: s.trail,
+                              deadzones: [dz], fullPush: full, zones: zones, lit: { lit($0, s.x, s.y) }) { EmptyView() }
+                }
+            }
     }
 
     // MARK: - Trigger Visualizer
@@ -402,14 +410,27 @@ struct DeadzoneCalibrationView: View {
     /// bottom - input below this point is ignored) and full push (green
     /// band at the top - input above this point counts as all the way).
     private var triggerVisualizer: some View {
-        var labels: [(color: Color, text: String)] = [
+        var above: [(color: Color, text: String)] = [
             (.secondary, String(localized: "\(Self.percent(1)) Top", comment: "The top of the deadzone bar, 100%"))]
-        if outer < 0.99 { labels.append((.green, String(localized: "Full push at \(Self.percent(outer))"))) }
-        labels.append((.red, String(localized: "Deadzone \(Self.percent(inner))")))
-        labels.append((.accentColor, String(localized: "Current \(Self.percent(Double(magnitude)))")))
-        labels.append((.secondary, String(localized: "\(Self.percent(0)) Rest", comment: "The bottom of the deadzone bar, 0%, the stick at rest")))
-        return TriggerGauge(pulled: Double(magnitude), deadzones: [inner], fullPush: outer,
-                            bands: shownZones, lit: zoneIsLit, labels: labels) { EmptyView() }
+        if outer < 0.99 { above.append((.green, String(localized: "Full push at \(Self.percent(outer))"))) }
+        above.append((.red, String(localized: "Deadzone \(Self.percent(inner))")))
+        let rest = String(localized: "\(Self.percent(0)) Rest", comment: "The bottom of the deadzone bar, 0%, the stick at rest")
+        let zones = shownZones, dz = inner, full = outer
+        let lit = { (r: TouchpadRegion, x: Float, y: Float) in zoneIsLit(r, x, y) }
+        let amount = { (x: Float, y: Float) in magnitude(x, y) }
+        // TriggerGauge's own size at its defaults: the 90 point bar, its
+        // 16 point gap and the label column.
+        return Color.clear
+            .frame(width: 90 + 16 + 110 * max(1, textScale), height: 240)
+            .overlay {
+                DeadzoneLiveReading(live: live) { s in
+                    let m = amount(s.x, s.y)
+                    TriggerGauge(pulled: Double(m), deadzones: [dz], fullPush: full,
+                                 bands: zones, lit: { lit($0, s.x, s.y) },
+                                 labels: above + [(color: Color.accentColor, text: String(localized: "Current \(Self.percent(Double(m)))")),
+                                                  (color: Color.secondary, text: rest)]) { EmptyView() }
+                }
+            }
     }
 
     // MARK: - Stat helper
@@ -419,15 +440,37 @@ struct DeadzoneCalibrationView: View {
         v.formatted(.percent.precision(.fractionLength(0)))
     }
 
+    /// Each reading is drawn over unseen room for its widest value, so a
+    /// reading that changes 60 times a second never lays the sheet out again.
     @ViewBuilder
     private var statBlocks: some View {
-        statBlock("Current", Self.percent(Double(magnitude)))
-        statBlock("Peak", Self.percent(Double(maxMagnitude)))
-        statBlock("Inside deadzone", magnitude < Float(inner) ? String(localized: "Yes") : String(localized: "No"))
-        if !shownZones.isEmpty {
+        let zones = shownZones, dz = inner
+        let lit = { (r: TouchpadRegion, x: Float, y: Float) in zoneIsLit(r, x, y) }
+        let amount = { (x: Float, y: Float) in magnitude(x, y) }
+        liveStat("Current", room: [Self.percent(1)]) { s in Self.percent(Double(amount(s.x, s.y))) }
+        liveStat("Peak", room: [Self.percent(1)]) { s in Self.percent(Double(s.maxMagnitude)) }
+        liveStat("Inside deadzone", room: [String(localized: "Yes"), String(localized: "No")]) { s in
+            amount(s.x, s.y) < Float(dz) ? String(localized: "Yes") : String(localized: "No")
+        }
+        if !zones.isEmpty {
             // Also said in words, since the lit zone is otherwise only a
             // brighter fill.
-            statBlock("In region", shownZones.first(where: zoneIsLit)?.shownName ?? String(localized: "None"))
+            liveStat("In region", room: [String(localized: "None")] + zones.map(\.shownName)) { s in
+                zones.first(where: { lit($0, s.x, s.y) })?.shownName ?? String(localized: "None")
+            }
+        }
+    }
+
+    /// A reading over room for each value it can show, unseen.
+    private func liveStat(_ label: LocalizedStringKey, room: [String],
+                          value: @escaping (StickSampler) -> String) -> some View {
+        ZStack(alignment: .leading) {
+            ForEach(Array(room.enumerated()), id: \.offset) { _, v in statBlock(label, v) }
+        }
+        .hidden()
+        .accessibilityHidden(true)
+        .overlay(alignment: .leading) {
+            DeadzoneLiveReading(live: live) { s in statBlock(label, value(s)) }
         }
     }
 
@@ -455,7 +498,8 @@ struct DeadzoneCalibrationView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var magnitude: Float {
+    /// How far the reading `currentX`, `currentY` is pushed, 0 to 1.
+    private func magnitude(_ currentX: Float, _ currentY: Float) -> Float {
         if is2D {
             return sqrt(currentX * currentX + currentY * currentY)
         } else {
@@ -511,7 +555,8 @@ struct DeadzoneCalibrationView: View {
 
         // Only add to trail if outside the deadzone; otherwise the rest position
         // would spam the trail with overlapping dots.
-        live.record(magnitude: magnitude, onTrail: magnitude > Float(inner) * 0.5)
+        let m = magnitude(live.x, live.y)
+        live.record(magnitude: m, onTrail: m > Float(inner) * 0.5)
     }
 }
 
@@ -568,6 +613,15 @@ private final class StickSampler: ObservableObject {
         trail.removeAll()
         maxMagnitude = 0
     }
+}
+
+/// What follows the live reading in the Adjust live sheet, redrawn alone
+/// as the stick moves.
+private struct DeadzoneLiveReading<Content: View>: View {
+    @ObservedObject var live: StickSampler
+    @ViewBuilder let content: (StickSampler) -> Content
+
+    var body: some View { content(live) }
 }
 
 // MARK: - Shared drawings
@@ -802,10 +856,12 @@ struct MiniDeadzonePreview: View {
     var body: some View {
         Button(action: onOpen) {
             VStack(spacing: 4) {
-                TimelineView(.periodic(from: .now, by: reduceMotion ? 0.25 : 1.0 / 30)) { _ in
-                    picture
-                }
-                .frame(width: is2D ? size : 44, height: size)
+                // Only the live dot or fill ticks; the rest of the picture is
+                // built when the row changes. The ticking part is drawn in an
+                // overlay or background, which takes no part in the row's
+                // layout, so 30 ticks a second never lay the editor out.
+                picture
+                    .frame(width: is2D ? size : 44, height: size)
                 // A quiet caption, not a button: the picture is what opens
                 // the full view.
                 Label("Adjust live", systemImage: "arrow.up.left.and.arrow.down.right")
@@ -857,8 +913,12 @@ struct MiniDeadzonePreview: View {
         if is2D { stickPicture } else { barPicture }
     }
 
+    /// Ticks at 30 Hz, or 4 times a second under either Reduce Motion.
+    private var tick: PeriodicTimelineSchedule {
+        .periodic(from: .now, by: reduceMotion ? 0.25 : 1.0 / 30)
+    }
+
     private var stickPicture: some View {
-        let r = reading
         let s = size
         return ZStack {
             Circle().fill(Color.black.opacity(0.25))
@@ -896,12 +956,19 @@ struct MiniDeadzonePreview: View {
                     .strokeBorder(Color.green.opacity(0.6), lineWidth: 1)
                     .frame(width: outer * s, height: outer * s)
             }
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 8, height: 8)
-                .position(x: (min(1, max(-1, r.x)) + 1) / 2 * s, y: (min(1, max(-1, r.y)) + 1) / 2 * s)
         }
         .frame(width: s, height: s)
+        // The live dot, on top of everything as before.
+        .overlay {
+            TimelineView(tick) { _ in
+                let r = reading
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 8, height: 8)
+                    .position(x: (min(1, max(-1, r.x)) + 1) / 2 * s, y: (min(1, max(-1, r.y)) + 1) / 2 * s)
+            }
+            .frame(width: s, height: s)
+        }
     }
 
     /// Which way the arrow points, as a unit step in the drawing (y down,
@@ -946,16 +1013,9 @@ struct MiniDeadzonePreview: View {
     }
 
     private var barPicture: some View {
-        let r = reading
         let h = size, w: CGFloat = 26
-        let pulled = DeadzoneCalibrationView.axisAmount(
-            r.x, oneWay: isTrigger || controllerService.axisReadsOneWay(slot: slot, index: axisIndex),
-            direction: direction, fullTravel: fullTravel)
         let bands = zones.regions(forStick: StickRegionService.bandKeyBase + axisIndex)
         return ZStack(alignment: .bottom) {
-            RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25))
-            Rectangle().fill(Color.accentColor.opacity(pulled <= inner ? 0.3 : 0.6))
-                .frame(height: h * pulled)
             Rectangle().fill(Color.red.opacity(0.22)).frame(height: h * inner)
             if outer < 0.99 {
                 Rectangle().fill(Color.green.opacity(0.22)).frame(height: h * (1 - outer)).offset(y: -h * outer)
@@ -972,6 +1032,23 @@ struct MiniDeadzonePreview: View {
             RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.35), lineWidth: 1)
         }
         .frame(width: w, height: h)
+        // The well and the live fill, under the bands as before.
+        .background(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25))
+                TimelineView(tick) { _ in
+                    let pulled = DeadzoneCalibrationView.axisAmount(
+                        reading.x, oneWay: isTrigger || controllerService.axisReadsOneWay(slot: slot, index: axisIndex),
+                        direction: direction, fullTravel: fullTravel)
+                    // Pinned to the bottom of the bar's own frame, whatever
+                    // size the timeline view takes.
+                    Rectangle().fill(Color.accentColor.opacity(pulled <= inner ? 0.3 : 0.6))
+                        .frame(height: h * pulled)
+                        .frame(width: w, height: h, alignment: .bottom)
+                }
+            }
+            .frame(width: w, height: h)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

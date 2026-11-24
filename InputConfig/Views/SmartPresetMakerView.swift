@@ -14,7 +14,13 @@ struct SmartPresetMakerView: View {
     @EnvironmentObject var presetStore: PresetStore
     @EnvironmentObject var controllerService: GameControllerService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
     var onCreated: (Preset) -> Void
+
+    /// The options that follow a switch fade in; off with either Reduce
+    /// Motion.
+    private var stepAnimation: Animation? { reduceMotion || appReduceMotion ? nil : .snappy(duration: 0.2) }
 
     enum Step: Int, CaseIterable { case category, item, controller, options, finish }
 
@@ -242,6 +248,7 @@ struct SmartPresetMakerView: View {
                     Spacer()
                     Button("Choose App…") { chooseApp() }.buttonStyle(.solidSecondaryCompact)
                 }
+                .transition(.opacity)
             }
             Divider()
             Toggle("Confine the mouse to the screen (boundaries)", isOn: $confine)
@@ -293,6 +300,8 @@ struct SmartPresetMakerView: View {
                 }
             }
         }
+        // The app path row fades in under its switch.
+        .animation(stepAnimation, value: autoLaunch)
     }
 
     private var finishStep: some View {

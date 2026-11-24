@@ -537,6 +537,8 @@ extension BindingRowView {
             set: { newValue in
                 guard newValue != ShippedText.t(binding.note ?? "") else { return }
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                // One undo step for a burst of typing, not one per key.
+                EditorTyping.pending = EditorTypingField(row: binding.id, field: .note)
                 binding.note = trimmed.isEmpty ? nil : newValue
             }
         )
@@ -555,20 +557,25 @@ extension BindingRowView {
                 .frame(width: numberColWidth, alignment: .leading)
             Group {
             if editingNote {
-                TextField("Add a note (what this control does)", text: noteBinding)
-                    .textFieldStyle(.plain)
-                    .font(.callout)
-                    .foregroundStyle((binding.note?.isEmpty ?? true) ? AnyShapeStyle(.hint) : AnyShapeStyle(.secondary))
-                    .lineLimit(1)
-                    .focused($noteFieldFocused)
-                    .onSubmit {
-                        editingNote = false
-                        EditorInlineEdit.clear(binding.id)
-                        DispatchQueue.main.async { noteButtonFocused = true }
-                    }
-                    .onChange(of: noteFieldFocused) { _, focused in
-                        if !focused { editingNote = false; EditorInlineEdit.clear(binding.id) }
-                    }
+                // The typed text is written when the typing pauses (see
+                // `EditorTextDraft`), so the color follows the field's
+                // own text, not the row's note.
+                DraftTextField(noteBinding) { text in
+                    TextField("Add a note (what this control does)", text: text)
+                        .textFieldStyle(.plain)
+                        .font(.callout)
+                        .foregroundStyle(text.wrappedValue.isEmpty ? AnyShapeStyle(.hint) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .focused($noteFieldFocused)
+                        .onSubmit {
+                            editingNote = false
+                            EditorInlineEdit.clear(binding.id)
+                            DispatchQueue.main.async { noteButtonFocused = true }
+                        }
+                        .onChange(of: noteFieldFocused) { _, focused in
+                            if !focused { editingNote = false; EditorInlineEdit.clear(binding.id) }
+                        }
+                }
             } else {
                 Button {
                     editingNote = true

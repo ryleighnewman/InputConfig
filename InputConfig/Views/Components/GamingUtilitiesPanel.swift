@@ -8,6 +8,10 @@ import AppKit
 /// UserDefaults so the choices survive launches).
 struct GamingUtilitiesPanel: View {
     @ObservedObject private var guardSvc = CursorGuardService.shared
+    /// The "Every" slider's value while its thumb is held. The service
+    /// gets the value on release: each write there restarts the guard's
+    /// timer, which while a preset ran was once per step of the drag.
+    @State private var recenterLiveMs: Double?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,7 +21,10 @@ struct GamingUtilitiesPanel: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             // Confine: the toggle, then its margin on the line below.
-            Toggle(isOn: $guardSvc.edgeConfineEnabled) {
+            // The slider a switch reveals fades in and what follows slides,
+            // not jumps (off under either Reduce Motion: Settings' sheet root
+            // strips the transaction).
+            Toggle(isOn: $guardSvc.edgeConfineEnabled.animation(.snappy(duration: 0.22))) {
                 Label("Keep the pointer off the screen edges", systemImage: "rectangle.inset.filled")
             }
             if guardSvc.edgeConfineEnabled {
@@ -27,14 +34,16 @@ struct GamingUtilitiesPanel: View {
             }
 
             // Recenter
-            Toggle(isOn: $guardSvc.autoRecenterEnabled) {
+            Toggle(isOn: $guardSvc.autoRecenterEnabled.animation(.snappy(duration: 0.22))) {
                 Label("Recenter the pointer on a timer", systemImage: "arrow.triangle.2.circlepath")
             }
             if guardSvc.autoRecenterEnabled {
                 HStack(spacing: 10) {
+                    let everyMs = Int(recenterLiveMs ?? guardSvc.recenterIntervalMs)
                     sliderRow("Every", value: $guardSvc.recenterIntervalMs, range: 50...2000, step: 10,
-                              text: String(localized: "\(Int(guardSvc.recenterIntervalMs)) ms"),
-                              spoken: String(localized: "\(Int(guardSvc.recenterIntervalMs)) milliseconds"))
+                              text: String(localized: "\(everyMs) ms"),
+                              spoken: String(localized: "\(everyMs) milliseconds"),
+                              live: { recenterLiveMs = $0 == guardSvc.recenterIntervalMs ? nil : $0 })
                     Button {
                         guardSvc.warpToAnchor()
                     } label: {
@@ -43,6 +52,9 @@ struct GamingUtilitiesPanel: View {
                     .buttonStyle(.solidSecondaryCompact)
                     .help("Move the pointer to the center of the screen it is on")
                 }
+                // Once the value lands (a release, an arrow key, Reset),
+                // the label reads the stored one again.
+                .onChange(of: guardSvc.recenterIntervalMs) { _, _ in recenterLiveMs = nil }
             }
 
             // Hide
@@ -74,17 +86,25 @@ struct GamingUtilitiesPanel: View {
     }
 
     /// Label, slider, value: one indented line under its toggle, the same
-    /// shape for every slider on the panel.
+    /// shape for every slider on the panel. With `live`, the bound value
+    /// is written when the thumb is let go (and on each arrow key or
+    /// VoiceOver step), and `live` hears every step for the label.
     private func sliderRow(_ label: LocalizedStringKey, value: Binding<Double>, range: ClosedRange<Double>,
-                           step: Double, text: String, spoken: String? = nil) -> some View {
+                           step: Double, text: String, spoken: String? = nil,
+                           live: ((Double) -> Void)? = nil) -> some View {
         HStack(spacing: 10) {
             Text(label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 52, alignment: .leading)
-            Slider(value: value, in: range, step: step) { EmptyView() }
-                .accessibilityLabel(label)
-                .accessibilityValue(spoken ?? text)
+            if let live {
+                ThrottledSlider(label, value: value, in: range, step: step, onLiveChange: live)
+                    .accessibilityValue(spoken ?? text)
+            } else {
+                Slider(value: value, in: range, step: step) { EmptyView() }
+                    .accessibilityLabel(label)
+                    .accessibilityValue(spoken ?? text)
+            }
             Text(text)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)

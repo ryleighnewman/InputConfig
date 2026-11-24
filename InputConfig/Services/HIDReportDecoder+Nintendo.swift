@@ -20,9 +20,10 @@ extension HIDReportDecoder {
     /// motion sensors, which the start-up sequence switches on, are read.
     /// The short format 0x09 (`decodeSwitch2ProShort`) is still decoded in
     /// case a controller keeps sending it.
-    static func decodeSwitch2Pro(report: Data, into state: inout ControllerState) {
+    static func decodeSwitch2Pro(report: Data, calibration: Switch2Calibration.Choice = .stored,
+                                 into state: inout ControllerState) {
         guard isSwitch2ProInputReport(report) else { return }
-        if report.first == 0x09 { decodeSwitch2ProShort(report: report, into: &state); return }
+        if report.first == 0x09 { decodeSwitch2ProShort(report: report, calibration: calibration, into: &state); return }
         let bytes = Array(report)
         let d5 = UInt16(bytes[5]), d6 = UInt16(bytes[6]), d7 = UInt16(bytes[7]), d8 = UInt16(bytes[8])
         // [5] Y, X, B, A (SDL WEST, NORTH, SOUTH, EAST), R (bit 6), ZR (bit 7)
@@ -54,7 +55,7 @@ extension HIDReportDecoder {
         state.hats[0] = (x: (left > 0.5 && right > 0.5) ? 0 : right - left,
                          y: (up > 0.5 && down > 0.5) ? 0 : up - down)
 
-        let cal = Switch2Calibration.current(product: 0x2069)
+        let cal = calibration.resolve(product: 0x2069)
         let leftStick = switch2Stick(bytes[11], bytes[12], bytes[13], calibration: cal?.left)
         let rightStick = switch2Stick(bytes[14], bytes[15], bytes[16], calibration: cal?.right)
         state.axes[0] = leftStick.x
@@ -101,7 +102,8 @@ extension HIDReportDecoder {
     ///   [5...7] left stick, [8...10] right stick: 12-bit X and Y packed into
     ///   three bytes, about 2048 at rest and about 1650 from rest to full
     ///   tilt, Y larger when pushed up.
-    static func decodeSwitch2ProShort(report: Data, into state: inout ControllerState) {
+    static func decodeSwitch2ProShort(report: Data, calibration: Switch2Calibration.Choice = .stored,
+                                      into state: inout ControllerState) {
         guard report.count >= 12, report.first == 0x09 else { return }
         let bytes = Array(report)
         // Payload index k is byte k + 1, after the report ID.
@@ -138,7 +140,7 @@ extension HIDReportDecoder {
         state.hats[0] = (x: hatX, y: hatY)
 
         // Sticks. Up is negative in the app, so Y is flipped.
-        let cal = Switch2Calibration.current(product: 0x2069)
+        let cal = calibration.resolve(product: 0x2069)
         let leftStick = switch2Stick(bytes[6], bytes[7], bytes[8], calibration: cal?.left)
         let rightStick = switch2Stick(bytes[9], bytes[10], bytes[11], calibration: cal?.right)
         state.axes[0] = leftStick.x
@@ -155,10 +157,9 @@ extension HIDReportDecoder {
     /// GameCube controller for Switch 2, USB, report 0x05, with the offsets
     /// SDL's Switch 2 driver reads (SDL_hidapi_switch2.c HandleGameCubeState,
     /// zlib license), counted from the report ID byte:
-    ///   [5] B, X, Y, A (bits 0 to 3: SDL_hidapi_switch2.c HandleGameCubeState
-    ///   WEST, NORTH, SOUTH, EAST with SDL's GameCube face mapping a:b1,
-    ///   b:b3, x:b0, y:b2), R click (bit 6), Z (bit 7). UNVERIFIED on a pad:
-    ///   the 0x09 format of the same pad is letter ordered B, A, Y, X.
+    ///   [5] Y, X, B, A (bits 0 to 3, the Switch 2 Pro's own order:
+    ///   SDL_hidapi_switch2.c HandleGameCubeState and Linux hid-nintendo.c
+    ///   ns2_gccon_unified_mappings agree), R click (bit 6), Z (bit 7)
     ///   [6] Start (bit 1), Home (bit 4), Capture (bit 5), C (bit 6)
     ///   [7] D-pad down, up, right, left (bits 0 to 3), L click (bit 6), ZL (bit 7)
     ///   [11...13] control stick, [14...16] C-stick: 12-bit X and Y as on the Pro
@@ -168,7 +169,8 @@ extension HIDReportDecoder {
     /// L click 4 and 6, Z 5, R click 7, Start 9, Home 10, Capture 14, C 15,
     /// ZL 16, the C-stick as the right stick, L and R on axes 4 and 5.
     /// Needs a hardware check: no pad was on hand.
-    static func decodeSwitch2GameCube(report: Data, into state: inout ControllerState) {
+    static func decodeSwitch2GameCube(report: Data, calibration: Switch2Calibration.Choice = .stored,
+                                      into state: inout ControllerState) {
         guard isSwitch2GameCubeInputReport(report) else { return }
         let bytes = Array(report)
         let d5 = UInt16(bytes[5]), d6 = UInt16(bytes[6]), d7 = UInt16(bytes[7])
@@ -194,7 +196,7 @@ extension HIDReportDecoder {
         // Analog L and R. The rest point comes from the pad's flash (SDL
         // MapTriggerAxis, 232 full); without it anything up to 40 counts as
         // at rest. The click at the end of the pull reads as fully pressed.
-        let cal = Switch2Calibration.current(product: 0x2073)
+        let cal = calibration.resolve(product: 0x2073)
         func trigger(_ raw: UInt8, zero: Int, click: Float) -> Float {
             // A span of at least 1: a zero at or past 232 gave NaN (read as
             // fully pressed) or an inverted pull.
@@ -237,11 +239,12 @@ extension HIDReportDecoder {
     /// X 2, Y 3; SL 4, SR 5; L or R 6; ZL or ZR 7; Minus 8; Plus 9; Home 10;
     /// left stick press 11; right stick press 12; Capture 14; C 15; GL 16;
     /// GR 17. Not checked on a Joy-Con 2: none was on hand.
-    static func decodeSwitch2JoyCon(report: Data, left: Bool, into state: inout ControllerState) {
+    static func decodeSwitch2JoyCon(report: Data, left: Bool, calibration: Switch2Calibration.Choice = .stored,
+                                    into state: inout ControllerState) {
         guard isSwitch2GameCubeInputReport(report) else { return }
         let bytes = Array(report)
         let d5 = UInt16(bytes[5]), d6 = UInt16(bytes[6]), d7 = UInt16(bytes[7]), d8 = UInt16(bytes[8])
-        let cal = Switch2Calibration.current(product: left ? 0x2066 : 0x2067)
+        let cal = calibration.resolve(product: Int32(left ? Switch2USBEnabler.joyConLeftProductID : Switch2USBEnabler.joyConRightProductID))
         if left {
             state.buttons[0] = bit(d7, 3)    // Left arrow
             state.buttons[1] = bit(d7, 1)    // Up arrow
@@ -293,6 +296,20 @@ extension HIDReportDecoder {
             if left { upright.motion[x] = -uy; upright.motion[y] = ux } else { upright.motion[x] = uy; upright.motion[y] = -ux }
         }
         state.motion = upright.motion
+    }
+
+    /// Which stick axes of a Switch 2 layout the decoders above read with
+    /// no flash calibration: `first` is axes 0 and 1, `second` axes 2 and
+    /// 3. Those still carry the pad's own rest (see `switch2Stick`), which
+    /// RawHIDGamepad.removeStickRest takes off. A Joy-Con 2 has one stick,
+    /// on axes 0 and 1; the right one reads it with either block.
+    static func switch2SticksWithoutCalibration(layout: ControllerProfile.ReportLayout,
+                                                calibration: Switch2Calibration?) -> (first: Bool, second: Bool) {
+        switch layout {
+        case .switch2JoyConLeft: return (calibration?.left == nil, false)
+        case .switch2JoyConRight: return (calibration?.left == nil && calibration?.right == nil, false)
+        default: return (calibration?.left == nil, calibration?.right == nil)
+        }
     }
 
     /// One stick: 12-bit X from the first byte and the low half of the

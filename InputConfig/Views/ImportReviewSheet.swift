@@ -16,6 +16,8 @@ import SwiftUI
 struct ImportReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var presetStore: PresetStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
 
     /// Local mutable copy of the store's review queue so the user can
     /// rename entries / toggle skip without immediately mutating the
@@ -87,6 +89,7 @@ struct ImportReviewSheet: View {
                                     : "checkmark.circle.fill"))
                     .foregroundStyle(isBroken ? .orange
                                               : (isSkipped ? .secondary : .green))
+                    .contentTransition(.symbolEffect(.replace))
                 Text(row.filename)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -226,6 +229,9 @@ struct ImportReviewSheet: View {
                         lineWidth: 1)
         )
         .opacity(isSkipped ? 0.55 : 1)
+        // Skip dims the row and swaps its mark in a short fade, not a jump;
+        // off with either Reduce Motion.
+        .animation(reduceMotion || appReduceMotion ? nil : .snappy(duration: 0.18), value: isSkipped)
     }
 
     /// Number of rows the user will actually import on confirm: parsed

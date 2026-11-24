@@ -292,6 +292,8 @@ final class TutorialState: ObservableObject {
 struct TutorialOverlay: View {
     @ObservedObject var state: TutorialState
     let anchors: [String: CGRect]
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
 
     // Window coordinates are left to right, so the spotlight and the
     // simulated cursor are placed in them in every language; the card's
@@ -309,10 +311,17 @@ struct TutorialOverlay: View {
                let rect = anchors[id] {
                 SpotlightDimView(rect: rect, shape: step.spotlightShape)
                     .ignoresSafeArea()
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.22), value: state.stepIndex)
+                    // Fades in, leaves at once: a step whose target appears a
+                    // frame later (its action opens a page) would otherwise
+                    // lay a fresh dim over the old one fading out.
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
             }
         }
+        // On the container, not the dim: inside the `if` it moved the
+        // spotlight between steps but could not fade the dim in, so a step
+        // that starts one flashed the window dark.
+        .animation((systemReduceMotion || appReduceMotion) ? nil : .easeInOut(duration: 0.22),
+                   value: state.stepIndex)
         // The anchors are window frames, measured from the window's top
         // edge: the cursor landed a toolbar's height below its target.
         .ignoresSafeArea()
@@ -437,6 +446,8 @@ fileprivate struct SimulatedCursor: View {
 /// TutorialState.shared so it stays in sync with the overlay.
 struct TutorialCardView: View {
     @ObservedObject var state = TutorialState.shared
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
 
     var body: some View {
         if let step = state.currentStep {
@@ -445,6 +456,7 @@ struct TutorialCardView: View {
                     Image(systemName: step.icon)
                         .font(.title2)
                         .foregroundStyle(step.tint)
+                        .contentTransition(.symbolEffect(.replace))
                         .frame(width: 32, height: 32)
                         .background(step.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
                         .accessibilityHidden(true)
@@ -569,6 +581,12 @@ struct TutorialCardView: View {
             // Pinned to the panel's bottom, so a longer step grows upward
             // and Back, Next and Skip stay where they are.
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            // A new step cross fades its text, glides the card to its new
+            // height and moves the progress fill, instead of swapping all of
+            // it in one frame. Only the card: a step's own action is not in
+            // this transaction.
+            .animation((systemReduceMotion || appReduceMotion) ? nil : .smooth(duration: 0.22),
+                       value: state.stepIndex)
         }
     }
 

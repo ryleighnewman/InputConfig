@@ -252,7 +252,13 @@ enum HIDDescriptorParser {
                     // after the orphan merge, so a truncation never leaves
                     // orphan fields under the nil key and the bit cap holds
                     // for the merged cursor.
-                    if !isConstant && isVariable {
+                    // An array input that will be kept counts as well:
+                    // every entry of it is read on each report. One with
+                    // more entries than any real device has (a keyboard has
+                    // 6, a button box a few dozen) is not kept at all.
+                    let keptArray = !isConstant && !isVariable && bitsPerEntry <= 16 && g.reportCount <= maxArrayEntries
+                        ? state.arrayUsages(logicalMin: g.logicalMin, logicalMax: g.logicalMax) : nil
+                    if (!isConstant && isVariable) || keptArray != nil {
                         fieldTotal += g.reportCount
                         if fieldTotal > maxFieldsTotal {
                             return (fieldsByReport, cursorByReport, arraysByReport)
@@ -295,9 +301,7 @@ enum HIDDescriptorParser {
                     // control that is down (button boxes, some arcade
                     // encoders, Android pads' Home and Back), not one bit
                     // per control. Kept when its controls are buttons.
-                    if !isConstant && !isVariable,
-                       let usages = state.arrayUsages(logicalMin: g.logicalMin, logicalMax: g.logicalMax),
-                       bitsPerEntry <= 16 {
+                    if let usages = keptArray {
                         let base = cursorByReport[g.reportID, default: 0]
                         arraysByReport[g.reportID, default: []].append(ArrayInput(
                             bitOffset: base,
@@ -385,6 +389,11 @@ enum HIDDescriptorParser {
 
         return (fieldsByReport, cursorByReport, arraysByReport)
     }
+
+    /// The most buttons a descriptor's array inputs give, all together.
+    static let maxArrayButtons = 512
+    /// The most entries one array input may have and still be kept.
+    static let maxArrayEntries = 256
 
     /// One array input item: `count` entries of `bitSize` bits, each the
     /// number of a control that is down, counted from `logicalMin`.
@@ -872,6 +881,11 @@ enum HIDDescriptorParser {
             }
         }
         var arraysPerReport: [Int?: [HIDExtendedLayout.ButtonArray]] = [:]
+        // A crafted or broken descriptor can repeat an array item hundreds
+        // of times, and every button of every one is walked on each
+        // report. An array that would take the count past the cap is left
+        // out (a truncation, as with the field cap).
+        var arrayButtons = 0
         for key in arraysByReport.keys.sorted(by: { ($0 ?? -1) < ($1 ?? -1) }) {
             for array in arraysByReport[key] ?? [] where array.usagePage == 0x09 || array.usagePage == 0x0C {
                 // Usage 0 is "no button pressed" (Button page) or unassigned
@@ -879,6 +893,8 @@ enum HIDDescriptorParser {
                 let skip = array.usages.first == 0 ? 1 : 0
                 let count = array.usages.count - skip
                 guard count > 0 else { continue }
+                guard arrayButtons + count <= maxArrayButtons else { continue }
+                arrayButtons += count
                 // A run of numbers clear of the mirrored ones.
                 while (buttonCount..<(buttonCount + count)).contains(where: mirrored.contains) { buttonCount += 1 }
                 arraysPerReport[key, default: []].append(.init(

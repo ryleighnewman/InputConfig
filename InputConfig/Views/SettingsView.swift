@@ -24,6 +24,7 @@ struct SettingsView: View {
     /// .about; everywhere else defaults to General.
     init(initialTab: SettingsTab = .general) {
         _selectedTab = State(initialValue: initialTab)
+        _permissionRereads = State(initialValue: PermissionRereads(onFirstAppearance: initialTab != .general))
     }
 
     /// Mirrors the same `@AppStorage` key used by the main app scene so
@@ -95,9 +96,15 @@ struct SettingsView: View {
     @State private var screenRecordingRequested = false
     /// Microphone and Speech Recognition (Voice phrase rows), re-read the same way.
     @State private var voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed
-    /// The live press log, observed here (not via the controller service) so
-    /// its per-press updates re-render only this sheet, never the root window.
-    @ObservedObject private var pressLog = PhysicalPressLogStore.shared
+    /// Whether each permission row reads its permission again as it appears.
+    /// Not the first time when Settings opens on General: the two lines above
+    /// have just read it, and each read is a round trip to tccd (10 to 20 ms
+    /// on a busy Mac) before the sheet's first frame. A reference, so
+    /// flipping it is not a state change.
+    @State private var permissionRereads: PermissionRereads
+    // The live press log is observed by LivePressLogBox alone (Devices tab):
+    // observed here, every press of any controller ran this whole body again,
+    // whichever tab was showing.
 
     // App-level accessibility preferences (Settings > General > Accessibility).
     @AppStorage("InputConfig.a11y.textSize") private var a11yTextSize = 0
@@ -121,6 +128,9 @@ struct SettingsView: View {
     @AppStorage(InputSimulator.followLayoutKey) private var keysFollowLayout = false
     @AppStorage("InputConfig.a11y.reduceTransparency") private var a11yReduceTransparency = false
     @AppStorage("InputConfig.a11y.reduceMotion") private var a11yReduceMotion = false
+
+    /// For the rows a switch reveals or hides: short, no bounce.
+    private static var reveal: Animation { .snappy(duration: 0.22) }
 
     enum SettingsTab: String, CaseIterable, Identifiable {
         case general = "General"
@@ -237,7 +247,11 @@ struct SettingsView: View {
                             .font(.callout.weight(.medium))
                         Spacer()
                     }
-                    .onAppear { screenRecordingAllowed = ScreenRecordingPermission.hasAccess }
+                    .onAppear {
+                        // Read when this view was made; again on a return from another tab.
+                        if permissionRereads.screen { screenRecordingAllowed = ScreenRecordingPermission.hasAccess }
+                        permissionRereads.screen = true
+                    }
                     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                         screenRecordingAllowed = ScreenRecordingPermission.hasAccess
                     }
@@ -276,7 +290,10 @@ struct SettingsView: View {
                             .font(.callout.weight(.medium))
                         Spacer()
                     }
-                    .onAppear { voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed }
+                    .onAppear {
+                        if permissionRereads.voice { voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed }
+                        permissionRereads.voice = true
+                    }
                     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                         voiceAllowed = VoicePermission.microphoneAllowed && VoicePermission.speechAllowed
                     }
@@ -448,7 +465,10 @@ struct SettingsView: View {
                     .padding(.top, 4)
                     // Its color while a preset runs: on by default, in the app
                     // accent unless another color is picked (green before 1.9).
-                    Toggle("Color the menu bar icon while a preset runs", isOn: $menuBarTintsRunning)
+                    // The rows a switch reveals fade in and the sections
+                    // below slide, not jump (off under either Reduce Motion:
+                    // the sheet root strips the transaction).
+                    Toggle("Color the menu bar icon while a preset runs", isOn: $menuBarTintsRunning.animation(Self.reveal))
                         .onChange(of: menuBarTintsRunning) { _, _ in MenuBarController.shared.refreshMenuBarImage() }
                     if menuBarTintsRunning {
                         AccentColorPicker(choiceKey: MenuBarController.runningColorKey,
@@ -579,7 +599,7 @@ struct SettingsView: View {
                 }
 
                 section(title: "Polling rate") {
-                    Toggle(isOn: $autoPollByPower) {
+                    Toggle(isOn: $autoPollByPower.animation(Self.reveal)) {
                         Label("Auto-switch on power source",
                               systemImage: "battery.100.bolt")
                     }
@@ -1077,7 +1097,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Toggle("Disconnect a wireless controller after it sits unused", isOn: $idleDisconnect)
+                    Toggle("Disconnect a wireless controller after it sits unused", isOn: $idleDisconnect.animation(Self.reveal))
                         .onChange(of: idleDisconnect) { _, _ in ControllerPowerService.shared.settingsChanged() }
                     if idleDisconnect {
                         HStack(spacing: 8) {
@@ -1251,34 +1271,7 @@ struct SettingsView: View {
                 // exact name Apple's framework reports appears here. Lets
                 // us extend `knownButtonMap` to match whatever Sony's
                 // newest firmware names the button.
-                if !pressLog.recent.isEmpty {
-                    GroupBox("Live press log") {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(pressLog.recent.prefix(10)) { entry in
-                                HStack(spacing: 6) {
-                                    Image(systemName: "circle.fill")
-                                        .font(.system(size: 6))
-                                        .foregroundStyle(.green)
-                                        .accessibilityHidden(true)
-                                    Text(entry.name)
-                                        .font(.caption.monospaced())
-                                    Spacer()
-                                    if let idx = entry.mappedIndex {
-                                        Text("btn \(idx)")
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.green)
-                                    } else {
-                                        Text("unmapped")
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.orange)
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.bottom, 8)
-                }
+                LivePressLogBox()
 
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(controllerService.connectedControllers.enumerated()), id: \.offset) { index, controller in
@@ -1582,6 +1575,53 @@ struct SettingsView: View {
     }
 }
 
+/// SettingsView's permission rows: whether each reads again as it appears.
+private final class PermissionRereads {
+    var screen: Bool
+    var voice: Bool
+    init(onFirstAppearance: Bool) {
+        screen = onFirstAppearance
+        voice = onFirstAppearance
+    }
+}
+
+/// Settings, Devices: the last presses of any controller with the index each
+/// one fires. Its own view so a press reruns only this box, not Settings.
+private struct LivePressLogBox: View {
+    @ObservedObject private var log = PhysicalPressLogStore.shared
+
+    var body: some View {
+        if !log.recent.isEmpty {
+            GroupBox("Live press log") {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(log.recent.prefix(10)) { entry in
+                        HStack(spacing: 6) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 6))
+                                .foregroundStyle(.green)
+                                .accessibilityHidden(true)
+                            Text(entry.name)
+                                .font(.caption.monospaced())
+                            Spacer()
+                            if let idx = entry.mappedIndex {
+                                Text("btn \(idx)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text("unmapped")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.bottom, 8)
+        }
+    }
+}
+
 /// Reset Settings to Default. Clears the app's preference keys, so every
 /// @AppStorage and every service that reads UserDefaults falls back to its
 /// built-in default. Records are kept: what has been seeded and migrated,
@@ -1609,6 +1649,7 @@ enum AppSettingsReset {
         // losing every star or a tuned tap threshold reads as data loss.
         "InputConfig.favoritePresets", "InputConfig.tap.minPeak",
         "InputConfig.motion.rezeroButtons", "InputConfig.manualHIDDevices",
+        "InputConfig.readInsteadOfGameController",
         "InputConfig.motion.clearedKeys",
         "InputConfig.welcomeIntroSeen", "InputConfig.tutorialFakeActive",
         // Records 1.6 keeps: the pads this Mac has seen (a group named for
@@ -1661,6 +1702,9 @@ enum AppSettingsReset {
         // A tour's borrowed preset, from a backup made mid tour: restored
         // later, the next launch undid what changed since.
         "InputConfig.tourBorrowedPreset.v1",
+        // The microphone chosen for voice phrases, by this Mac's own
+        // device UID; another Mac has no such device.
+        "InputConfig.voiceMicrophoneUID", "InputConfig.voiceMicrophoneName",
     ]
 
     static func isRestorable(_ key: String) -> Bool {
@@ -1713,22 +1757,26 @@ enum AppSettingsReset {
     /// union; a table keeps this Mac's entries and adds the backup's others.
     static func merged(_ restored: Any, into key: String, idMap: [UUID: UUID] = [:]) -> Any? {
         let defaults = UserDefaults.standard
+        // A value of the wrong type for a list or a table (a string where
+        // the list belongs, in a damaged or hand edited backup) leaves what
+        // is stored as it is: handed back raw it replaced the list, and
+        // the readers, which ask for a list, then saw none.
         switch key {
         case "InputConfig.seenControllerNames":
             // Every pad either Mac has seen.
-            guard let incoming = restored as? [String] else { return restored }
+            guard let incoming = restored as? [String] else { return defaults.object(forKey: key) }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
         case "InputConfig.unreviewedImports":
             // Added to, never replaced: an import on this Mac not yet
             // confirmed keeps its review before the first start.
-            guard let incoming = restored as? [String] else { return restored }
+            guard let incoming = restored as? [String] else { return defaults.object(forKey: key) }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
         case BuiltInUpdate.declinedKey:
             // "update|preset id": the backup's declines beside this Mac's,
             // with the preset ids a restore folded into this Mac's copies.
-            guard let incoming = restored as? [String] else { return restored }
+            guard let incoming = restored as? [String] else { return defaults.object(forKey: key) }
             let current = defaults.stringArray(forKey: key) ?? []
             let mapped = incoming.map { entry -> String in
                 let parts = entry.split(separator: "|", maxSplits: 1).map(String.init)
@@ -1736,14 +1784,14 @@ enum AppSettingsReset {
                 return parts[0] + "|" + new.uuidString
             }
             return current + mapped.filter { !current.contains($0) }
-        case "InputConfig.ignoredInputDevices":
+        case "InputConfig.ignoredInputDevices", "InputConfig.readInsteadOfGameController":
             // This Mac's switched-off pads stay off. The backup's per-unit
             // entries carry another Mac's salted serial and match only there.
-            guard let incoming = restored as? [String] else { return restored }
+            guard let incoming = restored as? [String] else { return defaults.object(forKey: key) }
             let current = defaults.stringArray(forKey: key) ?? []
             return current + incoming.filter { !current.contains($0) }
         case "InputConfig.favoritePresets", "InputConfig.manualHIDDevices":
-            guard var incoming = restored as? [String] else { return restored }
+            guard var incoming = restored as? [String] else { return defaults.object(forKey: key) }
             if key == "InputConfig.manualHIDDevices" {
                 // Restored on the Mac that made the backup: its own keys
                 // still match, and the plain vendor and product keys would
@@ -1765,7 +1813,7 @@ enum AppSettingsReset {
             // keys are salted per Mac, so from another Mac the plain vendor
             // and product the backup adds are what still match; on the Mac
             // that made it they are left out, as for manualHIDDevices.
-            guard var incoming = restored as? [String] else { return restored }
+            guard var incoming = restored as? [String] else { return defaults.object(forKey: key) }
             let sameMac = incoming.contains(saltTagPrefix + saltTag)
             incoming.removeAll { $0.hasPrefix(saltTagPrefix) }
             if sameMac {
@@ -1776,7 +1824,7 @@ enum AppSettingsReset {
             return current + incoming.filter { !current.contains($0) }
         case "InputConfig.learnedTiltSigns":
             // This Mac's signs stay; the backup adds pads not seen here.
-            guard let incoming = restored as? [String: Any] else { return restored }
+            guard let incoming = restored as? [String: Any] else { return defaults.object(forKey: key) }
             var current = defaults.dictionary(forKey: key) ?? [:]
             for (k, v) in incoming where current[k] == nil { current[k] = v }
             return current
@@ -1785,7 +1833,7 @@ enum AppSettingsReset {
             // list switched drift learning off for pads calibrated since.
             return defaults.stringArray(forKey: key) ?? []
         case "InputConfig.motion.rezeroButtons":
-            guard let incoming = restored as? [String: Any] else { return restored }
+            guard let incoming = restored as? [String: Any] else { return defaults.object(forKey: key) }
             var current = defaults.dictionary(forKey: key) ?? [:]
             for (k, v) in incoming where current[k] == nil { current[k] = v }
             return current
@@ -1794,12 +1842,26 @@ enum AppSettingsReset {
         }
     }
 
+    /// The keys `merged` reads as a list of strings.
+    static let mergedListKeys: Set<String> = [
+        "InputConfig.seenControllerNames", "InputConfig.unreviewedImports", BuiltInUpdate.declinedKey,
+        "InputConfig.ignoredInputDevices", "InputConfig.favoritePresets", "InputConfig.manualHIDDevices",
+        "InputConfig.handDevicesBefore17", "InputConfig.handDevicesBy17",
+        "InputConfig.readInsteadOfGameController",
+    ]
+    /// The keys `merged` reads as a table.
+    static let mergedTableKeys: Set<String> = ["InputConfig.learnedTiltSigns", "InputConfig.motion.rezeroButtons"]
+
     /// A backup value made safe for UserDefaults: JSON null removed at any
     /// depth (UserDefaults aborts the app on NSNull), only property-list
     /// types kept, and the keys the app reads as unsigned codes, rates, and
     /// sizes kept in range. nil means skip the key.
     static func restorableValue(_ value: Any, forKey key: String) -> Any? {
         guard let clean = plistSafe(value) else { return nil }
+        // The lists and tables `merged` adds to: the wrong type is skipped
+        // and counted, never stored.
+        if mergedListKeys.contains(key), !(clean is [String]) { return nil }
+        if mergedTableKeys.contains(key), !(clean is [String: Any]) { return nil }
         if let range = numericRanges[key] {
             // A number written as text too: UserDefaults reads "0.01" as
             // 0.01, and the stop's hold came back far below its range.
@@ -1947,6 +2009,8 @@ enum AppSettingsApply {
         // voice rows listen in the stored language, and the idle timers
         // start over under their stored minutes.
         Switch2BluetoothService.shared.setEnabled(d.bool(forKey: Switch2BluetoothService.enabledKey))
+        // The microphone too: the capture in use moves to the stored one.
+        VoicePhraseService.shared.storedMicrophoneChanged()
         // nil (never applied) restarts too, so the first restore that
         // changes the language takes.
         if voiceLocaleApplied == nil || VoicePhraseService.locale.identifier != voiceLocaleApplied {
@@ -1969,6 +2033,30 @@ enum AppSettingsApply {
 struct SpeechVoicePicker: View {
     @AppStorage(FeedbackService.voiceKey) private var voiceID = ""
     @State private var voices: [AVSpeechSynthesisVoice] = []
+
+    /// The list as last read, the languages and chosen voice it was read for
+    /// (installedVoices() keeps the chosen one whatever its language), and
+    /// the ids of every installed voice when it was read (nil until the
+    /// first check).
+    /// Reading the list asks the speech daemon, 50 to 80 ms on the main
+    /// thread, and it ran before the first frame of every Settings open and
+    /// every return to General. Now it is read again only when a check off
+    /// the main actor finds voices installed or removed since.
+    @MainActor private static var kept: (voices: [AVSpeechSynthesisVoice], languages: [String], chosen: String, installed: Set<String>?)?
+
+    /// The languages installedVoices() filters by: the Mac's and the app's.
+    private static func languages() -> [String] {
+        (CFPreferencesCopyValue("AppleLanguages" as CFString, kCFPreferencesAnyApplication,
+                                kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] ?? [])
+            + Locale.preferredLanguages
+    }
+
+    private func reload(installed: Set<String>?) {
+        voices = FeedbackService.installedVoices()
+        // A voice removed from the Mac since: show what really speaks.
+        if !voiceID.isEmpty, !voices.contains(where: { $0.identifier == voiceID }) { voiceID = "" }
+        Self.kept = (voices, Self.languages(), voiceID, installed)
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1996,9 +2084,26 @@ struct SpeechVoicePicker: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         .onAppear {
-            voices = FeedbackService.installedVoices()
-            // A voice removed from the Mac since: show what really speaks.
-            if !voiceID.isEmpty, !voices.contains(where: { $0.identifier == voiceID }) { voiceID = "" }
+            // The kept list when it still fits; another chosen voice since
+            // (a pick, a restored backup) reads it again, as before.
+            if let kept = Self.kept, kept.languages == Self.languages(), kept.chosen == voiceID {
+                voices = kept.voices
+            } else {
+                reload(installed: nil)
+            }
+        }
+        .task {
+            // Off the main actor, ids only: has anything been installed or
+            // removed since the list was read?
+            let installed = await Task.detached(priority: .utility) { () -> Set<String> in
+                Set(AVSpeechSynthesisVoice.speechVoices().map(\.identifier))
+            }.value
+            guard !Task.isCancelled, let kept = Self.kept else { return }
+            if kept.installed == nil {
+                Self.kept = (kept.voices, kept.languages, kept.chosen, installed)
+            } else if kept.installed != installed {
+                reload(installed: installed)
+            }
         }
     }
 
@@ -2076,13 +2181,27 @@ enum Changelog {
         let points: [String]
     }
 
-    /// The running app's version as people see it, "1.9": the build number
+    /// The running app's version as people see it, "1.10": the build number
     /// is not shown anywhere in the app since 1.9.
     static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     static let entries: [Entry] = [
+        Entry(version: "1.10", points: [
+            String(localized: "The preset editor is much faster, most of all in large presets"),
+            String(localized: "Lighter all around, from opening folders and searching a preset to controllers over Bluetooth"),
+            String(localized: "Hardware connectivity enhancements for PlayStation, Xbox, Switch 2 and Access controllers and racing wheels"),
+            String(localized: "New in the Devices menu: Read Directly Instead, for a controller macOS lists but passes nothing from"),
+            String(localized: "New output: mute or unmute a microphone, or keep it live only while a button is held"),
+            String(localized: "New editor option: Scroll to Pressed Input brings the row of the button you press into view"),
+            String(localized: "MIDI pedals, pads and fast repeated hits fire every time, and knobs have a new Trigger mode"),
+            String(localized: "A slowed pointer crosses to the next display and no longer jumps back"),
+            String(localized: "Steadier button sequences, stick gestures, touchpad swipes and macro recording"),
+            String(localized: "Voice phrases pick up again when a microphone goes silent"),
+            String(localized: "Importing a preset no longer brings another Mac's device options, and a damaged backup no longer replaces a stored list"),
+            String(localized: "Fixed crashes when a controller connected while another was in use and from damaged preset files, and a hang on import"),
+        ]),
         Entry(version: "1.9", points: [
             String(localized: "Macro recorder: click Record steps, use any app, and your keys, clicks, drags, scrolling and timing become steps"),
             String(localized: "Macro steps can type text, scroll, run a system action, wait, move the pointer, or wait for a color or words on screen"),
@@ -3350,7 +3469,10 @@ enum BackupService {
         func decodeAll<T: Decodable>(_ key: String, as type: T.Type, unreadable: inout Int) -> [T] {
             guard let list = envelope[key] as? [[String: Any]] else { return [] }
             return list.compactMap { dict in
+                // A backup entry nested deeper than any preset is counted
+                // as unreadable before the decode: see `JSONValue.nestsTooDeep`.
                 guard let data = try? JSONSerialization.data(withJSONObject: dict),
+                      !JSONValue.nestsTooDeep(data),
                       let value = try? JSONDecoder().decode(T.self, from: data) else {
                     unreadable += 1
                     return nil

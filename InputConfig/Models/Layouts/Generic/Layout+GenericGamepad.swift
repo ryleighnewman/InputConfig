@@ -49,6 +49,9 @@ extension ControllerLayout {
             // Logitech Dual Action and RumblePad 2 share these IDs and the
             // same SDL numbering on a very similar body.
             [.vidPid(vendor: 0x046D, products: [0xC216, 0xC218, 0xC219])],
+            // An Xbox 360 class pad read over USB (XInputUSBService): the
+            // standard numbering on the standard drawing.
+            [.rawProfileLayout("xinput")],
         ],
         matchPriority: 5,
         approximate: true,
@@ -124,8 +127,11 @@ extension ControllerLayout {
                       shape: .capsule(angleDegrees: 0), printed: "BACK", inputs: .button(8), callout: .above),
         PlacedControl(id: "start", kind: .menuButton, center: CGPoint(x: 0.59, y: 0.25), size: 0.05, height: 0.026,
                       shape: .capsule(angleDegrees: 0), printed: "START", inputs: .button(9), callout: .above),
+        // Read from its descriptor the left stick press is btn 10, so Home
+        // is 12 there, as on the arcade stick and the 8BitDo Lite.
         PlacedControl(id: "home", kind: .homeButton, center: CGPoint(x: 0.5, y: 0.34), size: 0.058,
-                      inputs: .button(10), note: "Home or Guide, on pads that report one", callout: .below,
+                      inputs: .button(10), pathInputs: [.rawDescriptor: .button(12)],
+                      note: "Home or Guide, on pads that report one", callout: .below,
                       variants: ["standard"]),
         PlacedControl(id: "logitech", kind: .homeButton, center: CGPoint(x: 0.5, y: 0.34), size: 0.058,
                       readable: .notReported("The Logitech button has no function in D mode and sends nothing"),

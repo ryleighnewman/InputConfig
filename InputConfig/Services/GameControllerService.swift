@@ -450,7 +450,7 @@ class GameControllerService: ObservableObject {
                     buttonCount: deckKeys ?? names.count, axisCount: Self.rawHIDAxisCount(pad),
                     supportsMotion: false, hasTouchpad: false, hasMicroGamepad: false,
                     physicalButtonNames: names,
-                    brand: ControllerTypeDetector.brand(fromName: "\(pad.manufacturer ?? "") \(pad.productName)") ?? .unknown)
+                    brand: ControllerTypeDetector.brand(fromName: "\(pad.manufacturer ?? "") \(pad.productName)", vendorID: pad.vendorID) ?? .unknown)
                 ActivityLog.shared.info("Controllers", "Connected \(pad.displayName) in slot \(slot)", slot: slot)
             }
         }
@@ -1299,7 +1299,10 @@ class GameControllerService: ObservableObject {
     private func placeReturningPads(_ pads: [GCController], previous: [GCController]) -> [GCController] {
         // Kept in the previous order even with nobody away: macOS lists a
         // returned pad last, so the next refresh swapped two live players.
-        guard !previous.isEmpty else { return pads }
+        // With every pad gone for a refresh there is no previous order, but
+        // the slots they left are remembered: they go back to those rather
+        // than to macOS's order.
+        guard !previous.isEmpty || !departedSlots.isEmpty else { return pads }
         let previousIDs = previous.map(ObjectIdentifier.init)
         var ordered = pads.filter { previousIDs.contains(ObjectIdentifier($0)) }
             .sorted { (previousIDs.firstIndex(of: ObjectIdentifier($0)) ?? 0) < (previousIDs.firstIndex(of: ObjectIdentifier($1)) ?? 0) }
@@ -1434,7 +1437,13 @@ class GameControllerService: ObservableObject {
                 installTouchpadHandlers(for: controller, slot: index)
             }
             installLiveInputHandler(for: controller)
-            controller.handlerQueue = handlersOnMain ? .main : Self.idleHandlerQueue
+            // A pad that just connected still has changes queued for main,
+            // where GameController starts every pad: see holdIdleQueue.
+            let wantedQueue: DispatchQueue = handlersOnMain ? .main : Self.idleHandlerQueue
+            if controller.handlerQueue !== wantedQueue {
+                if !handlersOnMain { holdIdleQueue() }
+                controller.handlerQueue = wantedQueue
+            }
             controllerNames[index] = controller.vendorName ?? String(localized: "Controller \(index)")
             controllerDetails[index] = buildControllerInfo(controller)
             if let since = connectedAtByIdentity[key] { controllerDetails[index]?.connectedAt = since }
@@ -1461,11 +1470,16 @@ class GameControllerService: ObservableObject {
 
             // Retry after a delay since some controllers need time after connection
             let idx = index
+            // Each retry looks for the raw pad first: a scan that found
+            // nothing a moment ago would otherwise drop the retry's write.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.setControllerLight(at: idx)
+                guard let self else { return }
+                if self.writesSonyLight(forSlot: idx) { InProcessLightWriter.shared.scanForConnectedPad() }
+                self.setControllerLight(at: idx)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak controller] in
                 guard let self, let controller else { return }
+                if self.writesSonyLight(forSlot: idx) { InProcessLightWriter.shared.scanForConnectedPad() }
                 self.setControllerLight(at: idx)
                 // Update details again (battery may not be ready immediately),
                 // only while this controller still holds the slot: slots move
@@ -3009,7 +3023,20 @@ class GameControllerService: ObservableObject {
         // Re-enumerate + open the controller(s) for fast, subprocess-free
         // writes (kept open afterwards for the focus-change re-assert).
         InProcessLightWriter.shared.open()
+        startRainbowTimerIfWanted()
+    }
+
+    /// Whether the shared rainbow timer has work: a slot is cycling and the
+    /// light bar is this app's to write. Left to macOS, a tick would write
+    /// nothing, so no timer runs then.
+    nonisolated static func rainbowTimerWanted(cycling: Bool, leaveLightBar: Bool) -> Bool {
+        cycling && !leaveLightBar
+    }
+
+    /// Start the shared rainbow timer unless it runs already or has no work.
+    private func startRainbowTimerIfWanted() {
         guard rgbTimer == nil else { return }   // shared timer already running
+        guard Self.rainbowTimerWanted(cycling: rgbCycleActive.values.contains(true), leaveLightBar: leaveLightBar) else { return }
         // Do NOT reset rgbHue here: keep the rainbow's current position so the
         // cycle resumes where it left off rather than snapping back to red when
         // it restarts (e.g. after setting a color or a menu round-trip).
@@ -3020,6 +3047,11 @@ class GameControllerService: ObservableObject {
         rgbTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
+
+    #if DEBUG
+    /// Whether the shared rainbow timer is running, for the Test Bench.
+    var debugRainbowTimerRunning: Bool { rgbTimer != nil }
+    #endif
 
     /// One frame of the rainbow: advance the hue (scaled by the speed
     /// slider), write it straight to the LED via the in-process writer, and
@@ -3033,8 +3065,12 @@ class GameControllerService: ObservableObject {
         }
 
         // Left to the system: the cycle keeps its state for the swatch
-        // and writes nothing.
-        guard !leaveLightBar else { return }
+        // and writes nothing, so the timer stops too. Turning the switch
+        // off starts it again (reloadLightBarControlFromDefaults).
+        guard !leaveLightBar else {
+            rgbTimer?.invalidate(); rgbTimer = nil
+            return
+        }
         let (r, g, b) = Self.hsbToRGB(h: rgbHue, s: 1.0, b: 1.0)
         // Honor the brightness of the lowest active slot (a dictionary has
         // no first) the same way applyLight() does - pre-scale the RGB; the
@@ -3070,6 +3106,9 @@ class GameControllerService: ObservableObject {
     }
 
     func stopRGBCycle(at index: Int) {
+        // Nothing to stop: no publish and no second light write. A drag in
+        // the color panel asks this before every color it sets.
+        guard rgbCycleActive[index] == true else { return }
         rgbCycleActive[index] = false
         // Freeze on the current color and route it through the normal path
         // so the focus-change re-assert keeps showing it. For this slot
@@ -3574,8 +3613,12 @@ class GameControllerService: ObservableObject {
     }
 
     func isIgnored(slot: Int) -> Bool {
-        guard !ignoredDevices.isEmpty else { return false }
-        let token = occupantToken(forSlot: slot) ?? ""
+        let raw = RawHIDGamepadService.shared
+        guard !ignoredDevices.isEmpty || !raw.insteadOfGameController.isEmpty else { return false }
+        var token = occupantToken(forSlot: slot) ?? ""
+        // A pad read directly instead of through GameController: its choice
+        // changes the answer without a slot changing hands.
+        if !raw.insteadOfGameController.isEmpty { token += "#\(raw.insteadOfGameControllerRevision)" }
         if let cached = ignoredCache[slot], cached.token == token { return cached.ignored }
         let ignored = computeIsIgnored(slot: slot)
         ignoredCache[slot] = (token, ignored)
@@ -3583,6 +3626,11 @@ class GameControllerService: ObservableObject {
     }
 
     private func computeIsIgnored(slot: Int) -> Bool {
+        // GameController's copy of a pad the person chose to read directly
+        // instead (Devices, Read Directly Instead): off, or every press
+        // arrived twice.
+        if slot < connectedControllers.count, steamControllerSlot != slot,
+           RawHIDGamepadService.shared.readsDirectlyInstead(of: connectedControllers[slot]) { return true }
         guard let id = deviceIdentity(at: slot) else { return false }
         // Entries saved before 1.7 name the model only, and still count.
         if ignoredDevices.contains(id) { return true }
@@ -3591,6 +3639,10 @@ class GameControllerService: ObservableObject {
     }
 
     func setIgnored(_ ignored: Bool, slot: Int) {
+        if !ignored, slot < connectedControllers.count,
+           RawHIDGamepadService.shared.readsDirectlyInstead(of: connectedControllers[slot]) {
+            ActivityLog.shared.info("Devices", "\(controllerName(at: slot)) is read directly instead of through macOS GameController, so this copy stays off. Untick it in the Devices menu to read it through macOS again", slot: slot)
+        }
         guard let id = deviceIdentity(at: slot), let unit = unitIdentity(at: slot) else { return }
         if ignored { ignoredDevices.insert(unit) } else { ignoredDevices.remove(unit); ignoredDevices.remove(id) }
         // A zone or trackpad click held at that moment is let go, the
@@ -3600,6 +3652,14 @@ class GameControllerService: ObservableObject {
                 TouchpadService.shared.touchSourceDisconnected()
             }
             if isSteamSlot(slot) { steamTrackpadsLeft() }
+            // Its click is not read from here on: a press held at that
+            // moment stayed in the merge, and no tap on another pad fired
+            // until a controller came or went.
+            if touchpadClickBySlot[slot] != nil {
+                let rest = Self.clicksWithout(slot, in: touchpadClickBySlot)
+                touchpadClickBySlot = rest.clicks
+                if touchpadSourceSlot == nil { TouchpadService.shared.setTouchpadButtonPressed(rest.pressed) }
+            }
         }
         UserDefaults.standard.set(Array(ignoredDevices).sorted(), forKey: Self.ignoredDevicesKey)
         ActivityLog.shared.info("Devices", "\(controllerName(at: slot)): input \(ignored ? "switched off" : "switched back on") in the Live Visualizer", slot: slot)
@@ -3629,6 +3689,9 @@ class GameControllerService: ObservableObject {
         leaveLightBar = leave
         InProcessLightWriter.shared.setLightControl(!leave)
         if leave {
+            // The rainbow writes nothing while this is on: its 40 a second
+            // timer stops, and the cycling slots stay marked for the swatch.
+            rgbTimer?.invalidate(); rgbTimer = nil
             InProcessLightWriter.shared.stopHold()
             // Their index was cleared while this was off, and nothing else
             // gives one out: without it a pad keeps our last color.
@@ -3640,12 +3703,18 @@ class GameControllerService: ObservableObject {
             for slot in connectedControllers.indices where controllerDetails[slot]?.hasLight == true {
                 setControllerLight(at: slot)
             }
+            // The slots that were cycling when the switch went on cycle again.
+            startRainbowTimerIfWanted()
         }
     }
 
     func reloadIgnoredDevicesFromDefaults() {
         let stored = Set(UserDefaults.standard.stringArray(forKey: Self.ignoredDevicesKey) ?? [])
         if stored != ignoredDevices { ignoredDevices = stored }
+        // The pads read directly instead of through GameController follow
+        // the stored list too.
+        RawHIDGamepadService.shared.reloadInsteadOfGameControllerFromDefaults()
+        ignoredCache.removeAll()
     }
 
     /// Every pad's axes as Scan began, so the editor can tell a pedal or
@@ -4288,13 +4357,63 @@ class GameControllerService: ObservableObject {
     private func applyHandlerQueues(onMain: Bool) {
         guard onMain != handlersOnMain else { return }
         handlersOnMain = onMain
-        for controller in connectedControllers {
-            controller.handlerQueue = onMain ? .main : Self.idleHandlerQueue
+        if onMain {
+            for controller in connectedControllers where controller.handlerQueue !== DispatchQueue.main {
+                controller.handlerQueue = .main
+            }
+            // Changes already queued off main land before the first read
+            // here, and before any change queued for main: this is main, so
+            // none of those runs until this returns. Nothing on that queue
+            // waits for main, so this cannot deadlock; a held queue is let
+            // go first, or the wait would never end.
+            releaseIdleQueue()
+            Self.idleHandlerQueue.sync {}
+        } else {
+            holdIdleQueue()
+            for controller in connectedControllers where controller.handlerQueue !== Self.idleHandlerQueue {
+                controller.handlerQueue = Self.idleHandlerQueue
+            }
         }
-        // Changes already queued off main land before the first read here.
-        // Nothing on that queue waits for main, so this cannot deadlock.
-        if onMain { Self.idleHandlerQueue.sync {} }
     }
+
+    /// idleHandlerQueue is suspended. Main actor.
+    private var idleQueueHeld = false
+    private var idleQueueHoldRequest = 0
+    /// How long idleHandlerQueue stays held after a pad moves onto it.
+    nonisolated static let idleQueueHoldSeconds = 0.25
+
+    /// GameController keeps one serial queue per handlerQueue it was given,
+    /// so a pad moved off main can have a change still queued for main and
+    /// the next one already running on idleHandlerQueue: two threads in the
+    /// same pad's state at once, which GameController ends with "Recursive
+    /// or concurrent mutation detected" (the crash of builds 35 to 40 when a
+    /// preset stopped while a pad was sending). Holding idleHandlerQueue
+    /// until main has drained what it was handed closes that: call this
+    /// before a pad's handlerQueue becomes idleHandlerQueue. Nothing reads
+    /// the pads then, so the late values cost nothing.
+    private func holdIdleQueue() {
+        if !idleQueueHeld { idleQueueHeld = true; Self.idleHandlerQueue.suspend() }
+        idleQueueHoldRequest &+= 1
+        let request = idleQueueHoldRequest
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleQueueHoldSeconds) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, request == self.idleQueueHoldRequest else { return }
+                self.releaseIdleQueue()
+            }
+        }
+    }
+
+    private func releaseIdleQueue() {
+        idleQueueHoldRequest &+= 1
+        guard idleQueueHeld else { return }
+        idleQueueHeld = false
+        Self.idleHandlerQueue.resume()
+    }
+
+    #if DEBUG
+    /// Test Bench: the handler queue state, and whether idleHandlerQueue runs.
+    var debugHandlerQueueState: (onMain: Bool, held: Bool) { (handlersOnMain, idleQueueHeld) }
+    #endif
 
     private func installLiveInputHandler(for controller: GCController) {
         if let pad = controller.extendedGamepad {
@@ -4483,7 +4602,9 @@ class GameControllerService: ObservableObject {
         // from the lock-protected snapshot the HID report callback wrote.
         guard index < connectedControllers.count else {
             if let gamepad = rawHIDGamepadSlots[index] {
-                var state = gamepad.state
+                // The engine's read tells the pad its short presses were
+                // seen; a display read does not.
+                var state = readingForDisplay ? gamepad.state : gamepad.stateForPoll()
                 // Any raw pad read with an IMU (the 2026 Steam Controller,
                 // the Switch 2 controllers): its motion goes through the
                 // shared IMU code, so the turn and the stall guard are the
@@ -4929,6 +5050,15 @@ class GameControllerService: ObservableObject {
                                                                 accessSlotCount: accessSlotCount(forSlot: slot))
     }
 
+    /// What the sockets of the Access controller in a slot send, learned
+    /// from its own reports (see AccessControllerPortService.learnedAction);
+    /// nil for any other controller.
+    func accessLearnedActions(forSlot slot: Int) -> [Int: Int]? {
+        guard isAccessSlot(slot) else { return nil }
+        return AccessControllerPortService.shared.learnedActions(for: accessIdentity(forSlot: slot),
+                                                                 accessSlotCount: accessSlotCount(forSlot: slot))
+    }
+
     /// The Access controller's buttons pressed so far, for the extras row.
     private func accessPortExtraButtons(forSlot slot: Int) -> [ExtraButton] {
         guard isAccessSlot(slot) else { return [] }
@@ -5162,7 +5292,16 @@ class GameControllerService: ObservableObject {
         updateLiveSnapshotTimer()
         DualSenseSupplementService.shared.setPollingWanted(wanted, reason: "live")
         RawHIDGamepadService.shared.setDecodingWanted(wanted, reason: "live")
-        setRacingWheelsWanted(wanted, reason: "live")
+        setRacingWheelsWanted(Self.wheelsWantedForLive(consumers: liveConsumers, scanning: isScanning), reason: "live")
+    }
+
+    /// Whether the live snapshot holds the racing wheels. A running preset
+    /// with touchpad or motion rows keeps the snapshot on ("engine") but
+    /// shows no wheel; a preset that reads a wheel asks through its own
+    /// reason ("read"). Held for it, a wheel no row read was taken from
+    /// the game for as long as the preset ran.
+    nonisolated static func wheelsWantedForLive(consumers: Set<String>, scanning: Bool) -> Bool {
+        scanning || !consumers.subtracting(["engine"]).isEmpty
     }
 
     /// The 30 Hz snapshot timer runs while someone reads it and there is
@@ -5645,6 +5784,12 @@ class GameControllerService: ObservableObject {
     /// Each Sony slot's touchpad click as last read, OR'd into the tap
     /// detector while no source slot is set.
     private var touchpadClickBySlot: [Int: Bool] = [:]
+    /// The clicks and their merge once a slot is no longer read.
+    nonisolated static func clicksWithout(_ slot: Int, in clicks: [Int: Bool]) -> (clicks: [Int: Bool], pressed: Bool) {
+        var rest = clicks
+        rest[slot] = nil
+        return (rest, rest.values.contains(true))
+    }
     /// The slot whose Steam Controller feeds the second surface (its left
     /// pad); nil takes any.
     var touchpadSecondSourceSlot: Int?
@@ -6289,7 +6434,8 @@ class GameControllerService: ObservableObject {
                     : gamepad.profile?.layout == .switch2Pro ? .switchPro
                     : gamepad.profile?.layout == .switch2JoyConLeft ? .joyConLeft
                     : gamepad.profile?.layout == .switch2JoyConRight ? .joyConRight
-                    : (ControllerTypeDetector.brand(fromName: "\(gamepad.manufacturer ?? "") \(gamepad.productName)")
+                    : (ControllerTypeDetector.brand(fromName: "\(gamepad.manufacturer ?? "") \(gamepad.productName)",
+                                                   vendorID: gamepad.vendorID)
                         ?? (gamepad.vendorID == 0x057E ? .switchPro
                             : gamepad.vendorID == 0x054C ? .dualShock4 : .unknown)),
                 stickAxisCount: Self.rawHIDStickAxisCount(gamepad),

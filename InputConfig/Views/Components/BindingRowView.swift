@@ -163,9 +163,6 @@ struct BindingRowView: View {
     /// shown next to each slider follows the thumb in real time. The
     /// underlying BindingModel still only commits on slider release to keep
     /// the editor's re-render chain off the per-frame hot path.
-    @State var liveSpeed: [Int: Double] = [:]
-    @State var liveHaptic: Double?
-    @State var liveHapticDuration: Double?
     @State var liveDeadzone: Double?
 
     // Fixed column widths for perfect alignment
@@ -1112,7 +1109,11 @@ struct RevealRowOnRequest: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: BindingRowView.revealRow)) { note in
                 if let id = note.object as? UUID, id == rowID { reveal = true }
             }
-            .background(ScrollIntoViewAnchor(active: reveal) { reveal = false })
+            // Built only while a reveal is asked for: an AppKit view in
+            // every row, made with each row at open, for a rare request.
+            .background {
+                if reveal { ScrollIntoViewAnchor(active: true) { reveal = false } }
+            }
     }
 }
 

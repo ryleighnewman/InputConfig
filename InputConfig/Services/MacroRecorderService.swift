@@ -160,13 +160,22 @@ final class MacroRecorderService {
     /// Two actions alike in every field but their id: each run of steps()
     /// makes actions with fresh ids, so `==` called every edge a change and
     /// the recorder published on every pointer sample.
+    /// Every stored field but the id, compared as it is; a field added to
+    /// OutputAction goes here (the Test Bench counts them). A walk over a
+    /// Mirror with a string made of every field cost about a hundred
+    /// times the steps it guarded, on every key of a take.
     nonisolated static func sameAction(_ a: OutputAction, _ b: OutputAction) -> Bool {
-        let fa = Mirror(reflecting: a).children, fb = Mirror(reflecting: b).children
-        guard fa.count == fb.count else { return false }
-        for (x, y) in zip(fa, fb) where x.label != "id" {
-            guard x.label == y.label, String(describing: x.value) == String(describing: y.value) else { return false }
-        }
-        return true
+        guard a.type == b.type, a.keyCode == b.keyCode, a.mouseButtonIndex == b.mouseButtonIndex,
+              a.clickX == b.clickX, a.clickY == b.clickY else { return false }
+        guard a.mouseAxis == b.mouseAxis, a.mouseDirection == b.mouseDirection, a.speed == b.speed,
+              a.stepVertical == b.stepVertical, a.text == b.text else { return false }
+        guard a.midiNote == b.midiNote, a.midiVelocity == b.midiVelocity, a.midiCCNumber == b.midiCCNumber,
+              a.midiCCValue == b.midiCCValue, a.midiChannel == b.midiChannel,
+              a.midiProgramNumber == b.midiProgramNumber, a.midiTransport == b.midiTransport,
+              a.velocityFromInput == b.velocityFromInput else { return false }
+        return a.appActionKind == b.appActionKind && a.targetPresetID == b.targetPresetID
+            && a.systemActionKind == b.systemActionKind && a.lightColor == b.lightColor
+            && a.lightMode == b.lightMode && a.profileAction == b.profileAction
     }
 
     @ObservationIgnored private var subscription: AnyCancellable?
@@ -393,10 +402,12 @@ final class MacroRecorderService {
 
     /// F10, F11 and F12 are Mute, Volume Down and Volume Up on an Apple
     /// keyboard's top row unless fn is held, so as stop keys they answer
-    /// to those keys as well.
+    /// to those keys as well. A stop key picked as "PrintScreen (F13)" or
+    /// "# ~ (ISO, next to Return)" arrives under its twin's code.
     static func isStopKey(_ code: Int, stopKey: Int) -> Bool {
-        stopKey >= 0 && (code == stopKey || (stopKey == 67 && code == 310)
-                         || (stopKey == 68 && code == 312) || (stopKey == 69 && code == 311))
+        let stopKey = stopKey >= 0 ? KeyCodeMap.canonicalInputCode(stopKey) : stopKey
+        return stopKey >= 0 && (code == stopKey || (stopKey == 67 && code == 310)
+                                || (stopKey == 68 && code == 312) || (stopKey == 69 && code == 311))
     }
 
     /// Skip the first click, or a click arriving just after the switch.

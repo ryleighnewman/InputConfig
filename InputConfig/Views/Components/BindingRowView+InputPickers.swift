@@ -152,17 +152,22 @@ extension BindingRowView {
             .fixedSize()
 
         case .hat:
-            Picker("Hat", selection: $binding.input.index) {
+            // A Menu, like the button and axis columns: a Picker builds its
+            // sixteen items for every hat row when the editor opens and
+            // carries them through every edit; a Menu builds them on click.
+            // A number from a file past the list still shows in the label.
+            Menu {
                 ForEach(0..<16, id: \.self) { i in
-                    Text("Hat #\(i)").tag(i)
+                    Button("Hat #\(i)") {
+                        if binding.input.index != i { binding.input.index = i }
+                    }
                 }
-                // A number from a file past the list, so the picker is not blank.
-                if !(0..<16).contains(binding.input.index) {
-                    Text("Hat #\(binding.input.index)").tag(binding.input.index)
-                }
+            } label: {
+                menuLabel(String(localized: "Hat #\(binding.input.index)"))
             }
-            .labelsHidden()
+            .menuStyle(.borderlessButton)
             .controlSize(.small)
+            .fixedSize()
 
         case .touchpad:
             if presetButtonFamily?.isSteam == true {
@@ -991,8 +996,9 @@ extension BindingRowView {
         binding.input.axisDirection = direction ?? (before?.index == axis ? before?.direction : nil) ?? .positive
         if before?.index == axis { binding.invertAxis = before?.invert }
         // Back on a trigger, a band's Invert has no toggle and the row
-        // would never fire.
+        // would never fire; nor would a minus it had before.
         if axis == 4 || axis == 5 { binding.invertAxis = nil }
+        binding.input.normalizeTriggerDirection()
         axisBeforeZone = nil
     }
 
@@ -1221,7 +1227,8 @@ extension BindingRowView {
             // Continuous controllers can be bound as a half-axis, so
             // offer the direction alongside the channel rather than
             // adding a fourth column just for MIDI.
-            if (binding.input.midiKind ?? .note).isContinuous, binding.input.midiKind != .aftertouch {
+            if (binding.input.midiKind ?? .note).isContinuous, binding.input.midiKind != .aftertouch,
+               binding.input.midiCCMode != .trigger {
                 Section("Direction") {
                     ForEach(AxisDirection.allCases) { dir in
                         Button(dir.displayName) { binding.input.axisDirection = dir }
@@ -1268,7 +1275,7 @@ extension BindingRowView {
                 ]
             }
         }
-        if kind.isContinuous, binding.input.midiKind != .aftertouch {
+        if kind.isContinuous, binding.input.midiKind != .aftertouch, binding.input.midiCCMode != .trigger {
             out += AxisDirection.allCases.map { dir in
                 MenuSearchChoice(title: dir.displayName, path: String(localized: "Direction")) { binding.input.axisDirection = dir }
             }
@@ -1294,7 +1301,9 @@ extension BindingRowView {
         // A knob or bend row's direction, so a "+" and a "-" row on the
         // same control do not look the same.
         let kind = binding.input.midiKind ?? .note
-        if kind.isContinuous, kind != .aftertouch, let dir = binding.input.axisDirection {
+        // (A Trigger row has no side: every message fires it.)
+        if kind.isContinuous, kind != .aftertouch, binding.input.midiCCMode != .trigger,
+           let dir = binding.input.axisDirection {
             ch += " \(dir.displayName)"
         }
         if kind == .cc, let badge = binding.input.midiCCMode?.badge {
@@ -1469,7 +1478,7 @@ extension BindingRowView {
             // the type menus: NSPopUpButtons pre-build on row creation.
             Menu {
                 Section("Direction") {
-                    ForEach(AxisDirection.allCases) { dir in
+                    ForEach(AxisDirection.choices(forAxis: binding.input.index)) { dir in
                         Button(dir.displayName) { axisDirectionBinding.wrappedValue = dir }
                     }
                     // A trigger only ever moves one way.
@@ -1542,7 +1551,7 @@ extension BindingRowView {
                 }
                 Menu {
                     Section("Direction") {
-                        ForEach(AxisDirection.allCases) { dir in
+                        ForEach(AxisDirection.choices(forAxis: zoneRowAxis)) { dir in
                             Button(dir.displayName) { useWholeAxis(direction: dir) }
                         }
                     }

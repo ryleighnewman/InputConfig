@@ -198,6 +198,12 @@ final class MIDIService: @unchecked Sendable {
 
     func releaseAllNotes() {
         guard isSetup else { return }
+        // The callers' side of the two dedup caches is dropped in the same
+        // step that queues the reset, so it stays in step with the queue's.
+        askedLock.lock()
+        defer { askedLock.unlock() }
+        askedCC.forget()
+        askedPitchBend.forget()
         queue.async { [self] in
             noteHolders.removeAll()
             activeNotesLock.lock()
@@ -260,13 +266,37 @@ final class MIDIService: @unchecked Sendable {
     /// touched on `queue`.
     private var lastSentPitchBend: [Int: Int] = [:]
 
+    /// The last value per key, and whether a new one differs from it.
+    struct LastValues {
+        private var last: [Int: Int] = [:]
+        /// True, and remembered, when `value` is not the one last given.
+        mutating func changes(_ key: Int, to value: Int) -> Bool {
+            if last[key] == value { return false }
+            last[key] = value
+            return true
+        }
+        mutating func forget() { last.removeAll(keepingCapacity: true) }
+    }
+    /// The callers' copy of the two caches above, under `askedLock`: a held
+    /// axis row asks for the same value every poll, and each ask built its
+    /// bytes and queued a block only for the queue to drop it. A value is
+    /// noted and its block queued in one locked step (and so is a reset),
+    /// so these see the same sends and resets, in the same order, as the
+    /// queue's caches do, and drop exactly what the queue would have.
+    private var askedCC = LastValues()
+    private var askedPitchBend = LastValues()
+    private let askedLock = NSLock()
+
     /// Send a Control Change. `value` is 0-127.
     func sendCC(controller: Int, value: Int, channel: Int) {
         guard isSetup else { return }
+        let safeCh = max(0, min(15, channel - 1))
+        let safeCC = max(0, min(127, controller))
+        let safeVal = max(0, min(127, value))
+        askedLock.lock()
+        defer { askedLock.unlock() }
+        guard askedCC.changes((safeCh << 8) | safeCC, to: safeVal) else { return }
         let bytes = Self.ccBytes(controller: controller, value: value, channel: channel)
-        let safeCh = Int(bytes[0] & 0x0F)
-        let safeCC = Int(bytes[1])
-        let safeVal = Int(bytes[2])
 
         queue.async { [self] in
             // Skip redundant identical CC packets: a variable axis bound to a
@@ -283,9 +313,12 @@ final class MIDIService: @unchecked Sendable {
     /// Send Pitch Bend. `value` is 0-16383, centered at 8192.
     func sendPitchBend(value: Int, channel: Int) {
         guard isSetup else { return }
-        let bytes = Self.pitchBendBytes(value: value, channel: channel)
         let safeVal = clamp(value, 0, 16383)
-        let safeCh = Int(bytes[0] & 0x0F)
+        let safeCh = max(0, min(15, channel - 1))
+        askedLock.lock()
+        defer { askedLock.unlock() }
+        guard askedPitchBend.changes(safeCh, to: safeVal) else { return }
+        let bytes = Self.pitchBendBytes(value: value, channel: channel)
         queue.async { [self] in
             // Skip redundant identical pitch-bend packets: a held stick would
             // otherwise flood the DAW every poll frame.
@@ -536,13 +569,57 @@ final class MIDIInputService: @unchecked Sendable {
     /// Otherwise it is a control of its own (a nanoKONTROL2's first fader).
     private var pendingBankScan: (key: String, event: InputEvent, token: UInt64)?
     private var pendingBankToken: UInt64 = 0
-    /// When each note last went down, so a tap whose Note Off came before
-    /// the next poll still reads as pressed for one frame.
-    private var noteOnAt: [NoteKey: TimeInterval] = [:]
-    /// How long after its note on a tap still counts as down (isNoteDown).
-    private static let noteTapWindow: TimeInterval = 0.05
-    /// One held note, as `noteOnAt` keys it. A struct, not a joined string:
-    /// the engine's 120 Hz poll split every entry's string per row.
+    /// A press that lasts one poll, kept until a poll has shown it. The
+    /// engine calls `beginPoll` once per poll; each call shows one waiting
+    /// strike for that poll and leaves the poll after it up, so strikes
+    /// reach the rows as separate presses however they fell between polls.
+    private struct Strike {
+        /// Reads as down for the poll in progress.
+        var shown = false
+        /// Strikes still to show.
+        var pending = 0
+        /// Polls to read up before the next strike shows.
+        var holdoff = 0
+        /// When the last strike arrived; one no poll took in time is dropped.
+        var at: TimeInterval = 0
+    }
+    /// A strike nobody polled for this long is forgotten, not fired late.
+    private static let strikeMaxAge: TimeInterval = 1.0
+    /// Strikes kept per stream, so a stalled main thread cannot bank a burst.
+    private static let strikeCap = 8
+    /// Note ons no poll has shown yet. A tap that began and ended between
+    /// two polls is still one press, and a note struck again while its row
+    /// reads down gets a poll up in between. (A 50 ms clock window did
+    /// this before: two fast hits merged, and a tap inside a longer main
+    /// thread stall was never seen.)
+    private var noteStrikes: [NoteKey: Strike] = [:]
+    /// Notes let go since the last poll, which may have read them down.
+    private var noteEndedSincePoll: Set<NoteKey> = []
+    /// CC messages no poll has shown yet, per stream: what a Trigger row
+    /// reads, and a Switch row on a press-only stream.
+    private var ccStrikes: [CCStream: Strike] = [:]
+    /// CC streams that send the same value on every press and never a
+    /// lower one (a foot switch sending CC 64 = 127 each time). A Switch
+    /// row read such a stream as held from the first press for good; it
+    /// reads it as one press per message. A different value takes the
+    /// mark away. Kept between launches, so the first press is a press.
+    private var pressOnly: Set<CCStream> = []
+    private var pressOnlyLoaded = false
+    private static let pressOnlyKey = "InputConfig.midi.pressOnlyStreams"
+    private static let pressOnlyCap = 64
+    /// Program Change and transport hits shown to the poll in progress:
+    /// every row of that poll reads them, whatever its channel or device
+    /// filter, and the next poll's start takes them away. (Each read
+    /// removed the hit before, so of two rows on one message with
+    /// different filters only the first fired.)
+    private var programShown: [String: [Int: Set<Int>]] = [:]
+    private var transportShown: [String: Set<UInt8>] = [:]
+    /// When the last Program Change or transport message arrived.
+    private var momentaryAt: TimeInterval = 0
+    /// Whether `beginPoll` has anything to do.
+    private var momentaryDirty = false
+    /// One note stream as a key. A struct, not a joined string: the
+    /// engine's 120 Hz poll split every entry's string per row.
     private struct NoteKey: Hashable {
         let deviceID: String
         let channel: Int
@@ -554,11 +631,24 @@ final class MIDIInputService: @unchecked Sendable {
     /// Net Turn travel per (device, channel, cc) stream: one signed count,
     /// so a pot wobbling 63, 64, 63 cancels out instead of filling both an
     /// up and a down pool and firing both ways while the knob sits still.
-    private var ccNetTravel: [String: Int] = [:]
+    private var ccNetTravel: [CCStream: Int] = [:]
     /// Where each Turn row has read up to, per stream. Every row sees the
     /// whole rotation and steps at its own size; one shared pool let a Fine
     /// row on the same CC drain what a Chunky row was waiting for.
-    private var consumerTravelMark: [String: Int] = [:]
+    private var consumerTravelMark: [TravelMark: Int] = [:]
+    /// One CC stream as a key. A "device|channel|cc" string was split
+    /// back into its three parts for every stream, by every Turn row, on
+    /// every poll, under the lock the CoreMIDI thread takes.
+    private struct CCStream: Hashable {
+        let deviceID: String
+        let channel: Int
+        let cc: Int
+    }
+    /// One Turn row's place in one stream.
+    private struct TravelMark: Hashable {
+        let consumer: String
+        let stream: CCStream
+    }
     /// Alternation phase per consumer key, so a fast continuous turn
     /// produces press / release / press pulses across poll frames
     /// instead of one long held press (which the OS would treat as a
@@ -729,6 +819,7 @@ final class MIDIInputService: @unchecked Sendable {
         notesDown.removeAll(); ccValues.removeAll(); pitchBend.removeAll()
         aftertouch.removeAll(); programHits.removeAll(); devices.removeAll()
         polyPressure.removeAll(); transportHits.removeAll()
+        clearStrikesLocked()
         lock.unlock()
         // Disposing the port drops its connections.
         scanLock.lock(); connectedSources.removeAll(); scanLock.unlock()
@@ -756,7 +847,7 @@ final class MIDIInputService: @unchecked Sendable {
             // held. Everything held is let go; live sources send again.
             lock.lock()
             notesDown.removeAll()
-            noteOnAt.removeAll()
+            clearStrikesLocked()
             polyPressure.removeAll()
             aftertouch.removeAll()
             pitchBend.removeAll()
@@ -853,8 +944,14 @@ final class MIDIInputService: @unchecked Sendable {
             // fired a burst of steps on the first message after replugging.
             let prefix = dead + "|"
             ccLastRaw = ccLastRaw.filter { !$0.key.hasPrefix(prefix) }
-            ccNetTravel = ccNetTravel.filter { !$0.key.hasPrefix(prefix) }
-            consumerTravelMark = consumerTravelMark.filter { !$0.key.contains("|" + prefix) }
+            ccNetTravel = ccNetTravel.filter { $0.key.deviceID != dead }
+            consumerTravelMark = consumerTravelMark.filter { $0.key.stream.deviceID != dead }
+            ccLastAt = ccLastAt.filter { !$0.key.hasPrefix(prefix) }
+            noteStrikes = noteStrikes.filter { $0.key.deviceID != dead }
+            noteEndedSincePoll = noteEndedSincePoll.filter { $0.deviceID != dead }
+            ccStrikes = ccStrikes.filter { $0.key.deviceID != dead }
+            programShown.removeValue(forKey: dead)
+            transportShown.removeValue(forKey: dead)
         }
         lock.unlock()
     }
@@ -981,6 +1078,8 @@ final class MIDIInputService: @unchecked Sendable {
         eventCounter &+= 1
         noteActivityLocked()
         transportHits[deviceID, default: []].insert(status)
+        momentaryAt = ProcessInfo.processInfo.systemUptime
+        momentaryDirty = true
         pushEvent(deviceID, .transport(status: status))
         let handler = scanHandler
         lock.unlock()
@@ -1003,6 +1102,8 @@ final class MIDIInputService: @unchecked Sendable {
     private func applyMessage(status: UInt8, channel: Int,
                               data1: Int, data2: Int, deviceID: String) {
         var scanEvent: InputEvent?
+        /// The press-only marks to store, when this message changed them.
+        var pressOnlySave: [String]?
 
         lock.lock()
         if status == 0x8 || status == 0x9 || status == 0xA || status == 0xB
@@ -1013,19 +1114,27 @@ final class MIDIInputService: @unchecked Sendable {
         }
         switch status {
         case 0x9 where data2 > 0:   // note on with velocity
+            let strikeKey = NoteKey(deviceID: deviceID, channel: channel, note: data1)
+            var strike = noteStrikes[strikeKey] ?? Strike()
+            // A note the last poll may have read down (still held, or let
+            // go since that poll) reads up for one poll before this strike.
+            if strike.pending == 0, !strike.shown, strike.holdoff == 0,
+               noteEndedSincePoll.contains(strikeKey) || notesDown[deviceID]?[channel]?.contains(data1) == true {
+                strike.holdoff = 1
+            }
+            addStrikeLocked(&strike, at: ProcessInfo.processInfo.systemUptime)
+            noteStrikes[strikeKey] = strike
             notesDown[deviceID, default: [:]][channel, default: []].insert(data1)
-            let onAt = ProcessInfo.processInfo.systemUptime
-            // Entries past the tap window (isNoteDown) are of no use: the
-            // map holds the notes of the last 40 ms, not 256 stale ones.
-            noteOnAt = noteOnAt.filter { onAt - $0.value < Self.noteTapWindow }
-            noteOnAt[NoteKey(deviceID: deviceID, channel: channel, note: data1)] = onAt
             noteVel[deviceID, default: [:]][data1] = data2
             noteArrivals &+= 1
             lastNoteVel[NoteKey(deviceID: deviceID, channel: channel, note: data1)] = (data2, noteArrivals)
             pushEvent(deviceID, .noteOn(note: data1, velocity: data2, channel: channel))
             scanEvent = .midi(.note, number: data1, channel: channel, deviceID: deviceID)
         case 0x8, 0x9:              // note off (or note on, velocity 0)
-            notesDown[deviceID, default: [:]][channel, default: []].remove(data1)
+            if notesDown[deviceID, default: [:]][channel, default: []].remove(data1) != nil {
+                noteEndedSincePoll.insert(NoteKey(deviceID: deviceID, channel: channel, note: data1))
+                momentaryDirty = true
+            }
             // An MPE controller bends each note on its own channel and does
             // not re-center a channel when its note ends, so a lifted
             // slide held an Any channel bend row on. With bends on more
@@ -1050,7 +1159,9 @@ final class MIDIInputService: @unchecked Sendable {
             for note in notesDown[deviceID]?[channel] ?? [] { noteVel[deviceID]?.removeValue(forKey: note) }
             notesDown[deviceID]?[channel]?.removeAll()
             polyPressure[deviceID]?[channel]?.removeAll()
-            noteOnAt = noteOnAt.filter { !($0.key.deviceID == deviceID && $0.key.channel == channel) }
+            if !noteStrikes.isEmpty {
+                noteStrikes = noteStrikes.filter { !($0.key.deviceID == deviceID && $0.key.channel == channel) }
+            }
             if data1 == 120 { aftertouch[deviceID]?[channel] = 0 }
             pushEvent(deviceID, .allNotesOff(channel: channel))
         case 0xB:                   // control change
@@ -1064,10 +1175,34 @@ final class MIDIInputService: @unchecked Sendable {
             let previousRaw = ccLastRaw[rawKey]
             if let prev = previousRaw {
                 let delta = data2 - prev
-                if abs(delta) <= 32 { ccNetTravel[rawKey, default: 0] += delta }
+                if abs(delta) <= 32 {
+                    ccNetTravel[CCStream(deviceID: deviceID, channel: channel, cc: data1), default: 0] += delta
+                }
             }
             ccLastRaw[rawKey] = data2
-            defer { ccLastAt[rawKey] = ProcessInfo.processInfo.systemUptime }
+            let ccAt = ProcessInfo.processInfo.systemUptime
+            defer { ccLastAt[rawKey] = ccAt }
+            // Every message is a strike, for a Trigger row and for a Switch
+            // row on a press-only stream.
+            let stream = CCStream(deviceID: deviceID, channel: channel, cc: data1)
+            addStrikeLocked(&ccStrikes[stream, default: Strike()], at: ccAt)
+            loadPressOnlyLocked()
+            if let prev = previousRaw, prev != data2 {
+                // A lower or higher value: a pedal or a knob after all.
+                if pressOnly.remove(stream) != nil { pressOnlySave = pressOnlyListLocked() }
+            } else if previousRaw == data2, data2 >= 64, !pressOnly.contains(stream),
+                      let last = ccLastAt[rawKey], ccAt - last > 0.3 {
+                // The same high value again after a pause, nothing between:
+                // a control that sends on the press only. Its Switch row has
+                // read down since the first press: one poll up, then this
+                // press and every later one as a press of its own.
+                pressOnly.insert(stream)
+                if pressOnly.count > Self.pressOnlyCap, let extra = pressOnly.first(where: { $0 != stream }) {
+                    pressOnly.remove(extra)
+                }
+                ccStrikes[stream] = Strike(shown: false, pending: 1, holdoff: 1, at: ccAt)
+                pressOnlySave = pressOnlyListLocked()
+            }
             ccValues[deviceID, default: [:]][channel, default: [:]][data1] = data2
             // Log the sweep sparsely: endpoints always, then every 16 units.
             let logKey = "\(deviceID)|\(channel)|\(data1)"
@@ -1088,6 +1223,7 @@ final class MIDIInputService: @unchecked Sendable {
             // compared message to message, a smooth turn moved 1 at a time
             // and was never caught.
             let moved: Bool
+            var scannedAsRepeat = false
             if scanHandler == nil {
                 moved = false
             } else if let base = scanBaseline[rawKey] {
@@ -1100,6 +1236,8 @@ final class MIDIInputService: @unchecked Sendable {
                 // caught. A fader streaming its position sends without a pause.
                 let paused = ccLastAt[rawKey].map { ProcessInfo.processInfo.systemUptime - $0 > 0.3 } ?? true
                 moved = abs(data2 - base) >= 3 || (data2 == base && data2 > 0 && paused)
+                // Caught by the repeat alone: Scan binds it as a Trigger.
+                scannedAsRepeat = moved && data2 == base
             } else {
                 scanBaseline[rawKey] = data2
                 moved = data2 > 0
@@ -1125,7 +1263,8 @@ final class MIDIInputService: @unchecked Sendable {
                 }
             }
             if moved && !isLSB && !isParameterMessage && data1 != 0 {
-                scanEvent = .midi(.cc, number: data1, channel: channel, deviceID: deviceID)
+                scanEvent = .midi(.cc, number: data1, channel: channel, deviceID: deviceID,
+                                  ccMode: scannedAsRepeat ? .trigger : nil)
             }
         case 0xE:                   // pitch bend: 14-bit, center 8192
             let raw = (data2 << 7) | data1
@@ -1155,6 +1294,8 @@ final class MIDIInputService: @unchecked Sendable {
         case 0xC:                   // program change
             if pendingBankScan?.key == "\(deviceID)|\(channel)" { pendingBankScan = nil }
             programHits[deviceID, default: [:]][channel, default: []].insert(data1)
+            momentaryAt = ProcessInfo.processInfo.systemUptime
+            momentaryDirty = true
             lastProgram[deviceID] = (channel, data1)
             pushEvent(deviceID, .program(number: data1, channel: channel))
             scanEvent = .midi(.programChange, number: data1, channel: channel, deviceID: deviceID)
@@ -1163,7 +1304,7 @@ final class MIDIInputService: @unchecked Sendable {
         }
         let handler = scanHandler
         lock.unlock()
-
+        if let pressOnlySave { UserDefaults.standard.set(pressOnlySave, forKey: Self.pressOnlyKey) }
 
         if let handler, let scanEvent {
             DispatchQueue.main.async { handler(scanEvent) }
@@ -1274,9 +1415,192 @@ final class MIDIInputService: @unchecked Sendable {
     #if DEBUG
     /// Tests only: the bench's note leaves no velocity behind.
     func debugForgetVelocity(deviceID: String) {
+        lock.lock(); defer { lock.unlock() }
         lastNoteVel = lastNoteVel.filter { $0.key.deviceID != deviceID }
+        noteStrikes = noteStrikes.filter { $0.key.deviceID != deviceID }
+    }
+    /// Tests only: a Start, Continue or Stop, as a device sends it.
+    func debugInjectTransport(status: UInt8, deviceID: String) {
+        applyTransport(status: status, deviceID: deviceID)
+    }
+    /// Tests only: the device's knobs last spoke `seconds` earlier, so a
+    /// test need not wait out the pause a repeated press is told by.
+    func debugAgePause(deviceID: String, by seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        let prefix = deviceID + "|"
+        for key in Array(ccLastAt.keys) where key.hasPrefix(prefix) { ccLastAt[key]? -= seconds }
+    }
+    /// Tests only: the bench's knob leaves no value, travel or Turn row
+    /// state behind.
+    func debugForgetKnobs(deviceID: String, consumers: [String]) {
+        lock.lock(); defer { lock.unlock() }
+        let prefix = deviceID + "|"
+        ccValues[deviceID] = nil
+        ccStamps[deviceID] = nil
+        channelStamps[deviceID] = nil
+        ccLastRaw = ccLastRaw.filter { !$0.key.hasPrefix(prefix) }
+        ccLastAt = ccLastAt.filter { !$0.key.hasPrefix(prefix) }
+        lastLoggedCC = lastLoggedCC.filter { !$0.key.hasPrefix(prefix) }
+        ccNetTravel = ccNetTravel.filter { $0.key.deviceID != deviceID }
+        consumerTravelMark = consumerTravelMark.filter { $0.key.stream.deviceID != deviceID }
+        for consumer in consumers { relativePhase[consumer] = nil }
+        recentEvents[deviceID] = nil
+        scanBaseline = scanBaseline.filter { !$0.key.hasPrefix(prefix) }
+        ccStrikes = ccStrikes.filter { $0.key.deviceID != deviceID }
+        noteStrikes = noteStrikes.filter { $0.key.deviceID != deviceID }
+        notesDown[deviceID] = nil
+        programHits[deviceID] = nil; programShown[deviceID] = nil
+        transportHits[deviceID] = nil; transportShown[deviceID] = nil
+        loadPressOnlyLocked()
+        let marked = pressOnly.count
+        pressOnly = pressOnly.filter { $0.deviceID != deviceID }
+        if pressOnly.count != marked { UserDefaults.standard.set(pressOnlyListLocked(), forKey: Self.pressOnlyKey) }
+    }
+    /// Tests only: whether the stream is marked press-only.
+    func debugIsPressOnly(cc: Int, channel: Int, deviceID: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        loadPressOnlyLocked()
+        return pressOnly.contains(CCStream(deviceID: deviceID, channel: channel, cc: cc))
+    }
+    /// Tests only: every waiting strike is made as old as `seconds`.
+    func debugAgeStrikes(by seconds: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        for key in Array(ccStrikes.keys) { ccStrikes[key]?.at -= seconds }
+        for key in Array(noteStrikes.keys) { noteStrikes[key]?.at -= seconds }
+        momentaryAt -= seconds
     }
     #endif
+
+    // MARK: One-poll presses
+
+    /// Call locked. One more strike on a stream. A strike left by a time
+    /// when nothing polled is not kept beside the new one.
+    private func addStrikeLocked(_ strike: inout Strike, at now: TimeInterval) {
+        if strike.pending > 0, !strike.shown, now - strike.at > Self.strikeMaxAge { strike.pending = 0 }
+        strike.pending = min(Self.strikeCap, strike.pending + 1)
+        strike.at = now
+        momentaryDirty = true
+    }
+
+    /// Call locked. Everything a poll has yet to show, and what it shows now.
+    private func clearStrikesLocked() {
+        noteStrikes.removeAll()
+        noteEndedSincePoll.removeAll()
+        ccStrikes.removeAll()
+        programShown.removeAll()
+        transportShown.removeAll()
+        momentaryDirty = false
+    }
+
+    /// Call locked. The stored press-only marks, read once.
+    private func loadPressOnlyLocked() {
+        guard !pressOnlyLoaded else { return }
+        pressOnlyLoaded = true
+        for entry in UserDefaults.standard.stringArray(forKey: Self.pressOnlyKey) ?? [] {
+            // "device|channel|cc"; a device id may hold a bar of its own.
+            let parts = entry.split(separator: "|", omittingEmptySubsequences: false)
+            guard parts.count >= 3, let cc = Int(parts[parts.count - 1]), let channel = Int(parts[parts.count - 2]) else { continue }
+            let device = parts.dropLast(2).joined(separator: "|")
+            pressOnly.insert(CCStream(deviceID: device, channel: channel, cc: cc))
+        }
+    }
+
+    /// Call locked. The marks as stored.
+    private func pressOnlyListLocked() -> [String] {
+        pressOnly.map { "\($0.deviceID)|\($0.channel)|\($0.cc)" }.sorted()
+    }
+
+    /// The engine's poll begins: the Program Change and transport messages
+    /// that arrived since the last poll are shown to this one and no other,
+    /// and each stream with a strike waiting shows one. One lock and a flag
+    /// when nothing waits.
+    func beginPoll() {
+        lock.lock(); defer { lock.unlock() }
+        guard momentaryDirty else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if !programHits.isEmpty || !transportHits.isEmpty, now - momentaryAt > Self.strikeMaxAge {
+            programHits.removeAll(); transportHits.removeAll()
+        }
+        programShown = programHits
+        transportShown = transportHits
+        if !programHits.isEmpty { programHits.removeAll() }
+        if !transportHits.isEmpty { transportHits.removeAll() }
+        if !noteEndedSincePoll.isEmpty { noteEndedSincePoll.removeAll(keepingCapacity: true) }
+        var live = !programShown.isEmpty || !transportShown.isEmpty
+        if !ccStrikes.isEmpty {
+            for key in Array(ccStrikes.keys) {
+                guard var strike = ccStrikes[key] else { continue }
+                if Self.advance(&strike, now: now) { ccStrikes[key] = strike; live = true } else { ccStrikes[key] = nil }
+            }
+        }
+        if !noteStrikes.isEmpty {
+            for key in Array(noteStrikes.keys) {
+                guard var strike = noteStrikes[key] else { continue }
+                if Self.advance(&strike, now: now) { noteStrikes[key] = strike; live = true } else { noteStrikes[key] = nil }
+            }
+        }
+        momentaryDirty = live
+    }
+
+    /// One poll's step for a stream; false once nothing is left of it.
+    private static func advance(_ strike: inout Strike, now: TimeInterval) -> Bool {
+        if strike.shown {
+            // The poll after a press reads up, so the next is a new press.
+            strike.shown = false
+        } else if strike.pending > 0, now - strike.at > strikeMaxAge {
+            strike.pending = 0
+            strike.holdoff = 0
+        } else if strike.holdoff > 0 {
+            strike.holdoff -= 1
+        } else if strike.pending > 0 {
+            strike.pending -= 1
+            strike.shown = true
+        }
+        return strike.shown || strike.pending > 0 || strike.holdoff > 0
+    }
+
+    /// A Switch row's reading of a knob: past halfway on the stream that
+    /// sent last, as before, except that a press-only stream is down only
+    /// for the poll its press is shown to.
+    func ccSwitchDown(_ cc: Int, channel: Int?, deviceID: String?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var best: Int?
+        var bestStamp: UInt64 = 0
+        var bestMarked = false
+        for (dev, byChannel) in ccValues where deviceID == nil || dev == deviceID {
+            for (ch, ccs) in byChannel where channel == nil || ch == channel {
+                guard let v = ccs[cc] else { continue }
+                var marked = false
+                if !pressOnly.isEmpty {
+                    let stream = CCStream(deviceID: dev, channel: ch, cc: cc)
+                    if pressOnly.contains(stream) {
+                        if ccStrikes[stream]?.shown == true { return true }
+                        marked = true
+                    }
+                }
+                let stamp = ccStamps[dev]?[ch]?[cc] ?? 0
+                if best == nil || stamp > bestStamp {
+                    best = v
+                    bestStamp = stamp
+                    bestMarked = marked
+                }
+            }
+        }
+        guard let best, !bestMarked else { return false }
+        return best >= 64
+    }
+
+    /// A Trigger row's reading: down for the one poll a message on a
+    /// matching stream is shown to, whatever value it carried.
+    func ccTriggerDown(_ cc: Int, channel: Int?, deviceID: String?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        for (stream, strike) in ccStrikes where strike.shown && stream.cc == cc {
+            if let channel, stream.channel != channel { continue }
+            if let deviceID, stream.deviceID != deviceID { continue }
+            return true
+        }
+        return false
+    }
 
     /// How hard the note was last struck (1 to 127) on the matching device
     /// and channel, or nil if it has not been played. Of several matches,
@@ -1292,23 +1616,26 @@ final class MIDIInputService: @unchecked Sendable {
         return best?.vel
     }
 
-    /// True while the given note is held. `channel`/`device` nil = any.
+    /// True while the given note is held, as the poll in progress sees it.
+    /// `channel`/`device` nil = any. A note struck since the last poll is
+    /// down for this one even if it has already ended, and a note struck
+    /// again while held reads up for one poll first (see `noteStrikes`).
     func isNoteDown(_ note: Int, channel: Int?, deviceID: String?) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        for (dev, byChannel) in notesDown where deviceID == nil || dev == deviceID {
-            for (ch, notes) in byChannel where channel == nil || ch == channel {
-                if notes.contains(note) { return true }
+        if !noteStrikes.isEmpty {
+            for (key, strike) in noteStrikes where strike.shown && key.note == note {
+                if let deviceID, key.deviceID != deviceID { continue }
+                if let channel, key.channel != channel { continue }
+                return true
             }
         }
-        // A tap shorter than a poll frame still counts once. The window
-        // covers the idle poll period (about 34 ms): a fast tap that woke
-        // the engine from idle was gone by the time it looked at 25 ms.
-        let now = ProcessInfo.processInfo.systemUptime
-        for (key, at) in noteOnAt where now - at < Self.noteTapWindow {
-            guard key.note == note else { continue }
-            if let deviceID, key.deviceID != deviceID { continue }
-            if let channel, key.channel != channel { continue }
-            return true
+        for (dev, byChannel) in notesDown where deviceID == nil || dev == deviceID {
+            for (ch, notes) in byChannel where channel == nil || ch == channel {
+                guard notes.contains(note) else { continue }
+                if noteStrikes.isEmpty { return true }
+                // Held with a strike still waiting: up until it is shown.
+                if (noteStrikes[NoteKey(deviceID: dev, channel: ch, note: note)]?.pending ?? 0) == 0 { return true }
+            }
         }
         return false
     }
@@ -1372,18 +1699,15 @@ final class MIDIInputService: @unchecked Sendable {
     }
 
     /// Whether a transport message (0xFA Start, 0xFB Continue, 0xFC Stop)
-    /// arrived since the last call, and clears it. Momentary like Program
-    /// Change. `device` nil = any.
+    /// arrived before the poll in progress began. Momentary like Program
+    /// Change: `beginPoll` shows it to one poll. `device` nil = any.
     func consumeTransport(_ status: UInt8, deviceID: String?) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        var hit = false
-        for (dev, statuses) in transportHits where deviceID == nil || dev == deviceID {
-            if statuses.contains(status) {
-                hit = true
-                transportHits[dev]?.remove(status)
-            }
+        guard !transportShown.isEmpty else { return false }
+        for (dev, statuses) in transportShown where deviceID == nil || dev == deviceID {
+            if statuses.contains(status) { return true }
         }
-        return hit
+        return false
     }
 
     /// One step of relative ("Turn") travel for the given CC, if enough
@@ -1403,15 +1727,12 @@ final class MIDIInputService: @unchecked Sendable {
             return false
         }
 
-        for (rawKey, net) in ccNetTravel {
-            let parts = rawKey.split(separator: "|", maxSplits: 2).map(String.init)
-            guard parts.count == 3,
-                  let ch = Int(parts[1]), let number = Int(parts[2]) else { continue }
-            guard number == cc else { continue }
-            if let channel, ch != channel { continue }
-            if let deviceID, parts[0] != deviceID { continue }
+        for (stream, net) in ccNetTravel {
+            guard stream.cc == cc else { continue }
+            if let channel, stream.channel != channel { continue }
+            if let deviceID, stream.deviceID != deviceID { continue }
 
-            let markKey = consumerKey + "|" + rawKey
+            let markKey = TravelMark(consumer: consumerKey, stream: stream)
             // A row seeing a stream for the first time starts from now.
             let mark = consumerTravelMark[markKey] ?? net
             let ahead = net - mark
@@ -1427,21 +1748,18 @@ final class MIDIInputService: @unchecked Sendable {
         return false
     }
 
-    /// Whether the given program change arrived since the last call, and
-    /// clears it. Program Change is momentary, so it is consumed: the
-    /// binding fires for exactly one poll frame.
+    /// Whether the given program change arrived before the poll in progress
+    /// began. Program Change is momentary: `beginPoll` shows it to one poll,
+    /// and every row of that poll reads it, whatever its filters.
     func consumeProgramChange(_ program: Int, channel: Int?, deviceID: String?) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        var hit = false
-        for (dev, byChannel) in programHits where deviceID == nil || dev == deviceID {
+        guard !programShown.isEmpty else { return false }
+        for (dev, byChannel) in programShown where deviceID == nil || dev == deviceID {
             for (ch, programs) in byChannel where channel == nil || ch == channel {
-                if programs.contains(program) {
-                    hit = true
-                    programHits[dev]?[ch]?.remove(program)
-                }
+                if programs.contains(program) { return true }
             }
         }
-        return hit
+        return false
     }
 
     /// Every MIDI source currently connected, for the editor's picker.
@@ -1497,9 +1815,11 @@ final class MIDIInputService: @unchecked Sendable {
         scanBaseline.removeAll()
         // A Bank Select heard by this scan does not reach the next one.
         pendingBankScan = nil
-        // A scanned Program Change or Start is not left queued for a row.
+        // A scanned Program Change, Start or pedal press is not left
+        // queued for a row.
         programHits.removeAll()
         transportHits.removeAll()
+        clearStrikesLocked()
         lock.unlock()
     }
 
@@ -1510,6 +1830,7 @@ final class MIDIInputService: @unchecked Sendable {
         lock.lock()
         programHits.removeAll()
         transportHits.removeAll()
+        clearStrikesLocked()
         lock.unlock()
     }
 
@@ -1524,6 +1845,7 @@ final class MIDIInputService: @unchecked Sendable {
         ccNetTravel.removeAll()
         consumerTravelMark.removeAll()
         relativePhase.removeAll()
+        clearStrikesLocked()
         stateGeneration &+= 1
         lock.unlock()
     }

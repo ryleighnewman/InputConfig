@@ -32,13 +32,21 @@ enum PlayStationCapabilityProbe {
     /// Generic, 0x2B81 PS5 mode). Razer is NOT asked: some Razer devices
     /// lock up or reset on the query (SDL issues 6733 and 6799); its pads
     /// come in by product ID through the class sets. Logitech and
-    /// Thrustmaster are wheels and are read by their own plans.
+    /// Thrustmaster are wheels and are read by their own plans. Red Octane
+    /// Games (0x3958) and SZ-MYPOWER (0x7545) are in SDL's list too.
     static let vendors: Set<Int32> = [0x3651, 0x0079, 0x1B1C, 0x0F0D, 0x0738, 0x33DF, 0x146B, 0x3285, 0x0E6F,
-                                      0x24C6, 0x20D6, 0x2C22, 0x1430, 0x2563, 0x20BC, 0x0C12, 0x1209, 0x2B81]
+                                      0x24C6, 0x20D6, 0x2C22, 0x1430, 0x2563, 0x20BC, 0x0C12, 0x1209, 0x2B81,
+                                      0x3958, 0x7545]
+
+    /// Devices of an asked vendor that SDL does not ask: the Mad Catz
+    /// Saitek side panel control deck (0738:2218) is no PlayStation pad,
+    /// and the HORIPAD for Nintendo Switch (0F0D:00C1) hangs on the query.
+    static let neverAsked: Set<Int> = [0x0738_2218, 0x0F0D_00C1]
 
     static func shouldProbe(vendorID: Int32, productID: Int32) -> Bool {
-        if vendors.contains(vendorID) { return true }
         let id = Int(vendorID) << 16 | Int(productID)
+        if neverAsked.contains(id) { return false }
+        if vendors.contains(vendorID) { return true }
         return SDLGameControllerDB.playStation4Class.contains(id) || SDLGameControllerDB.playStation5Class.contains(id)
     }
 

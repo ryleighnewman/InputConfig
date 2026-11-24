@@ -50,9 +50,21 @@ extension HIDFixtureCorpus {
         return out
     }
 
+    /// A notification as a controller sent it over Bluetooth LE, as hex,
+    /// with the report ID the transport leaves out put in front.
+    private static func notification05(_ hex: String) -> [UInt8] {
+        var out: [UInt8] = [0x05]
+        var i = hex.startIndex
+        while let j = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) {
+            out.append(UInt8(hex[i..<j], radix: 16) ?? 0)
+            i = j
+        }
+        return out
+    }
+
     private static func jc2(_ id: String, left: Bool, _ bytes: [UInt8], _ expect: [HIDFixture.Expect], _ locator: String) -> HIDFixture {
         HIDFixture(id: id, device: left ? "Joy-Con 2 (L)" : "Joy-Con 2 (R)", transport: .usb,
-                   route: .rawHID(vendorID: 0x057E, productID: left ? 0x2066 : 0x2067, transport: "USB"),
+                   route: .rawHID(vendorID: 0x057E, productID: Int32(left ? Switch2USBEnabler.joyConLeftProductID : Switch2USBEnabler.joyConRightProductID), transport: "USB"),
                    reportID: 0x05, hex: HIDFixture.hex(bytes), expect: expect, status: .reconstructed,
                    citation: HIDFixture.Citation(source: "SDL_hidapi_switch2.c HandleMiniControllerStateL and R; proto-nintendo.md 4.5 button table", locator: locator, date: "2026-10-21"))
     }
@@ -112,6 +124,21 @@ extension HIDFixtureCorpus {
               "F-SW2P5-7: nose up 45 degrees puts half the reaction on Y"),
         pro05("switch2pro05.imu.off", pro05Report(accel: (0, 0, 0)), [.button(0, 0), .axis(0, 0, tolerance: 0.01)],
               "F-SW2P5-8: all-zero accelerometer is the IMU off; no motion fields are set"),
+        // Three notifications a real Switch 2 Pro Controller sent on handle
+        // 0x000A, byte for byte (ndeadly/switch2_controller_research,
+        // captures/nrf52840/btle_procon2_motion_0x000A.pcapng): the first
+        // of the link, one lying still, and one with GR held.
+        pro05("switch2pro05.real.first", notification05("9b0e0000000000000000ae37842f38850000000000000000000000000000002e0d000000000000000001d5a602000a00000000000000000000000000000000"),
+              [.buttonAbsent(0), .buttonAbsent(1), .buttonAbsent(2), .buttonAbsent(3), .buttonAbsent(16), .buttonAbsent(17),
+               .axis(0, 0, tolerance: 0.1), .axis(1, 0, tolerance: 0.1), .axis(2, 0, tolerance: 0.1), .axis(3, 0, tolerance: 0.1)],
+              "real capture, counter 3739: at rest, sticks 1966, 2115 and 2095, 2131, motion sensors not on yet"),
+        pro05("switch2pro05.real.still", notification05("02110000000000000000af47842f28850000000000000000000000000000002e0d00000000000000000167ac0b000b00abff3e0233100000fbff0500000000"),
+              [.buttonAbsent(0), .buttonAbsent(17), .axis(0, 0, tolerance: 0.1), .axis(2, 0, tolerance: 0.1),
+               .motion(.accelY, 0.14, tolerance: 0.01), .motion(.accelZ, 1.012, tolerance: 0.01), .motion(.gyroX, 0, tolerance: 0.01)],
+              "real capture, counter 4354: lying still, about 1 g on Z"),
+        pro05("switch2pro05.real.gr", notification05("90a00000000000010000af47842f2885000000000000000000000000000000300d000000000000000001c14138020b00a5fe5bff69106600e5ffb500000000"),
+              [.button(17, 1), .buttonAbsent(16), .buttonAbsent(0), .buttonAbsent(1), .motion(.accelZ, 1.026, tolerance: 0.01)],
+              "real capture, counter 41104: GR held, byte 7 of the notification bit 0"),
         // Joy-Con 2 (L) and (R) on their own, report 0x05, held sideways
         jc2("switch2jcl.rest", left: true, pro05Report(), [.buttonAbsent(0), .buttonAbsent(6), .axis(0, 0, tolerance: 0.01), .axis(1, 0, tolerance: 0.01), .motion(.accelZ, 1, tolerance: 0.001)],
             "F-JC2L-1: at rest, flat"),

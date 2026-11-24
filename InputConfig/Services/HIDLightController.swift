@@ -249,7 +249,7 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// and the contention stopped. One writer, one sequence, no contention.
     /// Kept per pad (by device key) so a buzz meant for one slot does not
     /// shake every Sony pad on the Mac.
-    private var rumbles: [UInt64: (strong: UInt8, weak: UInt8, until: CFAbsoluteTime)] = [:]
+    private var rumbles: [UInt64: (strong: UInt8, weak: UInt8, until: TimeInterval)] = [:]
     #if DEBUG
     /// Which vibration flags the report claims, for measuring on a pad:
     /// 0 the shipped default (the older compatible-vibration flag with
@@ -336,11 +336,17 @@ final class InProcessLightWriter: @unchecked Sendable {
 
     /// Stop writing for a moment. Two processes writing output reports to
     /// one DualSense fight; this hands the stream to whoever else wants it.
-    private var quietUntil: CFAbsoluteTime = 0
+    private var quietUntil: TimeInterval = 0
+    /// The clock every deadline in this writer is kept on: time since boot,
+    /// which never steps. On the wall clock a time correction that stepped
+    /// back during a buzz made the stop block, which runs on the monotonic
+    /// clock, see a time before the buzz's end and skip the off write, so
+    /// the motors ran on until the next write.
+    nonisolated static func steadyNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
     func pauseWrites(forMs ms: Int) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            self.quietUntil = CFAbsoluteTimeGetCurrent() + Double(ms) / 1000
+            self.quietUntil = Self.steadyNow() + Double(ms) / 1000
             // macOS repaints the light bar itself while it is driving the
             // haptics, so the held color has to be taken straight back the
             // moment the pause ends. Waiting for the next heartbeat would
@@ -358,6 +364,16 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// What the last vibrate call asked for, for the debug dump.
     nonisolated(unsafe) static var debugLastVibrate: String = "none"
 
+    /// A buzz that starts inside another on the same pad joins it: the later
+    /// end and the stronger level stay, so a short pulse no longer ends a
+    /// long buzz early. One that has run out is replaced.
+    nonisolated static func mergedRumble(_ existing: (strong: UInt8, weak: UInt8, until: TimeInterval)?,
+                                         level: UInt8, until: TimeInterval,
+                                         now: TimeInterval) -> (strong: UInt8, weak: UInt8, until: TimeInterval) {
+        guard let existing, now < existing.until else { return (strong: level, weak: level, until: until) }
+        return (strong: max(existing.strong, level), weak: max(existing.weak, level), until: max(existing.until, until))
+    }
+
     /// `target` picks the pad (see `SonyPadIdentity`); nil buzzes every pad.
     func vibrate(intensity: Float, durationMs: Int, target: SonyPadIdentity? = nil) {
         let level = UInt8(max(0, min(1, intensity)) * 255)
@@ -366,9 +382,11 @@ final class InProcessLightWriter: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self, self.ensureDevicesLocked() else { return }
             let only = self.resolveLocked(target)
-            let until = CFAbsoluteTimeGetCurrent() + seconds
+            let now = Self.steadyNow()
+            let until = now + seconds
             for d in self.devices where only == nil || only!.contains(d.key) {
-                self.rumbles[d.key] = (strong: level, weak: level, until: until)
+                self.rumbles[d.key] = Self.mergedRumble(self.rumbles[d.key], level: level, until: until,
+                                                        now: now)
                 self.rumbleNeedsStop.insert(d.key)
             }
             self.writeLocked(only: only)
@@ -377,7 +395,8 @@ final class InProcessLightWriter: @unchecked Sendable {
             // buzz otherwise ran until the next heartbeat, up to a second.
             self.queue.asyncAfter(deadline: .now() + seconds) { [weak self] in
                 guard let self else { return }
-                if self.rumbles.values.contains(where: { CFAbsoluteTimeGetCurrent() >= $0.until }) {
+                let now = Self.steadyNow()
+                if self.rumbles.values.contains(where: { now >= $0.until }) {
                     self.writeLocked(only: only)
                 }
             }
@@ -616,14 +635,30 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// Pads whose open was refused at the last scan, and the ones already said.
     private var refused: Set<UInt64> = []
     private var refusedLogged: Set<UInt64> = []
-    private var lastEmptyScan: CFAbsoluteTime = 0
-    private func ensureDevicesLocked() -> Bool {
+    private var lastEmptyScan: TimeInterval = 0
+    /// The five second guard throttles idle polling only: a scan asked for
+    /// because a pad just connected (`force`) runs inside it.
+    nonisolated static func scanAllowed(sinceLastScan: TimeInterval, force: Bool) -> Bool {
+        force || sinceLastScan > 5
+    }
+    /// A controller just connected: look for its raw device now. The scan
+    /// at the connection can come back empty (the pad is not in the
+    /// registry yet), and the light writes retried half a second and a
+    /// second and a half later were then dropped by the guard, so the pad
+    /// got no held color.
+    func scanForConnectedPad() {
+        queue.async { [weak self] in
+            guard let self, self.devices.isEmpty else { return }
+            _ = self.ensureDevicesLocked(force: true)
+        }
+    }
+    private func ensureDevicesLocked(force: Bool = false) -> Bool {
         // Also while a pad was refused beside one that opened, so a release
         // by the other app is picked up within seconds.
         if devices.isEmpty || !refused.isEmpty {
-            let now = CFAbsoluteTimeGetCurrent()
+            let now = Self.steadyNow()
             if devices.isEmpty || now - lastEmptyScan > 5 {
-                guard now - lastEmptyScan > 5 else { return false }
+                guard Self.scanAllowed(sinceLastScan: now - lastEmptyScan, force: force) else { return false }
                 // With a pad open only the others are tried: closing it
                 // every five seconds cut whatever buzz it was playing.
                 reopenLocked(keepingOpen: !devices.isEmpty)
@@ -783,7 +818,7 @@ final class InProcessLightWriter: @unchecked Sendable {
         var out = ""
         queue.sync {
             let c = holdColor.map { "(\($0.r),\($0.g),\($0.b))" } ?? "none"
-            let quiet = max(0, quietUntil - CFAbsoluteTimeGetCurrent())
+            let quiet = max(0, quietUntil - Self.steadyNow())
             out = "devices=\(devices.count) holdColor=\(c) perPad=\(deviceHold.count) ticker=\(holdTimer != nil) "
                 + "quietFor=\(String(format: "%.2f", quiet))s rumble=\(!rumbles.isEmpty)"
         }
@@ -814,10 +849,17 @@ final class InProcessLightWriter: @unchecked Sendable {
     /// Each pad gets its own color (`bare` when this is a one-off write aimed
     /// at it, else its held color) and its own motor levels. `only` limits
     /// the write to some pads; nil writes every pad.
+    /// Whether a write claims a pad's light fields: asked to, light control
+    /// on in Settings, and a color to put there (a one-off color, or one
+    /// held for the pad).
+    nonisolated static func claimsLight(asked: Bool, lightControl: Bool, oneOff: Bool, held: Bool) -> Bool {
+        asked && lightControl && (oneOff || held)
+    }
+
     private func writeLocked(bare: (r: UInt8, g: UInt8, b: UInt8, br: UInt8)? = nil,
                              only: Set<UInt64>? = nil,
                              touchLight: Bool = true) {
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = Self.steadyNow()
         if now < quietUntil { return }
         for d in devices where only == nil || only!.contains(d.key) {
             // Motor levels for this write, and whether the report should
@@ -835,20 +877,20 @@ final class InProcessLightWriter: @unchecked Sendable {
                 touchMotors = true
                 rumbleNeedsStop.remove(d.key)
             }
-            // This pad's color. With nothing held anywhere the report carries
-            // an unlit color, as it always has; a pad with no color of its own
-            // while another pad holds one is left alone instead of blanked.
-            // With light control off in Settings the light fields are never
-            // claimed, whatever the write was for.
-            var touchLight = touchLight && lightControl
+            // This pad's color. A pad with no color to write (nothing held
+            // for it and no one-off color) is left alone instead of blanked:
+            // a buzz with nothing held claimed the light bar with black and
+            // turned it off. With light control off in Settings the light
+            // fields are never claimed, whatever the write was for.
             var red: UInt8 = 0, green: UInt8 = 0, blue: UInt8 = 0, brightness: UInt8 = 0
+            let held = deviceHold[d.key] ?? holdColor
             if let b = bare {
                 red = b.r; green = b.g; blue = b.b; brightness = b.br
-            } else if let c = deviceHold[d.key] ?? holdColor {
+            } else if let c = held {
                 red = c.r; green = c.g; blue = c.b; brightness = 2
-            } else if !deviceHold.isEmpty {
-                touchLight = false
             }
+            let touchLight = Self.claimsLight(asked: touchLight, lightControl: lightControl,
+                                              oneOff: bare != nil, held: held != nil)
             // Nothing to say to this pad on this write.
             if !touchLight && !touchMotors { continue }
             let isDS = Self.dualSensePIDs.contains(d.pid)

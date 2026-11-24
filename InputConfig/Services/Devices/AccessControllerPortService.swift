@@ -209,6 +209,10 @@ final class AccessControllerPortService: @unchecked Sendable {
                 && a.toggles == b.toggles && a.ports == b.ports && a.orientation == b.orientation
         }
 
+        /// Every action that lands on a button, with the slot's index for it.
+        static let buttonActionIndices: [(action: Int, button: Int)] =
+            [1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].compactMap { code in buttonIndex(ofAction: code).map { (code, $0) } }
+
         /// The slot's button index a profile action lands on, as
         /// GameController reports it. The four D-pad directions are a hat,
         /// not a button, and 0 is nothing.
@@ -236,14 +240,16 @@ final class AccessControllerPortService: @unchecked Sendable {
         /// with 0 for nothing.
         static let actionCodes: [Int] = [0, 2, 1, 4, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 
-        static func actionName(_ code: Int) -> String? {
-            let names: [Int: String] = [0: String(localized: "Nothing"), 1: String(localized: "Circle"), 2: String(localized: "Cross"),
-                                        3: String(localized: "Triangle"), 4: String(localized: "Square"), 5: String(localized: "Up"),
-                                        6: String(localized: "Down"), 7: String(localized: "Left"), 8: String(localized: "Right"),
-                                        9: "L1", 10: "R1", 11: "L2", 12: "R2", 13: "L3", 14: "R3", 15: String(localized: "Options"),
-                                        16: String(localized: "Create"), 17: String(localized: "PS"), 18: String(localized: "Touchpad")]
-            return names[code]
-        }
+        static func actionName(_ code: Int) -> String? { actionNames[code] }
+
+        /// Built once: the profile editor asks for a name several hundred
+        /// times per pass.
+        private static let actionNames: [Int: String] = [
+            0: String(localized: "Nothing"), 1: String(localized: "Circle"), 2: String(localized: "Cross"),
+            3: String(localized: "Triangle"), 4: String(localized: "Square"), 5: String(localized: "Up"),
+            6: String(localized: "Down"), 7: String(localized: "Left"), 8: String(localized: "Right"),
+            9: "L1", 10: "R1", 11: "L2", 12: "R2", 13: "L3", 14: "R3", 15: String(localized: "Options"),
+            16: String(localized: "Create"), 17: String(localized: "PS"), 18: String(localized: "Touchpad")]
 
         static func slotName(_ slot: Int) -> String {
             switch slot {
@@ -303,11 +309,27 @@ final class AccessControllerPortService: @unchecked Sendable {
         var switchingDisabled = false
         var battery: Battery?
         var profiles: [Int: Profile] = [:]
+        /// What each socket (1 to 8) and the center button (9) sends, per
+        /// profile number, as profile action codes, learned from the
+        /// controller's own reports (see `learnedAction`). Over Bluetooth
+        /// the stored profiles cannot be read, and this is all that is
+        /// known about what the person's profile puts where. Key 0 is the
+        /// stick: 1 the left stick, 2 the right one (see `learnedStick`).
+        var learned: [Int: [Int: Int]] = [:]
         var reportsSeen = 0
         /// Every report, decoded or not: a Bluetooth pad still on its
         /// compact report counts here and nowhere else.
         var rawReportsSeen = 0
         var firstReportLogged = false
+        /// When this pad last told the idle timer it is in use, in
+        /// `systemUptime` seconds; 0 before the first time.
+        var lastActivityNote: TimeInterval = 0
+        /// The last accepted report, kept while the next one can stand on
+        /// it: only when all four ports had settled on it, nil otherwise
+        /// (see `handleReport`).
+        var rest: [UInt8]?
+        /// Whether that report showed a use, for the idle timer.
+        var restShowsUse = false
         init(device: IOHIDDevice?, identity: SonyPadIdentity, buffer: UnsafeMutablePointer<UInt8>, overUSB: Bool, location: UInt64) {
             self.device = device; self.identity = identity; self.buffer = buffer; self.overUSB = overUSB; self.location = location
         }
@@ -603,12 +625,16 @@ final class AccessControllerPortService: @unchecked Sendable {
 
     static func parseProfile(_ bytes: [UInt8], number: Int) -> Profile? {
         guard bytes.count >= profileSize, bytes[0] == 0x02 else { return nil }
-        var name = ""
+        // The units up to the first zero, read as UTF-16 so a character
+        // stored as a surrogate pair (an emoji) comes back whole; a lone
+        // half is dropped.
+        var units: [UInt16] = []
         for i in 0..<40 {
             let unit = UInt16(bytes[4 + 2 * i]) | UInt16(bytes[5 + 2 * i]) << 8
             if unit == 0 { break }
-            if let scalar = Unicode.Scalar(unit) { name.unicodeScalars.append(scalar) }
+            units.append(unit)
         }
+        let name = String(String(decoding: units, as: UTF16.self).unicodeScalars.filter { $0 != "\u{FFFD}" })
         var profile = Profile(number: number, name: name)
         profile.bytes = Array(bytes.prefix(profileSize))
         for b in 0..<10 {
@@ -811,7 +837,9 @@ final class AccessControllerPortService: @unchecked Sendable {
         guard !pad.switchingDisabled else { completion(.failure(.switchingDisabled)); return }
         guard pad.device != nil else {
             // A synthetic pad has no controller to answer: it switches as the real one would.
-            lock.lock(); pad.activeProfile = number; lock.unlock()
+            // The next report is read in full, as it was before reports
+            // at rest were dropped: it carries the profile the pad is on.
+            lock.lock(); pad.activeProfile = number; pad.rest = nil; lock.unlock()
             completion(.success(())); return
         }
         let loc = pad.location, want = pad.identity
@@ -1037,6 +1065,31 @@ final class AccessControllerPortService: @unchecked Sendable {
 
     // MARK: - Reports (reader thread)
 
+    /// Whether a report that shows a use is passed on to the idle timer:
+    /// the pad's first one, then one a second. The timer counts minutes.
+    static func activityNoteDue(last: TimeInterval, now: TimeInterval) -> Bool { now - last >= 1 }
+
+    /// The Bluetooth byte numbers `decode` reads, 25 of them. A byte
+    /// `decode` comes to read has to be listed here, or a change in it
+    /// alone is dropped by `handleReport` as a report at rest.
+    static let readBytes: [Int] = Array(Set(
+        buttonBytes
+        + [mappedStickBytes.lx, mappedStickBytes.ly, mappedStickBytes.rx, mappedStickBytes.ry,
+           mappedTriggerBytes.l2, mappedTriggerBytes.r2,
+           mappedButtonBytes.face, mappedButtonBytes.shoulders, mappedButtonBytes.system,
+           stickBytes.x, stickBytes.y, batteryByte, profileByte]
+        + (1...portCount).flatMap { [typeByte(forPort: $0), portBytes($0).x, portBytes($0).y] }
+    )).sorted()
+
+    /// True when `bytes` is a full report of the same kind as `last` with
+    /// the same value in every byte `decode` reads.
+    static func repeatsReadBytes(_ bytes: [UInt8], of last: [UInt8]) -> Bool {
+        guard bytes.count == last.count, let first = bytes.first, first == last[0],
+              let format = formats.first(where: { $0.length == bytes.count && first == $0.id }) else { return false }
+        for byte in readBytes where bytes[byte + format.shift] != last[byte + format.shift] { return false }
+        return true
+    }
+
     fileprivate func handleReport(location loc: UInt64, report: UnsafePointer<UInt8>, length: Int) {
         let bytes = Array(UnsafeBufferPointer(start: report, count: length))
         #if DEBUG
@@ -1044,6 +1097,13 @@ final class AccessControllerPortService: @unchecked Sendable {
             HIDCapture.log("\(HIDCapture.elapsedMs) in \(String(format: "%02x", bytes.first ?? 0)) \(HIDCapture.hex(bytes))")
         }
         #endif
+        // The idle timer hears of a use after the pad lock is released
+        // (this defer runs after the unlock below), and once a second per
+        // pad at most: the note scans the system's controllers, and a held
+        // input ran that scan on every report with the lock held, the lock
+        // the main thread's poll waits on.
+        var noteIdentity: SonyPadIdentity?
+        defer { if let noteIdentity { ControllerPowerService.shared.noteAccessActivity(identity: noteIdentity) } }
         lock.lock()
         defer { lock.unlock() }
         guard let pad = pads[loc] else { return }
@@ -1052,6 +1112,31 @@ final class AccessControllerPortService: @unchecked Sendable {
             pad.firstReportLogged = true
             Self.log.notice("first report id \(String(format: "0x%02X", bytes.first ?? 0), privacy: .public) length \(length, privacy: .public)")
         }
+        let now = ProcessInfo.processInfo.systemUptime
+        func noteUse() {
+            guard Self.activityNoteDue(last: pad.lastActivityNote, now: now) else { return }
+            pad.lastActivityNote = now
+            noteIdentity = pad.identity
+            #if DEBUG
+            if syntheticLocations.contains(loc) { debugActivityNotes += 1 }
+            #endif
+        }
+        // At rest five fields still move on every report (its counter, the
+        // controller's clock, the trailer, the Bluetooth tag and the CRC)
+        // and `decode` reads none of them. A report that repeats the last
+        // accepted one in the bytes it does read would decode to the same
+        // values and store them again, so it is counted and dropped here,
+        // before the CRC, the decode and the three tables built from it.
+        if let last = pad.rest, Self.repeatsReadBytes(bytes, of: last) {
+            pad.reportsSeen += 1
+            #if DEBUG
+            // The bench's own pads only: a real Access Controller at rest
+            // on the desk added its drops to the count the bench reads.
+            if syntheticLocations.contains(loc) { debugRestSkips += 1 }
+            #endif
+            if pad.restShowsUse { noteUse() }
+            return
+        }
         guard let decoded = Self.decode(bytes) else {
             if pad.rawReportsSeen == 250, pad.reportsSeen == 0 {
                 Self.log.notice("still compact after 250 reports (id \(String(format: "0x%02X", bytes.first ?? 0), privacy: .public), length \(length, privacy: .public))")
@@ -1059,9 +1144,8 @@ final class AccessControllerPortService: @unchecked Sendable {
             return
         }
         defer { pad.reportsSeen += 1 }
-        if !decoded.buttons.isEmpty || decoded.axes.values.contains(where: { abs($0) > 0.33 }) {
-            ControllerPowerService.shared.noteAccessActivity(identity: pad.identity)
-        }
+        let showsUse = !decoded.buttons.isEmpty || decoded.axes.values.contains(where: { abs($0) > 0.33 })
+        if showsUse { noteUse() }
 
         for index in decoded.buttons where pad.seenButtons.insert(index).inserted {
             Self.log.notice("\(Self.buttonLabel(index), privacy: .public) first pressed")
@@ -1079,7 +1163,6 @@ final class AccessControllerPortService: @unchecked Sendable {
         // A port's type is published only once `portSettleReports` reports
         // in a row agree, so a half seated plug does not flap the drawing
         // and the extras row at report rate.
-        let now = ProcessInfo.processInfo.systemUptime
         for port in 1...Self.portCount {
             let candidate = decoded.ports[port]
             var entry = pad.portCandidates[port] ?? (device: nil, count: 0)
@@ -1105,9 +1188,34 @@ final class AccessControllerPortService: @unchecked Sendable {
             axes.removeValue(forKey: a.x); axes.removeValue(forKey: a.y)
             buttons.remove(Self.portButtonBase + port - 1)
         }
+        // A socket going down alone, in the same report as the function it
+        // turns on: that is what the active profile gives it.
+        if let found = Self.learnedAction(previousButtons: Set(pad.buttons.keys), buttons: buttons,
+                                          previous: pad.mapped, mapped: decoded.mapped) {
+            pad.learned[pad.activeProfile, default: [:]][found.socket] = found.action
+        }
+        // The stick pushed with every stick in a port at rest: the stick
+        // the profile moves with it is the one it is assigned to.
+        let portSticks = (1...Self.portCount).filter { pad.portDevices[$0] == .stick }.flatMap { port -> [Float] in
+            let a = Self.portAxes(port)
+            return [axes[a.x] ?? 0, axes[a.y] ?? 0]
+        }
+        if let side = Self.learnedStick(stick: (axes[Self.stickAxes.x] ?? 0, axes[Self.stickAxes.y] ?? 0),
+                                        portSticks: portSticks, mapped: decoded.mapped) {
+            pad.learned[pad.activeProfile, default: [:]][0] = side
+        }
         pad.axes = axes
         pad.buttons = Dictionary(uniqueKeysWithValues: buttons.map { ($0, Float(1)) })
         pad.mapped = decoded.mapped
+        // The next report can stand on this one only while no port is
+        // counting toward a change: until a port has settled, every
+        // report has to be counted.
+        let settled = (1...Self.portCount).allSatisfy { port in
+            guard let entry = pad.portCandidates[port] else { return false }
+            return entry.count >= Self.portSettleReports && pad.portDevices[port] == entry.device
+        }
+        pad.rest = settled ? bytes : nil
+        pad.restShowsUse = showsUse
     }
 
     // MARK: - Synthetic pads (DEBUG)
@@ -1115,6 +1223,26 @@ final class AccessControllerPortService: @unchecked Sendable {
     #if DEBUG
     /// Locations of pads installed by hand, never by IOKit.
     private var syntheticLocations: Set<UInt64> = []
+    /// How many reports were passed on to the idle timer, under `lock`.
+    private var debugActivityNotes = 0
+    /// The same, for the bench.
+    var debugActivityNoteCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return debugActivityNotes
+    }
+    /// How many reports of the bench's pads were dropped as a repeat of the last accepted one, under `lock`.
+    private var debugRestSkips = 0
+    /// The same, for the bench.
+    var debugRestSkipCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return debugRestSkips
+    }
+    /// Makes the pad's next report that shows a use due for the idle
+    /// timer, as if a second had passed.
+    func debugForgetActivityNote(location: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        pads[location]?.lastActivityNote = 0
+    }
 
     /// True while a synthetic pad is registered; GameControllerService
     /// merges a fake Access slot from this reader only then.
@@ -1224,6 +1352,58 @@ final class AccessControllerPortService: @unchecked Sendable {
     func portDevices(for identity: SonyPadIdentity?, accessSlotCount: Int) -> [Int: PortDevice] {
         lock.lock(); defer { lock.unlock() }
         return pad(for: identity, accessSlotCount: accessSlotCount)?.portDevices ?? [:]
+    }
+
+    /// The socket (1 to 8, the center button 9) that went down in this
+    /// report with nothing else held, and the one function the profile
+    /// turned on in the same report, as a profile action code. Nil when no
+    /// single socket went down alone, or when no function or several came
+    /// on with it (a socket with nothing, a toggle switching off, a
+    /// second function).
+    static func learnedAction(previousButtons: Set<Int>, buttons: Set<Int>,
+                              previous: Mapped?, mapped: Mapped?) -> (socket: Int, action: Int)? {
+        guard let previous, let mapped else { return nil }
+        let sockets = buttonBase..<(buttonBase + 9)
+        let before = previousButtons.filter(sockets.contains), now = buttons.filter(sockets.contains)
+        guard before.isEmpty, now.count == 1, let index = now.first else { return nil }
+        var actions: [Int] = []
+        for (action, button) in Profile.buttonActionIndices
+        where (previous.buttons[button] ?? 0) == 0 && (mapped.buttons[button] ?? 0) > 0 {
+            actions.append(action)
+        }
+        if previous.hat.x == 0, previous.hat.y == 0 {
+            switch (mapped.hat.x, mapped.hat.y) {
+            case (0, 1): actions.append(5)
+            case (0, -1): actions.append(6)
+            case (-1, 0): actions.append(7)
+            case (1, 0): actions.append(8)
+            default: break
+            }
+        }
+        guard actions.count == 1 else { return nil }
+        return (index - buttonBase + 1, actions[0])
+    }
+
+    /// Which stick the controller's own stick is assigned to, 1 left or 2
+    /// right, from a report where it is pushed well out, no stick in a
+    /// port is, and exactly one of the two sticks the profile sends moved
+    /// with it. Nil otherwise.
+    static func learnedStick(stick: (x: Float, y: Float), portSticks: [Float], mapped: Mapped?) -> Int? {
+        guard let mapped, max(abs(stick.x), abs(stick.y)) > 0.6, portSticks.allSatisfy({ abs($0) < 0.2 }) else { return nil }
+        let left = max(abs(mapped.axes[0] ?? 0), abs(mapped.axes[1] ?? 0))
+        let right = max(abs(mapped.axes[2] ?? 0), abs(mapped.axes[3] ?? 0))
+        if left > 0.5, right < 0.2 { return 1 }
+        if right > 0.5, left < 0.2 { return 2 }
+        return nil
+    }
+
+    /// What the sockets and the center button of the controller in a slot
+    /// send, learned from its reports, for the profile it has active; nil
+    /// when no controller is there. Empty until something is pressed.
+    func learnedActions(for identity: SonyPadIdentity?, accessSlotCount: Int) -> [Int: Int]? {
+        lock.lock(); defer { lock.unlock() }
+        guard let pad = pad(for: identity, accessSlotCount: accessSlotCount) else { return nil }
+        return pad.learned[pad.activeProfile] ?? [:]
     }
 
     /// The profile the controller has active (1...3), with what it maps

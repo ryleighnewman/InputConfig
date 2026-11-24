@@ -155,6 +155,9 @@ struct DebugLogView: View, Equatable {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.forward")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            // Turns with the panel's own animation instead of
+                            // swapping before it moves.
+                            .contentTransition(.symbolEffect(.replace))
                             .frame(width: 16)
                     }
                     .buttonStyle(.plain)

@@ -3,6 +3,42 @@ import Combine
 import SwiftUI
 import AppKit
 
+/// What the Previous versions list needs from a kept version: that it is
+/// a preset file (an id and a name, the two fields a preset must have)
+/// and how many rows its groups hold. The rows are counted, not read: a
+/// row from a newer version, which a full read keeps aside, counts too.
+private struct VersionRows: Decodable {
+    var count = 0
+
+    private enum Keys: String, CodingKey { case id, name, joysticks }
+
+    private struct Group: Decodable {
+        var rows = 0
+        private enum Keys: String, CodingKey { case bindings }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            if let list = try? c.nestedUnkeyedContainer(forKey: .bindings) { rows = list.count ?? 0 }
+        }
+    }
+
+    /// Reads past a group that is not an object, as the full read does.
+    private struct Skipped: Decodable {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        _ = try c.decode(UUID.self, forKey: .id)
+        _ = try c.decode(String.self, forKey: .name)
+        guard var list = try? c.nestedUnkeyedContainer(forKey: .joysticks) else { return }
+        while !list.isAtEnd {
+            if let group = try? list.decode(Group.self) {
+                count += group.rows
+            } else if (try? list.decode(Skipped.self)) == nil {
+                break
+            }
+        }
+    }
+}
+
 /// Manages loading, saving, and organizing presets
 @MainActor
 class PresetStore: ObservableObject {
@@ -292,11 +328,26 @@ class PresetStore: ObservableObject {
         }
     }
 
+    /// The list a preset is shown in: its folder, or nil (the folderless
+    /// list) when it has none or its folder no longer exists, as
+    /// `presets(in:)` lists it.
+    func container(of groupID: UUID?) -> UUID? {
+        guard let groupID, groups.contains(where: { $0.id == groupID }) else { return nil }
+        return groupID
+    }
+
+    /// Presets by the list each is shown in (see `container(of:)`).
+    nonisolated static func shownContainers(_ presets: [Preset], folders: Set<UUID>) -> [UUID?: [Preset]] {
+        Dictionary(grouping: presets, by: { p -> UUID? in p.groupID.flatMap { folders.contains($0) ? $0 : nil } })
+    }
+
     /// A drag or a Move Up in a sorted list: what is on screen becomes the
     /// manual order, then the move is made in it, so nothing jumps.
     private func switchToManualKeepingOrder() {
         guard sidebarSort != .manual else { return }
-        let shownPresets: [UUID?: [Preset]] = Dictionary(grouping: presets, by: { $0.groupID })
+        // By the list each preset is shown in: one whose folder is gone is
+        // listed with the folderless ones, and was numbered apart from them.
+        let shownPresets: [UUID?: [Preset]] = Self.shownContainers(presets, folders: Set(groups.map(\.id)))
             .mapValues { inSidebarOrder($0) }
         let shownTop = inSidebarOrder(groups.filter { $0.parentID == nil })
         let shownSubs = Dictionary(grouping: groups.filter { $0.parentID != nil }, by: { $0.parentID! })
@@ -896,6 +947,25 @@ class PresetStore: ObservableObject {
         }
     }
 
+    /// Every folder at once, for Expand All and Collapse All: the list is
+    /// changed in a copy and handed over once, so the folders file is
+    /// written once and the sidebar hears of one change. One call per
+    /// folder wrote the file and published once for each.
+    func setAllGroupsExpanded(_ expanded: Bool) {
+        guard let all = Self.groups(groups, allExpanded: expanded) else { return }
+        groups = all
+        saveGroups()
+    }
+
+    /// The list with every folder expanded or collapsed, nil when it is
+    /// that way already (nothing to write, nothing to publish).
+    nonisolated static func groups(_ groups: [PresetGroup], allExpanded expanded: Bool) -> [PresetGroup]? {
+        guard groups.contains(where: { $0.isExpanded != expanded }) else { return nil }
+        var all = groups
+        for i in all.indices { all[i].isExpanded = expanded }
+        return all
+    }
+
     /// Set the user-pickable tint for a folder. Pass nil to clear the
     /// tint (renders as neutral). The string must be a name from
     /// `PresetGroup.colorOptions` so the lookup in the sidebar stays
@@ -941,10 +1011,14 @@ class PresetStore: ObservableObject {
     /// the sort slots that list already occupies, in the new order, so the
     /// other list is untouched.
     func moveTopLevelGroups(builtIn: Bool, fromOffsets source: IndexSet, toOffset destination: Int) {
+        // Checked before the switch to Manual: a refused move (offsets from
+        // another list) left the sidebar on Manual with every row renumbered.
+        // The switch keeps the order on screen, so the count holds after it.
+        let shown = (builtIn ? builtInTopLevelGroups : userTopLevelGroups).count
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < shown })
+        guard !valid.isEmpty else { return }
         switchToManualKeepingOrder()
         var subset = builtIn ? builtInTopLevelGroups : userTopLevelGroups
-        let valid = IndexSet(source.filter { $0 >= 0 && $0 < subset.count })
-        guard !valid.isEmpty else { return }
         // Two folders on one number (a folder put back from the Trash onto a
         // number a new folder took): the move swapped equal numbers and said
         // it moved. Dense numbers first, in the order shown.
@@ -1050,8 +1124,10 @@ class PresetStore: ObservableObject {
         switchToManualKeepingOrder()
         guard let dragIdx = presets.firstIndex(where: { $0.id == presetID }),
               let target = presets.first(where: { $0.id == targetID }) else { return }
-        let sourceGroup = presets[dragIdx].groupID
-        let destGroup = target.groupID
+        // The lists the two are shown in: a folder that is gone handed the
+        // dragged preset its dead id and numbered it apart from its list.
+        let sourceGroup = container(of: presets[dragIdx].groupID)
+        let destGroup = container(of: target.groupID)
 
         // Moving down within one folder lands after the target, moving up
         // or from another folder lands before it: always "before" meant a
@@ -1142,10 +1218,12 @@ class PresetStore: ObservableObject {
     /// offsets and rows appeared to vanish. Positions are written back to each
     /// preset's `sortOrder` so the arrangement survives relaunch.
     func movePresets(in groupID: UUID?, fromOffsets source: IndexSet, toOffset destination: Int) {
+        // Checked before the switch to Manual, as moveTopLevelGroups does.
+        let shown = presets(in: groupID).count
+        let valid = IndexSet(source.filter { $0 >= 0 && $0 < shown })
+        guard !valid.isEmpty else { return }
         switchToManualKeepingOrder()
         var visible = presets(in: groupID)
-        let valid = IndexSet(source.filter { $0 >= 0 && $0 < visible.count })
-        guard !valid.isEmpty else { return }
         visible.move(fromOffsets: valid, toOffset: min(max(destination, 0), visible.count))
 
         // A local copy, published once (see movePreset).
@@ -1177,6 +1255,8 @@ class PresetStore: ObservableObject {
             let result = Result<T, Error> {
                 // Read again when the first read failed, for its error.
                 let bytes = try data ?? Data(contentsOf: urls[i])
+                // Refused before the decode: see `JSONValue.nestsTooDeep`.
+                if JSONValue.nestsTooDeep(bytes) { throw JSONValue.nestingError }
                 let decoder = JSONDecoder()
                 decoder.userInfo[RowDecodeCounts.key] = counts
                 return try decode(decoder, bytes)
@@ -2033,6 +2113,26 @@ class PresetStore: ObservableObject {
     nonisolated(unsafe) private var writeGeneration: [UUID: Int] = [:]
     private let writeGenLock = NSLock()
 
+    /// When each preset last had a save that could keep a version (one
+    /// that is not words only), so a stream of saves is told apart from
+    /// separate edits. Main actor only, like the store.
+    private var lastStructuralSave: [UUID: Date] = [:]
+
+    /// Whether a save follows a pause: no save of this kind for the preset
+    /// in the last three seconds, or none yet since launch.
+    nonisolated static func isQuietSave(last: Date?, now: Date) -> Bool {
+        last.map { now.timeIntervalSince($0) >= 3 } ?? true
+    }
+
+    /// Whether a save keeps the file it replaces as a version. The newest
+    /// kept version must be three seconds old, and the save must follow a
+    /// pause: half a minute of dragging the light bar color used to keep
+    /// one version every three seconds and push all ten real earlier ones
+    /// out. A stream that never pauses still gets one every five minutes.
+    nonisolated static func keepsVersion(forced: Bool, newestVersionAge: TimeInterval, quiet: Bool) -> Bool {
+        forced || (newestVersionAge >= 3.0 && (quiet || newestVersionAge >= 300))
+    }
+
     /// Rewrite a preset's file without it counting as an edit: reorders
     /// and upgrade migrations keep the preset's modified date, so they do
     /// not float to the top of "recently edited" or win a duplicate check.
@@ -2069,7 +2169,11 @@ class PresetStore: ObservableObject {
         // this, new presets keep a nil sortOrder and fall back to
         // newest-modified-first, which is the unstable ordering this replaced.
         if mutable.sortOrder == nil {
-            let siblings = presets.filter { $0.groupID == mutable.groupID && $0.id != mutable.id }
+            let home = container(of: mutable.groupID)
+            let folders = Set(groups.map(\.id))
+            let siblings = presets.filter {
+                $0.id != mutable.id && $0.groupID.flatMap({ folders.contains($0) ? $0 : nil }) == home
+            }
             mutable.sortOrder = (siblings.compactMap(\.sortOrder).max()).map { $0 + 1 } ?? siblings.count
         }
         // The engine holds a snapshot taken at start(), so without this an edit
@@ -2098,6 +2202,16 @@ class PresetStore: ObservableObject {
             before.sortOrder = mutable.sortOrder
             return before == mutable
         }()
+        // Read and stamped here on main; the block below only gets the
+        // answer. A Put Back (skipSnapshot) is not an edit and leaves the
+        // stamp alone.
+        var quiet = true
+        if !skipSnapshot, !wordsOnly {
+            let now = Date()
+            quiet = Self.isQuietSave(last: lastStructuralSave[mutable.id], now: now)
+            lastStructuralSave[mutable.id] = now
+        }
+        let followsPause = quiet
         let fileURL = presetsDirectory.appendingPathComponent(mutable.filename)
 
         // Snapshot the prior contents (if any) before overwriting, so the
@@ -2139,7 +2253,7 @@ class PresetStore: ObservableObject {
                     }.max() ?? .distantPast
                     return Date().timeIntervalSince(newest)
                 }()
-                if forceSnapshot || newestSnapshotAge >= 3.0 {
+                if Self.keepsVersion(forced: forceSnapshot, newestVersionAge: newestSnapshotAge, quiet: followsPause) {
                     try? FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
                     // Milliseconds: two forced snapshots in one second
                     // used to share a name, and the second replaced the first.
@@ -2236,9 +2350,10 @@ class PresetStore: ObservableObject {
                 out.append(cached)
                 continue
             }
-            guard let p = Self.decodeVersion(at: url) else { continue }
-            let version = PresetVersion(fileURL: url, savedAt: date,
-                                        bindingCount: p.joysticks.reduce(0) { $0 + $1.bindings.count })
+            // The row count alone: the whole preset is read on Revert.
+            guard let data = try? Data(contentsOf: url),
+                  let rows = Self.versionRowCount(in: data) else { continue }
+            let version = PresetVersion(fileURL: url, savedAt: date, bindingCount: rows)
             decodedVersions[url] = version
             out.append(version)
         }
@@ -2249,9 +2364,18 @@ class PresetStore: ObservableObject {
         return out.sorted { $0.savedAt > $1.savedAt }
     }
 
+    /// How many rows a kept version holds, nil when the file is not a
+    /// preset. The list decoded every kept version in full on the first
+    /// visit to a preset (every row, zone and watch of up to ten files,
+    /// inside the switch) only to count the rows.
+    static func versionRowCount(in data: Data) -> Int? {
+        guard !JSONValue.nestsTooDeep(data) else { return nil }
+        return (try? JSONDecoder().decode(VersionRows.self, from: data))?.count
+    }
+
     /// A snapshot file's content, nil when it does not read.
     private static func decodeVersion(at url: URL) -> Preset? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let data = try? Data(contentsOf: url), !JSONValue.nestsTooDeep(data) else { return nil }
         return try? JSONDecoder().decode(Preset.self, from: data)
     }
 
@@ -3678,6 +3802,8 @@ class PresetStore: ObservableObject {
                 savePreset(final)
                 // A copy of an import not yet confirmed waits for review too.
                 if isUnreviewedImport(preset.id) { markUnreviewedImport(final.id) }
+                // And a copy of a preset made before 1.6 is still offered its rows.
+                LegacyRowCheck.carry(from: preset.id, to: final.id)
                 return final
             }
         }
@@ -3687,6 +3813,7 @@ class PresetStore: ObservableObject {
                               filename: copy.filename, isActive: false, groupID: copy.groupID)
         savePreset(fallback)
         if isUnreviewedImport(preset.id) { markUnreviewedImport(fallback.id) }
+        LegacyRowCheck.carry(from: preset.id, to: fallback.id)
         return fallback
     }
 
@@ -3808,9 +3935,10 @@ class PresetStore: ObservableObject {
         /// before its new owner has looked at it.
         var removeOpeners = true
         /// Turn off hiding, confining and recentering the pointer, the
-        /// speed multipliers and drive mode on import. On by default for
-        /// the same reason: they act on the whole Mac once started.
-        var removePointerSettings = true
+        /// speed multipliers and drive mode on import. Off by default: they
+        /// are part of how a preset plays and harm nothing, so they come in
+        /// as shared, named on the review row and again before the first start.
+        var removePointerSettings = false
 
         /// What import leaves out that the file carries (its keyboard
         /// shortcut, the apps that switch to it, the app or website it opens
@@ -4198,6 +4326,13 @@ class PresetStore: ObservableObject {
             if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                object["schemaVersion"] != nil, object["presets"] is [Any] {
                 failed(String(localized: "This is a whole InputConfig backup, not a preset. A backup replaces settings and adds presets without review, so restore only one you made yourself, in Settings, Advanced, Restore from Backup."))
+                continue
+            }
+            // No preset nests this deep, and reading one that does holds
+            // the app for seconds: refused before either decode below.
+            if JSONValue.nestsTooDeep(data) {
+                failed(String(localized: "InputConfig cannot read this preset file. It may be from a newer version: update InputConfig, or ask for the file again.")
+                       + "\n\n" + String(localized: "Details: \(describe(JSONValue.nestingError))"))
                 continue
             }
             // Try modern Preset codable shape first.

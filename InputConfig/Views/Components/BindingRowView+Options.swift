@@ -19,9 +19,6 @@ extension BindingRowView {
         // The dragged value is the row's own now (or the drag was dropped);
         // the full sheet clears its own preview when it closes.
         if !showDeadzoneCalibration, MappingEngine.deadzonePreview?.id == binding.id { MappingEngine.deadzonePreview = nil }
-        if !liveSpeed.isEmpty { liveSpeed = [:] }
-        if liveHaptic != nil { liveHaptic = nil }
-        if liveHapticDuration != nil { liveHapticDuration = nil }
         if liveDeadzone != nil { liveDeadzone = nil }
         if liveOuterDeadzone != nil { liveOuterDeadzone = nil }
     }
@@ -201,6 +198,9 @@ extension BindingRowView {
         if type == .axis, binding.input.axisDirection == nil {
             binding.input.axisDirection = .positive
         }
+        // The number carried over can be a trigger's, with a minus from
+        // the row's earlier type.
+        binding.input.normalizeTriggerDirection()
         if type == .hat, binding.input.hatDirection == nil {
             binding.input.hatDirection = .up
         }
@@ -248,12 +248,10 @@ extension BindingRowView {
         }
         // A trigger has no Invert toggle: carried over, a + row never fired.
         // It reads 0 to 1, so a minus row (stick up) moved onto it never
-        // fired either.
-        if i == 4 || i == 5 {
-            binding.invertAxis = nil
-            if binding.input.axisDirection == .negative { binding.input.axisDirection = .positive }
-        }
+        // fired either, and a "+/-" row rested its CC at 64.
+        if InputEvent.isTriggerAxis(i) { binding.invertAxis = nil }
         binding.input.index = i
+        binding.input.normalizeTriggerDirection()
     }
 
     /// Anywhere, or only while the stick is inside one region.
@@ -353,6 +351,7 @@ extension BindingRowView {
                 }
                 .padding(.leading, 22)
                 .disabled(macroOwned)
+                .transition(revealTransition)
             }
         }
 
@@ -379,6 +378,7 @@ extension BindingRowView {
                 extraOutputEditor(.doubleTap)
                     .padding(.leading, 22)
                     .disabled(macroOwned)
+                    .transition(revealTransition)
             }
 
             Toggle(isOn: tripleTapEnabledBinding) {
@@ -395,6 +395,7 @@ extension BindingRowView {
                 extraOutputEditor(.tripleTap)
                     .padding(.leading, 22)
                     .disabled(macroOwned)
+                    .transition(revealTransition)
             }
 
             // The window both tap actions count in: each tap inside it of
@@ -417,6 +418,7 @@ extension BindingRowView {
                 .padding(.leading, 22)
                 .padding(.top, 2)
                 .disabled(macroOwned)
+                .transition(revealTransition)
             }
         }
     }
@@ -940,7 +942,8 @@ extension BindingRowView {
             .fixedSize(horizontal: false, vertical: true)
 
         if binding.turboEnabled == true {
-            autoClickOptions
+            Group { autoClickOptions }
+                .transition(revealTransition)
         }
 
         // Repeat count: only where the engine uses it, a plain press or a
@@ -1119,7 +1122,9 @@ extension BindingRowView {
             Text("ms")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text(String(format: String(localized: "(%.1f per second)"), locale: .current, 1000.0 / Double(max(5, turboIntervalMs))))
+            // One press a poll at most, so the poll rate is the ceiling.
+            Text(String(format: String(localized: "(%.1f per second)"), locale: .current,
+                        Self.turboPerSecond(intervalMs: turboIntervalMs, pollHz: MappingEngine.configuredPollHz())))
                 .font(.callout)
                 .foregroundStyle(.hint)
         }
@@ -1201,6 +1206,7 @@ extension BindingRowView {
             }
             .textFieldStyle(.roundedBorder)
             .controlSize(.small)
+            .transition(revealTransition)
         }
     }
 
@@ -1255,6 +1261,12 @@ extension BindingRowView {
             NSSound(named: "Tink")?.play()
             Self.announce(String(localized: "Spot set at \(Int(x)), \(Int(y))"))
         }
+    }
+
+    /// The presses a second a repeat interval gives at a poll rate: the
+    /// engine sends one a poll at most.
+    nonisolated static func turboPerSecond(intervalMs: Int, pollHz: Int) -> Double {
+        min(1000.0 / Double(max(5, intervalMs)), Double(pollHz))
     }
 
     var turboIntervalMs: Int {
@@ -1465,7 +1477,7 @@ extension BindingRowView {
     }
 
     var isTriggerAxis: Bool {
-        binding.input.type == .axis && (binding.input.index == 4 || binding.input.index == 5)
+        binding.input.type == .axis && InputEvent.isTriggerAxis(binding.input.index)
     }
 
     /// Like `deadzoneBinding` but always writes the value (even the 0.25 default).

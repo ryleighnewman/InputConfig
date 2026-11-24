@@ -140,10 +140,10 @@ enum DualSenseEdgeProfiles {
             var units: [UInt16] = []
             for i in stride(from: 6, to: 60, by: 2) { units.append(UInt16(b[0][i]) | UInt16(b[0][i + 1]) << 8) }
             for i in stride(from: 2, to: 28, by: 2) { units.append(UInt16(b[1][i]) | UInt16(b[1][i + 1]) << 8) }
-            for u in units {
-                if u == 0 { break }
-                if let scalar = Unicode.Scalar(u) { name.unicodeScalars.append(scalar) }
-            }
+            // Read as UTF-16 so a character stored as a surrogate pair (an
+            // emoji) comes back whole; a lone half is dropped.
+            let text = String(decoding: units.prefix { $0 != 0 }, as: UTF16.self)
+            name = String(text.unicodeScalars.filter { $0 != "\u{FFFD}" })
         }
         let map = assigned ? Array(b[2][10..<26]).map(Int.init) : Array(0..<16)
         return Profile(slot: slot, assigned: assigned, name: name, buttonMap: map,

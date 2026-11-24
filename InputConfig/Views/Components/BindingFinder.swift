@@ -332,10 +332,11 @@ struct PresetSearchBar: View {
             } else {
                 ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
+                    // Lazy: the first letter typed matches most rows of a
+                    // preset, and every hit was built for the eight shown.
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(hits.enumerated()), id: \.element.id) { i, h in
                             row(h, highlighted: i == highlighted)
-                                .id(i)
                                 .onTapGesture { go(h) }
                                 // Deferred: the results list appears under the
                                 // cursor as you type, so this hover can arrive
@@ -351,7 +352,10 @@ struct PresetSearchBar: View {
                 // Each row grows with Text Size, so its slot does too.
                 .frame(maxHeight: min(CGFloat(hits.count), 8) * 48 * max(1, textScale) + 4)
                 // The arrow keys' highlight stays in view (and where Zoom looks).
-                .onChange(of: highlighted) { _, i in proxy.scrollTo(i) }
+                // By the hit's own id, which the rows carry from the ForEach.
+                .onChange(of: highlighted) { _, i in
+                    if hits.indices.contains(i) { proxy.scrollTo(hits[i].id) }
+                }
                 }
             }
         }

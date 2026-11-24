@@ -85,7 +85,9 @@ extension VirtualControllerView {
                 saving: accessEditorSaving,
                 error: accessEditorError,
                 onSave: {
-                    guard let profile = accessProfileEditing else { return }
+                    // One write at a time: Cancel's own Save asked for a
+                    // second while the first was out.
+                    guard let profile = accessProfileEditing, !accessEditorSaving else { return }
                     accessEditorSaving = true
                     accessEditorError = nil
                     let number = profile.number, device = accessEditorDevice
@@ -95,7 +97,11 @@ extension VirtualControllerView {
                         guard accessProfileEditing?.number == number, accessEditorDevice == device else { return }
                         accessEditorSaving = false
                         switch result {
-                        case .success: closeAccessEditor()
+                        case .success:
+                            // Changed while the write was out: the controller
+                            // holds what was sent, and the newer edit stays
+                            // open to be saved.
+                            if accessProfileEditing == profile { closeAccessEditor() } else { accessEditorOriginal = profile }
                         case .failure(let e): accessEditorError = e.localizedDescription
                         }
                     }
@@ -1022,7 +1028,7 @@ extension VirtualControllerView {
             // In the drawing, at its captions' size, and only as wide as the
             // gap between the triggers: the words go first when it is tight.
             LightBarChipLabel(off: lightBarOff, rainbow: lightBarRainbow, tint: lightBarTint,
-                              leftToSystem: lightBarLeftToSystem)
+                              leftToSystem: lightBarLeft)
             .padding(.vertical, 3)
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
@@ -1034,7 +1040,10 @@ extension VirtualControllerView {
               : String(localized: "Edit this preset's light bar color"))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Light bar color")
-        .accessibilityValue(lightBarLeftToSystem ? String(localized: "left to macOS, see Settings")
+        // The preset's own choice is not a setting to go and look for.
+        .accessibilityValue(lightBarLeft ? (preset.automation.leaveLightBar == true
+                                            ? String(localized: "left to macOS by this preset")
+                                            : String(localized: "left to macOS, see Settings"))
                             : lightBarOff ? String(localized: "off") : lightBarRainbow ? String(localized: "rainbow") : lightBarTint == nil ? String(localized: "not set") : String(localized: "set"))
         .accessibilityHint("Opens the light bar color picker")
         .accessibilityAddTraits(.isButton)

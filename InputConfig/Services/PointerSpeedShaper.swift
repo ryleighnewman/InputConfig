@@ -41,10 +41,15 @@ final class PointerSpeedShaper: @unchecked Sendable {
     /// The pointer's place as this shaper put it, and when; tap thread only.
     private var placed: CGPoint?
     private var placedAt: TimeInterval = 0
-    /// A pause this long, or the cursor this far from the kept place, and
-    /// the place is taken from the cursor again.
+    /// A pause this long starts the smoothing and the delta fractions over.
+    /// A point this app placed longer ago than that is started from only
+    /// while the cursor is still within `resyncDistance` of it (and the move).
     static let resyncAfter: TimeInterval = 0.25
-    static let resyncDistance: CGFloat = 40
+    static let resyncDistance: CGFloat = 64
+    /// The fraction of each axis' scaled delta not yet written to the
+    /// event's whole-number delta fields; tap thread only.
+    private var carryX = 0.0
+    private var carryY = 0.0
 
     /// The move events the tap reads: the plain move and the three drags.
     static let eventMask: CGEventMask =
@@ -64,6 +69,56 @@ final class PointerSpeedShaper: @unchecked Sendable {
             p.y = min(max(p.y, b.minY), b.maxY - 1)
         }
         return p
+    }
+
+    /// Where a move ends, given whether the scaled point lies on a display.
+    /// On one it is kept as it is, fractions and all: pulling it back to the
+    /// last whole point of the screen would hold a slow move at the seam to
+    /// the next display, a fraction short of it on every event. Off every
+    /// display it is kept on the screen the move started on.
+    static func landing(from start: CGPoint, delta: CGVector, speed: Double, onDisplay: Bool, startBounds: CGRect?) -> CGPoint {
+        guard !onDisplay else { return scaledLocation(from: start, delta: delta, speed: speed, within: nil) }
+        var p = scaledLocation(from: start, delta: delta, speed: speed, within: startBounds)
+        // That clamp ends one whole point inside the far edge. A start
+        // already within the last point is not pulled back by it, or
+        // pushing on against the edge of the desktop would tremble by the
+        // fraction.
+        if delta.dx * speed > 0 { p.x = max(p.x, start.x) }
+        if delta.dy * speed > 0 { p.y = max(p.y, start.y) }
+        return p
+    }
+
+    /// Where a real move starts: where this app last put the pointer, if it
+    /// did since this shaper's own place was stamped; else that place while
+    /// the cursor is on it; else the cursor. The app's point counts only
+    /// while fresh or with the cursor still about there: an old one, with
+    /// the pointer moved since by something this shaper never saw, pulled
+    /// the first move back to it (moveMouse guards its tracked point alike).
+    static func start(appPoint: CGPoint?, appAt: TimeInterval, placed: CGPoint?, placedAt: TimeInterval,
+                      cursor: CGPoint, raw: CGVector, now: TimeInterval) -> CGPoint {
+        let reach = hypot(raw.dx, raw.dy)
+        if let p = appPoint, appAt > placedAt + 0.0005,
+           now - appAt <= resyncAfter || hypot(cursor.x - p.x, cursor.y - p.y) <= reach + resyncDistance {
+            return p
+        }
+        // The cursor is where this shaper put it, or that plus this very
+        // move (macOS reports either): carry on from the kept place.
+        if let p = placed, hypot(cursor.x - p.x, cursor.y - p.y) <= reach + 2 { return p }
+        // Something else moved the pointer (another device while this was
+        // idle, an app): start from where it is.
+        return cursor
+    }
+
+    /// The whole part of a scaled delta, for the event's delta fields, which
+    /// hold whole numbers: a fraction written to them was cut off, so at
+    /// half speed a one pixel move read as no move at all. The cut part
+    /// waits in `carry` for the next move.
+    static func deltaCarry(_ d: Double, carry: inout Double) -> Int64 {
+        let total = carry + d
+        guard total.isFinite, abs(total) < 1_000_000 else { carry = 0; return 0 }
+        let whole = total.rounded(.towardZero)
+        carry = total - whole
+        return Int64(whole)
     }
 
     func setSelfInFront(_ front: Bool) {
@@ -217,21 +272,14 @@ final class PointerSpeedShaper: @unchecked Sendable {
         // else the cursor where it is (after a pause, or the first move).
         let app = InputSimulator.shared.lastPlacedPointer()
         let cursorNow = CGEvent(source: nil)?.location ?? event.location
-        let start: CGPoint
-        if let p = app.point, app.at > placedAt + 0.0005 {
-            start = p
-        } else if let p = placed, hypot(cursorNow.x - p.x, cursorNow.y - p.y) <= hypot(rawX, rawY) + 2 {
-            // The cursor is where this shaper put it, or that plus this very
-            // move (macOS reports either): carry on from the kept place.
-            start = p
-        } else {
-            // Something else moved the pointer (another device while this was
-            // idle, an app): start from where it is.
-            start = cursorNow
-        }
+        let start = Self.start(appPoint: app.point, appAt: app.at, placed: placed, placedAt: placedAt,
+                               cursor: cursorNow, raw: raw, now: now)
         // A pause starts the smoothing over, so a new move is not pulled
-        // toward the last one.
-        if now - placedAt >= Self.resyncAfter { smoothed = CGVector(dx: 0, dy: 0) }
+        // toward the last one, and drops the delta fractions kept so far.
+        if now - placedAt >= Self.resyncAfter {
+            smoothed = CGVector(dx: 0, dy: 0)
+            carryX = 0; carryY = 0
+        }
         let move = steady > 0 ? Self.steadied(raw, previous: smoothed, steadying: steady) : raw
         smoothed = move
         let dx = flipX ? -move.dx : move.dx
@@ -240,15 +288,17 @@ final class PointerSpeedShaper: @unchecked Sendable {
         let rough = CGPoint(x: start.x + dx * speed, y: start.y + dy * speed)
         var displayID: CGDirectDisplayID = 0
         var count: UInt32 = 0
-        let bounds: CGRect? = CGGetDisplaysWithPoint(rough, 1, &displayID, &count) == .success && count > 0
-            ? CGDisplayBounds(displayID)
-            : (CGGetDisplaysWithPoint(start, 1, &displayID, &count) == .success && count > 0 ? CGDisplayBounds(displayID) : nil)
-        let target = Self.scaledLocation(from: start, delta: CGVector(dx: dx, dy: dy), speed: speed, within: bounds)
+        let onDisplay = CGGetDisplaysWithPoint(rough, 1, &displayID, &count) == .success && count > 0
+        // Off every screen: kept on the one the move started on.
+        let startBounds: CGRect? = !onDisplay && CGGetDisplaysWithPoint(start, 1, &displayID, &count) == .success && count > 0
+            ? CGDisplayBounds(displayID) : nil
+        let target = Self.landing(from: start, delta: CGVector(dx: dx, dy: dy), speed: speed,
+                                  onDisplay: onDisplay, startBounds: startBounds)
         placed = target
         placedAt = now
         event.location = target
-        event.setDoubleValueField(.mouseEventDeltaX, value: dx * speed)
-        event.setDoubleValueField(.mouseEventDeltaY, value: dy * speed)
+        event.setIntegerValueField(.mouseEventDeltaX, value: Self.deltaCarry(dx * speed, carry: &carryX))
+        event.setIntegerValueField(.mouseEventDeltaY, value: Self.deltaCarry(dy * speed, carry: &carryY))
         InputSimulator.shared.warpPointer(to: target)
         // Stamped after the warp, which stamps the app's own record: only a
         // later placement by someone else counts as moved elsewhere.

@@ -586,7 +586,7 @@ final class HIDDeviceRegistry: ObservableObject {
         // Griffin PowerMate) declare a Consumer collection but send their
         // buttons and wheels as ordinary fields that never become media keys,
         // so they are connected like a gamepad.
-        if kind == .consumer && (vid == 0x0B33 || vid == 0x077D || vid == 0x05F3) { kind = .vendor }
+        if kind == .consumer && (vid == 0x0B33 || vid == 0x077D) { kind = .vendor }
 
         let manufacturer = (prop(kIOHIDManufacturerKey) as? String)?.trimmingCharacters(in: .whitespaces)
         let serial = (prop(kIOHIDSerialNumberKey) as? String) ?? ""
@@ -729,6 +729,9 @@ final class HIDDeviceRegistry: ObservableObject {
     /// protocol 0xD0), used by Xbox One and Series pads, which macOS 15
     /// and later reads through GameController.
     func refreshUnreadablePads() {
+        // The Xbox 360 class pads among them are read by XInputUSBService,
+        // which looks at the bus again here; one it reads is left out below.
+        XInputUSBService.shared.refresh()
         guard let match = IOServiceMatching("IOUSBHostInterface") as NSMutableDictionary? else { return }
         // Inside IOPropertyMatch, as above.
         match["IOPropertyMatch"] = ["bInterfaceClass": 0xFF]
@@ -761,6 +764,7 @@ final class HIDDeviceRegistry: ObservableObject {
             var parentID: UInt64 = 0
             IORegistryEntryGetRegistryEntryID(parent, &parentID)
             if found[parentID] != nil { continue }
+            if isXUSB, XInputUSBService.shared.reads(deviceID: parentID) { continue }
 
             let vid = Int32(intProp(parent, "idVendor") ?? intProp(interface, "idVendor") ?? 0)
             let pid = Int32(intProp(parent, "idProduct") ?? intProp(interface, "idProduct") ?? 0)

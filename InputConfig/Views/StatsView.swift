@@ -928,6 +928,10 @@ struct StatTileView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
+                        // A count that moves (at most once a second) rolls
+                        // its digits instead of jumping.
+                        .contentTransition(.numericText())
+                        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: detail.value)
                     // Two lines: long translations ("Aggiornamenti della
                     // posizione del dito sul touchpad") keep the words that
                     // tell the counters apart.

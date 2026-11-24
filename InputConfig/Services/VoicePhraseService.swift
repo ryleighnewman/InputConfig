@@ -67,6 +67,21 @@ final class VoicePhraseService: ObservableObject {
     }
     /// Settings changed the microphone: listening, if on, starts over on it.
     func microphoneChanged() { restartListening(keepingAudio: false) }
+    /// Reset All Settings or a restored backup changed the stored microphone
+    /// with no control involved: listening starts over only when the capture
+    /// in use is not the one now stored. It stayed on the old microphone.
+    func storedMicrophoneChanged() {
+        let chosen = Self.chosenMicrophoneUID
+        let connected = chosen.flatMap { AudioInputDevices.device(forUID: $0) } != nil
+        guard Self.microphoneMoved(inUse: direct?.deviceUID, chosen: chosen, connected: connected) else { return }
+        restartListening(keepingAudio: false)
+    }
+    /// Whether the capture in use (nil on the system default) is not what
+    /// the stored choice asks for; a chosen microphone that is not connected
+    /// asks for the system default.
+    nonisolated static func microphoneMoved(inUse: String?, chosen: String?, connected: Bool) -> Bool {
+        (connected ? chosen : nil) != inUse
+    }
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     /// What the input tap appends to; a task restart swaps the request in
@@ -83,6 +98,19 @@ final class VoicePhraseService: ObservableObject {
     /// then twice as long each time up to 30 s, while someone wants it.
     private var retryTimer: Timer?
     private var retryDelay: TimeInterval = VoicePhraseService.firstRetrySeconds
+    /// Watches that the open capture goes on delivering sound (see
+    /// `CaptureHealth`): a device that changed its sample rate, was
+    /// replugged quickly or came back from sleep can leave the unit open
+    /// and silent, with no error and no notification, and every voice row
+    /// deaf until the preset was started again.
+    private var healthTimer: Timer?
+    private var health = CaptureHealth()
+    /// When the capture now open was started (system uptime).
+    private var captureStartedAt: TimeInterval = 0
+    /// True while the microphone has been started over at least twice and
+    /// still sends nothing: the sheet and the visualizer say so in place of
+    /// Listening.
+    @Published private(set) var captureSilent = false
     /// The presses still to come or under way for each phrase, as (start,
     /// end) uptimes: "jump jump" in one result queues two, a gap apart, so
     /// each is its own press at the engine's poll.
@@ -221,6 +249,7 @@ final class VoicePhraseService: ObservableObject {
         guard retainCount == 1 else { return }
         saidProblem = false
         retryDelay = Self.firstRetrySeconds
+        health = CaptureHealth(); captureSilent = false
         startListening()
     }
 
@@ -298,7 +327,11 @@ final class VoicePhraseService: ObservableObject {
         guard !suspended else { return }
         // Reused only while it runs as the policy wants it: voice processing
         // changes the input format, so a change of it takes the full start.
+        // And only while it still delivers sound: an open capture that has
+        // gone quiet is rebuilt, never handed the next request.
         let reuse = keepingAudio && sink != nil
+            && CaptureHealth.delivering(now: ProcessInfo.processInfo.systemUptime, startedAt: captureStartedAt,
+                                        lastAppend: sink?.lastAppend ?? 0)
             && ((direct?.isRunning ?? false)
                 || (audioEngine.isRunning && tapInstalled && audioEngine.inputNode.isVoiceProcessingEnabled == Self.voiceProcessing))
         // Whatever was running ends first: a delayed restart and a new
@@ -410,8 +443,12 @@ final class VoicePhraseService: ObservableObject {
             }
         }
         started = true
-        problem = nil
+        // Still silent after two fresh starts: the sheet keeps saying so
+        // until sound arrives (see checkCaptureHealth).
+        problem = captureSilent ? Self.silentText() : nil
         listening = true
+        if !reuse { captureStartedAt = ProcessInfo.processInfo.systemUptime }
+        startHealthTimer()
         transcript = ""; seen = [:]
         taskStartedAt = ProcessInfo.processInfo.systemUptime
         taskProducedText = false
@@ -449,6 +486,7 @@ final class VoicePhraseService: ObservableObject {
 
     /// Stops the engine and takes the tap off.
     private func tearDownAudio() {
+        healthTimer?.invalidate(); healthTimer = nil
         direct?.stop(); direct = nil
         if audioEngine.isRunning { audioEngine.stop() }
         if tapInstalled {
@@ -456,6 +494,45 @@ final class VoicePhraseService: ObservableObject {
             tapInstalled = false
         }
         sink = nil
+    }
+
+    private func startHealthTimer() {
+        guard healthTimer == nil else { return }
+        let t = Timer(timeInterval: CaptureHealth.checkSeconds, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkCaptureHealth() }
+        }
+        t.tolerance = 0.5
+        RunLoop.main.add(t, forMode: .common)
+        healthTimer = t
+    }
+
+    /// The open capture has sent nothing for a while: it is closed and
+    /// opened again, later each time while it stays silent, and from the
+    /// second time the sheet says the microphone is sending no sound.
+    private func checkCaptureHealth() {
+        guard retainCount > 0, !suspended, let sink else { return }
+        let verdict = health.check(now: ProcessInfo.processInfo.systemUptime, startedAt: captureStartedAt, lastAppend: sink.lastAppend)
+        switch verdict {
+        case .healthy:
+            // Not while a fresh start still waits for its first buffer.
+            if captureSilent, !health.silent {
+                captureSilent = false
+                if problem == Self.silentText() { problem = nil }
+                ActivityLog.shared.info("Voice", "The microphone is sending sound again")
+            }
+        case .wait:
+            break
+        case .restart:
+            if health.silentRestarts == 1 {
+                ActivityLog.shared.warning("Voice", "The microphone stopped sending sound; opening it again")
+            }
+            captureSilent = health.silent
+            restartListening(keepingAudio: false)
+        }
+    }
+
+    private static func silentText() -> String {
+        String(localized: "The microphone is not sending any sound. InputConfig keeps opening it again; check that it is connected.")
     }
 
     /// Off. Apple's voice processing failed on every buffer on macOS 27
@@ -658,11 +735,74 @@ final class VoicePhraseService: ObservableObject {
         private let lock = NSLock()
         /// Guarded by `lock`: written on main, read on the audio thread.
         private var request: SFSpeechAudioBufferRecognitionRequest?
-        init(_ request: SFSpeechAudioBufferRecognitionRequest) { self.request = request }
+        /// Guarded by `lock`: the uptime of the last buffer the capture
+        /// handed over, with or without a request to take it.
+        private var stamp: TimeInterval = 0
+        init(_ request: SFSpeechAudioBufferRecognitionRequest?) { self.request = request }
         func swap(_ new: SFSpeechAudioBufferRecognitionRequest?) { lock.lock(); request = new; lock.unlock() }
         /// Appended under the lock, so a request swapped out gets no buffer
         /// after its endAudio.
-        func append(_ buffer: AVAudioPCMBuffer) { lock.lock(); request?.append(buffer); lock.unlock() }
+        func append(_ buffer: AVAudioPCMBuffer) {
+            lock.lock(); stamp = ProcessInfo.processInfo.systemUptime; request?.append(buffer); lock.unlock()
+        }
+        var lastAppend: TimeInterval { lock.lock(); defer { lock.unlock() }; return stamp }
+    }
+
+    #if DEBUG
+    /// Test Bench: a buffer handed to a sink with no request still stamps it.
+    static func debugSinkStamps() -> Bool {
+        let sink = RequestSink(nil)
+        guard sink.lastAppend == 0, let format = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16) else { return false }
+        let before = ProcessInfo.processInfo.systemUptime
+        sink.append(buffer)
+        return sink.lastAppend >= before
+    }
+    #endif
+}
+
+/// Whether an open microphone capture is still delivering sound, and when
+/// one that is not gets closed and opened again. Both captures hand over a
+/// buffer about every 100 ms while they run, silence included, so none for
+/// seconds means the capture is dead, not that the room is quiet. Times are
+/// system uptime, which stands still while the Mac sleeps. Pure, so the Test
+/// Bench drives it with no microphone.
+struct CaptureHealth {
+    /// A capture with no buffer for this long is taken for dead.
+    static let staleSeconds: TimeInterval = 5
+    /// A task restart keeps a capture only with a buffer this recent.
+    static let reuseSeconds: TimeInterval = 2
+    static let checkSeconds: TimeInterval = 4
+    static let firstDelay: TimeInterval = 3
+    static let maxDelay: TimeInterval = 30
+
+    enum Verdict: Equatable { case healthy, wait, restart }
+
+    /// Fresh starts in a row that brought no sound.
+    private(set) var silentRestarts = 0
+    private var nextRestartAt: TimeInterval = 0
+    private var delay = CaptureHealth.firstDelay
+    /// Twice started over and still nothing: worth telling the person.
+    var silent: Bool { silentRestarts >= 2 }
+
+    /// A capture is new enough, or its last buffer recent enough, to take
+    /// the next request as it is.
+    static func delivering(now: TimeInterval, startedAt: TimeInterval, lastAppend: TimeInterval) -> Bool {
+        now - max(startedAt, lastAppend) < reuseSeconds
+    }
+
+    mutating func check(now: TimeInterval, startedAt: TimeInterval, lastAppend: TimeInterval) -> Verdict {
+        if now - max(startedAt, lastAppend) < Self.staleSeconds {
+            // Sound since this start: the count and the backoff start over.
+            // A start still waiting for its first buffer changes nothing.
+            if lastAppend > startedAt { silentRestarts = 0; delay = Self.firstDelay; nextRestartAt = 0 }
+            return .healthy
+        }
+        guard now >= nextRestartAt else { return .wait }
+        silentRestarts += 1
+        nextRestartAt = now + delay
+        delay = min(Self.maxDelay, delay * 2)
+        return .restart
     }
 }
 

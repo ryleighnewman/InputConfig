@@ -59,9 +59,10 @@ final class Switch2USBEnabler: @unchecked Sendable {
     static let gameCubeProductID = 0x2073
     /// Joy-Con 2 (L) and (R) in the Joy-Con 2 charging grip, over USB: the
     /// same start-up sequence on the same vendor interface, read from
-    /// report 0x05 with SDL's solo layouts (SDL_hidapi_switch2.c).
-    static let joyConLeftProductID = 0x2066
-    static let joyConRightProductID = 0x2067
+    /// report 0x05 with SDL's solo layouts (SDL_hidapi_switch2.c). The left
+    /// one has the higher number (SDL usb_ids.h, Linux hid-ids.h).
+    static let joyConLeftProductID = 0x2067
+    static let joyConRightProductID = 0x2066
     /// Every product this enabler starts.
     static let productIDs = [proControllerProductID, gameCubeProductID, joyConLeftProductID, joyConRightProductID]
     static let vendorInterfaceNumber = 1
@@ -230,13 +231,14 @@ final class Switch2USBEnabler: @unchecked Sendable {
         }
     }
 
-    /// Reads the five flash blocks that hold the stick and trigger
-    /// calibration (Switch2Calibration.addresses) and stores what parses.
+    /// Reads the flash blocks that hold the stick and, on the GameCube
+    /// controller, trigger calibration (Switch2Calibration.addresses(product:))
+    /// and stores what parses.
     /// A block that does not answer or parse is left out, and the decoders
     /// fall back to their fixed constants for it.
     private func readCalibration(outPipe: IOUSBHostPipe, inPipe: IOUSBHostPipe, product: Int32) {
         var replies: [UInt32: [UInt8]] = [:]
-        for address in Switch2Calibration.addresses {
+        for address in Switch2Calibration.addresses(product: product) {
             let command = Switch2Calibration.readCommand(address: address)
             let data = NSMutableData(bytes: command, length: command.count)
             var sent: UInt = 0

@@ -62,7 +62,11 @@ enum XboxBluetoothLayout {
 
     /// Decodes one input report into the state (only the controls the
     /// report carries, so 0x02 and 0x04 merge with 0x01).
-    static func decode(report: Data, share: Bool, into state: inout ControllerState) {
+    /// `sawGuidePacket`: this pad has sent a report 0x02, so its Xbox
+    /// button lives there and byte 15 bit 4 of report 0x01 is not it (SDL's
+    /// has_guide_packet). Written from 0x01 all the same, a held Xbox
+    /// button was let go by the next state report.
+    static func decode(report: Data, share: Bool, sawGuidePacket: Bool = false, into state: inout ControllerState) {
         let b = Array(report)
         guard let id = b.first else { return }
         func on(_ byte: Int, _ mask: UInt8) -> Float { b[byte] & mask != 0 ? 1 : 0 }
@@ -105,7 +109,8 @@ enum XboxBluetoothLayout {
             state.buttons[0] = on(14, 0x01); state.buttons[1] = on(14, 0x02)
             state.buttons[2] = on(14, 0x08); state.buttons[3] = on(14, 0x10)
             state.buttons[4] = on(14, 0x40); state.buttons[5] = on(14, 0x80)
-            state.buttons[9] = on(15, 0x08); state.buttons[10] = on(15, 0x10)
+            state.buttons[9] = on(15, 0x08)
+            if !sawGuidePacket { state.buttons[10] = on(15, 0x10) }
             state.buttons[11] = on(15, 0x20); state.buttons[12] = on(15, 0x40)
             let record = b.count >= 17 ? on(16, 0x01) : 0
             if share {

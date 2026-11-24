@@ -282,6 +282,8 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         if mouseConsumers.isEmpty && keyboardConsumers.isEmpty {
             liveTimer?.invalidate(); liveTimer = nil
             liveUntil.removeAll()
+            heldEntries.removeAll()
+            momentaryDevKeys.removeAll()
             if !rawActiveInputs.isEmpty { rawActiveInputs = [] }
         } else if liveTimer == nil {
             let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
@@ -304,8 +306,43 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     private static let momentaryWindow: TimeInterval = 0.18
 
     private func mark(_ body: String, dev: String, until: Date) {
+        #if DEBUG
+        liveKeysBuilt += 2
+        #endif
         liveUntil["\(body) any"] = until
         liveUntil["\(body) \(dev)"] = until
+    }
+
+    /// Movement and scroll, per axis and sign: the entries a moving mouse
+    /// writes on every event. Their keys are made once per device, so an
+    /// event writes its dates and builds no strings.
+    static let momentaryBodies = [
+        "ems moveX 0 +", "ems moveX 0 -", "ems moveY 0 +", "ems moveY 0 -",
+        "ems scrollX 0 +", "ems scrollX 0 -", "ems scrollY 0 +", "ems scrollY 0 -",
+    ]
+    /// The place of one of them in `momentaryBodies`.
+    static func momentarySlot(scroll: Bool, vertical: Bool, positive: Bool) -> Int {
+        (scroll ? 4 : 0) + (vertical ? 2 : 0) + (positive ? 0 : 1)
+    }
+    /// The eight keys of one device (or of "any"), as `mark` spells them.
+    static func momentaryKeys(dev: String) -> [String] {
+        momentaryBodies.map { "\($0) \(dev)" }
+    }
+    private static let momentaryAnyKeys = momentaryKeys(dev: "any")
+    private var momentaryDevKeys: [String: [String]] = [:]
+
+    /// `mark` for a movement or scroll entry, by its place.
+    private func markMomentary(_ slot: Int, dev: String, until: Date) {
+        let keys: [String]
+        if let known = momentaryDevKeys[dev] { keys = known } else {
+            keys = Self.momentaryKeys(dev: dev)
+            momentaryDevKeys[dev] = keys
+            #if DEBUG
+            liveKeysBuilt += keys.count
+            #endif
+        }
+        liveUntil[Self.momentaryAnyKeys[slot]] = until
+        liveUntil[keys[slot]] = until
     }
     private func unmark(_ body: String, dev: String) {
         liveUntil.removeValue(forKey: "\(body) any")
@@ -339,6 +376,25 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     }
     #endif
 
+    #if DEBUG
+    /// Tests only: key strings built for the live picture so far.
+    private var liveKeysBuilt = 0
+    /// Tests only: fold events into the live picture, sending them nowhere,
+    /// and give back the key strings built by the first one and by the rest.
+    /// The picture is put back as it was.
+    func debugLiveKeysBuilt(by list: [Event]) -> (first: Int, rest: Int) {
+        let saved = liveUntil
+        defer { liveUntil = saved }
+        let start = liveKeysBuilt
+        var afterFirst = start
+        for (i, e) in list.enumerated() {
+            noteLive(e)
+            if i == 0 { afterFirst = liveKeysBuilt }
+        }
+        return (afterFirst - start, liveKeysBuilt - afterFirst)
+    }
+    #endif
+
     private func noteLive(_ e: Event) {
         let soon = Date().addingTimeInterval(Self.momentaryWindow)
         switch e {
@@ -347,11 +403,11 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
         case .mouseButtonDown(let dev, let b):   mark("ems button \(b) +", dev: dev, until: .distantFuture)
         case .mouseButtonUp(let dev, let b):     unmark("ems button \(b) +", dev: dev)
         case .mouseMove(let dev, let dx, let dy):
-            if dx != 0 { mark("ems moveX 0 \(dx > 0 ? "+" : "-")", dev: dev, until: soon) }
-            if dy != 0 { mark("ems moveY 0 \(dy > 0 ? "+" : "-")", dev: dev, until: soon) }
+            if dx != 0 { markMomentary(Self.momentarySlot(scroll: false, vertical: false, positive: dx > 0), dev: dev, until: soon) }
+            if dy != 0 { markMomentary(Self.momentarySlot(scroll: false, vertical: true, positive: dy > 0), dev: dev, until: soon) }
         case .scroll(let dev, let dx, let dy):
-            if dx != 0 { mark("ems scrollX 0 \(dx > 0 ? "+" : "-")", dev: dev, until: soon) }
-            if dy != 0 { mark("ems scrollY 0 \(dy > 0 ? "+" : "-")", dev: dev, until: soon) }
+            if dx != 0 { markMomentary(Self.momentarySlot(scroll: true, vertical: false, positive: dx > 0), dev: dev, until: soon) }
+            if dy != 0 { markMomentary(Self.momentarySlot(scroll: true, vertical: true, positive: dy > 0), dev: dev, until: soon) }
         case .pressureChanged(let dev, let value, let stage):
             if value > 0.25 { mark("ems pressure 0 +", dev: dev, until: .distantFuture) } else { unmark("ems pressure 0 +", dev: dev) }
             if stage >= 2 { mark("ems deepPress 0 +", dev: dev, until: .distantFuture) } else { unmark("ems deepPress 0 +", dev: dev) }
@@ -510,37 +566,74 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     /// monitor, and a monitor rebuild can drop one), and a bound output
     /// stayed down. Release it here, as if the event had arrived.
     private func reconcileHeld() {
-        let polled = Set(Self.polledKeys.map(\.hid))
         for key in liveUntil.keys where liveUntil[key] == .distantFuture && !key.hasSuffix(" any") {
-            let parts = key.split(separator: " ")
-            // Not the Globe key: its press is a system-made key-down that
-            // the key state never reports as held, so it was let go on the
-            // next tick. Its real key-up still arrives and releases it.
-            if parts.count == 3, parts[0] == "ekb", let code = Int(parts[1]), !polled.contains(code),
-               code != KeyCodeMap.globeKeyCode, code != KeyCodeMap.globeFnCode,
-               // A key with no name is stored as its key code past the base.
-               let vk = KeyCodeMap.hidToVirtualKeyCode[code]
-                    ?? ((KeyCodeMap.unknownKeyBase..<KeyCodeMap.unknownSystemKeyBase).contains(code)
-                        ? code - KeyCodeMap.unknownKeyBase : nil),
-               !CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(vk)) {
-                let e: Event = .keyUp(deviceID: String(parts[2]), hidCode: code)
+            // Read once per key string: this runs 30 times a second for as
+            // long as the key is held.
+            let entry: HeldEntry
+            if let known = heldEntries[key] { entry = known } else {
+                entry = Self.heldEntry(of: key)
+                heldEntries[key] = entry
+            }
+            switch entry {
+            case .key(let code, let dev):
+                // Not the Globe key: its press is a system-made key-down that
+                // the key state never reports as held, so it was let go on the
+                // next tick. Its real key-up still arrives and releases it.
+                guard !Self.polledHIDCodes.contains(code),
+                      code != KeyCodeMap.globeKeyCode, code != KeyCodeMap.globeFnCode,
+                      // A key with no name is stored as its key code past the base.
+                      let vk = KeyCodeMap.hidToVirtualKeyCode[code]
+                        ?? ((KeyCodeMap.unknownKeyBase..<KeyCodeMap.unknownSystemKeyBase).contains(code)
+                            ? code - KeyCodeMap.unknownKeyBase : nil),
+                      !CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(vk)) else { continue }
+                let e: Event = .keyUp(deviceID: dev, hidCode: code)
                 // The tap missed it too (Secure Input hides keys from it):
                 // the engine answers for the key until the tap sees it again.
                 locked { if tapKeysDown.remove(code) != nil { tapKeysSeen.remove(code) } }
                 noteLive(e); events.send(e)
-            } else if parts.count == 5, parts[0] == "ems", parts[1] == "button", let b = Int(parts[2]),
-                      // CGMouseButton defines left, right and center only
-                      // (CGEventTypes.h); the window server's answer for 3 to
-                      // 31 is undefined, and a false there released every held
-                      // side button 33 ms after its press. The tap sees every
-                      // otherMouseUp, so those are trusted to it.
-                      b <= 2, let button = CGMouseButton(rawValue: UInt32(b)),
-                      !CGEventSource.buttonState(.combinedSessionState, button: button) {
-                let e: Event = .mouseButtonUp(deviceID: String(parts[4]), button: b)
+            case .button(let b, let dev):
+                // CGMouseButton defines left, right and center only
+                // (CGEventTypes.h); the window server's answer for 3 to
+                // 31 is undefined, and a false there released every held
+                // side button 33 ms after its press. The tap sees every
+                // otherMouseUp, so those are trusted to it.
+                guard b <= 2, let button = CGMouseButton(rawValue: UInt32(b)),
+                      !CGEventSource.buttonState(.combinedSessionState, button: button) else { continue }
+                let e: Event = .mouseButtonUp(deviceID: dev, button: b)
                 locked { if tapButtonsDown.remove(b) != nil { tapButtonsSeen.remove(b) } }
                 noteLive(e); events.send(e)
+            case .other:
+                continue
             }
         }
+    }
+
+    /// The HID codes of `polledKeys`, built once: `pollKeys` answers for
+    /// these, so `reconcileHeld` leaves them alone.
+    private static let polledHIDCodes = Set(polledKeys.map(\.hid))
+
+    /// What one held entry of the live picture names, as `reconcileHeld`
+    /// reads it: a key ("ekb code device"), a mouse button
+    /// ("ems button n + device"), or anything else, which it leaves alone.
+    enum HeldEntry: Equatable {
+        case key(code: Int, dev: String)
+        case button(Int, dev: String)
+        case other
+    }
+    /// The reading of each key string seen held, kept so the 30 Hz pass
+    /// splits a string once and not on every tick. Emptied with the live
+    /// picture.
+    private var heldEntries: [String: HeldEntry] = [:]
+
+    static func heldEntry(of key: String) -> HeldEntry {
+        let parts = key.split(separator: " ")
+        if parts.count == 3, parts[0] == "ekb", let code = Int(parts[1]) {
+            return .key(code: code, dev: String(parts[2]))
+        }
+        if parts.count == 5, parts[0] == "ems", parts[1] == "button", let b = Int(parts[2]) {
+            return .button(b, dev: String(parts[4]))
+        }
+        return .other
     }
 
     // MARK: - Public lookup (return empty / nil)
@@ -703,9 +796,11 @@ final class ExternalInputDeviceService: ObservableObject, @unchecked Sendable {
     private func tapHeld(_ input: InputEvent) -> Bool? {
         switch input.type {
         case .extKey:
+            // Under the code the tap files the key by.
+            let code = KeyCodeMap.canonicalInputCode(input.index)
             guard input.extDeviceID == nil || input.extDeviceID == Self.builtInKeyboardID,
-                  tapKeysSeen.contains(input.index) else { return nil }
-            return tapKeysDown.contains(input.index)
+                  tapKeysSeen.contains(code) else { return nil }
+            return tapKeysDown.contains(code)
         case .extMouse:
             guard (input.extMouseKind ?? .button) == .button,
                   input.extDeviceID == nil || input.extDeviceID == Self.builtInMouseID,

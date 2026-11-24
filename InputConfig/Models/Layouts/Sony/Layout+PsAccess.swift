@@ -206,9 +206,16 @@ extension ControllerLayout {
         }
     }
 
+    /// `learned` is for a connected controller whose stored profile could
+    /// not be read (over Bluetooth it never can): what each socket was
+    /// seen to send, by socket number. A socket not yet pressed shows its
+    /// number and lights on its own bit alone. Without it the sockets
+    /// would carry the profile the controller ships with, and a person
+    /// whose own profile has Circle on socket 4 saw socket 5 light too.
     static func psAccess(ports: [Int: AccessControllerPortService.PortDevice],
-                         profile: AccessControllerPortService.Profile? = nil) -> ControllerLayout {
-        guard !ports.isEmpty || profile != nil else { return psAccess }
+                         profile: AccessControllerPortService.Profile? = nil,
+                         learned: [Int: Int]? = nil) -> ControllerLayout {
+        guard !ports.isEmpty || profile != nil || learned != nil else { return psAccess }
         typealias Service = AccessControllerPortService
         var layout = psAccess
         layout.controls = layout.controls.map { c in
@@ -234,6 +241,32 @@ extension ControllerLayout {
                     if c.id != "center" {
                         let label = Self.accessCapLabel(code: code, socket: slot)
                         out.symbol = label.symbol; out.printed = label.printed
+                    }
+                }
+            }
+            if profile == nil, let learned, c.id == "stick" {
+                // Its own raw pair always; the stick the profile assigns it
+                // to once a push has shown which, and neither until then
+                // (a stick in a port set as the left stick lit this one).
+                switch learned[0] {
+                case 1?: out.inputs = ControlInputs(axes: [.x(0), .y(1), .x(6), .y(7)], press: 49)
+                case 2?: out.inputs = ControlInputs(axes: [.x(2), .y(3), .x(6), .y(7)], press: 49)
+                default: out.inputs = ControlInputs(axes: [.x(6), .y(7)], press: 49)
+                }
+            }
+            if profile == nil, let learned {
+                let slot: Int? = c.id.hasPrefix("socket") ? Int(c.id.dropFirst(6)) : (c.id == "center" ? 9 : nil)
+                if let slot {
+                    let code = learned[slot]
+                    let mapped = code.flatMap(Service.Profile.buttonIndex(ofAction:))
+                    out.inputs = ControlInputs(buttons: [Service.buttonBase + slot - 1] + (mapped.map { [$0] } ?? []))
+                    if let dir = Self.accessHatDirection(code) { out.inputs.hat = 0; out.inputs.hatDirection = dir }
+                    if c.id != "center" {
+                        let label = Self.accessCapLabel(code: code, socket: slot)
+                        out.symbol = label.symbol; out.printed = label.printed
+                    } else if code != 2 {
+                        // The center button's cross is the shipped profile's.
+                        out.symbol = nil
                     }
                 }
             }

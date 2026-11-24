@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.10
+
+- The preset editor is much faster, most of all in large presets
+- Lighter all around, from opening folders and searching a preset to controllers over Bluetooth
+- Hardware connectivity enhancements for PlayStation, Xbox, Switch 2 and Access controllers and racing wheels
+- New in the Devices menu: Read Directly Instead, for a controller macOS lists but passes nothing from
+- New output: mute or unmute a microphone, or keep it live only while a button is held
+- New editor option: Scroll to Pressed Input brings the row of the button you press into view
+- MIDI pedals, pads and fast repeated hits fire every time, and knobs have a new Trigger mode
+- A slowed pointer crosses to the next display and no longer jumps back
+- Steadier button sequences, stick gestures, touchpad swipes and macro recording
+- Voice phrases pick up again when a microphone goes silent
+- Importing a preset no longer brings another Mac's device options, and a damaged backup no longer replaces a stored list
+- Fixed crashes when a controller connected while another was in use and from damaged preset files, and a hang on import
+
 ## 1.9
 
 - Macro recorder: click Record steps, use any app, and your keys, clicks, drags, scrolling and timing become steps

@@ -125,6 +125,8 @@ final class TestBenchService: ObservableObject {
         #if DEBUG
         await runSecondAuditTests()
         await runEditorRowCases()
+        await runHandlerQueueHoldCases()
+        await runMicrophoneCases()
         #endif
         runHardwareSnapshot()
 
@@ -573,6 +575,48 @@ final class TestBenchService: ObservableObject {
         record(cat, "A media key with no name is still bindable",
                pass: odd == KeyCodeMap.unknownSystemKeyBase + 0x17,
                detail: odd.map { KeyCodeMap.name(for: $0) } ?? "Nothing arrived")
+
+        // The held pass reads a key string once and keeps the reading: the
+        // reading itself is pinned here, for a key, a button and the rest.
+        let E = ExternalInputDeviceService.self
+        record(cat, "A held key or mouse button is read from its live entry as before",
+               pass: E.heldEntry(of: "ekb 4 builtin.keyboard") == .key(code: 4, dev: "builtin.keyboard")
+                   && E.heldEntry(of: "ems button 2 + builtin.mouse") == .button(2, dev: "builtin.mouse")
+                   && E.heldEntry(of: "ems pressure 0 + builtin.mouse") == .other
+                   && E.heldEntry(of: "ems button x + builtin.mouse") == .other
+                   && E.heldEntry(of: "ekb 4 any device") == .other
+                   && E.heldEntry(of: "ekb four builtin.keyboard") == .other,
+               detail: "A key is \"ekb code device\", a button \"ems button n + device\"; nothing else is let go by the held pass")
+
+        // Counted by a hook only Debug builds have, so the case is theirs:
+        // the Release build did not compile with it outside this guard.
+        #if DEBUG
+        // A moving mouse writes its live entries under keys made once per
+        // device. A thousand moves and scrolls build no key string after
+        // the first, and the keys are spelled as they always were.
+        let benchMouse = "bench.mouse"
+        var feed: [ExternalInputDeviceService.Event] = [.mouseMove(deviceID: benchMouse, dx: 1, dy: -1)]
+        for i in 0..<1000 {
+            let d = i % 2 == 0 ? 3 : -3
+            feed.append(i % 5 == 0 ? .scroll(deviceID: benchMouse, dx: d, dy: -d)
+                                   : .mouseMove(deviceID: benchMouse, dx: d, dy: i % 3 == 0 ? 0 : -d))
+        }
+        let built = ExternalInputDeviceService.shared.debugLiveKeysBuilt(by: feed)
+        var spelled = true
+        for scroll in [false, true] {
+            for vertical in [false, true] {
+                for positive in [false, true] {
+                    let old = "ems \(scroll ? "scroll" : "move")\(vertical ? "Y" : "X") 0 \(positive ? "+" : "-") \(benchMouse)"
+                    if E.momentaryKeys(dev: benchMouse)[E.momentarySlot(scroll: scroll, vertical: vertical, positive: positive)] != old {
+                        spelled = false
+                    }
+                }
+            }
+        }
+        record(cat, "A moving mouse builds its live picture keys once per device",
+               pass: built.rest == 0 && built.first <= 8 && spelled,
+               detail: "\(built.first) key strings on the first event, \(built.rest) over the next 1,000")
+        #endif
     }
 
     // MARK: - 3. Sensitivity Curve Tests
@@ -717,6 +761,27 @@ final class TestBenchService: ObservableObject {
             record("Brand Detection", input, pass: ok,
                    detail: "Expected \(expected.rawValue), got \(result.rawValue)")
         }
+
+        // With a vendor ID in hand, the bare "Pro Controller" name is a
+        // Switch Pro only from Nintendo; "Nintendo" or "Switch Pro" in the
+        // name counts from anyone, and with no vendor ID the name decides
+        // as before.
+        let withVendor: [(String, Int32?, ControllerBrand?)] = [
+            ("Revolution Pro Controller", 0x146B, nil),
+            ("Nacon Revolution Unlimited Pro Controller", 0x146B, nil),
+            ("Pro Controller", 0x057E, .switchPro),
+            ("Pro Controller", 0, .switchPro),
+            ("Pro Controller", nil, .switchPro),
+            ("Revolution Pro Controller", nil, .switchPro),
+            ("Faceoff Wired Pro Controller for Nintendo Switch", 0x20D6, .switchPro),
+            ("Switch Pro Controller", 0x0F0D, .switchPro),
+            ("DS4 Wireless Controller", 0x054C, .dualShock4),
+            ("Sony DualSense Pro Controller", 0x054C, .dualSense),
+            ("8BitDo Pro Controller", 0x2DC8, .eightBitDo),
+        ]
+        let wrong = withVendor.filter { ControllerTypeDetector.brand(fromName: $0.0, vendorID: $0.1) != $0.2 }
+        record("Brand Detection", "A Pro Controller name is a Switch Pro only from Nintendo or an unknown vendor",
+               pass: wrong.isEmpty, detail: wrong.map { "\($0.0) from \($0.1.map { String($0, radix: 16) } ?? "no vendor")" }.joined(separator: ", "))
     }
 
     /// Brand detection from a name, through the production matcher.
@@ -880,6 +945,59 @@ final class TestBenchService: ObservableObject {
         }
         record(cat, "Profile with a wrong first byte rejected", pass: S.parseProfile([UInt8](repeating: 0, count: 956), number: 1) == nil)
         record(cat, "Drawing without devices or profile is the plain layout", pass: ControllerLayout.psAccess(ports: [:], profile: nil).control("e1")?.kind == .other)
+        // A connected controller whose stored profile cannot be read (over
+        // Bluetooth it never can): the sockets carry what the controller's
+        // own reports showed, never the shipped profile. As recorded from a
+        // real unit with Circle on socket 4 and Triangle on socket 5:
+        // socket 4 down came with face byte 0x40, socket 5 with 0x80.
+        typealias AccessMapped = AccessControllerPortService.Mapped
+        func accessMapped(_ down: [Int], hat: (x: Float, y: Float) = (0, 0)) -> AccessMapped {
+            var m = AccessMapped()
+            for b in 0...13 { m.buttons[b] = down.contains(b) ? 1 : 0 }
+            m.hat = hat
+            return m
+        }
+        let learn = AccessControllerPortService.learnedAction
+        let circle = learn([], [43], accessMapped([]), accessMapped([1]))
+        let triangle = learn([], [44], accessMapped([]), accessMapped([3]))
+        let up = learn([], [40], accessMapped([]), accessMapped([], hat: (0, 1)))
+        record(cat, "A socket going down alone teaches what it sends: 4 Circle, 5 Triangle, 1 Up",
+               pass: circle?.socket == 4 && circle?.action == 1 && triangle?.socket == 5 && triangle?.action == 3
+                   && up?.socket == 1 && up?.action == 5,
+               detail: "\(String(describing: circle)) \(String(describing: triangle)) \(String(describing: up))")
+        record(cat, "Nothing is learned from two sockets, a held one, no function, two functions or a missing report",
+               pass: learn([], [43, 44], accessMapped([]), accessMapped([1, 3])) == nil
+                   && learn([43], [43, 44], accessMapped([1]), accessMapped([1, 3])) == nil
+                   && learn([], [43], accessMapped([]), accessMapped([])) == nil
+                   && learn([], [43], accessMapped([]), accessMapped([1, 4])) == nil
+                   && learn([], [43], nil, accessMapped([1])) == nil
+                   && learn([], [49], accessMapped([]), accessMapped([11])) == nil
+                   && learn([], [48], accessMapped([]), accessMapped([0]))?.socket == 9)
+        func sticks(_ lx: Float, _ ly: Float, _ rx: Float, _ ry: Float) -> AccessMapped {
+            var m = accessMapped([]); m.axes = [0: lx, 1: ly, 2: rx, 3: ry]; return m
+        }
+        let side = AccessControllerPortService.learnedStick
+        record(cat, "The stick pushed alone teaches which stick the profile makes it",
+               pass: side((0.9, 0), [], sticks(0.9, 0, 0, 0)) == 1 && side((0, -0.8), [], sticks(0, 0, 0, -0.8)) == 2
+                   && side((0.3, 0), [], sticks(0.3, 0, 0, 0)) == nil          // not pushed far enough
+                   && side((0.9, 0), [0.7, 0], sticks(0.9, 0, 0.7, 0)) == nil  // a stick in a port is pushed too
+                   && side((0.9, 0), [], sticks(0.9, 0, 0.9, 0)) == nil        // both moved
+                   && side((0.9, 0), [], nil) == nil)
+        let stickUnknown = ControllerLayout.psAccess(ports: [:], profile: nil, learned: [:]).control("stick")?.inputs.axes ?? []
+        let stickRight = ControllerLayout.psAccess(ports: [:], profile: nil, learned: [0: 2]).control("stick")?.inputs.axes ?? []
+        record(cat, "With the profile unread the stick lights on its own pair, and on the stick it was seen to move",
+               pass: stickUnknown == [.x(6), .y(7)] && stickRight == [.x(2), .y(3), .x(6), .y(7)]
+                   && ControllerLayout.psAccess(ports: [:], profile: nil, learned: [0: 1]).control("stick")?.inputs.axes == [.x(0), .y(1), .x(6), .y(7)])
+        let shipped = ControllerLayout.psAccess(ports: [:], profile: nil)
+        let unknown = ControllerLayout.psAccess(ports: [:], profile: nil, learned: [:])
+        let taught = ControllerLayout.psAccess(ports: [:], profile: nil, learned: [4: 1, 5: 3, 1: 5])
+        record(cat, "With the profile unread, pressing Circle on socket 4 lights socket 4 and never socket 5",
+               pass: shipped.control("socket5")?.inputs.buttons == [44, 1]
+                   && unknown.control("socket5")?.inputs.buttons == [44] && unknown.control("socket4")?.inputs.buttons == [43]
+                   && unknown.control("center")?.inputs.buttons == [48] && unknown.control("socket5")?.printed == "5"
+                   && taught.control("socket4")?.inputs.buttons == [43, 1] && taught.control("socket5")?.inputs.buttons == [44, 3]
+                   && taught.control("socket1")?.inputs.hatDirection == .up && taught.control("socket7")?.inputs.buttons == [46],
+               detail: "unknown 5: \(unknown.control("socket5")?.inputs.buttons ?? []), taught 4: \(taught.control("socket4")?.inputs.buttons ?? []), 5: \(taught.control("socket5")?.inputs.buttons ?? [])")
 
         // Pointer speed on the Mac's own mouse and trackpad: a move goes back
         // to where it started and lands at the delta times the speed.
@@ -890,6 +1008,31 @@ final class TestBenchService: ObservableObject {
         let edge = PointerSpeedShaper.scaledLocation(from: CGPoint(x: 1905, y: 15), delta: CGVector(dx: 10, dy: -5), speed: 3,
                                                      within: CGRect(x: 0, y: 0, width: 1920, height: 1080))
         record("Pointer Speed", "Kept on the screen", pass: edge.x == 1919 && edge.y == 0, detail: "\(edge)")
+        // Two displays side by side: a slow move at a speed below 1 crosses
+        // the seam (it used to stop at 1919 for good), and pushing on
+        // against the outer edge stays on the desktop and holds still.
+        do {
+            let leftScreen = CGRect(x: 0, y: 0, width: 1920, height: 1080), rightScreen = CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+            func screen(_ p: CGPoint) -> CGRect? { leftScreen.contains(p) ? leftScreen : (rightScreen.contains(p) ? rightScreen : nil) }
+            func walk(from x: CGFloat, raw: Double, speed: Double, moves: Int) -> [CGFloat] {
+                var at = CGPoint(x: x, y: 500), seen: [CGFloat] = []
+                for _ in 0..<moves {
+                    let delta = CGVector(dx: raw, dy: 0)
+                    let rough = PointerSpeedShaper.scaledLocation(from: at, delta: delta, speed: speed, within: nil)
+                    let on = screen(rough) != nil
+                    at = PointerSpeedShaper.landing(from: at, delta: delta, speed: speed, onDisplay: on, startBounds: on ? nil : screen(at))
+                    seen.append(at.x)
+                }
+                return seen
+            }
+            let crossings = [(0.5, 1.0), (0.25, 3.0), (0.1, 9.0), (0.9, 1.0)].map { walk(from: 1900, raw: $0.1, speed: $0.0, moves: 400).last ?? 0 }
+            record("Pointer Speed", "A slow move below full speed crosses to the next display", pass: crossings.allSatisfy { $0 > 1930 },
+                   detail: "\(crossings)")
+            let outer = walk(from: 3830, raw: 1, speed: 0.25, moves: 200)
+            let tail = outer.suffix(20)
+            record("Pointer Speed", "Pushing against the outer edge stays on the desktop and holds still",
+                   pass: (tail.max() ?? 9999) < 3840 && tail.min() == tail.max() && (tail.min() ?? 0) >= 3839, detail: "\(tail.min() ?? 0) to \(tail.max() ?? 0)")
+        }
 
         // Sony pads checked against GameController: the bits read the way
         // SDL's PS5 and PS4 drivers read them.
@@ -919,6 +1062,133 @@ final class TestBenchService: ObservableObject {
                && RawHIDGamepadService.eightBitDoRumbleReport(intensity: -1)[2] == 0)
         record(motors, "Only the Ultimate 2 Wireless (2DC8:6012), from its 34 byte firmware 1.03 reports",
                pass: RawHIDGamepadService.eightBitDoRumbleProducts == [0x6012: 34] && RawHIDGamepadService.eightBitDoRumbleVendor == 0x2DC8)
+        // A pad macOS lists: the buzz goes to the device GameController
+        // names as that controller, else to a lone device of the model, and
+        // to none when two are there and neither can be told apart.
+        let listed = RawHIDGamepadService.eightBitDoListedTargets
+        record(motors, "A buzz for a pad macOS lists picks that pad's own device",
+               pass: listed([false, true]) == [1] && listed([true, true]) == [0, 1] && listed([false]) == [0]
+                   && listed([false, false]) == [] && listed([]) == [])
+        let nobody = GCController()
+        record(motors, "With no such pad connected a buzz writes nothing and says so",
+               pass: !RawHIDGamepadService.shared.rumbleListedEightBitDo(controller: nobody, intensity: 1, durationMs: 100))
+
+        // Xbox 360 class pads over USB (XInputUSBService), as xpad.c drives
+        // them. The configuration descriptor is a wired Xbox 360
+        // controller's own, 045E:028E, 153 bytes (DJm00n/ControllersInfo,
+        // xbox360 descriptor dump).
+        let xusb = "XInput USB"
+        let X = XInputUSBService.self
+        func hexBytes(_ hex: String) -> [UInt8] {
+            var out: [UInt8] = []
+            var i = hex.startIndex
+            while let j = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) { out.append(UInt8(hex[i..<j], radix: 16) ?? 0); i = j }
+            return out
+        }
+        let realConfig = hexBytes("09029900040100a0fa0904000002ff5d0100112100010125811400000000130108000007058103200004070501032000080904010004ff5d03001b2100010101824001022016830000000000001603000000000000070582032000020705020320000407058303200040070503032000100904020001ff5d0200092100010122840700070584032000100904030000fffd1304064100010103")
+        let pads0 = X.interruptEndpoints(configuration: realConfig, interfaceNumber: 0)
+        let audio1 = X.interruptEndpoints(configuration: realConfig, interfaceNumber: 1)
+        record(xusb, "A real Xbox 360 controller's descriptor gives its controller endpoints: IN 0x81, OUT 0x01",
+               pass: realConfig.count == 153 && pads0?.input == 0x81 && pads0?.output == 0x01
+                   && audio1?.input == 0x82 && audio1?.output == 0x02
+                   && X.interruptEndpoints(configuration: realConfig, interfaceNumber: 3) == nil
+                   // Cut off after the IN endpoint: that one alone. Cut off
+                   // inside it: nothing, and no read past the end.
+                   && X.interruptEndpoints(configuration: Array(realConfig.prefix(42)), interfaceNumber: 0)?.input == 0x81
+                   && X.interruptEndpoints(configuration: Array(realConfig.prefix(42)), interfaceNumber: 0)?.output == nil
+                   && X.interruptEndpoints(configuration: Array(realConfig.prefix(40)), interfaceNumber: 0) == nil
+                   && X.interruptEndpoints(configuration: [], interfaceNumber: 0) == nil,
+               detail: "interface 0: \(pads0.map { String(format: "%02X, %02X", $0.input, $0.output ?? 0) } ?? "none")")
+        record(xusb, "Only the controller interface is read: class FF, subclass 5D, protocol 01",
+               pass: X.isControllerInterface(interfaceClass: 0xFF, subclass: 0x5D, protocol: 0x01)
+                   && !X.isControllerInterface(interfaceClass: 0xFF, subclass: 0x5D, protocol: 0x03)
+                   && !X.isControllerInterface(interfaceClass: 0xFF, subclass: 0x5D, protocol: 0x81)
+                   && !X.isControllerInterface(interfaceClass: 0xFF, subclass: 0x47, protocol: 0xD0)
+                   && !X.isControllerInterface(interfaceClass: 0x03, subclass: 0x00, protocol: 0x00))
+        record(xusb, "The light, the motors and the start request are xpad.c's",
+               pass: X.lightCommand(player: 1) == [0x01, 0x03, 0x02] && X.lightCommand(player: 4) == [0x01, 0x03, 0x05]
+                   && X.lightCommand(player: 5) == [0x01, 0x03, 0x02]
+                   && X.motorCommand(strong: 1, weak: 1) == [0x00, 0x08, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00]
+                   && X.motorCommand(strong: 0, weak: 0) == [0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+                   && X.motorCommand(strong: 9, weak: -1) == [0x00, 0x08, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00]
+                   && X.startRequest.bmRequestType == 0xC1 && X.startRequest.bRequest == 0x01
+                   && X.startRequest.wValue == 0x0100 && X.startRequest.wIndex == 0 && X.startRequest.wLength == 20)
+        var aHeld = [UInt8](repeating: 0, count: 20)
+        aHeld[1] = 0x14; aHeld[3] = 0x10
+        record(xusb, "A state is message 00 with length 14; the light's and the motors' echoes are not",
+               pass: X.isState(aHeld) && !X.isState([0x01, 0x03, 0x02]) && !X.isState([0x03, 0x03, 0x03])
+                   && !X.isState([UInt8](repeating: 0, count: 20)) && !X.isState(Array(aHeld.prefix(19))))
+        record(xusb, "A pad is listed with its own XInput profile, else the Xbox 360 controller's",
+               pass: X.profile(vendorID: 0x2DC8, productID: 0x310A).identifier == "8bitdo-ultimate-2c-xinput"
+                   && X.profile(vendorID: 0x0E6F, productID: 0x0213).identifier == "xbox-360-wired"
+                   && X.profile(vendorID: 0x0E6F, productID: 0x0213).layout == .xinput
+                   // A model with a HID profile of its own is still an Xbox 360 class pad on this road.
+                   && X.profile(vendorID: 0x2DC8, productID: 0x6012).identifier == "xbox-360-wired")
+        #if DEBUG
+        do {
+            // From the endpoint to a press: listed as the service lists it,
+            // a state through the live dispatcher, then an echo, which must
+            // change nothing.
+            let raw = RawHIDGamepadService.shared
+            let key = raw.attachExternalPad(profile: X.profile(vendorID: 0x0E6F, productID: 0x0213), vendorID: 0x0E6F, productID: 0x0213,
+                                            transport: "USB", productName: "Bench XInput pad")
+            // Reports are decoded only while something wants them.
+            raw.setDecodingWanted(true, reason: "bench xinput")
+            defer {
+                raw.detachExternalPad(key: key)
+                raw.setDecodingWanted(false, reason: "bench xinput")
+            }
+            raw.dispatchOnReportThread(key: key, reportID: 0, bytes: aHeld)
+            RawHIDReportThread.shared.sync {}
+            let pressed = raw.debugPad(key: key)?.state.buttons[0] ?? -1
+            raw.dispatchOnReportThread(key: key, reportID: 0, bytes: [0x01, 0x03, 0x02])
+            RawHIDReportThread.shared.sync {}
+            let after = raw.debugPad(key: key)?.state.buttons[0] ?? -1
+            record(xusb, "A state from the endpoint presses A on the listed pad, and an echo leaves it pressed",
+                   pass: pressed == 1 && after == 1 && !XInputUSBService.shared.isPad(key: key)
+                       && !XInputUSBService.shared.rumble(key: key, intensity: 1, durationMs: 100),
+                   detail: "A \(pressed), after the echo \(after)")
+        }
+        #endif
+
+        // A Scan that heard nothing points at Read Directly Instead only
+        // for a pad that may be read here, that GameController has passed
+        // nothing from since it connected, after a real wait, and once.
+        let offers = RawHIDGamepadService.offersReadingDirectly
+        record("Read Directly Instead", "A silent Scan offers it only for a pad macOS lists and has passed nothing from",
+               pass: offers(true, false, false, 20) && !offers(true, true, false, 20) && !offers(false, false, false, 20)
+                   && !offers(true, false, true, 20) && !offers(true, false, false, 2)
+                   && RawHIDGamepadService.shared.silentPadsReadableDirectly().allSatisfy { !$0.key.isEmpty })
+        // Scroll to Pressed Input: the row a press brings into view is the
+        // one it lit, by the chord rules, in a group that is open.
+        do {
+            let cross = BindingModel(input: InputEvent.button(0), outputs: [])
+            let circle = BindingModel(input: InputEvent.button(1), outputs: [])
+            var chord = BindingModel(input: InputEvent.button(1), outputs: [])
+            chord.setModifiers([InputEvent.button(4)])
+            let open = JoystickMapping(bindings: [cross, circle, chord])
+            let folded = JoystickMapping(bindings: [BindingModel(input: InputEvent.button(0), outputs: [])], isExpanded: false)
+            let k0 = InputEvent.button(0).serialized, k1 = InputEvent.button(1).serialized
+            let k4 = InputEvent.button(4).serialized
+            let row = PresetEditorView.pressedRow
+            record("Scroll to Pressed Input", "A press picks the row it lit, in open groups only",
+                   pass: row([k1], [k1], [open]) == circle.id
+                       && row([k1], [k1, k4], [open]) == chord.id
+                       && row([k0], [k0], [folded, open]) == cross.id
+                       && row([k0], [k0], [folded]) == nil
+                       && row([], [k0], [open]) == nil
+                       && row(["ems button 0 + any"], ["ems button 0 + any"], [open]) == nil)
+        }
+        // Read Directly Instead (Devices menu): offered for third-party pads
+        // GameController lists, never for the pads with rules of their own.
+        let instead = "Read Directly Instead"
+        let firstParty: [(Int32, Int32)] = [(0x045E, 0x0B13), (0x054C, 0x0CE6), (0x054C, 0x05C4), (0x057E, 0x2009),
+                                            (0x057E, 0x2069), (0x18D1, 0x9400), (0x1949, 0x0419), (0x28DE, 0x1205)]
+        record(instead, "Never offered for Xbox, PlayStation, Nintendo, Stadia, Luna or Steam pads",
+               pass: firstParty.allSatisfy { !RawHIDGamepadService.mayReadInsteadOfGameController(vendorID: $0.0, productID: $0.1) })
+        record(instead, "Offered for a GameSir Nova Lite (3537:1041) and an 8BitDo pad (2DC8:6012)",
+               pass: RawHIDGamepadService.mayReadInsteadOfGameController(vendorID: 0x3537, productID: 0x1041)
+                   && RawHIDGamepadService.mayReadInsteadOfGameController(vendorID: 0x2DC8, productID: 0x6012))
 
         // The caps the user picks: the drawing follows them.
         let plain = ControllerLayout.psAccess(ports: [:], profile: nil)
@@ -973,6 +1243,15 @@ final class TestBenchService: ObservableObject {
             record(cat, "Profile encode: changed port starts clean", pass: bytes[152 + 90] == 0x01 && bytes[152 + 90 + 1] == 2 && bytes[152 + 90 + 3] == 0
                    && (4..<45).allSatisfy { bytes[152 + 90 + $0] == 0 } && (0..<45).allSatisfy { bytes[152 + 180 + $0] == 0 },
                    detail: "E2 type 1 assignment 2 with the old button map cleared, E4 all zero")
+            // A character outside the basic plane is two units on the
+            // controller and one character in the name.
+            p.name = "A\u{1F600}B"
+            let emoji = S.parseProfile(S.encode(p), number: 2)
+            record(cat, "Profile name keeps an emoji", pass: emoji?.name == "A\u{1F600}B", detail: "got \(emoji?.name ?? "nil")")
+            var half = S.encode(p)
+            half[8] = 0x42; half[9] = 0                // the low half overwritten: a lone high half is left
+            record(cat, "Profile name drops half a character", pass: S.parseProfile(half, number: 2)?.name == "ABB",
+                   detail: "got \(S.parseProfile(half, number: 2)?.name ?? "nil")")
             record(cat, "Profile encode: toggle bits", pass: bytes[150] == 0b0000_0100 && bytes[151] == 0b0000_0100,
                    detail: "bit 2 (socket 3) and bit 10 (E1); got \(bytes[150]) \(bytes[151])")
             record(cat, "Profile encode: simultaneous press, orientation in every stick record",
@@ -1072,6 +1351,11 @@ final class TestBenchService: ObservableObject {
         let unassigned = DualSenseEdgeProfiles.parse([u0, b1, b2], slot: .square)
         record(ecat, "Unassigned slot", pass: unassigned?.assigned == false && unassigned?.remaps.isEmpty == true && unassigned?.name == "")
         record(ecat, "Wrong report count rejected", pass: DualSenseEdgeProfiles.parse([b0, b1], slot: .square) == nil)
+        var e0 = b0
+        for (i, u) in "A\u{1F600}B".utf16.enumerated() { e0[6 + 2 * i] = UInt8(u & 0xFF); e0[7 + 2 * i] = UInt8(u >> 8) }
+        for i in 14..<16 { e0[i] = 0 }
+        record(ecat, "Profile name keeps an emoji", pass: DualSenseEdgeProfiles.parse([e0, b1, b2], slot: .square)?.name == "A\u{1F600}B",
+               detail: "got \(DualSenseEdgeProfiles.parse([e0, b1, b2], slot: .square)?.name ?? "nil")")
 
         // The adaptive trigger report.
         let usbFirm = InProcessLightWriter.triggerEffectReport(left: 3, right: 3, bluetooth: false)
@@ -1343,6 +1627,18 @@ final class TestBenchService: ObservableObject {
                && !P.shouldDisconnect(idle: 899, minutes: 15, presetRunning: false, whileRunning: false))
         record(cat, "A running preset keeps it unless set otherwise", pass: !P.shouldDisconnect(idle: 7200, minutes: 5, presetRunning: true, whileRunning: false)
                && P.shouldDisconnect(idle: 7200, minutes: 5, presetRunning: true, whileRunning: true))
+        // A preset file may carry any whole number of minutes: the largest
+        // one is "never", not a trap in the multiply.
+        record(cat, "Minutes too large to multiply never disconnect", pass: !P.shouldDisconnect(idle: 45, minutes: Int.max, presetRunning: true, whileRunning: true)
+               && !P.shouldDisconnect(idle: 45, minutes: Int.max / 59, presetRunning: false, whileRunning: false))
+        // A preset's own "Reconnect controllers" asks with a controller
+        // already on; the Settings switch alone only with none.
+        record(cat, "A preset's own reconnect choice asks with a controller already on", pass: P.shouldAskReconnect(preset: true, setting: false, connected: 1)
+               && P.shouldAskReconnect(preset: true, setting: false, connected: 0))
+        record(cat, "The Settings switch alone asks only with no controller on", pass: P.shouldAskReconnect(preset: nil, setting: true, connected: 0)
+               && !P.shouldAskReconnect(preset: nil, setting: true, connected: 1) && !P.shouldAskReconnect(preset: nil, setting: false, connected: 0))
+        record(cat, "A preset that says no is never asked for", pass: !P.shouldAskReconnect(preset: false, setting: true, connected: 0)
+               && !P.shouldAskReconnect(preset: false, setting: true, connected: 1))
         record(cat, "A gamepad or joystick class of device is a controller", pass: P.looksLikeController(major: 5, minor: 0x02, name: "")
                && P.looksLikeController(major: 5, minor: 0x01, name: "") && !P.looksLikeController(major: 5, minor: 0x10, name: "Magic Keyboard")
                && !P.looksLikeController(major: 4, minor: 0x06, name: "AirPods Pro"))
@@ -1390,11 +1686,11 @@ final class TestBenchService: ObservableObject {
         let body = Array(HIDFixtureCorpus.nintendo.first { $0.id == "switch2pro05.a" }!.bytes.dropFirst())
         let rebuilt = B.report(fromNotification: Data(body))
         var fromBLE = ControllerState()
-        HIDReportDecoder.decodeSwitch2Pro(report: rebuilt, into: &fromBLE)
+        HIDReportDecoder.decodeSwitch2Pro(report: rebuilt, calibration: .constants, into: &fromBLE)
         record(cat, "Bluetooth LE notification rebuilt as report 0x05 decodes A", pass: rebuilt.first == 0x05 && rebuilt.count == 64 && fromBLE.buttons[1] == 1 && (fromBLE.buttons[0] ?? 0) == 0)
         record(cat, "Bluetooth LE product by name", pass: B.productID(name: "Pro Controller", manufacturerData: nil) == 0x2069
-               && B.productID(name: "Joy-Con 2 (L)", manufacturerData: nil) == 0x2066
-               && B.productID(name: "Joy-Con 2 (R)", manufacturerData: nil) == 0x2067
+               && B.productID(name: "Joy-Con 2 (L)", manufacturerData: nil) == 0x2067
+               && B.productID(name: "Joy-Con 2 (R)", manufacturerData: nil) == 0x2066
                && B.productID(name: "NSO GameCube Controller", manufacturerData: nil) == 0x2073
                && B.productID(name: "Magic Keyboard", manufacturerData: nil) == nil
                && B.productID(name: nil, manufacturerData: nil) == nil)
@@ -1406,11 +1702,48 @@ final class TestBenchService: ObservableObject {
                && B.productID(name: nil, manufacturerData: Data(gcAdvert)) == 0x2073
                && B.productID(name: nil, manufacturerData: Data(otherAdvert)) == nil
                && B.productID(name: nil, manufacturerData: Data([0x4C, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05])) == nil)
+        // Another maker's company ID: the name is not asked. With no
+        // manufacturer data the name answers as before.
+        record(cat, "Bluetooth LE: another maker's data is no Switch 2 controller, whatever the name",
+               pass: B.productID(name: "XYZ GameCube Adapter", manufacturerData: Data([0x4C, 0x00, 0x02, 0x15])) == nil
+               && B.productID(name: "Wireless Pro Controller", manufacturerData: Data([0x4C, 0x00])) == nil
+               && B.productID(name: "XYZ GameCube Adapter", manufacturerData: nil) == 0x2073
+               && B.productID(name: "Pro Controller", manufacturerData: Data(advert)) == 0x2069)
+        record(cat, "Bluetooth off or refused is told to the Activity Log while a preset holds the search, and only then",
+               pass: B.notice(for: .poweredOff, held: true) != nil && B.notice(for: .unauthorized, held: true) != nil
+               && B.notice(for: .poweredOn, held: true) == nil && B.notice(for: .resetting, held: true) == nil
+               && B.notice(for: .poweredOff, held: false) == nil && B.notice(for: .unauthorized, held: false) == nil)
+        // A stop closed the link at once, so the restart hold could never
+        // come from the controller it was armed for.
+        let holds = MappingEngine.holdsSwitch2Search
+        record(cat, "A Switch 2 preset holds the Bluetooth search while it runs and while its restart hold is watched",
+               pass: holds(true, true, false, false) && !holds(true, false, false, false)
+               && holds(false, false, true, true) && !holds(false, false, false, false)
+               && !holds(false, false, true, false) && !holds(false, true, false, true)
+               && !holds(true, false, true, true))
         record(cat, "Bluetooth LE feature flags per controller (ndeadly commands.md)", pass: B.featureFlags(productID: 0x2069) == 0x2F && B.featureFlags(productID: 0x2066) == 0x37 && B.featureFlags(productID: 0x2073) == 0x27
                && B.featureCommands(productID: 0x2069) == [[0x0C, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0x2F, 0, 0, 0], [0x0C, 0x91, 0x01, 0x04, 0x00, 0x04, 0x00, 0x00, 0x2F, 0, 0, 0]])
+        let startSteps = B.startCommands(productID: 0x2067)
+        record(cat, "Bluetooth LE start-up writes go one at a time, mask, then on, then the light (JoyCon2Mac, joycon2cpp)",
+               pass: startSteps.count == 3 && startSteps.map(\.bytes) == B.featureCommands(productID: 0x2067) + [B.playerOneLightCommand]
+                   && startSteps[0].after > 0 && zip(startSteps, startSteps.dropFirst()).allSatisfy { $1.after - $0.after >= 0.1 },
+               detail: startSteps.map { String(format: "%.1f s", $0.after) }.joined(separator: ", "))
         record(cat, "Bluetooth LE player light command keeps the USB frame with interface 1",
                pass: B.playerOneLightCommand.count == 16 && B.playerOneLightCommand[2] == 0x01 && Array(B.playerOneLightCommand[0..<2]) == [0x09, 0x91] && B.playerOneLightCommand[8] == 0x01)
         record(cat, "Joy-Con 2 products are started over USB too", pass: Switch2USBEnabler.productIDs.contains(0x2066) && Switch2USBEnabler.productIDs.contains(0x2067))
+        // Which side each number is: SDL usb_ids.h and Linux hid-ids.h give
+        // the left Joy-Con 2 0x2067 and the right one 0x2066. A swap reads
+        // each side with the other's bytes, and no press arrives.
+        func joyConSide(advertised product: [UInt8]) -> ControllerProfile.ReportLayout? {
+            let data = Data([0x53, 0x05, 0x01, 0x00, 0x03, 0x7E, 0x05] + product)
+            return B.productID(name: nil, manufacturerData: data).flatMap { ControllerProfileDatabase.profile(forVendor: 0x057E, product: $0)?.layout }
+        }
+        record(cat, "Joy-Con 2 sides by product: left 0x2067, right 0x2066 (SDL usb_ids.h, Linux hid-ids.h)",
+               pass: Switch2USBEnabler.joyConLeftProductID == 0x2067 && Switch2USBEnabler.joyConRightProductID == 0x2066
+                   && ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2067)?.layout == .switch2JoyConLeft
+                   && ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2066)?.layout == .switch2JoyConRight
+                   && joyConSide(advertised: [0x67, 0x20]) == .switch2JoyConLeft
+                   && joyConSide(advertised: [0x66, 0x20]) == .switch2JoyConRight)
 
         // With a calibration in place the decoder maps through it.
         if let proProfile = ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2069) {
@@ -1539,6 +1872,12 @@ final class TestBenchService: ObservableObject {
         record(cat, "An answer without 0x27 or 0x28 is not a PlayStation pad", pass: P.parse(other) == nil && P.parse(Array(ps4.prefix(20))) == nil)
         record(cat, "Razer is never queried by vendor (SDL 6733), only by product", pass: !P.vendors.contains(0x1532) && P.shouldProbe(vendorID: 0x1532, productID: 0x0401) && !P.shouldProbe(vendorID: 0x1532, productID: 0x0001)
                && P.shouldProbe(vendorID: 0x0F0D, productID: 0x1234) && !P.shouldProbe(vendorID: 0x046D, productID: 0xC24F))
+        record(cat, "Red Octane Games and SZ-MYPOWER pads are asked, as SDL asks them",
+               pass: P.shouldProbe(vendorID: 0x3958, productID: 0x0001) && P.shouldProbe(vendorID: 0x7545, productID: 0x0001)
+                   && P.shouldProbe(vendorID: 0x1430, productID: 0x0001))
+        record(cat, "The Mad Catz control deck and the HORIPAD for Switch are never asked",
+               pass: !P.shouldProbe(vendorID: 0x0738, productID: 0x2218) && !P.shouldProbe(vendorID: 0x0F0D, productID: 0x00C1)
+                   && P.shouldProbe(vendorID: 0x0738, productID: 0x1234))
         let profile = P.profile(for: a!, vendorID: 0x1532, productID: 0x0401, productName: "Panthera")
         record(cat, "Probe profile uses the DualShock 4 layout with Sony names", pass: profile.layout == .dualShock4 && profile.physicalButtonNames.count == 14 && profile.physicalButtonNames[13] == "Touchpad")
     }
@@ -1991,6 +2330,39 @@ final class TestBenchService: ObservableObject {
                pass: ha != nil && ha == hAgain, detail: "\(ha.map(String.init) ?? "nil") vs \(hAgain.map(String.init) ?? "nil")")
         record(cat, "Changed pixels hash differently, so the text is read again",
                pass: ha != nil && hb != nil && ha != hb)
+        // A recognition that failed is not kept as "no words" for the
+        // same pixels; a good read is, for the same words and languages.
+        typealias T = ScreenTextService
+        record(cat, "A failed recognition is not kept",
+               pass: T.readToKeep(hash: 7, words: "Ready", preferred: ["en-US"], text: nil) == nil
+                   && T.readToKeep(hash: nil, words: "Ready", preferred: ["en-US"], text: "Ready") == nil)
+        let keptRead = T.readToKeep(hash: 7, words: "Ready", preferred: ["en-US"], text: "Ready to go")
+        record(cat, "A kept read is used again only for the same pixels, words and languages",
+               pass: keptRead != nil
+                   && T.reusedText(keptRead, hash: 7, words: "Ready", preferred: ["en-US"]) == "Ready to go"
+                   && T.reusedText(keptRead, hash: 8, words: "Ready", preferred: ["en-US"]) == nil
+                   && T.reusedText(keptRead, hash: 7, words: "Paused", preferred: ["en-US"]) == nil
+                   && T.reusedText(keptRead, hash: 7, words: "Ready", preferred: ["de-DE"]) == nil
+                   && T.reusedText(keptRead, hash: nil, words: "Ready", preferred: ["en-US"]) == nil
+                   && T.reusedText(nil, hash: 7, words: "Ready", preferred: ["en-US"]) == nil)
+        // Marking a corner of a text watch's area: the corner asked for is
+        // still the one marked when the three seconds are up.
+        for corner in [1, 2] {
+            var count = 3, marking = corner, due = false
+            for _ in 0..<3 {
+                let step = ScreenTextsView.countTick(countdown: count, marking: marking)
+                count = step.countdown; marking = step.marking; due = step.due
+            }
+            var area = ScreenTextWatch()
+            ScreenTextsView.mark(&area, corner: marking, x: corner == 1 ? 0.1 : 0.9, y: corner == 1 ? 0.2 : 0.8)
+            let right = corner == 1
+                ? area.minX == 0.1 && area.minY == 0.2 && area.maxX == 0.75
+                : area.maxX == 0.9 && area.maxY == 0.8 && area.minX == 0.25
+            record("Screen Watches", corner == 1 ? "Three ticks after Mark top-left move the top-left corner"
+                                    : "Three ticks after Mark bottom-right move the bottom-right corner",
+                   pass: due && count == 0 && marking == corner && right,
+                   detail: "corner \(marking), \(area.minX), \(area.minY) to \(area.maxX), \(area.maxY)")
+        }
         let near = ScreenCapture.clusters(of: [first, second])
         let far = ScreenCapture.clusters(of: [first, CGRect(x: 3000, y: 1800, width: 6, height: 6), second])
         record(cat, "Watches near each other share one capture",
@@ -2118,6 +2490,39 @@ final class TestBenchService: ObservableObject {
         record(cat, "Scrolls merge by direction",
                pass: scrolled.count == 2 && scrolled[0].action.type == .mouseWheelStep && scrolled[0].count == 5
                    && scrolled[0].action.mouseDirection == .positive && scrolled[1].count == 1 && scrolled[1].action.mouseDirection == .negative)
+        // A finger path that is not straight: both axes in every event.
+        var swipe = MacroRecording()
+        for i in 0..<100 {
+            swipe.add(.scroll(axis: .vertical, lines: 1), down: true, at: Double(i) * 0.008)
+            swipe.add(.scroll(axis: .horizontal, lines: 1), down: true, at: Double(i) * 0.008)
+        }
+        let swiped = swipe.steps()
+        record(cat, "A diagonal scroll is one step an axis, not one an event",
+               pass: swiped.count == 2 && swiped.allSatisfy { $0.action.type == .mouseWheelStep && $0.count == 100 },
+               detail: "\(swiped.count) steps")
+        // A turn on one axis still parts the scrolls on it, in order.
+        let turned = rec([(.scroll(axis: .vertical, lines: 1), true, 0), (.scroll(axis: .vertical, lines: -1), true, 0.05),
+                          (.scroll(axis: .vertical, lines: 1), true, 0.1)]).steps()
+        record(cat, "Scrolling down, up, down stays three steps", pass: turned.count == 3 && turned.allSatisfy { $0.count == 1 })
+        // Lines scrolled after a modifier is let go are not played under it.
+        let after = rec([(.key(226), true, 0), (.scroll(axis: .vertical, lines: 1), true, 0.10), (.key(226), false, 0.15),
+                         (.scroll(axis: .vertical, lines: 1), true, 0.20)]).steps()
+        record(cat, "A scroll after the modifier is let go is its own step",
+               pass: after.count == 4 && after[0].eventKind == .down && after[1].action.type == .mouseWheelStep && after[1].count == 1
+                   && after[2].eventKind == .up && after[3].action.type == .mouseWheelStep && after[3].count == 1,
+               detail: after.map { "\($0.eventKind ?? .tap) \($0.action.type) \($0.count ?? 0)" }.joined(separator: ", "))
+        let clicked = rec([(.mouseButton(0), true, 0), (.scroll(axis: .vertical, lines: 1), true, 0.05), (.mouseButton(0), false, 0.08),
+                           (.scroll(axis: .vertical, lines: 1), true, 0.12)]).steps()
+        record(cat, "A button let go between two scrolls parts them",
+               pass: clicked.filter { $0.action.type == .mouseWheelStep }.map { $0.count ?? 0 } == [1, 1],
+               detail: clicked.map { "\($0.eventKind ?? .tap) \($0.action.type) \($0.count ?? 0)" }.joined(separator: ", "))
+        // A step plays 100 lines at most: a longer scroll goes on in the next.
+        var flick = MacroRecording()
+        for i in 0..<150 { flick.add(.scroll(axis: .vertical, lines: 1), down: true, at: Double(i) * 0.01) }
+        let flicked = flick.steps()
+        record(cat, "A scroll past 100 lines keeps every line",
+               pass: flicked.count == 2 && flicked.map { $0.count ?? 0 } == [100, 50] && flicked[1].delayMs == 1000,
+               detail: flicked.map { "\($0.count ?? 0) after \($0.delayMs)" }.joined(separator: ", "))
         // Path samples glide into each other.
         let path = rec([(.move(x: 0, y: 0), true, 0), (.move(x: 10, y: 10), true, 0.1), (.key(4), true, 0.3), (.key(4), false, 0.35)]).steps()
         record(cat, "Path moves glide until the next move",
@@ -2202,7 +2607,7 @@ final class TestBenchService: ObservableObject {
                    && tap(thinned[MacroRecording.maxSteps - 1]) && thinned[MacroRecording.maxSteps - 1].action.keyCode == 4
                    && thinned[0].action.clickX == 0 && moves.last?.action.clickX == 249,
                detail: "\(thinned.count) steps, \(moves.count) moves, last \(thinned.last?.action.keyCode ?? -1)")
-        // The recorder publishes only when the steps change (D6): two runs
+        // The recorder publishes only when the steps change: two runs
         // of steps() differ by ids alone, a measured hold is a change, and
         // a pointer sample at the end of the take is none.
         var live = rec([(.key(4), true, 0), (.key(4), false, 0.05)])
@@ -2214,6 +2619,27 @@ final class TestBenchService: ObservableObject {
                pass: first != again && MacroRecorderService.sameSteps(first, again)
                    && !MacroRecorderService.sameSteps(first, longer) && MacroRecorderService.sameSteps(first, afterMove),
                detail: "\(first.count) \(longer.count) \(afterMove.count)")
+        // The compare names every stored field of an output. One added to
+        // OutputAction and not to sameAction shows here.
+        let plainKey = OutputAction(type: .key, keyCode: 4)
+        var other = OutputAction(type: .key, keyCode: 4)
+        var unlike: [String] = []
+        if !MacroRecorderService.sameAction(plainKey, other) { unlike.append("ids alone") }
+        other.keyCode = 5
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("keyCode") }
+        other = OutputAction(type: .key, keyCode: 4); other.clickX = 10
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("clickX") }
+        other = OutputAction(type: .key, keyCode: 4); other.text = "a"
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("text") }
+        other = OutputAction(type: .key, keyCode: 4); other.stepVertical = .negative
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("stepVertical") }
+        other = OutputAction(type: .key, keyCode: 4); other.velocityFromInput = true
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("velocityFromInput") }
+        other = OutputAction(type: .key, keyCode: 4); other.speed = 3
+        if MacroRecorderService.sameAction(plainKey, other) { unlike.append("speed") }
+        let fields = Mirror(reflecting: plainKey).children.count
+        record(cat, "Two outputs compare by every field but the id",
+               pass: unlike.isEmpty && fields == 25, detail: "\(unlike), \(fields) stored fields")
 
         // continueOnTimeout: absent from older JSON, nil on decode; true survives.
         do {
@@ -2311,16 +2737,50 @@ final class TestBenchService: ObservableObject {
                                                            joysticks: [JoystickMapping(tag: "Keys", bindings: [wk])]))
         record(cat, "Blocking the held controls blocks a held key always and never a modifier, and leaves the row's own key alone",
                pass: Set(held.keys) == [14] && held[14] == [[]], detail: "\(held.keys.sorted())")
+        // A row stored on PrintScreen (F13) or # ~ blocks the key under the
+        // code it arrives with (F13, backslash), in a sequence as well.
+        var twin = BindingModel(input: InputEvent(type: .extKey, index: 70), outputs: [OutputAction(type: .key, keyCode: 5)])
+        twin.blockOriginal = true
+        var twinSeq = BindingModel(input: InputEvent(type: .keySequence, index: 0), outputs: [OutputAction(type: .key, keyCode: 5)])
+        twinSeq.input.sequenceSteps = [50, 4]
+        twinSeq.blockOriginal = true
+        let twins = MappingEngine.keyBlockChords(in: Preset(name: "Blocking 4", tag: "Tests",
+                                                            joysticks: [JoystickMapping(tag: "Keys", bindings: [twin, twinSeq])]))
+        record(cat, "A row on PrintScreen (F13) or # ~ blocks the key under the code it arrives with",
+               pass: Set(twins.keys) == [104, 49, 4], detail: "\(twins.keys.sorted())")
 
         let ds = InProcessLightWriter.dualSenseLightReport(bluetooth: false, sequence: 0, touchLight: false, rgb: (255, 0, 0),
                                                            brightness: 2, setup: false, touchMotors: true, weak: 100, strong: 200,
                                                            hapticsSelect: true, motorMask: 0, improvedRumble: false)
         record(cat, "A rumble write with the light left alone claims no light field",
                pass: ds[2] == 0x00 && ds[1] != 0 && ds[3] == 100 && ds[4] == 200, detail: "flag1 \(ds[2])")
+        // A short pulse inside a long buzz joins it instead of ending it.
+        let longBuzz = InProcessLightWriter.mergedRumble(nil, level: 200, until: 12, now: 10)
+        let shortInside = InProcessLightWriter.mergedRumble(longBuzz, level: 80, until: 10.6, now: 10.5)
+        let longAfterShort = InProcessLightWriter.mergedRumble((strong: 80, weak: 80, until: 10.1), level: 200, until: 12, now: 10.05)
+        let afterTheEnd = InProcessLightWriter.mergedRumble(longBuzz, level: 80, until: 12.6, now: 12.5)
+        record(cat, "A short buzz inside a long one keeps the long one's end and strength",
+               pass: shortInside.until == 12 && shortInside.strong == 200 && shortInside.weak == 200,
+               detail: "\(shortInside)")
+        record(cat, "A long buzz after a short one runs its own length, and one that has ended is replaced",
+               pass: longAfterShort.until == 12 && longAfterShort.strong == 200
+                   && afterTheEnd.until == 12.6 && afterTheEnd.strong == 80 && afterTheEnd.weak == 80,
+               detail: "\(longAfterShort) \(afterTheEnd)")
         let ds4 = InProcessLightWriter.dualShock4LightReport(bluetooth: false, touchLight: false, rgb: (255, 0, 0),
                                                              touchMotors: true, weak: 100, strong: 200)
         record(cat, "A DualShock 4 rumble write with the light left alone clears the light flag",
                pass: ds4[1] & 0x02 == 0 && ds4[1] & 0x01 != 0, detail: "flags \(ds4[1])")
+        // A haptic engine that failed is forgotten for its pad, so the next
+        // buzz builds a new one; a late notice from an engine already
+        // replaced leaves the new one alone.
+        let pad = NSObject(), otherPad = NSObject(), dead = NSObject(), fresh = NSObject()
+        var engines: [ObjectIdentifier: NSObject] = [ObjectIdentifier(pad): dead, ObjectIdentifier(otherPad): fresh]
+        FeedbackService.forget(ObjectIdentifier(dead), for: ObjectIdentifier(pad), in: &engines)
+        let forgotten = engines[ObjectIdentifier(pad)] == nil && engines[ObjectIdentifier(otherPad)] === fresh
+        engines[ObjectIdentifier(pad)] = fresh
+        FeedbackService.forget(ObjectIdentifier(dead), for: ObjectIdentifier(pad), in: &engines)
+        record(cat, "A haptic engine that failed is forgotten for its pad, and never a newer one in its place",
+               pass: forgotten && engines[ObjectIdentifier(pad)] === fresh && engines.count == 2)
     }
 
     private func runButtonSequenceTests() {
@@ -2362,7 +2822,8 @@ final class TestBenchService: ObservableObject {
         r.reset()
         // Down held over two polls is one press; a second button pressed
         // while the first stays down is the next press.
-        let held = !r.feed(down: [12], now: 5.0, steps: steps) && !r.feed(down: [12], now: 5.1, steps: steps)
+        let held = !r.feed(down: [], now: 4.9, steps: steps)
+            && !r.feed(down: [12], now: 5.0, steps: steps) && !r.feed(down: [12], now: 5.1, steps: steps)
             && r.progress == 1
             && !r.feed(down: [], now: 5.2, steps: steps) && !r.feed(down: [12], now: 5.3, steps: steps)
             && r.progress == 2
@@ -2588,12 +3049,24 @@ final class TestBenchService: ObservableObject {
         var searchMisses: [String] = []
         // No "ß": Swift's own String search with .caseInsensitive matches it on
         // nearly any text with an "s" so it is no reference there.
-        for q in ["po", "poi", "point", "resume", "résumé", "dualsense", "zzqx", "a b"] {
+        // Since 1.10 a query is taken word by word, so the reference holds
+        // every word of the query in one language.
+        func holdsAll(_ text: String, _ q: String) -> Bool {
+            q.split(separator: " ").allSatisfy { text.range(of: $0, options: options) != nil }
+        }
+        for q in ["po", "poi", "point", "resume", "résumé", "dualsense", "zzqx", "a b", "preset pointer", "pointer zzqx"] {
             let reference = zip(HelpGuideLibrary.localizedAll, zip(localized, english))
-                .filter { $0.1.0.range(of: q, options: options) != nil
-                    || (HelpLocalizer.isTranslated && $0.1.1.range(of: q, options: options) != nil) }.map(\.0.id)
+                .filter { holdsAll($0.1.0, q) || (HelpLocalizer.isTranslated && holdsAll($0.1.1, q)) }.map(\.0.id)
             if HelpGuideView.matching(q).map(\.id) != reference { searchMisses.append(q) }
         }
+        // Words that are apart in a guide still find it, in either order.
+        let apart = HelpGuideView.matching("preset pointer").map(\.id)
+        record(cat, "Help search takes a query word by word",
+               pass: apart == HelpGuideView.matching("pointer preset").map(\.id)
+                   && apart.count >= HelpGuideView.matching("pointer preset zzqx").count
+                   && HelpGuideView.matching("pointer zzqx").isEmpty
+                   && Set(apart).isSubset(of: Set(HelpGuideView.matching("pointer").map(\.id))),
+               detail: "\(apart.count) guides hold both words")
         record(cat, "Help search finds what the String search found", pass: searchMisses.isEmpty,
                detail: searchMisses.joined(separator: ", "))
         let sharpS = HelpGuideView.matching("ß").count
@@ -2744,6 +3217,39 @@ final class TestBenchService: ObservableObject {
         record("Variable Sensitivity", "Both ways reaches the end at Full push",
                pass: MappingEngine.bipolarValue(0.8, inner: 0.2, outer: 0.8) == 1
                    && MappingEngine.bipolarValue(-0.9, inner: 0.2, outer: 0.8) == -1)
+        // Mouse Motion and Mouse Wheel from a both ways row: the stick's
+        // negative side runs the output the other way. A row with a
+        // direction keeps the output's own direction on either reading.
+        record("Variable Sensitivity", "Both ways moves the pointer and the wheel the other way on the stick's negative side",
+               pass: MappingEngine.bothWaysSide(-0.8, direction: nil) == -1 && MappingEngine.bothWaysSide(0.8, direction: nil) == 1
+                   && MappingEngine.bothWaysSide(0, direction: nil) == 1
+                   && abs(MappingEngine.bipolarValue(0.1, inner: 0.2, outer: 1)) * MappingEngine.bothWaysSide(0.1, direction: nil) == 0)
+        // At full speed a row latched on keeps running with the stick let
+        // go: a resting stick's noise is no side, on either sign.
+        record("Variable Sensitivity", "Both ways at full speed keeps the output's own direction while the stick rests",
+               pass: MappingEngine.bothWaysSide(-0.02, direction: nil, restBelow: 0.225) == 1
+                   && MappingEngine.bothWaysSide(0.02, direction: nil, restBelow: 0.225) == 1
+                   && MappingEngine.bothWaysSide(-0.225, direction: nil, restBelow: 0.225) == 1
+                   && MappingEngine.bothWaysSide(-0.8, direction: nil, restBelow: 0.225) == -1
+                   && MappingEngine.bothWaysSide(0.8, direction: nil, restBelow: 0.225) == 1
+                   && MappingEngine.bothWaysSide(-0.8, direction: .positive, restBelow: 0.225) == 1)
+        // A trigger scanned as a button and resting near half pull: one
+        // press, held until it falls below the release point.
+        do {
+            var held = false, presses = 0, releases = 0
+            for value: Float in [0.2, 0.49, 0.51, 0.49, 0.51, 0.46, 0.5, 0.44, 0.49, 0.6] {
+                let now = MappingEngine.buttonHeld(value, wasHeld: held)
+                if now, !held { presses += 1 } else if !now, held { releases += 1 }
+                held = now
+            }
+            record("Variable Sensitivity", "A trigger read as a button near half pull is one press until it falls below the release point",
+                   pass: presses == 2 && releases == 1 && MappingEngine.buttonHeld(1, wasHeld: false) && !MappingEngine.buttonHeld(0, wasHeld: true)
+                       && !MappingEngine.buttonHeld(0.5, wasHeld: false) && !MappingEngine.buttonHeld(0.45, wasHeld: true),
+                   detail: "\(presses) presses, \(releases) releases")
+        }
+        record("Variable Sensitivity", "A row with a direction keeps the output's own direction",
+               pass: MappingEngine.bothWaysSide(-0.8, direction: .negative) == 1 && MappingEngine.bothWaysSide(0.8, direction: .positive) == 1
+                   && MappingEngine.bothWaysSide(-0.8, direction: .positive) == 1)
         let bothWaysRow = InputEvent.parse(InputEvent(type: .axis, index: 0, axisDirection: nil).serialized)
         record("Variable Sensitivity", "A both ways row survives its text form",
                pass: bothWaysRow?.type == .axis && bothWaysRow?.axisDirection == nil)
@@ -2922,6 +3428,19 @@ final class TestBenchService: ObservableObject {
         record(cat, "A rewrite keeps its place; a new key drops the oldest",
                pass: cache.count == 256 && cache["k299"] == -1 && cache["k44"] == nil && cache["k45"] == 45,
                detail: "count \(cache.count), k299 \(cache["k299"].map(String.init) ?? "nil"), k44 \(cache["k44"].map(String.init) ?? "nil")")
+        #if DEBUG
+        // An Access controller cap moves and reshapes a socket under the
+        // same id and kind: the drawing's caches must not take the two
+        // for one drawing.
+        let bare = ControllerLayout.psAccess(ports: [:], profile: nil)
+        var reach = AccessCapSet(); reach.sockets[3] = .overhang
+        let capped = ControllerLayout.applyingAccessCaps(reach, to: bare)
+        let sameParts = bare.controls.map { "\($0.id):\($0.kind)" } == capped.controls.map { "\($0.id):\($0.kind)" }
+        record(cat, "A cap that moves a socket gives the drawing its own cache entries",
+               pass: sameParts && ControllerCanvas.cacheSignature(bare, variant: nil) != ControllerCanvas.cacheSignature(capped, variant: nil)
+                   && ControllerCanvas.cacheSignature(bare, variant: nil) == ControllerCanvas.cacheSignature(ControllerLayout.psAccess(ports: [:], profile: nil), variant: nil),
+               detail: "same ids and kinds: \(sameParts)")
+        #endif
     }
 
     /// The controller drawing's frozen layer (ControllerCanvas) draws what
@@ -2936,6 +3455,15 @@ final class TestBenchService: ObservableObject {
                detail: differ.isEmpty ? "\(drawn) layouts identical" : "differ: " + differ.prefix(6).joined(separator: ", "))
         record("Controller drawing", "A second draw looks the layer up", pass: remade.isEmpty,
                detail: remade.isEmpty ? "no layer made again" : "made again: " + remade.prefix(6).joined(separator: ", "))
+        // A layer is looked up by what it draws, not by what each control
+        // reads: made with the pad away, then looked up for the pad
+        // read from its descriptor, where btn 1 is A, not B.
+        let readsNow = ControllerCanvas.debugLayerReadsNowCheck()
+        record("Controller drawing", "A layer made with the pad away lights what the pad sends now",
+               pass: readsNow.hit && readsNow.lit == ["a"] && readsNow.keyLit == (readsNow.keyHasA ? ["a"] : []),
+               detail: "looked up: \(readsNow.hit), lit: \(readsNow.lit.joined(separator: ", ")), key lines lit: \(readsNow.keyLit.joined(separator: ", "))")
+        record("Controller drawing", "And draws what working it out draws", pass: readsNow.hit && readsNow.same,
+               detail: readsNow.same ? "identical" : "the pictures differ")
         let (compared, routeDiffer) = ControllerCanvas.debugQuickRouteCheck()
         record("Controller drawing", "The quick key routing lays out what the full routing lays out", pass: compared > 0 && routeDiffer.isEmpty,
                detail: routeDiffer.isEmpty ? "\(compared) keys identical" : "differ: " + routeDiffer.prefix(6).joined(separator: ", "))
@@ -2976,17 +3504,18 @@ final class TestBenchService: ObservableObject {
             window.close()
         }
         let pid = getpid()
-        /// The window's elements, read off the main thread while main
-        /// answers; read again until two reads agree (the tree fills in on
-        /// the first request).
+        /// The window's elements, read on the main thread: a read of this
+        /// app's own elements is answered on the thread that asks, and the
+        /// views may only be touched on main. Read again until two reads
+        /// agree (the tree fills in on the first request), with a pause
+        /// between so pending view updates land.
         func read() async -> [String] {
             var last: [String]? = nil
             for _ in 0..<4 {
-                let lines = await withCheckedContinuation { (done: CheckedContinuation<[String], Never>) in
-                    Thread.detachNewThread { done.resume(returning: Self.accessibilityLines(pid: pid, window: title)) }
-                }
+                let lines = Self.accessibilityLines(pid: pid, window: title)
                 if lines == last { return lines }
                 last = lines
+                try? await Task.sleep(nanoseconds: 10_000_000)
             }
             return last ?? []
         }
@@ -3018,8 +3547,9 @@ final class TestBenchService: ObservableObject {
 
     #if DEBUG
     /// Every element under the window titled `window`, depth first, one
-    /// line each: role, label, value, help. Runs off the main thread (the
-    /// Accessibility API asks main for each answer); plain loops only.
+    /// line each: role, label, value, help. Call it on the main thread:
+    /// for this app's own elements the Accessibility API answers on the
+    /// calling thread and reaches into the views. Plain loops only.
     nonisolated private static func accessibilityLines(pid: pid_t, window: String) -> [String] {
         func attribute(_ e: AXUIElement, _ name: String) -> AnyObject? {
             var value: AnyObject?
@@ -3372,7 +3902,7 @@ final class TestBenchService: ObservableObject {
             guard let profile = fixtureProfile(vendorID: vid, productID: pid, transport: transport) else {
                 return .checked([String(format: "no profile for %04x:%04x", vid, pid)])
             }
-            let state = HIDReportDecoder.decode(report: Data(bytes), profile: profile)
+            let state = HIDReportDecoder.decode(report: Data(bytes), profile: profile, calibration: .constants)
             return .checked(checkState(state, expect: f.expect, facts: ["profile": profile.identifier]))
         case .descriptor(let name, let descriptor, let vid, let pid, let version):
             // The real path: a GameControllerDB row for the device when one
@@ -3461,7 +3991,7 @@ final class TestBenchService: ObservableObject {
                 if step.delayMs > 0 { try? await Task.sleep(nanoseconds: UInt64(step.delayMs) * 1_000_000) }
                 let bytes = HIDFixture.parse(step.hex)
                 if !bytes.isEmpty {
-                    RawHIDReportApplier.apply(data: Data(bytes), to: pad, profile: profile, players: nil, replay: false, steam2026: nil)
+                    RawHIDReportApplier.apply(data: Data(bytes), to: pad, profile: profile, players: nil, replay: false, steam2026: nil, calibration: .constants)
                 }
                 let stepMisses = checkState(pad.state, expect: step.expect, facts: ["profile": profile.identifier])
                 misses += stepMisses.map { "step \(n): \($0)" }
@@ -3587,6 +4117,59 @@ final class TestBenchService: ObservableObject {
             info(cat, "queued order case", detail: "no fixture sequence with two reports and a profile")
         }
         raw.debugRemoveSyntheticPads()
+
+        // A Switch 2 Bluetooth notification goes from the Bluetooth queue
+        // to the report thread with no turn of the main queue: it lands
+        // while the main thread is held, here by this case itself.
+        if let key = raw.debugInstallSyntheticPad(vendorID: 0x057E, productID: 0x2069, transport: "USB",
+                                                  productName: "Pro Controller", descriptor: nil),
+           let pad = raw.debugPad(key: key),
+           let pressA = HIDFixtureCorpus.nintendo.first(where: { $0.id == "switch2pro05.a" }) {
+            Switch2BluetoothService.deliver(Data(pressA.bytes.dropFirst()), key: key, to: raw)
+            RawHIDReportThread.shared.sync {}
+            let a = pad.state.buttons[1] ?? 0
+            record(cat, "A Switch 2 Bluetooth report reaches its pad while the main thread is held", pass: a == 1, detail: "A \(a)")
+        } else {
+            info(cat, "Switch 2 Bluetooth report case", detail: "no Switch 2 Pro profile or report 0x05 fixture")
+        }
+        raw.debugRemoveSyntheticPads()
+
+        // A Joy-Con 2 from its advertisement to a press, the way the
+        // Bluetooth service does it: the product from the manufacturer
+        // data (a real Joy-Con 2 (R) advertises 53 05 01 00 03 7e 05 66
+        // 20), the pad listed for that product, a 63 byte notification
+        // through the live dispatcher. Minus on the left one and Plus on
+        // the right one arrive; each side's notification on the other
+        // side's pad presses nothing.
+        func joyCon2Notification(_ set: (inout [UInt8]) -> Void) -> Data {
+            var n = [UInt8](repeating: 0, count: 63)
+            for at in [0x0A, 0x0D] { n[at] = 0x00; n[at + 1] = 0x08; n[at + 2] = 0x80 }   // both sticks at 2048, 2048
+            set(&n)
+            return Data(n)
+        }
+        let minus = joyCon2Notification { $0[5] = 0x01 }, plus = joyCon2Notification { $0[5] = 0x02 }
+        var sideResults: [String] = []
+        var sidesPass = true
+        for (label, advertised, own, other, button) in [("left", [UInt8](arrayLiteral: 0x67, 0x20), minus, plus, 8),
+                                                        ("right", [UInt8](arrayLiteral: 0x66, 0x20), plus, minus, 9)] {
+            let advert = Data([0x53, 0x05, 0x01, 0x00, 0x03, 0x7E, 0x05] + advertised + [0x00, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0x0F])
+            guard let product = Switch2BluetoothService.productID(name: nil, manufacturerData: advert),
+                  let key = raw.debugInstallSyntheticPad(vendorID: 0x057E, productID: product, transport: "Bluetooth LE",
+                                                         productName: "Joy-Con 2", descriptor: nil),
+                  let pad = raw.debugPad(key: key) else { sidesPass = false; sideResults.append("\(label): not listed"); continue }
+            Switch2BluetoothService.deliver(other, key: key, to: raw)
+            RawHIDReportThread.shared.sync {}
+            let wrong = pad.state.buttons.values.reduce(0, +)
+            Switch2BluetoothService.deliver(own, key: key, to: raw)
+            RawHIDReportThread.shared.sync {}
+            let right = pad.state.buttons[button] ?? 0
+            let expected: ControllerProfile.ReportLayout = label == "left" ? .switch2JoyConLeft : .switch2JoyConRight
+            if right != 1 || wrong != 0 || pad.profile?.layout != expected { sidesPass = false }
+            sideResults.append("\(label): own press \(right), other side's press \(wrong)")
+            raw.debugRemoveSyntheticPads()
+        }
+        record(cat, "A Joy-Con 2 from its advertisement to a press: Minus on the left, Plus on the right",
+               pass: sidesPass, detail: sideResults.joined(separator: "; "))
     }
     #endif
 
@@ -3781,12 +4364,14 @@ final class TestBenchService: ObservableObject {
             case .bytesPrefix(let want):
                 if Array(got.prefix(want.count)) != want { out.append("prefix got \(HIDFixture.hex(Array(got.prefix(want.count)))) want \(HIDFixture.hex(want))") }
             case .crcValid(let want):
-                if got.count >= 78, got[0] == 0x31 {
+                // An output report is sealed with the output seed (0xA2), not the
+                // input seed, and the DualShock 4 sends report 0x11.
+                if got.count >= 78, got[0] == 0x31 || got[0] == 0x11 {
                     let stored = UInt32(got[74]) | UInt32(got[75]) << 8 | UInt32(got[76]) << 16 | UInt32(got[77]) << 24
-                    let valid = sonyCRC32(got[0..<74]) == stored
-                    if valid != want { out.append("crc valid \(valid) want \(want)") }
+                    let valid = SonyBluetoothCRC.crc32(seed: SonyBluetoothCRC.outputSeed, Array(got[0..<74])) == stored
+                    if valid != want { out.append("output crc valid \(valid) want \(want)") }
                 } else {
-                    out.append("crcValid needs a 78 byte 0x31 report, got \(got.count) bytes")
+                    out.append("crcValid needs a 78 byte 0x31 or 0x11 output report, got \(got.count) bytes")
                 }
             case .custom(let spec):
                 if let miss = checkCustom(spec, facts: facts) { out.append(miss) }
@@ -3887,7 +4472,7 @@ final class TestBenchService: ObservableObject {
             profileOrder.append(p.identifier)
             profileCounts[p.identifier] = 0
         }
-        let layoutNames = ["xinput", "dualShock3", "dualShock4", "dualSenseAlt", "xboxBluetooth", "switch2Pro", "switch2GameCube", "switch2JoyConLeft", "switch2JoyConRight", "steamController2026", "streamDeck", "generic"]
+        let layoutNames = ["xinput", "dualShock3", "dualShock4", "dualSenseAlt", "xboxBluetooth", "switch2Pro", "switch2GameCube", "switch2JoyConLeft", "switch2JoyConRight", "steamController2026", "eightBitDo", "streamDeck", "generic"]
         var layoutCounts = Dictionary(uniqueKeysWithValues: layoutNames.map { ($0, 0) })
         var builderCounts = Dictionary(uniqueKeysWithValues: OutputBuilder.caseNames.map { ($0, 0) })
         func count(_ route: HIDFixture.Route) {
@@ -4231,6 +4816,8 @@ final class TestBenchService: ObservableObject {
         runHelpCoverageTests()
         runScreenDisplayTests()
         runThirdAuditTests()
+        runFourthAuditTests()
+        await runNov9DevicePulseTests()
         // These take the simulator's posting path, its held state, the key
         // tap's state and the engine's suspend edges: one skip per section.
         if MappingEngine.current?.isRunning ?? false {
@@ -4262,6 +4849,88 @@ final class TestBenchService: ObservableObject {
         runWatchdogReleaseTest()
         runLockedPlayOnceTest()
         runEngineRowsBench()
+        runMIDIStrikeEngineTest()
+    }
+
+    /// Through the engine's own poll: five MIDI rows on
+    /// a device no port has, the keys they send caught by the sink.
+    private func runMIDIStrikeEngineTest() {
+        let cat = "MIDI Strikes"
+        let name = "Through the engine: two rows on one Program Change, a Trigger, a tapped note and a press-only pedal each send a key per press"
+        #if DEBUG
+        guard let engine = MappingEngine.current else { return }
+        guard !engine.outputsPaused, !engine.isSuspended, !engine.editorOpen else {
+            skip(cat, name, detail: "Outputs are paused or held back, or the editor is open")
+            return
+        }
+        let midi = MIDIInputService.shared
+        let dev = "testbench-strike-engine"
+        // F13 to F17: no letter, so no keyboard layout moves them. The
+        // sink sees the Mac key code, not the code the row stores.
+        let keys = [104, 105, 106, 107, 108]
+        let codes = keys.map { Int64(KeyCodeMap.hidToVirtualKeyCode[$0] ?? -1) }
+        guard Set(codes).count == keys.count, !codes.contains(-1) else {
+            record(cat, name, pass: false, detail: "F13 to F17 have no key codes of their own")
+            return
+        }
+        func row(_ input: InputEvent, _ key: Int) -> BindingModel { BindingModel(input: input, outputs: [OutputAction(type: .key, keyCode: keys[key])]) }
+        let preset = Preset(name: "Bench strikes", tag: "Tests", joysticks: [JoystickMapping(tag: "MIDI", bindings: [
+            row(.midi(.programChange, number: 5, deviceID: dev), 0),
+            row(.midi(.programChange, number: 5, channel: 1, deviceID: dev), 1),
+            row(.midi(.cc, number: 70, deviceID: dev, ccMode: .trigger), 2),
+            row(.midi(.note, number: 60, deviceID: dev), 3),
+            row(.midi(.cc, number: 71, deviceID: dev), 4),
+        ])])
+        let savedStats = StatsService.shared.stats
+        let oldSink = InputSimulator.debugEventSink
+        engine.debugLizardSink = { _ in }
+        engine.debugQuiet = true
+        defer {
+            engine.debugQuiet = false
+            engine.debugLizardSink = nil
+            InputSimulator.debugEventSink = oldSink
+            StatsService.shared.debugRestore(savedStats)
+        }
+        var downs: [Int64: Int] = [:], ups: [Int64: Int] = [:]
+        InputSimulator.debugEventSink = { event in
+            let code = event.getIntegerValueField(.keyboardEventKeycode)
+            if event.type == .keyDown { downs[code, default: 0] += 1 }
+            if event.type == .keyUp { ups[code, default: 0] += 1 }
+        }
+        midi.debugForgetKnobs(deviceID: dev, consumers: [])
+        engine.debugStartQuiet(preset)
+        func poll(_ times: Int) { for _ in 0..<times { engine.debugPollOnce() } }
+        func send(_ status: UInt8, _ number: Int, _ value: Int) {
+            midi.debugInject(status: status, channel: 1, data1: number, data2: value, deviceID: dev)
+        }
+        poll(4)
+        // One Program Change, read by the any channel row and the channel 1 row.
+        send(0xC, 5, 0)
+        poll(3)
+        // Three messages on the Trigger's number, a 0 among them.
+        send(0xB, 70, 127); poll(2)
+        send(0xB, 70, 127); poll(2)
+        send(0xB, 70, 0); poll(2)
+        // A tap that began and ended between two polls, then two more.
+        send(0x9, 60, 100); send(0x8, 60, 0); poll(2)
+        send(0x9, 60, 100); send(0x8, 60, 0); send(0x9, 60, 100); send(0x8, 60, 0); poll(4)
+        // A pedal that sends 127 on each press and nothing else, three presses.
+        send(0xB, 71, 127); poll(3)
+        let heldAfterFirst = (downs[codes[4]] ?? 0) - (ups[codes[4]] ?? 0)
+        midi.debugAgePause(deviceID: dev, by: 0.5)
+        send(0xB, 71, 127); poll(3)
+        midi.debugAgePause(deviceID: dev, by: 0.5)
+        send(0xB, 71, 127); poll(3)
+        let counts = codes.map { downs[$0] ?? 0 }
+        let letGo = codes.allSatisfy { (downs[$0] ?? 0) == (ups[$0] ?? 0) }
+        engine.debugStopQuiet()
+        InputSimulator.debugEventSink = { _ in }
+        midi.debugForgetKnobs(deviceID: dev, consumers: [])
+        midi.debugForgetVelocity(deviceID: dev)
+        record(cat, name,
+               pass: counts == [1, 1, 3, 3, 3] && letGo && heldAfterFirst == 1,
+               detail: "key downs for any channel, channel 1, Trigger, note, pedal \(counts); all let go before the stop \(letGo); pedal held after its first press \(heldAfterFirst)")
+        #endif
     }
 
     /// Play once refused at the lock screen or asleep, run under the gate (ENG-1).
@@ -4564,6 +5233,60 @@ final class TestBenchService: ObservableObject {
         info(cat, "300 rows, 1,000 polls",
              detail: "digest \(digest(first.events)), \(first.events.count) events, "
                  + "\(Int(first.seconds * 1_000_000 / Double(states.count))) and \(Int(second.seconds * 1_000_000 / Double(states.count))) us per poll")
+
+        // A double tap row. The single of a tap is parked for the window
+        // and sent by a block on the main queue, which runs a little late:
+        // a second tap pressed and let go after the window's end and before
+        // that block took the first tap's place, and one press was lost.
+        // The main thread is held here, so the block cannot run between the
+        // taps, as when it is late.
+        var tapRow = BindingModel(input: .button(buttons[0]), outputs: [OutputAction(type: .key, keyCode: 4)])
+        tapRow.doubleTapOutputs = [OutputAction(type: .key, keyCode: 5)]
+        tapRow.doubleTapWindowMs = 100
+        let taps = Preset(name: "Bench taps", tag: "Tests", joysticks: [JoystickMapping(tag: "Pad", bindings: [tapRow])])
+        let tapSlot = service.effectiveSlots(for: taps.joysticks)[0] ?? 0
+        guard tapSlot != GameControllerService.noSlot, !service.isIgnored(slot: tapSlot) else { return }
+        var padUp = ControllerState()
+        for b in pool { padUp.buttons[b] = 0 }
+        var padDown = padUp
+        padDown.buttons[buttons[0]] = 1
+        /// Two taps `apart` seconds from each other; the key downs of the
+        /// row's own action (A) and of its double tap action (B) by the
+        /// second tap's release.
+        func tapTwice(apart: TimeInterval) -> (single: Int, double: Int) {
+            var single = 0, double = 0
+            InputSimulator.debugEventSink = { event in
+                guard event.type == .keyDown else { return }
+                switch event.getIntegerValueField(.keyboardEventKeycode) {
+                case 0: single += 1
+                case 11: double += 1
+                default: break
+                }
+            }
+            engine.debugStartQuiet(taps)
+            func poll(_ state: ControllerState, _ times: Int) {
+                GameControllerService.debugScriptedStates[tapSlot] = state
+                for _ in 0..<times { engine.debugPollOnce() }
+            }
+            poll(padUp, 4)
+            poll(padDown, 2)
+            poll(padUp, 2)
+            if apart > 0 { Thread.sleep(forTimeInterval: apart) }
+            poll(padDown, 2)
+            poll(padUp, 2)
+            let sent = (single, double)
+            engine.debugStopQuiet()
+            InputSimulator.debugEventSink = { _ in }
+            return sent
+        }
+        let late = tapTwice(apart: 0.13)
+        record(cat, "A tap just after a double tap window ends does not swallow the single of the tap before",
+               pass: late.single == 1 && late.double == 0,
+               detail: "by the second release: \(late.single) single, \(late.double) double (the second tap's own single waits out its window)")
+        let quick = tapTwice(apart: 0)
+        record(cat, "Two taps inside the window are one double tap and no single",
+               pass: quick.single == 0 && quick.double == 1,
+               detail: "\(quick.single) single, \(quick.double) double")
     }
 
     // MARK: - Third review
@@ -4576,6 +5299,1800 @@ final class TestBenchService: ObservableObject {
         runSeededBuiltInTests()
         runDeferredArrivalTests()
         runHeldPaneTests()
+    }
+
+    // MARK: - Fourth review
+
+    private func runFourthAuditTests() {
+        runNov9StoreTests()
+        runNov9PerformanceLaneTests()
+        runNov9PointerAndVoiceTests()
+        runNov9EngineTests()
+        runNov9DeviceTests()
+        runNov9ViewTests()
+    }
+
+    /// Decoders, lights and the raw HID path (the devices lane).
+    private func runNov9DeviceTests() {
+        let raw = RawHIDGamepadService.shared
+
+        // An Xbox pad over Bluetooth that sends report 0x02 keeps
+        // its Xbox button there; a state report between the press and the
+        // release does not let it go. Through the live dispatcher, which
+        // is what knows a 0x02 was seen.
+        var cat = "Xbox Bluetooth"
+        func xboxRest(_ length: Int) -> [UInt8] {
+            var r = [UInt8](repeating: 0, count: length)
+            r[0] = 0x01; r[2] = 0x80; r[4] = 0x80; r[6] = 0x80; r[8] = 0x80
+            return r
+        }
+        var withGuide = ControllerState(), alone = ControllerState()
+        var bitSet = xboxRest(17); bitSet[15] = 0x10
+        XboxBluetoothLayout.decode(report: Data(bitSet), share: false, sawGuidePacket: true, into: &withGuide)
+        XboxBluetoothLayout.decode(report: Data(bitSet), share: false, into: &alone)
+        record(cat, "A pad with no report 0x02 reads its Xbox button from the state report",
+               pass: alone.buttons[10] == 1 && withGuide.buttons[10] == nil && withGuide.buttons[9] == 0)
+        for (pid, length) in [(Int32(0x02FD), 17), (Int32(0x0B05), 39), (Int32(0x0B05), 55), (Int32(0x0B13), 17)] {
+            let name = String(format: "A held Xbox button survives a state report (%04X, %d bytes)", pid, length)
+            guard let key = raw.debugInstallSyntheticPad(vendorID: 0x045E, productID: pid, transport: "Bluetooth",
+                                                         productName: "Xbox Wireless Controller", descriptor: nil),
+                  let pad = raw.debugPad(key: key) else {
+                record(cat, name, pass: false, detail: "no synthetic pad")
+                raw.debugRemoveSyntheticPads()
+                continue
+            }
+            var pressA = xboxRest(length); pressA[14] = 0x01
+            raw.debugInject(key: key, reportID: 0x02, bytes: [0x02, 0x01])
+            let down = pad.state.buttons[10]
+            raw.debugInject(key: key, reportID: 0x01, bytes: pressA)
+            let held = pad.state.buttons[10], a = pad.state.buttons[0]
+            raw.debugInject(key: key, reportID: 0x01, bytes: xboxRest(length))
+            let stillHeld = pad.state.buttons[10]
+            raw.debugInject(key: key, reportID: 0x02, bytes: [0x02, 0x00])
+            let up = pad.state.buttons[10]
+            raw.debugRemoveSyntheticPads()
+            record(cat, name, pass: down == 1 && held == 1 && a == 1 && stillHeld == 1 && up == 0,
+                   detail: "down \(down ?? -1) held \(held ?? -1) A \(a ?? -1) after rest \(stillHeld ?? -1) up \(up ?? -1)")
+        }
+
+        // A buzz with no color held for the pad leaves its
+        // light bar alone, and the light writes retried after a connection
+        // are not dropped by the guard on empty scans.
+        cat = "Light Bar"
+        typealias Light = InProcessLightWriter
+        record(cat, "A write with no color for the pad does not claim its light",
+               pass: !Light.claimsLight(asked: true, lightControl: true, oneOff: false, held: false)
+                   && Light.claimsLight(asked: true, lightControl: true, oneOff: false, held: true)
+                   && Light.claimsLight(asked: true, lightControl: true, oneOff: true, held: false)
+                   && !Light.claimsLight(asked: true, lightControl: false, oneOff: true, held: true)
+                   && !Light.claimsLight(asked: false, lightControl: true, oneOff: false, held: true))
+        record(cat, "A scan asked for by a connection runs inside the five second guard",
+               pass: Light.scanAllowed(sinceLastScan: 0.5, force: true)
+                   && !Light.scanAllowed(sinceLastScan: 0.5, force: false)
+                   && Light.scanAllowed(sinceLastScan: 5.5, force: false))
+        // The end of a buzz is timed on the clock its stop block
+        // runs on. On the wall clock a time correction that stepped back
+        // mid buzz skipped the off write.
+        record(cat, "The end of a buzz is timed on time since boot, not the wall clock",
+               pass: abs(Light.steadyNow() - ProcessInfo.processInfo.systemUptime) < 1
+                   && abs(Light.steadyNow() - CFAbsoluteTimeGetCurrent()) > 60)
+        // Stopping a rainbow that is not running publishes nothing
+        // and writes no light. A drag in a chip's color panel asks for the
+        // stop before every color: 120 asks were 120 publishes of the whole
+        // controller service and 120 extra light writes.
+        // No rainbow timer runs while the light bar is left to macOS.
+        record(cat, "The rainbow timer has work only with a slot cycling and the light bar ours",
+               pass: GameControllerService.rainbowTimerWanted(cycling: true, leaveLightBar: false)
+                   && !GameControllerService.rainbowTimerWanted(cycling: true, leaveLightBar: true)
+                   && !GameControllerService.rainbowTimerWanted(cycling: false, leaveLightBar: false))
+        if let service = AppState.current?.controllerService {
+            final class Count { var publishes = 0 }
+            let count = Count()
+            let idleSlot = 63   // past any pad; never cycling
+            let watch = service.objectWillChange.sink { _ in count.publishes += 1 }
+            for _ in 0..<120 { service.stopRGBCycle(at: idleSlot) }
+            watch.cancel()
+            record(cat, "Stopping a rainbow that is not running publishes nothing",
+                   pass: count.publishes == 0 && service.rgbCycleActive[idleSlot] == nil,
+                   detail: "\(count.publishes) publishes in 120 asks")
+            #if DEBUG
+            record(cat, "No rainbow timer runs while the light bar is left to macOS",
+                   pass: !(service.leaveLightBar && service.debugRainbowTimerRunning),
+                   detail: "left to macOS \(service.leaveLightBar), timer running \(service.debugRainbowTimerRunning)")
+            #endif
+        } else {
+            skip(cat, "Stopping a rainbow that is not running publishes nothing", detail: "no controller service")
+            #if DEBUG
+            skip(cat, "No rainbow timer runs while the light bar is left to macOS", detail: "no controller service")
+            #endif
+        }
+        // The Bluetooth light reports are sealed with the output
+        // seed. The corpus check of an output checksum used the input seed
+        // and took report 0x31 only, so it could hold neither of them.
+        let sealedLights: [[UInt8]] = ["out.dualsense.light.bt", "out.ds4.light.bt"].compactMap { id in
+            HIDFixtureCorpus.output.first { $0.id == id }?.expect.compactMap { expect -> [UInt8]? in
+                if case .bytes(let bytes) = expect { return bytes }
+                return nil
+            }.first
+        }
+        func sealHolds(_ report: [UInt8], seed: UInt8) -> Bool {
+            guard report.count == 78 else { return false }
+            let stored = UInt32(report[74]) | UInt32(report[75]) << 8 | UInt32(report[76]) << 16 | UInt32(report[77]) << 24
+            return SonyBluetoothCRC.crc32(seed: seed, Array(report[0..<74])) == stored
+        }
+        record(cat, "Both Bluetooth light reports carry a checksum made with the output seed",
+               pass: sealedLights.count == 2 && sealedLights.allSatisfy { report in
+                   var flipped = report
+                   if flipped.count > 6 { flipped[6] ^= 0x01 }
+                   return sealHolds(report, seed: SonyBluetoothCRC.outputSeed)
+                       && !sealHolds(report, seed: SonyBluetoothCRC.inputSeed)
+                       && !sealHolds(flipped, seed: SonyBluetoothCRC.outputSeed)
+               },
+               detail: "\(sealedLights.count) of 2 reports found, ids \(sealedLights.compactMap { $0.first }.map { String(format: "0x%02x", $0) }.joined(separator: " "))")
+
+        // A zone held longer than the latch lets go on the sample
+        // where the finger leaves it (a slide into the next zone read both
+        // pressed for 40 ms); a tap shorter than the latch still lasts it.
+        cat = "Touchpad"
+        let heldLeave = TouchpadService.regionLatchEnd(pressStart: 10, left: 10.2, latch: 0.04)
+        let tapLeave = TouchpadService.regionLatchEnd(pressStart: 10, left: 10.002, latch: 0.04)
+        record(cat, "A zone held past its latch lets go when the finger leaves, and a short tap still lasts the latch",
+               pass: heldLeave == 10.2 && abs(tapLeave - 10.04) < 1e-9,
+               detail: "held \(heldLeave) tap \(tapLeave)")
+
+        // The stick rest is decided per stick, a
+        // Joy-Con 2 on its own learns it, and a flash read that brought
+        // nothing keeps the calibration read before.
+        cat = "Switch 2"
+        typealias Cal = Switch2Calibration
+        let packed = HIDFixtureCorpus.switch2Stick
+        func proShort(_ left: [UInt8], _ right: [UInt8]) -> Data { Data([0x09, 0x00, 0x00, 0x00, 0x00, 0x00] + left + right) }
+        func apply(_ report: Data, to pad: RawHIDGamepad, _ profile: ControllerProfile) -> ControllerState {
+            RawHIDReportApplier.apply(data: report, to: pad, profile: profile, players: nil, replay: false, steam2026: nil)
+            return pad.state
+        }
+        // Neutral 2048, 1024 counts up and 1536 down, on both axes.
+        let goodStick = Cal.Stick(block: [0x00, 0x08, 0x80, 0x00, 0x04, 0x40, 0x00, 0x06, 0x60])
+        if let pro = ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2069), let goodStick {
+            // A connected Switch 2 Pro's own calibration is put back after.
+            let theirs = Cal.current(product: 0x2069)
+            defer { Cal.store(theirs, product: 0x2069) }
+            Cal.store(nil, product: 0x2069)
+            var triggersOnly = Cal()
+            triggersOnly.triggerZeroL = 30; triggersOnly.triggerZeroR = 30
+            Cal.store(triggersOnly, product: 0x2069)
+            var pad = RawHIDGamepad(testProfile: pro, vendorID: 0x057E, productID: 0x2069, transport: "USB", id: 0xFA5E_0000_5202_0001)
+            let rest = apply(proShort(packed(2198, 1950), packed(2048, 2048)), to: pad, pro)
+            let pushed = apply(proShort(packed(4095, 1950), packed(2048, 2048)), to: pad, pro)
+            record(cat, "A calibration with no stick in it still takes off the stick rest and clamps to 1",
+                   pass: abs(rest.axes[0] ?? 9) < 0.0001 && abs(rest.axes[1] ?? 9) < 0.0001 && pushed.axes[0] == 1,
+                   detail: "rest \(rest.axes[0] ?? 9), \(rest.axes[1] ?? 9); pushed \(pushed.axes[0] ?? 9)")
+
+            var leftOnly = Cal()
+            leftOnly.left = goodStick
+            Cal.store(leftOnly, product: 0x2069)
+            pad = RawHIDGamepad(testProfile: pro, vendorID: 0x057E, productID: 0x2069, transport: "USB", id: 0xFA5E_0000_5202_0002)
+            let mixed = apply(proShort(packed(2198, 2048), packed(2198, 1950)), to: pad, pro)
+            let far = apply(proShort(packed(2198, 2048), packed(4095, 1950)), to: pad, pro)
+            record(cat, "The stick rest is taken off the stick with no calibration only",
+                   pass: abs((mixed.axes[0] ?? 9) - 150.0 / 1024.0) < 0.0001 && abs(mixed.axes[2] ?? 9) < 0.0001
+                       && abs(mixed.axes[3] ?? 9) < 0.0001 && far.axes[2] == 1,
+                   detail: "calibrated \(mixed.axes[0] ?? 9); other \(mixed.axes[2] ?? 9), \(mixed.axes[3] ?? 9); pushed \(far.axes[2] ?? 9)")
+
+            Cal.store(Cal.from(replies: [:]), product: 0x2069)
+            let kept = Cal.current(product: 0x2069)
+            Cal.store(nil, product: 0x2069)
+            record(cat, "A flash read that brought nothing keeps the calibration read before",
+                   pass: kept == leftOnly && Cal.current(product: 0x2069) == nil,
+                   detail: "kept \(kept == leftOnly), cleared \(Cal.current(product: 0x2069) == nil)")
+
+            // A decode told to use the fixed constants reads none of
+            // what is stored, so the stick fixtures hold with a pad's
+            // calibration in the table; one handed a calibration reads
+            // through it with nothing stored.
+            var both = Cal()
+            both.left = goodStick; both.right = goodStick
+            Cal.store(both, product: 0x2069)
+            let stickFixtures = HIDFixtureCorpus.nintendo.filter { $0.id.hasPrefix("switch2pro.leftstick.") || $0.id == "switch2pro.rest" }
+            var misses: [String] = []
+            for f in stickFixtures {
+                let state = HIDReportDecoder.decode(report: Data(f.bytes), profile: pro, calibration: .constants)
+                misses += checkState(state, expect: f.expect, facts: ["profile": pro.identifier]).map { "\(f.id): \($0)" }
+            }
+            let tilted = proShort(packed(3072, 2048), packed(2048, 2048))
+            let throughStored = HIDReportDecoder.decode(report: tilted, profile: pro).axes[0] ?? 9
+            let throughConstants = HIDReportDecoder.decode(report: tilted, profile: pro, calibration: .constants).axes[0] ?? 9
+            pad = RawHIDGamepad(testProfile: pro, vendorID: 0x057E, productID: 0x2069, transport: "USB", id: 0xFA5E_0000_5202_0004)
+            RawHIDReportApplier.apply(data: proShort(packed(2198, 1950), packed(2048, 2048)), to: pad, profile: pro, players: nil,
+                                      replay: false, steam2026: nil, calibration: .constants)
+            let appliedRest = pad.state.axes[0] ?? 9
+            Cal.store(nil, product: 0x2069)
+            let throughGiven = HIDReportDecoder.decode(report: tilted, profile: pro, calibration: .given(both)).axes[0] ?? 9
+            record(cat, "A decode told to use the fixed constants reads none of the stored calibration",
+                   pass: stickFixtures.count >= 4 && misses.isEmpty && abs(throughStored - 1) < 0.001
+                       && abs(throughConstants - 1024.0 / 1650.0) < 0.001 && abs(appliedRest) < 0.0001
+                       && abs(throughGiven - 1) < 0.001,
+                   detail: "fixtures \(stickFixtures.count), misses \(misses.prefix(2)); stored \(throughStored), constants \(throughConstants), "
+                       + "applied rest \(appliedRest), given \(throughGiven)")
+        } else {
+            skip(cat, "A calibration with no stick in it still takes off the stick rest and clamps to 1", detail: "No Switch 2 Pro profile")
+        }
+        record(cat, "The trigger rest block is read from the GameCube controller only",
+               pass: Cal.addresses(product: 0x2073).contains(Cal.triggerZeroAddress)
+                   && !Cal.addresses(product: 0x2069).contains(Cal.triggerZeroAddress)
+                   && !Cal.addresses(product: 0x2066).contains(Cal.triggerZeroAddress)
+                   && Cal.addresses(product: 0x2069).count == Cal.addresses.count - 1)
+        if let joyCon = ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2067) {
+            let theirs = Cal.current(product: 0x2067)
+            defer { Cal.store(theirs, product: 0x2067) }
+            Cal.store(nil, product: 0x2067)
+            func solo(_ stick: [UInt8]) -> Data {
+                var r = [UInt8](repeating: 0, count: 64)
+                r[0] = 0x05
+                for (i, b) in stick.enumerated() { r[11 + i] = b }
+                return Data(r)
+            }
+            let pad = RawHIDGamepad(testProfile: joyCon, vendorID: 0x057E, productID: 0x2067, transport: "USB", id: 0xFA5E_0000_5202_0003)
+            let rest = apply(solo(packed(2198, 1950)), to: pad, joyCon)
+            let pushed = apply(solo(packed(4095, 1950)), to: pad, joyCon)
+            record(cat, "A Joy-Con 2 on its own learns its stick rest",
+                   pass: abs(rest.axes[0] ?? 9) < 0.0001 && abs(rest.axes[1] ?? 9) < 0.0001 && pushed.axes[1] == -1,
+                   detail: "rest \(rest.axes[0] ?? 9), \(rest.axes[1] ?? 9); pushed \(pushed.axes[1] ?? 9)")
+        } else {
+            skip(cat, "A Joy-Con 2 on its own learns its stick rest", detail: "No Joy-Con 2 profile")
+        }
+        // A GameCube controller for Switch 2 holds the answer about
+        // its earlier B and Y from attach, and the report path reads that
+        // (it built a string and searched a set on every report).
+        if let cube = ControllerProfileDatabase.profile(forVendor: 0x057E, product: 0x2073),
+           let bHeld = HIDFixtureCorpus.nintendo.first(where: { $0.id == "switch2gc.b" }) {
+            let asked = HIDDeviceRegistry.keepsLegacyNumbering(vendorID: 0x057E, productID: 0x2073)
+            let cubePad = RawHIDGamepad(testProfile: cube, vendorID: 0x057E, productID: 0x2073, transport: "USB", id: 0xFA5E_0000_5202_0005)
+            let state = apply(Data(bHeld.bytes), to: cubePad, cube)
+            let b = state.buttons[asked ? 3 : 1] ?? 0, other = state.buttons[asked ? 1 : 3] ?? 0
+            record(cat, "A GameCube controller for Switch 2 holds its earlier numbering from attach",
+                   pass: cubePad.keepsLegacyNumbering == asked && b == 1 && other == 0
+                       && !RawHIDGamepad.keepsLegacyNumbering(profile: nil, vendorID: 0x057E, productID: 0x2073),
+                   detail: "earlier numbering \(asked), on the pad \(cubePad.keepsLegacyNumbering), B reads \(b), the other slot \(other)")
+        } else {
+            skip(cat, "A GameCube controller for Switch 2 holds its earlier numbering from attach", detail: "No profile or no B fixture")
+        }
+
+        // The mode switch stamp goes when the wheel comes
+        // back in its own mode, so a wheel plugged in again within half a
+        // minute is switched again; one that ignored the switch waits.
+        cat = "Logitech Wheel"
+        do {
+            typealias Raw = RawHIDGamepadService
+            let port: UInt64 = 0x1420_0000, t0 = Date(timeIntervalSinceReferenceDate: 1000)
+            var stamps: [UInt64: Date] = [:]
+            let first = Raw.wheelSwitchDue(&stamps, location: port, hasCommand: true, now: t0)
+            stamps[port] = t0   // the switch was written
+            let ignored = Raw.wheelSwitchDue(&stamps, location: port, hasCommand: true, now: t0 + 3)
+            let later = Raw.wheelSwitchDue(&stamps, location: port, hasCommand: true, now: t0 + 31)
+            let native = Raw.wheelSwitchDue(&stamps, location: port, hasCommand: false, now: t0 + 4)
+            let replug = Raw.wheelSwitchDue(&stamps, location: port, hasCommand: true, now: t0 + 12)
+            record(cat, "A wheel plugged in again within half a minute of its mode switch is switched again",
+                   pass: first && !ignored && later && !native && replug,
+                   detail: "first \(first), ignored \(ignored), later \(later), native \(native), replug \(replug)")
+        }
+
+        // The release of a dial turn waits for the poll, only while
+        // a poll is reading the pad and three times at most.
+        cat = "Stream Deck"
+        record(cat, "A short press waits for the poll only while one reads the pad, three times at most",
+               pass: RawHIDGamepad.pulseWaitsForPoll(seen: false, sincePoll: 0.06, tries: 0)
+                   && RawHIDGamepad.pulseWaitsForPoll(seen: false, sincePoll: 0.2, tries: 2)
+                   && !RawHIDGamepad.pulseWaitsForPoll(seen: false, sincePoll: 0.2, tries: 3)
+                   && !RawHIDGamepad.pulseWaitsForPoll(seen: true, sincePoll: 0.01, tries: 0)
+                   && !RawHIDGamepad.pulseWaitsForPoll(seen: false, sincePoll: 5, tries: 0))
+
+        // An X-keys unit lists a keyboard beside its other
+        // interfaces, so it is a keyboard or mouse and never offered.
+        cat = "Devices"
+        record(cat, "A unit with a keyboard and a mouse beside its vendor interface is not offered to connect",
+               pass: HIDDeviceRegistry.adoptableKind([.vendor, .keyboard, .pointer], name: "X-keys XK-3 Foot Pedal") == nil
+                   && HIDDeviceRegistry.adoptableKind([.consumer, .keyboard], name: "X-keys XK-12 Jog") == nil)
+
+        // A streamed Bluetooth report's checksum is worked once and
+        // both reads take that answer. A read handed "whole" on a damaged
+        // report returns its bytes, which it could not had it checked again.
+        typealias Sony = DualSenseSupplementService
+        var sealed = [UInt8](repeating: 0, count: 78)
+        sealed[0] = 0x31; sealed[9] = 0x28; sealed[10] = 0x01; sealed[11] = 0x05
+        SonyBluetoothCRC.sealInputReport(&sealed)
+        var damaged = sealed
+        damaged[20] ^= 0xFF
+        var wired = [UInt8](repeating: 0, count: 64)
+        wired[0] = 0x01; wired[8] = 0x48; wired[9] = 0x20; wired[10] = 0x01
+        func holds(_ report: [UInt8]) -> Bool {
+            report.withUnsafeBufferPointer { Sony.bluetoothChecksumHolds($0.baseAddress!, length: $0.count) }
+        }
+        func third(_ report: [UInt8], whole: Bool?) -> UInt8? {
+            report.withUnsafeBufferPointer { Sony.buttons2($0.baseAddress!, length: $0.count, isDS4: false, whole: whole) }
+        }
+        func firstTwo(_ report: [UInt8], whole: Bool?) -> [UInt8]? {
+            report.withUnsafeBufferPointer { Sony.mainButtons($0.baseAddress!, length: $0.count, isDS4: false, whole: whole) }
+                .map { [$0.0, $0.1] }
+        }
+        let oneAnswer = holds(sealed) && !holds(damaged) && !holds(wired)
+        let taken = third(sealed, whole: false) == nil && firstTwo(sealed, whole: false) == nil
+            && third(damaged, whole: true) == 0x05 && firstTwo(damaged, whole: true) == [0x28, 0x01]
+        let unasked = third(sealed, whole: nil) == 0x05 && third(damaged, whole: nil) == nil
+            && firstTwo(sealed, whole: nil) == [0x28, 0x01] && firstTwo(damaged, whole: nil) == nil
+        let wiredStill = third(wired, whole: false) == 0x01 && firstTwo(wired, whole: false) == [0x48, 0x20]
+        record(cat, "A Bluetooth report's checksum is worked once and both reads take the answer",
+               pass: oneAnswer && taken && unasked && wiredStill,
+               detail: "one answer \(oneAnswer), taken \(taken), unasked \(unasked), wired \(wiredStill)")
+    }
+
+    /// On a pad: a dial turn the poll has not read yet is still held
+    /// when the poll comes late, and is let go once the poll has read it.
+    private func runNov9DevicePulseTests() async {
+        let cat = "Stream Deck"
+        let name = "A dial turn is still held when the poll comes late, and let go once it is read"
+        guard let profile = ControllerProfileDatabase.streamDeckProfiles.first else {
+            skip(cat, name, detail: "No Stream Deck profile")
+            return
+        }
+        let polled = RawHIDGamepad(testProfile: profile, vendorID: profile.vendorID, productID: 0x0084,
+                                   transport: "USB", id: 0xFA5E_0000_1701_0001)
+        let unread = RawHIDGamepad(testProfile: profile, vendorID: profile.vendorID, productID: 0x0084,
+                                   transport: "USB", id: 0xFA5E_0000_1701_0002)
+        let slot = ControllerProfile.StreamDeckFormat.firstSlot
+        _ = polled.stateForPoll()   // a poll is reading this one
+        let start = CACurrentMediaTime()
+        polled.pulse([slot])
+        unread.pulse([slot])
+        // Past the 50 ms hold with no poll: the read pad's press waits, the
+        // other pad's is let go on time.
+        try? await Task.sleep(for: .milliseconds(90))
+        let waited = CACurrentMediaTime() - start
+        let held = polled.state.buttons[slot] == 1, onTime = unread.state.buttons[slot] == 0
+        let read = polled.stateForPoll().buttons[slot] == 1
+        try? await Task.sleep(for: .milliseconds(120))
+        let released = polled.state.buttons[slot] == 0
+        // The press is let go unread after three more gaps, 170 ms in all.
+        if waited > 0.16 {
+            skip(cat, name, detail: "The wait ran long (\(Int(waited * 1000)) ms)")
+            return
+        }
+        record(cat, name, pass: held && onTime && read && released,
+               detail: "held \(held), other pad on time \(onTime), read \(read), released \(released)")
+    }
+
+    /// The library window, Simple View and the tour.
+    private func runNov9ViewTests() {
+        var cat = "Sidebar Presses"
+        let row = SidebarClicks.Target(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
+        let inner = SidebarClicks.Target(frame: NSRect(x: 20, y: 20, width: 80, height: 12))
+        record(cat, "Of two targets under one press the smaller runs first",
+               pass: SidebarClicks.innerFirst([row, inner]).first === inner
+                   && SidebarClicks.innerFirst([inner, row]).first === inner)
+        record(cat, "Under Simple View the library's rows take no press and Help's do",
+               pass: !SidebarClicks.takesPress(library: true, simpleView: true)
+                   && SidebarClicks.takesPress(library: false, simpleView: true)
+                   && SidebarClicks.takesPress(library: true, simpleView: false)
+                   && SidebarClicks.takesPress(library: false, simpleView: false)
+                   && SidebarClicks.Target().library)
+
+        cat = "Quick Tour"
+        let empty = Preset(name: "Empty")
+        let running = Preset(name: "Running", joysticks: [JoystickMapping(tag: "")])
+        let idle = Preset(name: "Idle", joysticks: [JoystickMapping(tag: "")])
+        record(cat, "The tour's demo is a preset that is not running",
+               pass: ContentView.tourDemoPick([empty, running, idle], running: running.id)?.id == idle.id
+                   && ContentView.tourDemoPick([empty, running, idle], running: nil)?.id == running.id
+                   && ContentView.tourDemoPick([empty, running], running: running.id)?.id == running.id
+                   && ContentView.tourDemoPick([empty], running: nil)?.id == empty.id
+                   && ContentView.tourDemoPick([], running: nil) == nil)
+        var set = idle
+        set.joysticks[0].inputKind = .controller
+        record(cat, "The tour leaves the running preset's device kind alone",
+               pass: !ContentView.tourMayBorrow(running, slot: 0, kind: .controller, running: running.id)
+                   && ContentView.tourMayBorrow(idle, slot: 0, kind: .controller, running: running.id)
+                   && ContentView.tourMayBorrow(empty, slot: 0, kind: .controller, running: nil))
+        record(cat, "A device kind already set is not saved again",
+               pass: !ContentView.tourMayBorrow(set, slot: 0, kind: .controller, running: nil)
+                   && ContentView.tourMayBorrow(set, slot: 0, kind: .keyboard, running: nil))
+
+        // The print panel is attached to the library window with no flag
+        // of the app's own.
+        record("Sheets", "No sheet is asked for under a panel attached to the library window",
+               pass: ContentView.canPresent(editorOpen: false, flagged: false, sheetAttached: false)
+                   && !ContentView.canPresent(editorOpen: false, flagged: false, sheetAttached: true)
+                   && !ContentView.canPresent(editorOpen: true, flagged: false, sheetAttached: false)
+                   && !ContentView.canPresent(editorOpen: false, flagged: true, sheetAttached: false))
+
+        // Simple View's list.
+        cat = "Simple View"
+        let hiddenOne = Preset(name: "Hidden", joysticks: [JoystickMapping(tag: "")])
+        let everything = [running, hiddenOne, idle]
+        let listed = SimpleLauncherView.shown(favorites: [], all: everything,
+                                              hidden: { $0.id == hiddenOne.id }, order: { $0.reversed() })
+        record(cat, "With no favorites it lists the sidebar's order without the hidden built ins",
+               pass: listed.map(\.id) == [idle.id, running.id], detail: listed.map(\.name).joined(separator: ", "))
+        record(cat, "Favorites are listed as they are",
+               pass: SimpleLauncherView.shown(favorites: [hiddenOne, idle], all: everything,
+                                              hidden: { _ in true }, order: { $0.reversed() }).map(\.id) == [hiddenOne.id, idle.id])
+
+        // The light bar chip.
+        record("Light Bar Chip", "The preset's own choice comes before the Settings switch",
+               pass: LightBarChipLabel.leftToSystem(preset: true, setting: false)
+                   && !LightBarChipLabel.leftToSystem(preset: false, setting: true)
+                   && LightBarChipLabel.leftToSystem(preset: true, setting: true)
+                   && !LightBarChipLabel.leftToSystem(preset: false, setting: false)
+                   && LightBarChipLabel.leftToSystem(preset: nil, setting: true)
+                   && !LightBarChipLabel.leftToSystem(preset: nil, setting: false))
+
+        // The printed page.
+        var printed = BindingModel(input: InputEvent.button(0), outputs: [OutputAction(type: .key, keyCode: 4)])
+        printed.holdOutputs = [OutputAction(type: .key, keyCode: 5)]
+        printed.doubleTapOutputs = [OutputAction(type: .key, keyCode: 6)]
+        printed.tripleTapOutputs = [OutputAction(type: .key, keyCode: 7)]
+        let printedLine = PresetPrint.summary(of: printed, in: idle).does
+        func tapNames(_ outputs: [OutputAction]?) -> String { OutputAction.names(outputs ?? []).joined(separator: " + ") }
+        record("Printed Page", "A row prints its press, hold, double tap and triple tap",
+               pass: printedLine.hasPrefix(tapNames(printed.outputs))
+                   && printedLine.contains(String(localized: "Held: \(tapNames(printed.holdOutputs))"))
+                   && printedLine.contains(String(localized: "Double tap: \(tapNames(printed.doubleTapOutputs))"))
+                   && printedLine.contains(String(localized: "Triple tap: \(tapNames(printed.tripleTapOutputs))")),
+               detail: printedLine)
+
+        // The Access profile editor under a preset switch.
+        record("Access Profile Editor", "A preset switch closes it only with no edits and no write out",
+               pass: AccessProfileEditorPanel.closesOnPresetSwitch(edited: false, saving: false)
+                   && !AccessProfileEditorPanel.closesOnPresetSwitch(edited: true, saving: false)
+                   && !AccessProfileEditorPanel.closesOnPresetSwitch(edited: false, saving: true)
+                   && !AccessProfileEditorPanel.closesOnPresetSwitch(edited: true, saving: true))
+
+        // The motion widget's spoken angles.
+        record("Spoken Values", "An angle that is not a number, or past any count, reads as one",
+               pass: SpokenLive.degrees(.nan) == 0 && SpokenLive.degrees(.infinity) == 0
+                   && SpokenLive.degrees(-.infinity) == 0
+                   && SpokenLive.degrees(.greatestFiniteMagnitude) == 36000
+                   && SpokenLive.degrees(-.greatestFiniteMagnitude) == -36000
+                   && SpokenLive.degrees(.pi / 2) == 90 && SpokenLive.degrees(-.pi / 4) == -45)
+
+        // The screen regions' bounds fields.
+        let displayA = DisplayKey(vendor: 1, model: 2, serial: 3, name: "Bench A")
+        let displayB = DisplayKey(vendor: 4, model: 5, serial: 6, name: "Bench B")
+        var onA = TouchpadRegion(name: "Bench A", minX: 0.1, maxX: 0.3, minY: 0.1, maxY: 0.3, colorIndex: 0, display: displayA)
+        let everywhere = TouchpadRegion(name: "Bench every", minX: 0.5, maxX: 0.7, minY: 0.5, maxY: 0.7, colorIndex: 1, display: nil)
+        cat = "Screen Regions"
+        let canvasA = CursorRegionsView.onCanvas([onA, everywhere], shown: displayA)
+        let canvasB = CursorRegionsView.onCanvas([onA, everywhere], shown: displayB)
+        record(cat, "A region selected on its own display has its bounds fields",
+               pass: CursorRegionsView.selected(onA.id, onCanvas: canvasA)?.id == onA.id)
+        record(cat, "With another display shown, a selected region off the canvas has none",
+               pass: CursorRegionsView.selected(onA.id, onCanvas: canvasB) == nil
+                   && CursorRegionsView.selected(everywhere.id, onCanvas: canvasB)?.id == everywhere.id
+                   && CursorRegionsView.selected(nil, onCanvas: canvasA) == nil)
+        onA.display = displayB
+        record(cat, "Moved to another display from its row, the selected region has none",
+               pass: CursorRegionsView.selected(onA.id, onCanvas: CursorRegionsView.onCanvas([onA, everywhere], shown: displayA)) == nil)
+
+        // The light bar popover's whole actions.
+        var lit = idle
+        lit.lightBarColor = RGBLightColor(r: 1, g: 2, b: 3)
+        lit.lightBarBrightness = 1
+        lit.lightBarRainbow = true
+        lit.lightBarRainbowSpeed = 2
+        let pickedOne = PresetLightBarPopover.picked(RGBLightColor(r: 9, g: 8, b: 7), in: lit)
+        let clearedOne = PresetLightBarPopover.cleared(lit)
+        cat = "Light Bar Popover"
+        record(cat, "A color is one change: the color, and the rainbow ended",
+               pass: pickedOne.lightBarColor == RGBLightColor(r: 9, g: 8, b: 7) && pickedOne.lightBarRainbow == nil
+                   && pickedOne.lightBarBrightness == 1 && pickedOne.lightBarRainbowSpeed == 2)
+        record(cat, "Controller's color is one change: all four fields emptied",
+               pass: clearedOne.lightBarColor == nil && clearedOne.lightBarBrightness == nil
+                   && clearedOne.lightBarRainbow == nil && clearedOne.lightBarRainbowSpeed == nil
+                   && clearedOne.id == lit.id && clearedOne.name == lit.name)
+
+        // Every drawing's own checks, on each read path a control has its
+        // own inputs for. Read from its descriptor, the Standard
+        // gamepad had Home and the left stick press both on btn 10.
+        cat = "Controller Drawings"
+        let drawingIssues = LayoutValidation.validateAll().map(\.description)
+        record(cat, "Every drawing passes its checks on every read path", pass: drawingIssues.isEmpty,
+               detail: drawingIssues.isEmpty ? "none" : "\(drawingIssues.count): " + drawingIssues.prefix(4).joined(separator: " | "))
+        var homeTwice = ControllerLayout.genericGamepad
+        if let at = homeTwice.controls.firstIndex(where: { $0.id == "home" }) {
+            homeTwice.controls[at].pathInputs[.rawDescriptor] = .button(10)
+        }
+        let twiceFound = LayoutValidation.validate(homeTwice).map(\.message)
+        record(cat, "A button on two controls on one read path only is found",
+               pass: twiceFound == ["btn 10 is on both home and lstick on rawDescriptor"],
+               detail: twiceFound.joined(separator: " | "))
+    }
+
+    /// Slots and the sequence and gesture recognizers.
+    private func runNov9EngineTests() {
+        var cat = "Controller Slots"
+        record(cat, "A pad arriving in an empty slot asks for the slots again",
+               pass: MappingEngine.slotGained(old: [0: "A"], new: [0: "A", 1: "B"])
+                   && MappingEngine.slotGained(old: [:], new: [0: "A"])
+                   && !MappingEngine.slotGained(old: [0: "A"], new: [0: "A"])
+                   && !MappingEngine.slotGained(old: [0: "A", 1: "B"], new: [0: "A"])
+                   && !MappingEngine.slotGained(old: [0: "A"], new: [0: "B"]))
+
+        // A preset with touchpad or motion rows keeps the live snapshot on
+        // but reads no wheel; the editor or a scan shows one.
+        record("Logitech Wheel", "A running preset alone does not hold a wheel for the live snapshot",
+               pass: !GameControllerService.wheelsWantedForLive(consumers: ["engine"], scanning: false)
+                   && !GameControllerService.wheelsWantedForLive(consumers: [], scanning: false)
+                   && GameControllerService.wheelsWantedForLive(consumers: ["engine", "editor"], scanning: false)
+                   && GameControllerService.wheelsWantedForLive(consumers: ["engine"], scanning: true))
+        // A pad switched off with its touchpad click down leaves the merge.
+        let alone = GameControllerService.clicksWithout(0, in: [0: true, 1: false])
+        let both = GameControllerService.clicksWithout(0, in: [0: true, 1: true])
+        record("Touchpad", "A pad switched off takes its click out of the merge",
+               pass: !alone.pressed && alone.clicks == [1: false] && both.pressed && both.clicks == [1: true]
+                   && !GameControllerService.clicksWithout(3, in: [:]).pressed)
+        // A gesture a row read once and never again does not stay pending.
+        record("Touchpad", "A gesture read once and then left alone is dropped after its hold window",
+               pass: TouchpadService.gestureIsStale(firedAt: 10, pendingAt: 9.9, now: 11, holdWindow: 0.08)
+                   && !TouchpadService.gestureIsStale(firedAt: 10, pendingAt: 9.9, now: 10.2, holdWindow: 0.08)
+                   && !TouchpadService.gestureIsStale(firedAt: nil, pendingAt: 10, now: 10.4, holdWindow: 0.08)
+                   && TouchpadService.gestureIsStale(firedAt: nil, pendingAt: 10, now: 10.6, holdWindow: 0.08))
+
+        // The engine sends one turbo press a poll at most, and the editor's
+        // caption says so.
+        record("Turbo", "The caption's rate stops at the poll rate",
+               pass: BindingRowView.turboPerSecond(intervalMs: 5, pollHz: 120) == 120
+                   && BindingRowView.turboPerSecond(intervalMs: 5, pollHz: 240) == 200
+                   && BindingRowView.turboPerSecond(intervalMs: 8, pollHz: 240) == 125
+                   && BindingRowView.turboPerSecond(intervalMs: 50, pollHz: 30) == 20
+                   && BindingRowView.turboPerSecond(intervalMs: 1, pollHz: 30) == 30)
+
+        // The icon's words say a preset runs with the color switched off.
+        cat = "Menu Bar"
+        let runningWords = String(localized: "InputConfig (running)")
+        record(cat, "The icon's words say running with the color off",
+               pass: MenuBarController.debugIconWords(running: true, blocked: false, tinted: false) == runningWords
+                   && MenuBarController.debugIconWords(running: true, blocked: false, tinted: true) == runningWords)
+        record(cat, "The icon's words are the app's name with nothing running",
+               pass: MenuBarController.debugIconWords(running: false, blocked: false, tinted: false) == "InputConfig"
+                   && MenuBarController.debugIconWords(running: false, blocked: false, tinted: true) == "InputConfig")
+        // The close after a start from the pop-up waits for three seconds
+        // of nothing, and never comes over typed text.
+        typealias Step = MenuBarController.AutoCloseStep
+        record(cat, "The pop-up's close waits out typing and a moving pointer",
+               pass: MenuBarController.autoCloseStep(now: 13, due: 14.5, typed: false) == Step.wait(1.5)
+                   && MenuBarController.autoCloseStep(now: 13, due: 14.5, typed: true) == Step.wait(1.5))
+        record(cat, "The pop-up stays open over typed text",
+               pass: MenuBarController.autoCloseStep(now: 13, due: 13, typed: true) == Step.stay)
+        record(cat, "The pop-up left alone for three seconds closes",
+               pass: MenuBarController.autoCloseStep(now: 13, due: 13, typed: false) == Step.close
+                   && MenuBarController.autoCloseStep(now: 13.2, due: 13, typed: false) == Step.close)
+
+        // A knob: eight buttons and a Dial that reports turns. The report
+        // saved from its last turn, decoded again when decoding starts, is
+        // not a turn; the button held in it still comes back.
+        cat = "Raw HID"
+        let dial: [UInt8] = [
+            0x05, 0x01, 0x09, 0x04, 0xA1, 0x01,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x05, 0x01, 0x09, 0x37, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
+            0xC0,
+        ]
+        if let knob = descriptorProfile(name: "bench-dial", descriptor: dial, vendorID: 0x1234, productID: 0x5678) {
+            let pad = RawHIDGamepad(testProfile: knob, vendorID: 0x1234, productID: 0x5678, transport: "USB", id: 0xFA5E_0000_D1A1_0001)
+            let axis = pad.relativeAxes.first ?? -1
+            let turn = Data([0x01, 0x03])          // button 1 held, three steps clockwise
+            RawHIDReportApplier.apply(data: turn, to: pad, profile: knob, players: nil, replay: true, steam2026: nil)
+            let replayed = pad.state
+            record(cat, "A knob's last turn is not played again when decoding starts",
+                   pass: axis >= 0 && (replayed.axes[axis] ?? 0) == 0 && replayed.buttons[0] == 1,
+                   detail: "axis \(axis) reads \(replayed.axes[axis] ?? 0), button \(replayed.buttons[0] ?? -1)")
+            RawHIDReportApplier.apply(data: turn, to: pad, profile: knob, players: nil, replay: false, steam2026: nil)
+            record(cat, "A knob turned for real still pushes its axis", pass: axis >= 0 && pad.state.axes[axis] == 1,
+                   detail: "axis \(axis) reads \(pad.state.axes[axis] ?? 0)")
+        } else {
+            record(cat, "A knob's last turn is not played again when decoding starts", pass: false, detail: "the bench descriptor did not parse")
+        }
+
+        // A descriptor that repeats one array input a hundred times: 127
+        // buttons each, 12,700 without the cap, walked on every report.
+        var crowded: [UInt8] = [0x05, 0x01, 0x09, 0x05, 0xA1, 0x01]
+        for _ in 0..<100 {
+            crowded += [0x05, 0x09, 0x19, 0x00, 0x29, 0x7F, 0x15, 0x00, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x81, 0x00]
+        }
+        crowded += [0xC0]
+        if let boxes = descriptorProfile(name: "bench-arrays", descriptor: crowded, vendorID: 0x1234, productID: 0x5679),
+           case .generic(let layout) = boxes.layout, let plan = layout.extended {
+            let arrays = plan.reports.flatMap(\.buttonArrays)
+            let total = arrays.reduce(0) { $0 + $1.buttons }
+            let decoded = HIDReportDecoder.decode(report: Data([0x01, 0x02, 0x03, 0x04]), profile: boxes)
+            record(cat, "Array inputs past 512 buttons are left out",
+                   pass: total > 0 && total <= HIDDescriptorParser.maxArrayButtons && decoded.buttons.count <= HIDDescriptorParser.maxArrayButtons
+                       && decoded.buttons[0] == 1,
+                   detail: "\(arrays.count) arrays, \(total) buttons, \(decoded.buttons.count) decoded")
+        } else {
+            record(cat, "Array inputs past 512 buttons are left out", pass: false, detail: "the bench descriptor did not parse")
+        }
+
+        // One array input of 300 entries (no real device has one; each
+        // entry is read on every report) is not kept, and the eight buttons
+        // and the six entry array after it still are.
+        let wide: [UInt8] = [
+            0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
+            0x05, 0x09, 0x19, 0x00, 0x29, 0x7F, 0x15, 0x00, 0x25, 0x7F, 0x75, 0x08, 0x96, 0x2C, 0x01, 0x81, 0x00,
+            0x19, 0x01, 0x29, 0x08, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x19, 0x00, 0x29, 0x7F, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x06, 0x81, 0x00,
+            0xC0,
+        ]
+        if let plan = HIDDescriptorParser.parseExtended(Data(wide)) {
+            let counts = plan.reports.flatMap(\.buttonArrays).map(\.count)
+            let bits = plan.reports.flatMap(\.buttons).map(\.bitOffset).sorted()
+            record(cat, "An array input of more than 256 entries is left out, the controls after it are kept",
+                   pass: counts == [6] && bits == Array(2400..<2408), detail: "arrays of \(counts), \(bits.count) buttons")
+        } else {
+            record(cat, "An array input of more than 256 entries is left out, the controls after it are kept", pass: false,
+                   detail: "the bench descriptor did not parse")
+        }
+        // Twenty arrays of 250 entries, one button each: under the button
+        // cap, 5,000 entries read per report. Kept entries count toward the
+        // field ceiling, so the descriptor is cut off at sixteen.
+        var manyEntries: [UInt8] = [0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x05, 0x09, 0x15, 0x00, 0x25, 0x01, 0x75, 0x08, 0x95, 0xFA]
+        for _ in 0..<20 { manyEntries += [0x19, 0x00, 0x29, 0x01, 0x81, 0x00] }
+        manyEntries += [0xC0]
+        let keptEntries = HIDDescriptorParser.parseExtended(Data(manyEntries))?.reports.flatMap(\.buttonArrays).map(\.count) ?? []
+        record(cat, "Array entries count toward the field ceiling",
+               pass: keptEntries.count == 16 && keptEntries.reduce(0, +) == 4000,
+               detail: "\(keptEntries.count) arrays, \(keptEntries.reduce(0, +)) entries")
+
+        // The 1.5 numbering reader, fed a descriptor that repeats a 1,024
+        // button item: past 4,096 fields there is no old numbering (it
+        // built every field, on the main actor); up to there, and for a
+        // plain pad, it reads as before.
+        func repeated(_ items: Int) -> Data {
+            var d: [UInt8] = [0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x05, 0x09, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x96, 0x00, 0x04]
+            for _ in 0..<items { d += [0x19, 0x01, 0x29, 0x20, 0x81, 0x02] }
+            return Data(d + [0xC0])
+        }
+        let plainPad: [UInt8] = [
+            0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x08, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
+            0xC0,
+        ]
+        let oldPlain = Numbering15.parse(Data(plainPad))
+        record(cat, "The 1.5 numbering reader gives up on a descriptor past 4,096 fields and reads a plain pad as before",
+               pass: Numbering15.parse(repeated(5)) == nil && Numbering15.parse(repeated(1300)) == nil
+                   && Numbering15.parse(repeated(4))?.buttonBitOffsets.count == 4096
+                   && oldPlain?.buttonBitOffsets.count == 8 && oldPlain?.axisByteOffsets == [1, 2, 3, 4],
+               detail: "plain pad: \(oldPlain?.buttonBitOffsets.count ?? -1) buttons, axes \(oldPlain?.axisByteOffsets ?? [])")
+
+        // A USB SNES pad (DragonRise 0079:0011): four fields named X and one
+        // Y, the D-pad on the fourth and fifth. Its rows name no stick, and
+        // a spare X with no partner is no stick: with byte 0 resting at 1 it
+        // would hold the left stick hard over. It stays an extra axis.
+        let snesPad: [UInt8] = [
+            0x05, 0x01, 0x09, 0x04, 0xA1, 0x01, 0xA1, 0x02, 0x75, 0x08, 0x95, 0x05, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x35, 0x00, 0x46, 0xFF, 0x00,
+            0x09, 0x30, 0x09, 0x30, 0x09, 0x30, 0x09, 0x30, 0x09, 0x31, 0x81, 0x02,
+            0x75, 0x04, 0x95, 0x01, 0x25, 0x07, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x09, 0x00, 0x81, 0x42, 0x65, 0x00,
+            0x75, 0x01, 0x95, 0x0A, 0x25, 0x01, 0x45, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x0A, 0x81, 0x02,
+            0x06, 0x00, 0xFF, 0x75, 0x01, 0x95, 0x0A, 0x25, 0x01, 0x45, 0x01, 0x09, 0x01, 0x81, 0x02, 0xC0,
+            0xA1, 0x02, 0x75, 0x08, 0x95, 0x04, 0x46, 0xFF, 0x00, 0x26, 0xFF, 0x00, 0x09, 0x02, 0x91, 0x02, 0xC0, 0xC0,
+        ]
+        if let snes = SDLGameControllerDB.profile(descriptor: Data(snesPad), vendorID: 0x0079, productID: 0x0011, version: 0x0106,
+                                                  productName: "bench-snes") {
+            let rest = HIDReportDecoder.decode(report: Data([0x01, 0x7F, 0x7F, 0x7F, 0x7F, 0x0F, 0x00, 0x00]), profile: snes)
+            let left = HIDReportDecoder.decode(report: Data([0x01, 0x7F, 0x7F, 0x00, 0x7F, 0x0F, 0x00, 0x00]), profile: snes)
+            record(cat, "A spare axis with no partner is not read as a stick",
+                   pass: (rest.axes[0] ?? 0) == 0 && (rest.axes[1] ?? 0) == 0 && (rest.axes[6] ?? 0) < -0.9
+                       && (left.hats[0]?.x ?? 0) == -1,
+                   detail: "axis 0 reads \(rest.axes[0] ?? 0), axis 6 reads \(rest.axes[6] ?? 0)")
+        } else {
+            record(cat, "A spare axis with no partner is not read as a stick", pass: false, detail: "no row fit the bench descriptor")
+        }
+        // A row that names no stick on a pad with X, Y, Z and Rz (the Hori
+        // Pokken shape) still gets both sticks.
+        let noStickRow = SDLGameControllerDB.Mapping(vendorID: 0x1234, productID: 0x567A, version: 0, name: "bench",
+                                                     entries: ["a": "b0", "b": "b1", "x": "b2", "y": "b3"])
+        let filled = HIDDescriptorParser.sdlElements(Data(plainPad))
+            .flatMap { SDLGameControllerDB.layout(for: $0, mapping: noStickRow) }?.reports.flatMap(\.axes).map(\.index).sorted() ?? []
+        record(cat, "A row that names no stick still fills both sticks from X, Y, Z and Rz", pass: filled == [0, 1, 2, 3],
+               detail: "\(filled)")
+        // The rows for this pad differ by version, so the nearest one that
+        // fits is picked: a version at either end of 32 bits picks a row
+        // (the far end used to overflow), a real one picks as before.
+        if let elements = HIDDescriptorParser.sdlElements(Data(snesPad)) {
+            func row(_ version: Int32) -> Int32? {
+                SDLGameControllerDB.mapping(vendorID: 0x0079, productID: 0x0011, version: version, elements: elements)?.version
+            }
+            record(cat, "A device version at either end of 32 bits picks the nearest row",
+                   pass: row(Int32.min) == 0 && row(Int32.max) == 0x0106 && row(0x0104) == 0x0105 && row(0x0200) == 0x0106)
+        } else {
+            record(cat, "A device version at either end of 32 bits picks the nearest row", pass: false,
+                   detail: "the bench descriptor did not parse")
+        }
+
+        cat = "Button sequence"
+        // A button down on the first poll was down before the recognizer
+        // was made (the press that switched to this preset): not a press.
+        var first = ButtonSequenceRecognizer()
+        let quiet = !first.feed(down: [0], now: 1.0, steps: [0, 1]) && first.progress == 0
+        record(cat, "A button held on the first poll is not a press", pass: quiet, detail: "progress \(first.progress)")
+        let noFire = !first.feed(down: [0, 1], now: 1.1, steps: [0, 1]) && first.progress == 0
+        record(cat, "A held on the first poll, then B, does not fire A, B", pass: noFire, detail: "progress \(first.progress)")
+        // Let go and pressed again, it is a press like any other.
+        let again = !first.feed(down: [], now: 1.2, steps: [0, 1]) && !first.feed(down: [0], now: 1.3, steps: [0, 1])
+            && first.progress == 1 && !first.feed(down: [0], now: 1.35, steps: [0, 1]) && first.feed(down: [0, 1], now: 1.4, steps: [0, 1])
+        record(cat, "The same button pressed afresh starts the sequence", pass: again)
+        first.reset()
+        record(cat, "After a reset the buttons down are held, not pressed",
+               pass: !first.feed(down: [0], now: 2.0, steps: [0, 1]) && first.progress == 0)
+        // Keys arrive a press at a time, so the first one counts.
+        var keys = ButtonSequenceRecognizer.forEvents()
+        let typed = !keys.feed(down: [13], now: 3.0, steps: [13, 14]) && keys.progress == 1
+            && !keys.feed(down: [], now: 3.0, steps: [13, 14]) && keys.feed(down: [14], now: 3.1, steps: [13, 14])
+        record(cat, "The first key of a key sequence counts", pass: typed)
+
+        cat = "Stick Gestures"
+        let right = [GestureStep(direction: .right)]
+        let anyStep: (GestureStep, Double, Double) -> Bool = { _, _, _ in true }
+        // A stick out on the first frame was out before the recognizer was
+        // made: letting it go is not a flick.
+        var stick = StickGestureRecognizer()
+        let resting = !stick.feed(x: 1, y: 0, now: 1.0, steps: right, matches: anyStep)
+            && !stick.feed(x: 0, y: 0, now: 1.05, steps: right, matches: anyStep)
+        record(cat, "A stick already out when watching starts is not a flick", pass: resting)
+        // The next flick, from rest, lands as before.
+        let flick = !stick.feed(x: 1, y: 0, now: 1.2, steps: right, matches: anyStep)
+            && stick.feed(x: 0, y: 0, now: 1.3, steps: right, matches: anyStep)
+        record(cat, "A flick from rest still lands", pass: flick)
+        var fresh = StickGestureRecognizer()
+        let fromRest = !fresh.feed(x: 0, y: 0, now: 2.0, steps: right, matches: anyStep)
+            && !fresh.feed(x: 1, y: 0, now: 2.1, steps: right, matches: anyStep)
+            && fresh.feed(x: 0, y: 0, now: 2.2, steps: right, matches: anyStep)
+        record(cat, "A flick after a first frame at rest lands", pass: fromRest)
+    }
+
+    /// The pointer speed shaper's start point and whole-number deltas, and
+    /// the stored microphone.
+    private func runNov9PointerAndVoiceTests() {
+        let cat = "Pointer Speed"
+        typealias S = PointerSpeedShaper
+        let app = CGPoint(x: 100, y: 100), here = CGPoint(x: 900, y: 500), one = CGVector(dx: 1, dy: 0)
+        let stale = S.start(appPoint: app, appAt: 10, placed: nil, placedAt: 0, cursor: here, raw: one, now: 60)
+        let fresh = S.start(appPoint: app, appAt: 59.9, placed: nil, placedAt: 0, cursor: here, raw: one, now: 60)
+        let near = S.start(appPoint: app, appAt: 10, placed: nil, placedAt: 0, cursor: CGPoint(x: 130, y: 140), raw: one, now: 60)
+        record(cat, "A real move does not start from a point the app placed long ago and far away",
+               pass: stale == here && fresh == app && near == app, detail: "old and far \(stale), fresh \(fresh), old and near \(near)")
+        let kept = CGPoint(x: 400, y: 300)
+        let own = S.start(appPoint: app, appAt: 10, placed: kept, placedAt: 59.99, cursor: CGPoint(x: 401, y: 300), raw: one, now: 60)
+        let moved = S.start(appPoint: app, appAt: 10, placed: kept, placedAt: 59.99, cursor: here, raw: one, now: 60)
+        record(cat, "The shaper's own place holds while the cursor is on it", pass: own == kept && moved == here, detail: "\(own), \(moved)")
+        func sum(_ d: Double, _ speed: Double) -> Int64 {
+            var carry = 0.0
+            return (0..<500).reduce(Int64(0)) { total, _ in total + S.deltaCarry(d * speed, carry: &carry) }
+        }
+        let slow = sum(1, 0.4), fast = sum(1, 1.6), back = sum(-1, 0.4)
+        record(cat, "Slow moves keep their delta in whole steps", pass: slow == 200 && fast == 800 && back == -200,
+               detail: "500 moves of 1 at 0.4: \(slow), at 1.6: \(fast), of -1 at 0.4: \(back)")
+        var wild = 0.5
+        record(cat, "A delta that is not a number writes nothing", pass: S.deltaCarry(.nan, carry: &wild) == 0 && wild == 0)
+
+        typealias V = VoicePhraseService
+        record("Voice Phrases", "A stored microphone other than the one in use starts listening over",
+               pass: V.microphoneMoved(inUse: "old", chosen: nil, connected: false)
+                   && V.microphoneMoved(inUse: "old", chosen: "new", connected: true)
+                   && V.microphoneMoved(inUse: nil, chosen: "new", connected: true)
+                   && V.microphoneMoved(inUse: "old", chosen: "gone", connected: false)
+                   && !V.microphoneMoved(inUse: "same", chosen: "same", connected: true)
+                   && !V.microphoneMoved(inUse: nil, chosen: "gone", connected: false)
+                   && !V.microphoneMoved(inUse: nil, chosen: nil, connected: false))
+        // A capture that goes quiet with no error: started at 100,
+        // sound until 101, then nothing.
+        var health = CaptureHealth()
+        var verdicts: [CaptureHealth.Verdict] = []
+        // Checks every 4 s. The capture is started over at each restart, so
+        // its start time moves and no buffer ever follows.
+        var startedAt = 100.0, lastAppend = 101.0
+        var restartsAt: [Double] = []
+        for now in stride(from: 104.0, through: 180.0, by: 4.0) {
+            let v = health.check(now: now, startedAt: startedAt, lastAppend: lastAppend)
+            verdicts.append(v)
+            if v == .restart { restartsAt.append(now); startedAt = now }
+        }
+        let gaps = zip(restartsAt.dropFirst(), restartsAt).map { $0 - $1 }
+        record("Voice Phrases", "A microphone that stops sending sound is opened again, later each time",
+               pass: verdicts.first == .healthy && restartsAt.first == 108 && restartsAt.count >= 4
+                   && gaps == gaps.sorted() && (gaps.last ?? 0) > (gaps.first ?? 0) && (gaps.last ?? 99) <= CaptureHealth.maxDelay + CaptureHealth.checkSeconds
+                   && health.silent,
+               detail: "restarts at \(restartsAt.map { Int($0) }), silent \(health.silent)")
+        // Sound comes back after the last restart: healthy, and the count starts over.
+        lastAppend = startedAt + 0.5
+        let soundBack = health.check(now: startedAt + 4, startedAt: startedAt, lastAppend: lastAppend)
+        record("Voice Phrases", "Sound coming back clears the silent state",
+               pass: soundBack == .healthy && !health.silent && health.silentRestarts == 0)
+        // A fresh start waiting for its first buffer is left alone and keeps the count.
+        var waiting = CaptureHealth()
+        _ = waiting.check(now: 10, startedAt: 0, lastAppend: 0)
+        let grace = waiting.check(now: 12, startedAt: 10, lastAppend: 0)
+        record("Voice Phrases", "A capture just opened is given time for its first buffer",
+               pass: grace == .healthy && waiting.silentRestarts == 1)
+        record("Voice Phrases", "A task restart keeps the capture only while it delivers",
+               pass: CaptureHealth.delivering(now: 50, startedAt: 10, lastAppend: 49.5)
+                   && CaptureHealth.delivering(now: 11, startedAt: 10, lastAppend: 0)
+                   && !CaptureHealth.delivering(now: 50, startedAt: 10, lastAppend: 45)
+                   && !CaptureHealth.delivering(now: 50, startedAt: 10, lastAppend: 0))
+        record("Voice Phrases", "A buffer with no request to take it still counts as sound", pass: V.debugSinkStamps())
+        // The app's own short phrase ends while VoiceOver is still saying
+        // "Heard jump": the window stays open for VoiceOver's words.
+        let early = FeedbackService.windowEnd(speechEndedAt: 10, elsewhereUntil: 11.4)
+        let alone = FeedbackService.windowEnd(speechEndedAt: 10, elsewhereUntil: 0)
+        record("Voice Phrases", "The end of the app's speech does not close the window on words said elsewhere",
+               pass: early == 11.4 && alone > 10 && alone < 10.5, detail: "with VoiceOver talking \(early), alone \(alone)")
+        record("Backup", "The chosen microphone stays on this Mac",
+               pass: !AppSettingsReset.isRestorable(V.microphoneKey) && !AppSettingsReset.isRestorable(V.microphoneNameKey)
+                   && AppSettingsReset.isSetting(V.microphoneKey))
+    }
+
+    /// The sidebar's lists and the older-preset lists.
+    private func runNov9StoreTests() {
+        let cat = "Preset Store"
+        let dead = UUID(), folder = UUID()
+        let made = [Preset(name: "A"), Preset(name: "B", groupID: dead), Preset(name: "C", groupID: folder), Preset(name: "D")]
+        let shown = PresetStore.shownContainers(made, folders: [folder])
+        record(cat, "A preset whose folder is gone is listed with the folderless ones",
+               pass: shown.count == 2 && shown[UUID?.none]?.map(\.name) == ["A", "B", "D"] && shown[folder]?.map(\.name) == ["C"],
+               detail: "\(shown.count) lists, folderless: \(shown[UUID?.none]?.map(\.name) ?? [])")
+        // On the live store, so only a move that must be refused: offsets
+        // no list has. Before the fix it left the sidebar on Manual.
+        if let store = AppState.current?.presetStore {
+            if store.sidebarSort == .manual {
+                skip(cat, "A refused move leaves the sidebar's sort alone", detail: "The sidebar is on Manual; choose another sort and run again")
+            } else {
+                let before = store.sidebarSort
+                store.moveTopLevelGroups(builtIn: true, fromOffsets: IndexSet(integer: 100_000), toOffset: 0)
+                let afterFolders = store.sidebarSort
+                store.movePresets(in: nil, fromOffsets: IndexSet(integer: 100_000), toOffset: 0)
+                record(cat, "A refused move leaves the sidebar's sort alone",
+                       pass: afterFolders == before && store.sidebarSort == before,
+                       detail: "\(before.rawValue), then \(afterFolders.rawValue) and \(store.sidebarSort.rawValue)")
+                // A failing run does not leave the person's sidebar on Manual.
+                if store.sidebarSort != before { store.sidebarSort = before }
+            }
+        } else {
+            skip(cat, "A refused move leaves the sidebar's sort alone", detail: "Needs the live AppState")
+        }
+        // The older-preset lists, in a defaults domain of its own.
+        let suite = "InputConfig.testBench.legacyRows"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            skip(cat, "A copy of a preset made before 1.6 is still offered its rows", detail: "No defaults domain")
+            return
+        }
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = UUID(), copy = UUID(), other = UUID()
+        var group = JoystickMapping(tag: "Pad", bindings: (0...3).map {
+            BindingModel(input: .button($0), outputs: [OutputAction(type: .key, keyCode: 4)])
+        })
+        let keys = group.bindings.map { "\($0.id.uuidString)|\($0.input.serialized)" }
+        defaults.set([original.uuidString], forKey: LegacyRowCheck.Kind.switchFaces.pendingKey)
+        defaults.set([original.uuidString], forKey: LegacyRowCheck.Kind.rawPads.offeredKey)
+        defaults.set([original.uuidString: keys], forKey: LegacyRowCheck.rowsKey)
+        LegacyRowCheck.carry(from: original, to: copy, defaults: defaults)
+        LegacyRowCheck.carry(from: original, to: copy, defaults: defaults)
+        LegacyRowCheck.carry(from: other, to: UUID(), defaults: defaults)
+        let pending = defaults.stringArray(forKey: LegacyRowCheck.Kind.switchFaces.pendingKey) ?? []
+        let offered = defaults.stringArray(forKey: LegacyRowCheck.Kind.rawPads.offeredKey) ?? []
+        let rows = defaults.dictionary(forKey: LegacyRowCheck.rowsKey) as? [String: [String]] ?? [:]
+        LegacyRowCheck.fix(&group, kind: .switchFaces, snapshot: rows[copy.uuidString].map(Set.init) ?? [])
+        record(cat, "A copy of a preset made before 1.6 is still offered its rows",
+               pass: pending == [original.uuidString, copy.uuidString] && offered == [original.uuidString, copy.uuidString]
+                   && rows.count == 2 && rows[copy.uuidString] == keys
+                   && defaults.object(forKey: LegacyRowCheck.Kind.eightBitDoBack.pendingKey) == nil
+                   && group.bindings.map(\.input.index) == [1, 0, 3, 2],
+               detail: "pending \(pending.count), offered \(offered.count), snapshots \(rows.count), rows \(group.bindings.map(\.input.index))")
+    }
+
+    /// Files nested too deep, the staged rows of a group, what an import
+    /// and a backup may bring.
+    private func runNov9PerformanceLaneTests() {
+        var cat = "Preset Files"
+        func nestedArrays(_ depth: Int) -> Data {
+            Data((String(repeating: "[", count: depth) + "1" + String(repeating: "]", count: depth)).utf8)
+        }
+        func nestedObjects(_ depth: Int) -> String {
+            String(repeating: "{\"a\":", count: depth) + "1" + String(repeating: "}", count: depth)
+        }
+        func milliseconds(_ work: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            work()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        // Brackets inside a string, after an escaped quote too, are text.
+        let quoted = Data(#"{"a":"[[[[{{{{\"[[","b":[1]}"#.utf8)
+        record(cat, "Nesting 64 deep reads and 65 is refused",
+               pass: !JSONValue.nestsTooDeep(nestedArrays(64)) && JSONValue.nestsTooDeep(nestedArrays(65))
+                   && !JSONValue.nestsTooDeep(Data(nestedObjects(64).utf8)) && JSONValue.nestsTooDeep(Data(nestedObjects(65).utf8))
+                   && (try? JSONDecoder().decode(JSONValue.self, from: nestedArrays(64))) != nil
+                   && !JSONValue.nestsTooDeep(quoted, limit: 2) && JSONValue.nestsTooDeep(quoted, limit: 1))
+        // 16 fields, each nested 500 deep (about 48 KB): seconds to decode,
+        // refused at the door.
+        let branches = Data(("{" + (0..<16).map { "\"f\($0)\":" + nestedObjects(500) }.joined(separator: ",") + "}").utf8)
+        var refused = false
+        let scan = milliseconds { refused = JSONValue.nestsTooDeep(branches) }
+        record(cat, "A file with 16 deep branches is refused in under 50 ms", pass: refused && scan < 50,
+               detail: String(format: "%d KB, %.2f ms", branches.count / 1024, scan))
+        // Eight preset files through the launch reader, on its worker
+        // threads: the one carrying a field nested 300 deep is refused
+        // and left in place, the other seven read.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("InputConfig-bench-nesting-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var urls: [URL] = []
+        for i in 0..<8 {
+            guard var text = (try? JSONEncoder().encode(Preset(name: "Nesting \(i)"))).flatMap({ String(data: $0, encoding: .utf8) }),
+                  text.hasSuffix("}") else { continue }
+            if i == 3 {
+                text.removeLast()
+                text += ",\"future\":" + (String(data: nestedArrays(300), encoding: .utf8) ?? "1") + "}"
+            }
+            let url = dir.appendingPathComponent("\(i).json")
+            if (try? Data(text.utf8).write(to: url)) != nil { urls.append(url) }
+        }
+        if urls.count == 8 {
+            let read = PresetStore.decodeFiles(urls) { try $0.decode(Preset.self, from: $1) }
+            let names = read.compactMap { try? $0.result.get().name }
+            let deepRefused = (try? read[3].result.get()) == nil && read[3].data != nil
+            record(cat, "Of eight preset files, the one nested 300 deep is refused and seven read",
+                   pass: names.count == 7 && deepRefused && names == [0, 1, 2, 4, 5, 6, 7].map { "Nesting \($0)" },
+                   detail: "\(names.count) read")
+        } else {
+            skip(cat, "Of eight preset files, the one nested 300 deep is refused and seven read", detail: "The files could not be written")
+        }
+
+        cat = "Editor Rows"
+        // A folded group goes back to the first rows; the open after it
+        // then builds no more than those and one batch in its first frame.
+        let folded = JoystickGroupView.revealCount(afterExpandedBecomes: false, from: .max)
+        let reopened = JoystickGroupView.revealCount(afterExpandedBecomes: true, from: folded)
+        record(cat, "group re-expand stays staged",
+               pass: folded == JoystickGroupView.firstReveal
+                   && reopened <= JoystickGroupView.firstReveal + JoystickGroupView.revealBatch
+                   && JoystickGroupView.revealCount(afterExpandedBecomes: true, from: 12) == 12,
+               detail: "\(reopened) rows in the first frame")
+
+        cat = "Import"
+        var shared = Preset(name: "Shared")
+        shared.automation.leaveLightBar = true
+        shared.automation.idleDisconnectMinutes = 1
+        shared.automation.reconnectOnStart = true
+        let imported = shared.sanitizedForImport(removingOpeners: false).automation
+        // A backup is this Mac's own: read back as written, nothing cleared.
+        let restored = (try? JSONEncoder().encode(shared)).flatMap { try? JSONDecoder().decode(Preset.self, from: $0) }?.automation
+        record(cat, "An import follows this Mac's device options; a backup keeps the preset's",
+               pass: imported.leaveLightBar == nil && imported.idleDisconnectMinutes == nil && imported.reconnectOnStart == nil
+                   && restored?.leaveLightBar == true && restored?.idleDisconnectMinutes == 1 && restored?.reconnectOnStart == true)
+
+        cat = "Backup"
+        // A string, a number, and the other container where a merged list
+        // or table belongs: skipped, and never handed on to be stored.
+        var wrongTypesKept: [String] = []
+        for key in AppSettingsReset.mergedListKeys.sorted() {
+            let wrong: [Any] = ["text", 7, ["a": "b"], ["a", 1]]
+            if wrong.contains(where: { AppSettingsReset.restorableValue($0, forKey: key) != nil })
+                || AppSettingsReset.restorableValue(["a", "b"], forKey: key) == nil
+                || AppSettingsReset.merged("text", into: key) is String { wrongTypesKept.append(key) }
+        }
+        for key in AppSettingsReset.mergedTableKeys.sorted() {
+            let wrong: [Any] = ["text", 7, ["a", "b"]]
+            if wrong.contains(where: { AppSettingsReset.restorableValue($0, forKey: key) != nil })
+                || AppSettingsReset.restorableValue(["a": 1], forKey: key) == nil
+                || AppSettingsReset.merged("text", into: key) is String { wrongTypesKept.append(key) }
+        }
+        record(cat, "A wrong typed list or table in a backup is skipped, and the stored one stays",
+               pass: wrongTypesKept.isEmpty && AppSettingsReset.mergedListKeys.count == 9,
+               detail: wrongTypesKept.isEmpty ? "" : wrongTypesKept.joined(separator: ", "))
+
+        cat = "Editor Rows"
+        // The row editor's own steps: the axis number changes, then the
+        // helper runs (setAxisIndex, the Direction setter, the type menu).
+        var bothWays = InputEvent(type: .axis, index: 1, axisDirection: nil)
+        bothWays.index = 4
+        bothWays.normalizeTriggerDirection()
+        var minus = InputEvent(type: .axis, index: 1, axisDirection: .negative)
+        minus.index = 5
+        minus.normalizeTriggerDirection()
+        var stick = InputEvent(type: .axis, index: 1, axisDirection: nil)
+        stick.normalizeTriggerDirection()
+        var tilt = InputEvent.motion(.gyroY, direction: .negative)
+        tilt.index = 4
+        tilt.normalizeTriggerDirection()
+        record(cat, "A both ways row moved to a trigger becomes a plus row",
+               pass: bothWays.axisDirection == .positive && minus.axisDirection == .positive
+                   && stick.axisDirection == nil && tilt.axisDirection == .negative
+                   && AxisDirection.choices(forAxis: 4) == [.positive] && AxisDirection.choices(forAxis: 5) == [.positive]
+                   && AxisDirection.choices(forAxis: 1) == AxisDirection.allCases)
+        // Read from a file: no direction on a trigger heals, a stick's
+        // both ways row and a stored minus are left as written.
+        record(cat, "A trigger row read with no direction is a plus row",
+               pass: InputEvent(type: .axis, index: 4, axisDirection: nil).clampedValues().axisDirection == .positive
+                   && InputEvent(type: .axis, index: 5, axisDirection: nil).clampedValues().axisDirection == .positive
+                   && InputEvent(type: .axis, index: 1, axisDirection: nil).clampedValues().axisDirection == nil
+                   && InputEvent(type: .axis, index: 5, axisDirection: .negative).clampedValues().axisDirection == .negative)
+
+        // A row stores its whole percent as a Float; the group's Stick
+        // settings popover reads it back as a Double and prints it.
+        var offPercents: [Int] = []
+        for k in 1...90 where JoystickGroupView.bulkDeadzonePercent(Double(Float(Double(k) / 100))) != k {
+            offPercents.append(k)
+        }
+        record(cat, "Stick settings shows every whole percent as the row does, and stores a whole one",
+               pass: offPercents.isEmpty && JoystickGroupView.bulkDeadzoneStored(0.2537) == 0.25
+                   && JoystickGroupView.bulkDeadzoneStored(Double(Float(0.29))) == Float(0.29),
+               detail: offPercents.isEmpty ? "" : "off at \(offPercents.map(String.init).joined(separator: ", "))")
+
+        // A note typed at 30 ms a key, then at 200 ms a key: the history
+        // step rule the editor's recordHistory asks, with the stack it
+        // would keep. A run is one step at either speed, because the
+        // second is counted from the key before, not from the first key.
+        var burst = EditorTypingBurst()
+        var noteRow = BindingModel(input: InputEvent.button(0))
+        let noteField = EditorTypingField(row: noteRow.id, field: .note)
+        var steps = ["before"], lastText = "before"
+        for key in 0..<150 {
+            let typedText = String(repeating: "a", count: key + 1)
+            if burst.startsStep(field: noteField, at: 100 + Double(key) * 0.03) { steps.append(lastText) }
+            lastText = typedText
+        }
+        let afterTyping = steps.count
+        let otherEdit = burst.startsStep(field: nil, at: 104.6)
+        let typingAgain = burst.startsStep(field: noteField, at: 104.7)
+        let otherRow = burst.startsStep(field: EditorTypingField(row: UUID(), field: .note), at: 104.8)
+        var slowBurst = EditorTypingBurst()
+        var slowSteps = 0
+        for key in 0..<150 where slowBurst.startsStep(field: noteField, at: 200 + Double(key) * 0.2) { slowSteps += 1 }
+        let keyAfterPause = 200 + 149 * 0.2 + EditorTypingBurst.window + 0.05
+        let stepAfterPause = slowBurst.startsStep(field: noteField, at: keyAfterPause)
+        let joinsAfterPause = !slowBurst.startsStep(field: noteField, at: keyAfterPause + 0.9)
+        var typingPreset = Preset(name: "Typing")
+        typingPreset.joysticks = [JoystickMapping(bindings: [noteRow])]
+        var typedPreset = typingPreset
+        noteRow.note = "a"
+        typedPreset.joysticks[0].bindings = [noteRow]
+        var otherChange = typingPreset
+        otherChange.joysticks[0].bindings[0].deadzone = 0.4
+        record(cat, "A note of 150 characters is a handful of undo steps, and the first leads back to before it",
+               pass: afterTyping == 2 && steps[1] == "before" && otherEdit && typingAgain && otherRow
+                   && slowSteps == 1 && stepAfterPause && joinsAfterPause
+                   && EditorTyping.changed(noteField, from: typingPreset, to: typedPreset)
+                   && !EditorTyping.changed(noteField, from: typingPreset, to: otherChange)
+                   && !EditorTyping.changed(EditorTypingField(row: UUID(), field: .note), from: typingPreset, to: typedPreset),
+               detail: "\(afterTyping - 1) steps for 150 keys at 30 ms, \(slowSteps) at 200 ms, a new step after a pause \(stepAfterPause)")
+
+        // Typed text is held in its field and written once after a pause:
+        // the newest text is what gets written, once; a dropped draft
+        // writes nothing; a Save's flush writes what is waiting; and the
+        // undo rule still counts a pause from key to key, however late
+        // the write comes.
+        var written: [String] = []
+        let heldDraft = EditorTextDraft()
+        heldDraft.hold(at: 300.0) { written.append("a") }
+        heldDraft.hold(at: 300.2) { written.append("ab") }
+        let waitsBeforeWrite = heldDraft.isWaiting && written.isEmpty && !EditorTextDrafts.isEmpty
+        heldDraft.commit()
+        heldDraft.commit()
+        let draftKeys = EditorTyping.takeKeys()
+        let wroteOnce = written == ["ab"] && !heldDraft.isWaiting
+        let droppedDraft = EditorTextDraft()
+        droppedDraft.hold { written.append("dropped") }
+        droppedDraft.drop()
+        droppedDraft.commit()
+        let flushedDraft = EditorTextDraft()
+        flushedDraft.hold { written.append("flushed") }
+        EditorTextDrafts.flushAll()
+        _ = EditorTyping.takeKeys()
+        var pieces = EditorTypingBurst()
+        let firstPiece = pieces.startsStep(field: noteField, from: 400.0, to: 402.0)
+        let joinsPiece = !pieces.startsStep(field: noteField, from: 402.5, to: 405.0)
+        let pieceAfterPause = pieces.startsStep(field: noteField, from: 406.2, to: 407.0)
+        let endsTyping = [36, 48, 53, 76].allSatisfy { EditorTextDrafts.keyEndsTyping(keyCode: UInt16($0), command: false, control: false) }
+            && EditorTextDrafts.keyEndsTyping(keyCode: 1, command: true, control: false)
+            && EditorTextDrafts.keyEndsTyping(keyCode: 1, command: false, control: true)
+            && !EditorTextDrafts.keyEndsTyping(keyCode: 1, command: false, control: false)
+            && !EditorTextDrafts.keyEndsTyping(keyCode: 49, command: false, control: false)
+        record(cat, "Typed text is written once after a pause, and at once on Save, Return, Tab or a click",
+               pass: waitsBeforeWrite && wroteOnce && draftKeys?.first == 300.0 && draftKeys?.last == 300.2
+                   && written == ["ab", "flushed"] && EditorTextDrafts.isEmpty && !flushedDraft.isWaiting
+                   && firstPiece && joinsPiece && pieceAfterPause && endsTyping,
+               detail: "wrote \(written.joined(separator: ", ")); keys \(draftKeys.map { "\($0.first) to \($0.last)" } ?? "none"); pieces \(firstPiece) \(joinsPiece) \(pieceAfterPause); end keys \(endsTyping)")
+
+        // A group set to a controller that is away reads no slot, whatever
+        // else is connected; a recorder with no slot of its own reads all.
+        record(cat, "A sequence recorder whose own controller is away says so",
+               pass: ButtonSequenceRecorder.padIsAway(rowSlot: GameControllerService.noSlot, slotsRead: 0)
+                   && !ButtonSequenceRecorder.padIsAway(rowSlot: 0, slotsRead: 1)
+                   && !ButtonSequenceRecorder.padIsAway(rowSlot: nil, slotsRead: 0))
+
+
+        // A zone a newer version wrote with a field this build reads
+        // strictly: kept raw and written back, on a pad list, the screen
+        // list and a stick, and not carried into an import.
+        cat = "Preset Files"
+        var zonePreset = Preset(name: "Zones")
+        let plainZone = TouchpadRegion(name: "Plain", minX: 0.1, maxX: 0.4, minY: 0.1, maxY: 0.4, colorIndex: 1)
+        zonePreset.touchpadRegions = [plainZone]
+        zonePreset.stickRegions = ["0": [plainZone], "1": []]
+        let saveEncoder = JSONEncoder()
+        saveEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        func tree(_ data: Data?) -> JSONValue? { data.flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) } }
+        func zoneList(_ file: JSONValue?, _ path: [String]) -> [JSONValue] {
+            var here = file
+            for step in path {
+                guard case .object(let o)? = here else { return [] }
+                here = o[step]
+            }
+            if case .array(let list)? = here { return list }
+            return []
+        }
+        let honestBytes = try? saveEncoder.encode(zonePreset)
+        let honestAgain = honestBytes.flatMap { try? JSONDecoder().decode(Preset.self, from: $0) }
+        let honestSame = honestAgain.flatMap { try? saveEncoder.encode($0) } == honestBytes && honestBytes != nil
+            && honestAgain?.unreadableRegionCount == 0
+        var zonesKept = false, zonesStable = false, zonesNotImported = false, zoneDetail = "did not decode"
+        if let honestBytes, var file = (try? JSONSerialization.jsonObject(with: honestBytes)) as? [String: Any],
+           let plain = (file["touchpadRegions"] as? [[String: Any]])?.first {
+            var leftPad = plain
+            leftPad["id"] = UUID().uuidString; leftPad["surface"] = "left"; leftPad["pressure"] = [1, 2]
+            var onDisplay = plain
+            onDisplay["id"] = UUID().uuidString; onDisplay["display"] = 7
+            file["touchpadRegions"] = [leftPad, plain]
+            file["cursorRegions"] = [onDisplay]
+            file["stickRegions"] = ["0": [plain, onDisplay], "3": [onDisplay], "1": [[String: Any]]()]
+            if let newerBytes = try? JSONSerialization.data(withJSONObject: file),
+               let read = try? JSONDecoder().decode(Preset.self, from: newerBytes),
+               let written = try? saveEncoder.encode(read) {
+                let before = tree(newerBytes), after = tree(written)
+                let lists = [["touchpadRegions"], ["cursorRegions"], ["stickRegions", "0"], ["stickRegions", "3"], ["stickRegions", "1"]]
+                zonesKept = read.touchpadRegions.count == 1 && read.cursorRegions.isEmpty
+                    && read.stickRegions["0"]?.count == 1 && read.unreadableRegionCount == 4
+                    && lists.allSatisfy { path in
+                        let was = zoneList(before, path), now = zoneList(after, path)
+                        return was.count == now.count && Set(was) == Set(now)
+                    }
+                let again = (try? JSONDecoder().decode(Preset.self, from: written)).flatMap { try? saveEncoder.encode($0) }
+                zonesStable = again == written
+                let imported = read.sanitizedForImport(removingOpeners: true)
+                zonesNotImported = imported.unreadableRegionCount == 0
+                    && zoneList(tree(try? saveEncoder.encode(imported)), ["cursorRegions"]).isEmpty
+                zoneDetail = "\(read.unreadableRegionCount) of 4 kept"
+            }
+        }
+        record(cat, "A zone this version cannot read is kept in the file through a save, and left out of an import",
+               pass: honestSame && zonesKept && zonesStable && zonesNotImported, detail: zoneDetail)
+        cat = "Editor Rows"
+
+
+        // A newer version's watch: a mode this build has no case for and
+        // a field it has no key for. Both stay in the file through a
+        // save, the watch does not fire here, and a mode picked here
+        // replaces the unread one.
+        cat = "Preset Files"
+        var watchPreset = Preset(name: "Watches")
+        watchPreset.screenPixels = [ScreenPixelWatch()]
+        watchPreset.screenTexts = [ScreenTextWatch()]
+        watchPreset.voicePhrases = [VoicePhrase()]
+        var watchesKept = false, watchesQuiet = false, watchPick = false, watchImport = false
+        let ownWatchBytes = try? saveEncoder.encode(watchPreset)
+        let ownWatchesSame = ownWatchBytes.flatMap { try? JSONDecoder().decode(Preset.self, from: $0) }
+            .flatMap { try? saveEncoder.encode($0) } == ownWatchBytes && ownWatchBytes != nil
+        if let ownWatchBytes, var file = (try? JSONSerialization.jsonObject(with: ownWatchBytes)) as? [String: Any],
+           var pixel = (file["screenPixels"] as? [[String: Any]])?.first,
+           var text = (file["screenTexts"] as? [[String: Any]])?.first,
+           var phrase = (file["voicePhrases"] as? [[String: Any]])?.first {
+            pixel["mode"] = "fade"; pixel["sampleEvery"] = 4
+            text["mode"] = "gone"; text["language"] = ["de", "fr"]
+            phrase["confidence"] = 0.5
+            file["screenPixels"] = [pixel]; file["screenTexts"] = [text]; file["voicePhrases"] = [phrase]
+            if let newerBytes = try? JSONSerialization.data(withJSONObject: file),
+               let read = try? JSONDecoder().decode(Preset.self, from: newerBytes),
+               let written = try? saveEncoder.encode(read),
+               let pixelRead = read.screenPixels.first, let textRead = read.screenTexts.first {
+                let before = tree(newerBytes), after = tree(written)
+                watchesKept = ["screenPixels", "screenTexts", "voicePhrases"].allSatisfy {
+                    !zoneList(before, [$0]).isEmpty && zoneList(before, [$0]) == zoneList(after, [$0])
+                }
+                watchesQuiet = !pixelRead.canFire && !textRead.canFire
+                    && ScreenPixelWatch().canFire && ScreenTextWatch().canFire
+                var picked = pixelRead
+                picked.mode = .change
+                var moved = pixelRead
+                moved.x = 0.9
+                watchPick = picked.canFire && picked.rawMode == nil && moved.rawMode == "fade"
+                    && moved.extraFields == pixelRead.extraFields
+                let imported = read.sanitizedForImport(removingOpeners: true)
+                watchImport = imported.screenPixels.first?.extraFields.isEmpty == true
+                    && imported.screenPixels.first?.canFire == false
+                    && imported.screenTexts.first?.extraFields.isEmpty == true
+                    && imported.voicePhrases.first?.extraFields.isEmpty == true
+            }
+        }
+        record(cat, "A watch with a newer version's mode and fields keeps both through a save and does not fire",
+               pass: ownWatchesSame && watchesKept && watchesQuiet && watchPick && watchImport,
+               detail: "kept \(watchesKept), quiet \(watchesQuiet), pick \(watchPick), import \(watchImport)")
+        cat = "Editor Rows"
+
+        // The store's own rule for keeping a
+        // version, on a made up clock. Ten earlier versions a day apart,
+        // then thirty saves a second for 31 seconds: every three seconds
+        // one used to be kept and the oldest dropped.
+        cat = "Preset Files"
+        func versionsLeft(after saves: [TimeInterval]) -> (earlier: Int, kept: Int) {
+            var versions: [(at: TimeInterval, earlier: Bool)] = (1...10).map { (at: -Double($0) * 86_400, earlier: true) }
+            var last: Date? = nil
+            var kept = 0
+            for t in saves {
+                let now = Date(timeIntervalSinceReferenceDate: t)
+                let quiet = PresetStore.isQuietSave(last: last, now: now)
+                last = now
+                let age = versions.map(\.at).max().map { t - $0 } ?? .greatestFiniteMagnitude
+                if PresetStore.keepsVersion(forced: false, newestVersionAge: age, quiet: quiet) {
+                    versions.append((at: t, earlier: false))
+                    versions.sort { $0.at > $1.at }
+                    versions = Array(versions.prefix(10))
+                    kept += 1
+                }
+            }
+            return (versions.filter(\.earlier).count, kept)
+        }
+        let longDrag = versionsLeft(after: (0...930).map { Double($0) / 30.0 })
+        let slowEdits = versionsLeft(after: (0...12).map { Double($0) * 5.0 })
+        let afterPause = versionsLeft(after: (0...930).map { Double($0) / 30.0 } + [34.5])
+        record(cat, "A 31 second color drag keeps one version and leaves nine of the ten earlier ones",
+               pass: longDrag.earlier == 9 && longDrag.kept == 1
+                   && slowEdits.kept == 13 && afterPause.kept == 2
+                   && PresetStore.keepsVersion(forced: true, newestVersionAge: 0, quiet: false)
+                   && PresetStore.keepsVersion(forced: false, newestVersionAge: 300, quiet: false)
+                   && !PresetStore.keepsVersion(forced: false, newestVersionAge: 2.9, quiet: true),
+               detail: "drag left \(longDrag.earlier), kept \(longDrag.kept); an edit every 5 s kept \(slowEdits.kept) of 13; after a pause \(afterPause.kept)")
+        cat = "Editor Rows"
+
+        // The Previous versions list
+        // counts a kept version's rows without reading them. Same count
+        // as a full read, the same refusals, and less work.
+        cat = "Preset Files"
+        var versionPreset = Preset(name: "Versions")
+        versionPreset.joysticks = (0..<4).map { g in
+            JoystickMapping(bindings: (0..<(10 + g)).map { BindingModel(input: InputEvent.button($0)) })
+        }
+        let versionBytes = (try? saveEncoder.encode(versionPreset)) ?? Data()
+        let fullCount = (try? JSONDecoder().decode(Preset.self, from: versionBytes))
+            .map { $0.joysticks.reduce(0) { $0 + $1.bindings.count } }
+        let quickCount = PresetStore.versionRowCount(in: versionBytes)
+        let emptyCount = (try? saveEncoder.encode(Preset(name: "Empty"))).flatMap { PresetStore.versionRowCount(in: $0) }
+        var namelessRefused = false
+        if var file = (try? JSONSerialization.jsonObject(with: versionBytes)) as? [String: Any] {
+            file["name"] = nil
+            let nameless = (try? JSONSerialization.data(withJSONObject: file)) ?? Data()
+            namelessRefused = PresetStore.versionRowCount(in: nameless) == nil
+                && (try? JSONDecoder().decode(Preset.self, from: nameless)) == nil
+        }
+        let deepRefused = PresetStore.versionRowCount(
+            in: Data((String(repeating: "[", count: 300) + String(repeating: "]", count: 300)).utf8)) == nil
+        func rounds(_ work: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<20 { work() }
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        let fullMs = rounds { _ = try? JSONDecoder().decode(Preset.self, from: versionBytes) }
+        let quickMs = rounds { _ = PresetStore.versionRowCount(in: versionBytes) }
+        record(cat, "A kept version's row count matches a full read of it, and costs less",
+               pass: fullCount == 46 && quickCount == fullCount && emptyCount == 0
+                   && namelessRefused && deepRefused && quickMs < fullMs,
+               detail: "full \(fullCount.map(String.init) ?? "none"), quick \(quickCount.map(String.init) ?? "none"); 20 reads \(String(format: "%.2f", fullMs)) ms full, \(String(format: "%.2f", quickMs)) ms quick")
+        cat = "Editor Rows"
+
+        // The rows compare one hash of the
+        // preset list, so it must move with everything the picker shows.
+        cat = "Editor Rows"
+        let choiceA = UUID(), choiceB = UUID()
+        let choices: [(id: UUID, name: String)] = [(id: choiceA, name: "One"), (id: choiceB, name: "Two")]
+        let choicesKey = PresetEditorView.choicesVersion(of: choices)
+        record(cat, "The preset list's hash moves on a rename, an add, a removal and a reorder, and not otherwise",
+               pass: choicesKey == PresetEditorView.choicesVersion(of: [(id: choiceA, name: "One"), (id: choiceB, name: "Two")])
+                   && choicesKey != PresetEditorView.choicesVersion(of: [(id: choiceA, name: "One"), (id: choiceB, name: "Too")])
+                   && choicesKey != PresetEditorView.choicesVersion(of: choices + [(id: UUID(), name: "Three")])
+                   && choicesKey != PresetEditorView.choicesVersion(of: Array(choices.prefix(1)))
+                   && choicesKey != PresetEditorView.choicesVersion(of: Array(choices.reversed()))
+                   && choicesKey != PresetEditorView.choicesVersion(of: [(id: UUID(), name: "One"), (id: choiceB, name: "Two")]),
+               detail: "")
+
+        // Expand All and Collapse All change
+        // the folder list once. Twelve folders, half open: one new list
+        // with nothing else touched, and none at all when already there.
+        cat = "Preset Files"
+        let twelve = (0..<12).map { PresetGroup(name: "Folder \($0)", sortOrder: $0, isExpanded: $0 % 2 == 0) }
+        let opened = PresetStore.groups(twelve, allExpanded: true)
+        let closed = PresetStore.groups(twelve, allExpanded: false)
+        func sameButExpanded(_ a: [PresetGroup]?, _ expanded: Bool) -> Bool {
+            guard let a, a.count == twelve.count else { return false }
+            return zip(a, twelve).allSatisfy { new, old in
+                var want = old
+                want.isExpanded = expanded
+                return new == want
+            }
+        }
+        record(cat, "Expand All and Collapse All change twelve folders in one list, and none when already so",
+               pass: sameButExpanded(opened, true) && sameButExpanded(closed, false)
+                   && opened.flatMap { PresetStore.groups($0, allExpanded: true) } == nil
+                   && closed.flatMap { PresetStore.groups($0, allExpanded: false) } == nil
+                   && PresetStore.groups([], allExpanded: true) == nil,
+               detail: "")
+        cat = "Editor Rows"
+
+        // The editor's per change work. The one walk gives
+        // the five lists the five sweeps gave, and the one compare answers
+        // as the two rewritten copies did.
+        cat = "Editor Rows"
+        func liveRow(_ type: InputType, _ index: Int, _ change: (inout BindingModel) -> Void = { _ in }) -> BindingModel {
+            var row = BindingModel(input: InputEvent.button(index))
+            row.input.type = type
+            change(&row)
+            return row
+        }
+        let zoneA = UUID(), zoneB = UUID()
+        var livePreset = Preset(name: "Live rows")
+        livePreset.joysticks = [
+            JoystickMapping(bindings: [
+                liveRow(.axis, 0) { $0.input.axisDirection = .positive; $0.deadzone = 0.4; $0.fullTravel = true },
+                liveRow(.stickRegion, 1) { $0.input.stickRegionID = zoneA; $0.zoneSharesStick = false; $0.invertAxis = true },
+                liveRow(.button, 2),
+                liveRow(.stickGesture, 0) { $0.gestureReach = 0.1; $0.gestureWindowMs = 900 },
+                liveRow(.stickRegion, 1),
+            ]),
+            JoystickMapping(bindings: [
+                liveRow(.buttonSequence, 0) { $0.input.sequenceSteps = [1, 2, 3]; $0.gestureWindowMs = 9000 },
+                liveRow(.stickRegion, 0) { $0.input.stickRegionID = zoneB; $0.deadzone = 0.6 },
+                liveRow(.axis, 3) { $0.onlyInRegion = zoneA },
+                liveRow(.stickRegion, 0) { $0.input.stickRegionID = zoneA; $0.zoneSharesStick = false },
+                liveRow(.stickGesture, 1),
+                liveRow(.buttonSequence, 1),
+            ]),
+        ]
+        let oneWalk = PresetEditorView.liveRows(of: livePreset)
+        let everyRow = livePreset.joysticks.flatMap(\.bindings)
+        let sweptZones = everyRow.filter { $0.input.type == .stickRegion }
+            .compactMap { row in row.input.stickRegionID.map {
+                GameControllerService.LiveZoneRow(id: row.id, key: row.input.index, zone: $0,
+                                                  deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true) } }
+        let sweptTakeover = everyRow.filter { $0.input.type == .stickRegion && $0.zoneSharesStick == false }
+            .compactMap { row in row.input.stickRegionID.map {
+                (key: row.input.index, id: $0, deadzone: Double(row.deadzone ?? 0.25), invert: row.invertAxis == true,
+                 rowID: row.id, modifiers: row.modifiers.map(\.serialized)) } }
+        let sweptAxes = everyRow.filter { $0.input.type == .axis }
+            .map { GameControllerService.LiveAxisRow(id: $0.id, index: $0.input.index, direction: $0.input.axisDirection,
+                                                     deadzone: $0.deadzone ?? 0.25, invert: $0.invertAxis == true,
+                                                     fullTravel: $0.fullTravel == true, onlyInRegion: $0.onlyInRegion) }
+        let sweptSequences = everyRow.filter { $0.input.type == .buttonSequence }
+            .map { GameControllerService.LiveSequence(input: $0.input, windowMs: max(150, min(3000, $0.gestureWindowMs ?? 600))) }
+        let sweptGestures = everyRow.filter { $0.input.type == .stickGesture }
+            .map { GameControllerService.LiveGesture(input: $0.input, reach: max(0.3, min(1, $0.gestureReach ?? 0.8)),
+                                                     windowMs: $0.gestureWindowMs ?? 600, flickMs: $0.gestureFlickMs ?? 400,
+                                                     invert: $0.invertAxis == true) }
+        let takeoverSame = oneWalk.takeoverZones.count == sweptTakeover.count
+            && zip(oneWalk.takeoverZones, sweptTakeover).allSatisfy { new, old in
+                new.key == old.key && new.id == old.id && new.deadzone == old.deadzone && new.invert == old.invert
+                    && new.rowID == old.rowID && new.modifiers == old.modifiers
+            }
+        record(cat, "One walk of the rows gives the same five live lists as the five sweeps",
+               pass: oneWalk.zoneRows == sweptZones && sweptZones.count == 3 && takeoverSame && sweptTakeover.count == 2
+                   && oneWalk.axisRows == sweptAxes && sweptAxes.count == 2
+                   && oneWalk.sequences == sweptSequences && sweptSequences.count == 2
+                   && oneWalk.gestures == sweptGestures && sweptGestures.count == 2,
+               detail: "zones \(oneWalk.zoneRows.count), takeover \(oneWalk.takeoverZones.count), axes \(oneWalk.axisRows.count), sequences \(oneWalk.sequences.count), gestures \(oneWalk.gestures.count)")
+
+        func twoCopies(_ a: Preset, _ b: Preset) -> Bool {
+            func flat(_ p: Preset) -> Preset {
+                var copy = p
+                for i in copy.joysticks.indices {
+                    copy.joysticks[i].isExpanded = true
+                    if copy.joysticks[i].tag == "Add bindings here" { copy.joysticks[i].tag = "" }
+                }
+                return copy
+            }
+            return a != b && flat(a) != flat(b)
+        }
+        var foldedGroup = livePreset
+        foldedGroup.joysticks[1].isExpanded.toggle()
+        var placeholder = livePreset
+        placeholder.joysticks[0].tag = "Add bindings here"
+        var tagged = livePreset
+        tagged.joysticks[0].tag = "Left stick"
+        var placeholderToTag = placeholder
+        placeholderToTag.joysticks[0].tag = "Left stick"
+        var rowEdit = foldedGroup
+        rowEdit.joysticks[1].bindings[0].gestureWindowMs = 700
+        var fewer = livePreset
+        fewer.joysticks.removeLast()
+        var renamed = livePreset
+        renamed.name = "Other"
+        let layoutPairs: [(Preset, Preset, Bool)] = [
+            (livePreset, livePreset, false), (livePreset, foldedGroup, false), (livePreset, placeholder, false),
+            (foldedGroup, placeholder, false), (livePreset, tagged, true), (placeholder, placeholderToTag, true),
+            (livePreset, rowEdit, true), (foldedGroup, rowEdit, true), (livePreset, fewer, true), (livePreset, renamed, true),
+        ]
+        let layoutWrong = layoutPairs.indices.filter { i in
+            let (a, b, want) = layoutPairs[i]
+            return PresetEditorView.differsBeyondLayout(a, b) != want || PresetEditorView.differsBeyondLayout(b, a) != want
+                || twoCopies(a, b) != want
+        }
+        record(cat, "Folding a group or the placeholder tag is no undo step; a row, a tag, a name or a group is one",
+               pass: layoutWrong.isEmpty, detail: layoutWrong.isEmpty ? "" : "pairs \(layoutWrong)")
+
+        #if DEBUG
+        // A held Access input tells the idle timer once a
+        // second, not once a report. Through the reader itself, on a pad
+        // installed by hand; all 500 reports land within the same second.
+        cat = "Access Controller"
+        do {
+            typealias S = AccessControllerPortService
+            let loc: UInt64 = 0xFA5E_0000_ACCE_5519
+            let idle: [UInt8] = HIDFixture.parse("01 80 80 80 80 00 00 00 08 00 00 00 00 00 00 00 00 00 80 80" + String(repeating: " 00", count: 44))
+            var held = idle
+            held[16] = 0x01
+            S.shared.debugInstallSyntheticPad(location: loc, overUSB: true)
+            let start = S.shared.debugActivityNoteCount
+            for _ in 0..<100 { S.shared.debugInjectNow(location: loc, bytes: idle) }
+            let afterIdle = S.shared.debugActivityNoteCount - start
+            for _ in 0..<500 { S.shared.debugInjectNow(location: loc, bytes: held) }
+            let afterHeld = S.shared.debugActivityNoteCount - start
+            S.shared.debugRemoveSyntheticPads()
+            let decodes = S.decode(idle)?.buttons.isEmpty == true && S.decode(held)?.buttons == [S.buttonBase]
+            let rule = S.activityNoteDue(last: 0, now: 5) && !S.activityNoteDue(last: 5, now: 5.996)
+                && S.activityNoteDue(last: 5, now: 6)
+            record(cat, "500 reports of a held Access button tell the idle timer once or twice, and a pad at rest never",
+                   pass: decodes && afterIdle == 0 && (1...2).contains(afterHeld) && rule,
+                   detail: "at rest \(afterIdle), held \(afterHeld), reports decode \(decodes), rule \(rule)")
+        }
+        #endif
+        cat = "Editor Rows"
+
+        #if DEBUG
+        // A Turn row's travel is kept per stream under a struct
+        // key. Through the service itself, on a device no port has. Not
+        // with a preset running: an Any device Turn row on CC 21 would step.
+        cat = "MIDI Turn"
+        if !(MappingEngine.current?.isRunning ?? false) {
+            let midi = MIDIInputService.shared
+            let knob = "testbench-turn"
+            let turnRows = ["testbench-coarse+", "testbench-fine+", "testbench-down-", "testbench-elsewhere+", "testbench-timing+"]
+            midi.debugForgetKnobs(deviceID: knob, consumers: turnRows)
+            func send(_ values: [Int], channel: Int = 2) {
+                for v in values { midi.debugInject(status: 0xB, channel: channel, data1: 21, data2: v, deviceID: knob) }
+            }
+            /// Presses over `polls` polls, and whether two ever came in a row.
+            func presses(_ row: String, up: Bool, size: Int, channel: Int? = 2, device: String? = knob, polls: Int = 40) -> (count: Int, doubled: Bool) {
+                var count = 0, doubled = false, last = false
+                for _ in 0..<polls {
+                    let hit = midi.consumeRelativeStep(cc: 21, channel: channel, deviceID: device, up: up, consumerKey: row, stepUnits: size)
+                    if hit { count += 1; if last { doubled = true } }
+                    last = hit
+                }
+                return (count, doubled)
+            }
+            // The first message seeds the stream, the second makes it one
+            // the rows can see; each row then starts from there.
+            send([60, 61])
+            let atRest = presses(turnRows[0], up: true, size: 4).count + presses(turnRows[1], up: true, size: 1).count
+                + presses(turnRows[2], up: false, size: 4).count
+            send(Array(62...73))
+            let coarse = presses(turnRows[0], up: true, size: 4)
+            let fine = presses(turnRows[1], up: true, size: 1)
+            let wrongWay = presses(turnRows[2], up: false, size: 4)
+            let otherChannel = presses(turnRows[3], up: true, size: 1, channel: 3)
+            let otherDevice = presses(turnRows[3], up: true, size: 1, device: "testbench-no-such-knob")
+            send(Array((65...72).reversed()))
+            let back = presses(turnRows[2], up: false, size: 4)
+            let coarseAfterBack = presses(turnRows[0], up: true, size: 4)
+            // A jump no hand makes between two messages only seeds again.
+            send([120])
+            let jump = presses(turnRows[1], up: true, size: 1)
+            // Sixteen streams and a row that matches none of them: what
+            // one poll of a Turn row costs, for the detail line only.
+            for channel in 20..<36 { send([10, 11], channel: channel) }
+            let began = ProcessInfo.processInfo.systemUptime
+            _ = presses(turnRows[4], up: true, size: 4, channel: 99, polls: 20_000)
+            let micros = (ProcessInfo.processInfo.systemUptime - began) * 1_000_000 / 20_000
+            midi.debugForgetKnobs(deviceID: knob, consumers: turnRows)
+            let gone = presses(turnRows[1], up: true, size: 1, channel: nil).count
+            record(cat, "Twelve units of a knob are three steps of four, twelve of one, none the other way, and each row keeps its own place",
+                   pass: atRest == 0 && coarse.count == 3 && !coarse.doubled && fine.count == 12 && !fine.doubled
+                       && wrongWay.count == 0 && otherChannel.count == 0 && otherDevice.count == 0
+                       && back.count == 2 && coarseAfterBack.count == 0 && jump.count == 0 && gone == 0,
+                   detail: "rest \(atRest), coarse \(coarse.count), fine \(fine.count), wrong way \(wrongWay.count), other channel \(otherChannel.count), other device \(otherDevice.count), back \(back.count), coarse after \(coarseAfterBack.count), jump \(jump.count), forgotten \(gone); one poll over 17 streams \(String(format: "%.2f", micros)) microseconds")
+        } else {
+            skip(cat, "Twelve units of a knob are three steps of four, twelve of one, none the other way, and each row keeps its own place",
+                 detail: "A preset is running")
+        }
+        #endif
+        cat = "Editor Rows"
+
+        #if DEBUG
+        // The MIDI presses that last one poll. Through
+        // the service itself, on a device no port has; each beginPoll
+        // stands for one poll of the engine. Not with a preset running:
+        // its polls would take the strikes.
+        cat = "MIDI Strikes"
+        let strikeCases = [
+            "A pedal that sends the same value on every press is a press each time, not held for good",
+            "A Trigger row fires once per message, whatever the value",
+            "A Program Change or Start reaches every row of one poll, and no later poll",
+            "A tapped note is one press however it fell between polls, and a held note stays down",
+            "A press nothing polled for a second is dropped, a held note is not",
+        ]
+        if !(MappingEngine.current?.isRunning ?? false) {
+            let midi = MIDIInputService.shared
+            let pedal = "testbench-strike"
+            midi.debugForgetKnobs(deviceID: pedal, consumers: [])
+            func cc(_ value: Int, _ number: Int = 64) {
+                midi.debugInject(status: 0xB, channel: 1, data1: number, data2: value, deviceID: pedal)
+            }
+            func note(_ on: Bool) {
+                midi.debugInject(status: on ? 0x9 : 0x8, channel: 1, data1: 60, data2: on ? 100 : 0, deviceID: pedal)
+            }
+            /// What the next polls read, as "1" (down) and "0".
+            func polls(_ count: Int, _ read: () -> Bool) -> String {
+                var out = ""
+                for _ in 0..<count { midi.beginPoll(); out += read() ? "1" : "0" }
+                return out
+            }
+            let asSwitch = { midi.ccSwitchDown(64, channel: nil, deviceID: pedal) }
+            let asTrigger = { midi.ccTriggerDown(65, channel: nil, deviceID: pedal) }
+            let asNote = { midi.isNoteDown(60, channel: nil, deviceID: pedal) }
+            let storeKey = "InputConfig.midi.pressOnlyStreams"
+            let storedMark = "\(pedal)|1|64"
+
+            // The first press reads as a held pedal does. The same value
+            // again after a pause marks the stream: one poll up, then the
+            // press, and each later press is one poll.
+            cc(127)
+            let first = polls(3, asSwitch)
+            midi.debugAgePause(deviceID: pedal, by: 0.5)
+            cc(127)
+            let second = polls(4, asSwitch)
+            let marked = midi.debugIsPressOnly(cc: 64, channel: 1, deviceID: pedal)
+            let stored = UserDefaults.standard.stringArray(forKey: storeKey)?.contains(storedMark) ?? false
+            midi.debugAgePause(deviceID: pedal, by: 0.5)
+            cc(127)
+            let third = polls(3, asSwitch)
+            cc(127); cc(127)
+            let twoFast = polls(5, asSwitch)
+            // A lower value: a pedal with a release after all. Held again.
+            cc(0)
+            let released = polls(2, asSwitch)
+            let unmarked = !midi.debugIsPressOnly(cc: 64, channel: 1, deviceID: pedal)
+            cc(127)
+            let heldAgain = polls(3, asSwitch)
+            record(cat, strikeCases[0],
+                   pass: first == "111" && second == "0100" && marked && stored && third == "100"
+                       && twoFast == "10100" && released == "00" && unmarked && heldAgain == "111",
+                   detail: "first \(first), second \(second), marked \(marked), stored \(stored), third \(third), two fast \(twoFast), after a 0 \(released), unmarked \(unmarked), held again \(heldAgain)")
+
+            // Trigger: the first message, a 0, and two between polls.
+            cc(0, 65)
+            let firstMessage = polls(3, asTrigger)
+            cc(0, 65); cc(127, 65)
+            let twoMessages = polls(5, asTrigger)
+            cc(127, 65)
+            midi.beginPoll()
+            let filters = [midi.ccTriggerDown(65, channel: 1, deviceID: pedal), midi.ccTriggerDown(65, channel: nil, deviceID: nil),
+                           midi.ccTriggerDown(65, channel: 2, deviceID: pedal), midi.ccTriggerDown(65, channel: nil, deviceID: "testbench-no-such-pedal"),
+                           midi.ccTriggerDown(66, channel: nil, deviceID: pedal)]
+            midi.beginPoll()
+            record(cat, strikeCases[1],
+                   pass: firstMessage == "100" && twoMessages == "10100" && filters == [true, true, false, false, false],
+                   detail: "first message \(firstMessage), two between polls \(twoMessages), its channel, any, another channel, another device, another number \(filters)")
+
+            // Program 5 on channel 1: a row on any channel and a row on
+            // channel 1 both read it (the first read took it before).
+            midi.debugInject(status: 0xC, channel: 1, data1: 5, data2: 0, deviceID: pedal)
+            let early = midi.consumeProgramChange(5, channel: nil, deviceID: pedal)
+            midi.beginPoll()
+            let both = [midi.consumeProgramChange(5, channel: nil, deviceID: pedal), midi.consumeProgramChange(5, channel: 1, deviceID: pedal),
+                        midi.consumeProgramChange(5, channel: nil, deviceID: pedal), midi.consumeProgramChange(5, channel: 2, deviceID: pedal),
+                        midi.consumeProgramChange(6, channel: nil, deviceID: pedal)]
+            midi.beginPoll()
+            let later = midi.consumeProgramChange(5, channel: nil, deviceID: pedal)
+            midi.debugInjectTransport(status: 0xFA, deviceID: pedal)
+            midi.beginPoll()
+            let start = [midi.consumeTransport(0xFA, deviceID: pedal), midi.consumeTransport(0xFA, deviceID: pedal),
+                         midi.consumeTransport(0xFC, deviceID: pedal)]
+            midi.beginPoll()
+            let startLater = midi.consumeTransport(0xFA, deviceID: pedal)
+            record(cat, strikeCases[2],
+                   pass: !early && both == [true, true, true, false, false] && !later && start == [true, true, false] && !startLater,
+                   detail: "before its poll \(early), any channel, channel 1, any again, channel 2, program 6 \(both), next poll \(later); Start twice and Stop \(start), next poll \(startLater)")
+
+            // Notes: a tap that began and ended between two polls, a held
+            // note, a note struck again while held, two taps between polls,
+            // and twenty taps two polls apart.
+            note(true); note(false)
+            let tap = polls(3, asNote)
+            note(true)
+            let held = polls(3, asNote)
+            note(false); note(true)
+            let again = polls(4, asNote)
+            note(false)
+            let up = polls(2, asNote)
+            note(true); note(false); note(true); note(false)
+            let twoTaps = polls(5, asNote)
+            var twenty = 0
+            for _ in 0..<20 {
+                note(true); note(false)
+                if polls(2, asNote) == "10" { twenty += 1 }
+            }
+            record(cat, strikeCases[3],
+                   pass: tap == "100" && held == "111" && again == "0111" && up == "00" && twoTaps == "10100" && twenty == 20,
+                   detail: "tap \(tap), held \(held), struck again while held \(again), let go \(up), two taps between polls \(twoTaps), twenty taps \(twenty)")
+
+            // Nothing polled for two seconds (outputs paused, a stalled
+            // main thread): the tap, the Trigger and the Program Change are
+            // dropped, not fired late; a note still held reads down.
+            note(true); note(false)
+            cc(127, 65)
+            midi.debugInject(status: 0xC, channel: 1, data1: 5, data2: 0, deviceID: pedal)
+            midi.debugAgeStrikes(by: 2)
+            midi.beginPoll()
+            let stale = [asNote(), asTrigger(), midi.consumeProgramChange(5, channel: nil, deviceID: pedal)]
+            // A stall shorter than that keeps the tap (it was lost past 50 ms).
+            note(true); note(false)
+            midi.debugAgeStrikes(by: 0.3)
+            let kept = polls(2, asNote)
+            note(true)
+            midi.debugAgeStrikes(by: 2)
+            let stillHeld = polls(2, asNote)
+            note(false)
+            midi.debugForgetKnobs(deviceID: pedal, consumers: [])
+            midi.debugForgetVelocity(deviceID: pedal)
+            let cleaned = !(UserDefaults.standard.stringArray(forKey: storeKey)?.contains(storedMark) ?? false)
+                && polls(2, asNote) == "00" && polls(2, asSwitch) == "00"
+            record(cat, strikeCases[4],
+                   pass: stale == [false, false, false] && kept == "10" && stillHeld == "11" && cleaned,
+                   detail: "after two seconds: tap, Trigger, Program Change \(stale); after 0.3 s \(kept); held through it \(stillHeld); cleaned up \(cleaned)")
+        } else {
+            for name in strikeCases { skip(cat, name, detail: "A preset is running") }
+        }
+        #endif
+        cat = "Editor Rows"
+
+        // A held MIDI value is asked for every poll and queued
+        // once; a reset lets the same value through again. The rule only,
+        // so the bench puts nothing on the wire.
+        cat = "MIDI Turn"
+        do {
+            var asked = MIDIService.LastValues()
+            var queued = 0
+            for _ in 0..<1000 where asked.changes((3 << 8) | 74, to: 64) { queued += 1 }
+            let held = queued
+            if asked.changes((3 << 8) | 74, to: 65) { queued += 1 }
+            if asked.changes((4 << 8) | 74, to: 65) { queued += 1 }
+            if asked.changes((3 << 8) | 75, to: 65) { queued += 1 }
+            let moved = queued - held
+            asked.forget()
+            let afterReset = asked.changes((3 << 8) | 74, to: 65) && !asked.changes((3 << 8) | 74, to: 65)
+            record(cat, "A held MIDI value is queued once in 1,000 asks, and again after a reset",
+                   pass: held == 1 && moved == 3 && afterReset,
+                   detail: "held \(held), a new value, channel and controller \(moved), after a reset \(afterReset)")
+        }
+        cat = "Editor Rows"
+
+        #if DEBUG
+        // A report that repeats the last accepted one in every byte
+        // the decoder reads is dropped before the decode, once all four
+        // ports have settled. Through the reader itself, on pads installed
+        // by hand. The counter and the controller's clock move throughout.
+        cat = "Access Controller"
+        do {
+            typealias S = AccessControllerPortService
+            let usbLoc: UInt64 = 0xFA5E_0000_ACCE_5524
+            var usbPad = SonyPadIdentity()
+            usbPad.locationID = usbLoc
+            let usbRest: [UInt8] = HIDFixture.parse("01 80 80 80 80 00 00 00 08 00 00 00 00 00 00 00 00 00 80 80" + String(repeating: " 00", count: 44))
+            var tick = 0
+            // USB bytes 7 and 28 to 30 are the counter and the clock.
+            func usbFrame(_ base: [UInt8]) -> [UInt8] {
+                tick += 1
+                var b = base
+                b[7] = UInt8(truncatingIfNeeded: tick); b[28] = UInt8(truncatingIfNeeded: tick &* 37)
+                b[29] = UInt8(truncatingIfNeeded: tick >> 3); b[30] = UInt8(truncatingIfNeeded: tick >> 11)
+                return b
+            }
+            S.shared.debugInstallSyntheticPad(location: usbLoc, overUSB: true)
+            let skips0 = S.shared.debugRestSkipCount
+            for _ in 0..<S.portSettleReports { S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(usbRest)) }
+            let whileSettling = S.shared.debugRestSkipCount - skips0
+            for _ in 0..<200 { S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(usbRest)) }
+            let atRest = S.shared.debugRestSkipCount - skips0
+            let restAxes = S.shared.axes(for: usbPad, accessSlotCount: 1)
+            record(cat, "Of 225 resting Access reports whose counter and clock move, the 25 that settle the ports are read and the 200 after are dropped",
+                   pass: whileSettling == 0 && atRest == 200 && restAxes[S.stickAxes.x] != nil
+                       && S.readBytes.count == 25 && !S.readBytes.contains(8) && !S.readBytes.contains(29),
+                   detail: "dropped while settling \(whileSettling), after \(atRest), axes \(restAxes.count), read bytes \(S.readBytes.count)")
+
+            // A press is stored on its own report, and so is the release.
+            var pressed = usbRest
+            pressed[16] = 0x01
+            S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(pressed))
+            let down = S.shared.buttons(for: usbPad, accessSlotCount: 1)
+            for _ in 0..<50 { S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(pressed)) }
+            let heldSkips = S.shared.debugRestSkipCount - skips0 - atRest
+            // A held input on a dropped report still reaches the idle timer once it is due.
+            let notes0 = S.shared.debugActivityNoteCount
+            S.shared.debugForgetActivityNote(location: usbLoc)
+            S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(pressed))
+            let notedOnDrop = S.shared.debugActivityNoteCount - notes0
+            S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(usbRest))
+            let up = S.shared.buttons(for: usbPad, accessSlotCount: 1)
+            record(cat, "A press and its release are stored on their own reports, and a held input on a dropped report still reaches the idle timer",
+                   pass: down[S.buttonBase] == 1 && heldSkips == 50 && notedOnDrop == 1 && up.isEmpty,
+                   detail: "down \(down.keys.sorted()), dropped while held \(heldSkips), noted on a dropped report \(notedOnDrop), up \(up.keys.sorted())")
+
+            // A stick plugged into E1 (the low nibble of USB byte 49): the
+            // first report with the new type is read, and so are the next
+            // 24, and the port is published on the 25th as before.
+            var e1Stick = usbRest
+            e1Stick[49] = 0x03; e1Stick[20] = 0x80; e1Stick[21] = 0x80
+            let beforePlug = S.shared.debugRestSkipCount
+            for _ in 0..<(S.portSettleReports - 1) { S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(e1Stick)) }
+            let early = S.shared.portDevices(for: usbPad, accessSlotCount: 1)
+            S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(e1Stick))
+            let onTime = S.shared.portDevices(for: usbPad, accessSlotCount: 1)
+            let plugSkips = S.shared.debugRestSkipCount - beforePlug
+            var e1Moved = e1Stick
+            e1Moved[20] = 0xFF
+            for _ in 0..<5 { S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(e1Stick)) }
+            S.shared.debugInjectNow(location: usbLoc, bytes: usbFrame(e1Moved))
+            let e1X = S.shared.axes(for: usbPad, accessSlotCount: 1)[S.portAxes(1).x] ?? 0
+            record(cat, "A port change in byte 50 is counted on every report and published on the 25th; the plugged stick then moves on its own report",
+                   pass: early[1] == nil && onTime[1] == .stick && plugSkips == 0 && e1X > 0.9,
+                   detail: "after 24: \(early), after 25: \(onTime), dropped meanwhile \(plugSkips), E1 X \(e1X)")
+
+            // Bluetooth: a frame with a changed read byte and a bad CRC stores nothing.
+            let btLoc: UInt64 = 0xFA5E_0000_ACCE_5525
+            var btPad = SonyPadIdentity()
+            btPad.locationID = btLoc
+            func sealed(_ frame: [UInt8]) -> [UInt8] {
+                var b = frame
+                let crc = SonyBluetoothCRC.crc32(seed: SonyBluetoothCRC.inputSeed, Array(b[0..<74]))
+                for k in 0..<4 { b[74 + k] = UInt8((crc >> (8 * UInt32(k))) & 0xFF) }
+                return b
+            }
+            var btRest = [UInt8](repeating: 0, count: 78)
+            btRest[0] = 0x31
+            for i in [2, 3, 4, 5, 19, 20] { btRest[i] = 0x80 }
+            btRest[9] = 0x08
+            func btFrame(_ base: [UInt8]) -> [UInt8] {
+                tick += 1
+                var b = base
+                b[8] = UInt8(truncatingIfNeeded: tick); b[29] = UInt8(truncatingIfNeeded: tick &* 37)
+                return sealed(b)
+            }
+            S.shared.debugInstallSyntheticPad(location: btLoc, overUSB: false)
+            let btSkips0 = S.shared.debugRestSkipCount
+            for _ in 0..<60 { S.shared.debugInjectNow(location: btLoc, bytes: btFrame(btRest)) }
+            let btAtRest = S.shared.debugRestSkipCount - btSkips0
+            var btPressed = btRest
+            btPressed[17] = 0x01
+            var damaged = btFrame(btRest)
+            damaged[17] = 0x01
+            S.shared.debugInjectNow(location: btLoc, bytes: damaged)
+            let afterDamaged = S.shared.buttons(for: btPad, accessSlotCount: 1)
+            S.shared.debugInjectNow(location: btLoc, bytes: btFrame(btPressed))
+            let afterWhole = S.shared.buttons(for: btPad, accessSlotCount: 1)
+            S.shared.debugRemoveSyntheticPads()
+            record(cat, "A Bluetooth frame with a changed button byte and a bad CRC stores nothing; the same press in a whole frame is stored",
+                   pass: btAtRest == 60 - S.portSettleReports && afterDamaged.isEmpty && afterWhole[S.buttonBase] == 1
+                       && S.decode(damaged) == nil && S.decode(btFrame(btPressed)) != nil,
+                   detail: "dropped at rest \(btAtRest), after the damaged frame \(afterDamaged.keys.sorted()), after the whole one \(afterWhole.keys.sorted())")
+        }
+        #endif
+        cat = "Editor Rows"
     }
 
     /// The Scan path's row rules, through the same function the Scan
@@ -4750,7 +7267,7 @@ final class TestBenchService: ObservableObject {
     }
 
     /// A held or released key named like a System Function is written with
-    /// `key`, and every verb reads it back as the key (J-E).
+    /// `key`, and every verb reads it back as the key.
     private func runMacroKeyMarkerTests() {
         let cat = "Macro Text"
         var turned: [String] = []
@@ -4769,11 +7286,25 @@ final class TestBenchService: ObservableObject {
         record(cat, "tap key volume up is the key", pass: marked.count == 1 && marked[0].action.type == .key)
         let number = MacroText.parse("hold key 2047", watches: [], currentOptions: MacroTextOptions()).steps
         record(cat, "key with a code number still reads", pass: number.count == 1 && number[0].action.keyCode == 2047)
+        // A soft line break from Pages or Word inside a Type Text: the step
+        // is written as JSON on one line and reads back the same.
+        var split: [String] = []
+        for scalar in [0x0A, 0x0D, 0x85, 0x2028, 0x2029] as [UInt32] {
+            guard let broken = Unicode.Scalar(scalar) else { continue }
+            let typed = "one" + String(Character(broken)) + "two"
+            let text = MacroText.write(steps: [MacroStep(action: OutputAction(type: .typeText, text: typed))],
+                                       options: nil, watches: [], heading: nil)
+            let back = MacroText.parse(text, watches: [], currentOptions: MacroTextOptions())
+            if back.hasErrors || back.steps.count != 1 || back.steps[0].action.type != .typeText || back.steps[0].action.text != typed {
+                split.append(String(format: "U+%04X", scalar))
+            }
+        }
+        record(cat, "A Type Text with a line break of any kind reads back as written", pass: split.isEmpty, detail: "\(split)")
     }
 
     /// The four events: a pad listed under an app's switch, a preset picked
     /// by hand in the game, the person leaving it, the waiting pad looked at
-    /// again (J-G).
+    /// again.
     private func runDeferredArrivalTests() {
         let cat = "Automatic Switching"
         typealias W = ControllerConnectWatcher
@@ -4794,7 +7325,7 @@ final class TestBenchService: ObservableObject {
     }
 
     /// The editor's Text pane registry: clean lines are written by Save,
-    /// the rest are asked about, a deleted row's go with it (J-D).
+    /// the rest are asked about, a deleted row's go with it.
     private func runHeldPaneTests() {
         let cat = "Macro Text Pane"
         // All four, with the editor maybe open: a section name being typed
@@ -4847,7 +7378,7 @@ final class TestBenchService: ObservableObject {
 
     /// The watchdog's release and stamp from its own queue while main is
     /// held: a defaults observer on the main queue made the stamp wait for
-    /// main, so nothing was let go during the hang (J-H).
+    /// main, so nothing was let go during the hang.
     private func runWatchdogReleaseTest() {
         let cat = "Freeze Watchdog"
         let key = CrashRecoveryService.lastFreezeKey
@@ -4985,7 +7516,7 @@ final class TestBenchService: ObservableObject {
         for _ in 0..<60 where engine.editorPlaybackRunning { try? await Task.sleep(for: .milliseconds(50)) }
     }
 
-    /// A Tap or Hold down step asks main once, in its press hop (D6): the
+    /// A Tap or Hold down step asks main once, in its press hop: the
     /// order of what goes out is the same, and a stop during a step's wait
     /// or a Wait step presses nothing after it.
     private func runMacroOneHopTests() async {
@@ -5214,6 +7745,14 @@ final class TestBenchService: ObservableObject {
         record(cat, "The stop key answers, and F12 to the Volume Up key as well",
                pass: MacroRecorderService.isStopKey(69, stopKey: 69) && MacroRecorderService.isStopKey(311, stopKey: 69)
                    && !MacroRecorderService.isStopKey(311, stopKey: 70) && !MacroRecorderService.isStopKey(69, stopKey: -1))
+        // Two list entries share a Mac key with another (PrintScreen with
+        // F13, # ~ with backslash); the key arrives under the other's code.
+        record(cat, "A stop key picked as PrintScreen (F13) or # ~ answers to the key as it arrives",
+               pass: MacroRecorderService.isStopKey(ExternalInputDeviceService.inputCode(forVirtualKeyCode: 0x69), stopKey: 70)
+                   && MacroRecorderService.isStopKey(ExternalInputDeviceService.inputCode(forVirtualKeyCode: 0x2A), stopKey: 50)
+                   && MacroRecorderService.isStopKey(104, stopKey: 104) && !MacroRecorderService.isStopKey(105, stopKey: 70)
+                   && !MacroRecorderService.isStopKey(70, stopKey: -1)
+                   && (0..<400).allSatisfy { [50, 70].contains($0) || KeyCodeMap.canonicalInputCode($0) == $0 })
         record(cat, "Skip the first click, and a click just after the switch",
                pass: MacroRecorderService.firstClickSkipped(awaiting: true, sinceSwitch: nil)
                    && MacroRecorderService.firstClickSkipped(awaiting: false, sinceSwitch: 0.2)
@@ -5546,7 +8085,7 @@ final class TestBenchService: ObservableObject {
                    pass: down != nil && moved != nil && moved! < down! && !order.contains(.leftMouseDragged),
                    detail: "\(order.map(\.rawValue))")
             // Locked from an unlisted app, a pointer row's click passes; the
-            // unlock with the gate still up lets go of it (J-A).
+            // unlock with the gate still up lets go of it.
             engine.debugSuspend(MappingEngine.unlistedAppReason)
             engine.debugSuspend("screen lock")
             engine.debugFire([click], press: true, owner: "0:bench")
@@ -5878,6 +8417,27 @@ final class TestBenchService: ObservableObject {
                    && !scrollOnly.hasMappings,
                detail: [empty, appsOnly, reversed, neither, smoothed, fasterAlone, faster].map { $0 ? "1" : "0" }.joined())
 
+        // A trackpad or Magic Mouse scroll at a speed below 1: a slow finger
+        // sends a point an event, and the points still add up to the
+        // speed's share. A whole number speed (a flip) carries nothing.
+        do {
+            var carry = 0.0, sum: Int64 = 0
+            for _ in 0..<100 { sum += MouseWheelShaper.carriedPoints(1, by: 0.5, carry: &carry) }
+            var back = 0.0, backSum: Int64 = 0
+            for _ in 0..<100 { backSum += MouseWheelShaper.carriedPoints(1, by: -0.3, carry: &back) }
+            var none = 0.0
+            let flipped = MouseWheelShaper.carriedPoints(7, by: -1, carry: &none)
+            record(cat, "A slow trackpad scroll at half speed travels half as far",
+                   pass: sum == 50 && backSum == -30 && flipped == -7 && none == 0,
+                   detail: "\(sum) of 50, \(backSum) of -30, \(flipped) of -7")
+            let ended = MouseWheelShaper.scrollEnded(phase: 4, momentum: 0) && MouseWheelShaper.scrollEnded(phase: 8, momentum: 0)
+                && MouseWheelShaper.scrollEnded(phase: 0, momentum: 3)
+            let going = [(1, 0), (2, 0), (128, 0), (0, 1), (0, 2), (0, 0)]
+                .contains { MouseWheelShaper.scrollEnded(phase: Int64($0.0), momentum: Int64($0.1)) }
+            record(cat, "What a slowed trackpad scroll still owes is dropped when the fingers lift or the coasting runs out",
+                   pass: ended && !going)
+        }
+
         // Turned off, as when the preset stops: the rest is not sent.
         sim.scrollWheel(deltaX: 0, deltaY: 500)
         sim.setScrollStyle(reverseVertical: false, reverseHorizontal: false, glideMs: nil)
@@ -6196,7 +8756,15 @@ final class MainStallSampler {
         if gap > worst { worst = gap }
         if gap > 0.008 { busy += gap }
     }
-    func stop() { timer?.invalidate(); timer = nil }
+    /// Counts the gap still open: a main thread blocked for the whole
+    /// window fired no tick at all, and the window read as quiet.
+    func stop() {
+        guard let t = timer else { return }
+        t.invalidate(); timer = nil
+        let gap = CACurrentMediaTime() - last
+        if gap > worst { worst = gap }
+        if gap > 0.008 { busy += gap }
+    }
 }
 
 /// Memory as the bench reads it: resident (mach_task_basic_info, as
@@ -6332,6 +8900,16 @@ extension TestBenchService {
         isRunning = true
         defer { isRunning = false }
         results.removeAll { $0.category == Self.perfCategory }
+        // The cases start presets dozens of times under bench names; none of
+        // that is the owner's use, so the counts go back as they were.
+        let savedStats = StatsService.shared.stats
+        // Written at once: the timing script quits the app right after the
+        // last case, before the flush timer comes round.
+        defer {
+            StatsService.shared.debugRestore(savedStats)
+            StatsService.shared.flushSynchronously()
+        }
+        sweepStaleBenchPresets()
         Self.perfStartQuiet = PerfHost.quiet
         Self.perfLines = [PerfHost.line("start")]
         if o.wants("launch") { runLaunchBudget() }
@@ -6339,7 +8917,11 @@ extension TestBenchService {
         if o.wants("tick") { await runEngineTickBudget(o) }
         if o.wants("switch") { await runPresetSwitchBudget(o) }
         if o.wants("viz") { await runVisualizerTickBudget(o) }
-        if o.wants("keystroke") { await runEditorKeystrokeBudget(o) }
+        if o.wants("keystroke") {
+            // The largest real preset has 25 rows; 300 is the stress case.
+            await runEditorKeystrokeBudget(o, rows: 24)
+            await runEditorKeystrokeBudget(o, rows: 300)
+        }
         // Last: it switches presets twice over.
         if o.wants("memory") { await runMemoryTourBudget(o) }
         Self.perfLines.append(PerfHost.line("end"))
@@ -6617,20 +9199,32 @@ extension TestBenchService {
 
     // MARK: Editor keystroke
 
-    /// One note edit in an open 300-row editor, the preset running: the
+    /// One note edit in an open editor (24 rows, the size of a real preset,
+    /// then the 300-row stress case), the preset running: the
     /// worst main stall in the 250 ms after it (SwiftUI on the row list plus
     /// recordHistory; the editor's 300 ms pause has not ended), and the time
     /// from the edit to the engine's reload landing (the activePreset
     /// publish) less that 300 ms pause. A note edit keeps runtimeShape, so
     /// the reload takes the fast path. The preset is saved for the case and
     /// deleted for good after it, Trash and versions included.
-    private func runEditorKeystrokeBudget(_ o: PerfOptions) async {
-        let name = "keystroke.300"
+    /// A run that died in the middle of a case (a crash, a force quit) left
+    /// its preset in the library, where the next run counted and switched to
+    /// it. Only the exact bench names, and never a running preset.
+    private func sweepStaleBenchPresets() {
+        guard let store = AppState.current?.presetStore else { return }
+        for p in store.presets where p.name.hasPrefix("Perf ") && p.name.hasSuffix(" (bench, deleted after)") && !p.isActive {
+            store.deletePreset(p)
+            if let entry = store.recentlyDeleted.first(where: { $0.preset.id == p.id }) { store.permanentlyDelete(entry) }
+        }
+    }
+
+    private func runEditorKeystrokeBudget(_ o: PerfOptions, rows: Int) async {
+        let name = "keystroke.\(rows)"
         guard let store = AppState.current?.presetStore, let engine = MappingEngine.current else { perfSkip(name, "no AppState"); return }
         guard store.activePresetId == nil, !engine.isRunning else { perfSkip(name, "a preset is running; stop it first"); return }
         guard perfWindowUp, OpenEditor.current == nil else { perfSkip(name, "the main window is closed or an editor is open"); return }
-        var preset = Self.perfBenchPreset()
-        preset.name = "Perf 300 (bench, deleted after)"
+        var preset = Self.perfBenchPreset(rows: rows)
+        preset.name = "Perf \(rows) (bench, deleted after)"
         store.savePreset(preset, skipSnapshot: true)
         let saved = store.presets.first { $0.id == preset.id } ?? preset
         let sim = InputSimulator.shared
@@ -6639,17 +9233,43 @@ extension TestBenchService {
         InputSimulator.debugEventSink = { _ in }
         TestCapture.active = true
         MenuBarController.activate(saved, store: store, engine: engine, background: true, quietPointerWarning: true)
+        let startedAtOnce = engine.isRunning
         NotificationCenter.default.post(name: .init("inputconfig.debug.selectid"), object: saved.id.uuidString)
         try? await Task.sleep(for: .seconds(0.5))
+        let startedBeforeEdit = engine.isRunning
         // No name: the edit hook opens the selected preset.
         NotificationCenter.default.post(name: .init("inputconfig.debug.edit"), object: nil)
-        for _ in 0..<30 where OpenEditor.current?.presetID != saved.id { try? await Task.sleep(for: .milliseconds(100)) }
-        let opened = OpenEditor.current?.presetID == saved.id && engine.isRunning
-        var stalls: [Double] = [], reloads: [Double] = []
+        // Up to ten seconds for the editor. The skip line below says which
+        // half was missing and what the log last said: that is how the 300
+        // row preset, started right behind the 24 row one's delete, was
+        // found stopped by the delete's late library change.
+        var waited = 0
+        while waited < 100, OpenEditor.current?.presetID != saved.id {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
+        let editorUp = OpenEditor.current?.presetID == saved.id, started = engine.isRunning
+        let opened = editorUp && started
+        var stalls: [Double] = [], reloads: [Double] = [], busies: [Double] = []
+        var settled = 0.0
         let laps = max(2, o.runs)
         if opened {
             // The editor's first layout and its live hooks settle.
             try? await Task.sleep(for: .seconds(1.5))
+            // Then the staged reveal: 300 rows are built four at a time over
+            // several seconds, and a keystroke timed in the middle of that
+            // measures the reveal, not the keystroke. Wait until the main
+            // thread has been quiet for half a second, 25 seconds at most.
+            let settle = MainStallSampler()
+            var quiet = 0
+            let settleFrom = CACurrentMediaTime()
+            for _ in 0..<100 where quiet < 2 {
+                settle.start()
+                try? await Task.sleep(for: .seconds(0.25))
+                settle.stop()
+                quiet = settle.worst < 0.04 ? quiet + 1 : 0
+            }
+            settled = CACurrentMediaTime() - settleFrom
             final class Stamp { var at = 0.0 }
             let sampler = MainStallSampler()
             for lap in 1...laps {
@@ -6657,7 +9277,7 @@ extension TestBenchService {
                 let sub = engine.$activePreset.dropFirst().sink { _ in if stamp.at == 0 { stamp.at = CACurrentMediaTime() } }
                 let posted = CACurrentMediaTime()
                 sampler.start()
-                NotificationCenter.default.post(name: .init("inputconfig.debug.editnote"), object: "1 \(lap * 7 % 100) note \(lap)")
+                NotificationCenter.default.post(name: .init("inputconfig.debug.editnote"), object: "1 \(lap * 7 % max(1, rows / 3)) note \(lap)")
                 try? await Task.sleep(for: .seconds(0.25))
                 // Before the 300 ms pause ends: the stall is the keystroke's alone.
                 sampler.stop()
@@ -6665,6 +9285,7 @@ extension TestBenchService {
                 sub.cancel()
                 guard lap > 1 else { continue }
                 stalls.append(sampler.worst * 1000)
+                busies.append(sampler.busy * 1000)
                 if stamp.at > 0 { reloads.append((stamp.at - posted) * 1000 - 300) }
             }
         }
@@ -6677,11 +9298,15 @@ extension TestBenchService {
         TestCapture.active = oldCapture
         if let p = store.presets.first(where: { $0.id == saved.id }) { store.deletePreset(p) }
         if let entry = store.recentlyDeleted.first(where: { $0.preset.id == saved.id }) { store.permanentlyDelete(entry) }
-        guard opened else { perfSkip(name, "the editor did not open on the bench preset, or it did not start"); return }
+        guard opened else {
+            let said = ActivityLog.shared.entries.suffix(3).map { "\($0.source): \($0.text)" }.joined(separator: " | ")
+            perfSkip(name, "editor \(editorUp ? "open" : "not open after \(waited / 10) s") on the bench preset, preset \(started ? "started" : "not started") (running at once=\(startedAtOnce), before the editor=\(startedBeforeEdit)); log: \(said)")
+            return
+        }
         let stall = Self.median(stalls), reload = reloads.isEmpty ? -1 : Self.median(reloads)
         perfLine(name, gated: ("stall_ms", stall), budget: PerfBudget.keystrokeStallMs,
                  pass: stall <= PerfBudget.keystrokeStallMs && reload >= 0 && reload <= PerfBudget.keystrokeReloadMs,
-                 extra: "reload_ms=\(reload < 0 ? "none" : Self.perfFmt(reload)) budget_reload=\(Self.perfFmt(PerfBudget.keystrokeReloadMs)) stall_max=\(Self.perfFmt(stalls.max() ?? 0)) rows=300",
+                 extra: "reload_ms=\(reload < 0 ? "none" : Self.perfFmt(reload)) budget_reload=\(Self.perfFmt(PerfBudget.keystrokeReloadMs)) stall_max=\(Self.perfFmt(stalls.max() ?? 0)) busy_ms=\(Self.perfFmt(Self.median(busies))) settle_s=\(Self.perfFmt(settled)) rows=\(rows)",
                  runs: laps - 1)
     }
 
@@ -6704,6 +9329,16 @@ extension TestBenchService {
             }
             // Autorelease pools and the page's own caches settle.
             try? await Task.sleep(for: .seconds(1.0))
+        }
+        // An editor closed by the case before this one is still letting go
+        // of its rows: wait until the footprint holds still for a second,
+        // 20 seconds at most, or lap one measures that teardown.
+        var last = ProcessMemory.read().footprint, still = 0
+        for _ in 0..<40 where still < 2 {
+            try? await Task.sleep(for: .seconds(0.5))
+            let now = ProcessMemory.read().footprint
+            still = abs(Double(now) - Double(last)) < 2 * 1_048_576 ? still + 1 : 0
+            last = now
         }
         let m0 = ProcessMemory.read(), b0 = ProcessMemory.liveBlocks()
         await tour()
@@ -7148,6 +9783,179 @@ extension TestBenchService {
 }
 
 #if DEBUG
+// MARK: - Handler queue hold (pads moving between main and the idle queue)
+
+#if DEBUG
+extension TestBenchService {
+    /// The microphone System Functions: where they sit, how an output names
+    /// its microphone, the release half of the two that act while held (a
+    /// preset stopping mid-press included), and the Mac's own microphone
+    /// muted and put back.
+    func runMicrophoneCases() async {
+        let cat = "Microphone"
+        let kinds: [SystemActionKind] = [.microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld]
+        let sound = SystemActionKind.grouped.first { $0.kinds.contains(.muteToggle) }?.kinds ?? []
+        record(cat, "The three microphone functions sit under Sound and need no Accessibility",
+               pass: kinds.allSatisfy { sound.contains($0) && $0.isMicrophone && !$0.needsParameter }
+                   && !SystemActionKind.muteToggle.isMicrophone
+                   && kinds.filter(\.actsWhileHeld) == [.microphoneOnWhileHeld, .microphoneMutedWhileHeld]
+                   && kinds.allSatisfy { OutputAction.macroTextSystemKind(forWord: OutputAction.macroTextSystemWord(for: $0)) == $0 })
+        record(cat, "An output names its microphone by a prefix; anything else is the Mac's current one",
+               pass: MicrophoneSwitch.uid(from: "mic:Built") == "Built" && MicrophoneSwitch.uid(from: "https://example.com") == nil
+                   && MicrophoneSwitch.uid(from: nil) == nil && MicrophoneSwitch.uid(from: "mic:") == nil
+                   && MicrophoneSwitch.parameter(forUID: "") == nil && MicrophoneSwitch.parameter(forUID: "Built") == "mic:Built"
+                   && MicrophoneSwitch.way(muteSettable: true, volumeSettable: true) == .muteSwitch
+                   && MicrophoneSwitch.way(muteSettable: false, volumeSettable: true) == .volume
+                   && MicrophoneSwitch.way(muteSettable: false, volumeSettable: false) == .none)
+        #if DEBUG
+        // The editor cases before these close their sheet a moment later.
+        for _ in 0..<60 where MappingEngine.current.map({ $0.outputsPaused || $0.isSuspended || $0.editorOpen }) ?? false {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        if let engine = MappingEngine.current, !engine.outputsPaused, !engine.isSuspended, !engine.editorOpen {
+            func action(_ kind: SystemActionKind) -> OutputAction {
+                var a = OutputAction(type: .systemAction)
+                a.systemActionKind = kind
+                a.text = "mic:bench"
+                return a
+            }
+            let preset = Preset(name: "Bench microphone", tag: "Tests", joysticks: [JoystickMapping(tag: "Pad", bindings: [
+                BindingModel(input: .button(0), outputs: [action(.microphoneOnWhileHeld)]),
+                BindingModel(input: .button(1), outputs: [action(.microphoneMutedWhileHeld)]),
+                BindingModel(input: .button(2), outputs: [action(.microphoneToggle)]),
+            ])])
+            let savedStats = StatsService.shared.stats
+            let oldSink = InputSimulator.debugEventSink, oldCapture = TestCapture.active
+            InputSimulator.debugEventSink = { _ in }
+            TestCapture.active = true
+            TestCapture.clear()
+            engine.debugQuiet = true
+            func poll(_ down: [Int]) {
+                var state = ControllerState()
+                for n in 0..<4 { state.buttons[n] = down.contains(n) ? 1 : 0 }
+                GameControllerService.debugScriptedStates = [0: state]
+                engine.debugPollOnce()
+            }
+            func heard() -> [String] { TestCapture.log.filter { $0.hasPrefix("microphone ") } }
+            GameControllerService.debugScriptedStates = [:]
+            engine.start(with: preset)
+            engine.debugStopPollTimer()
+            poll([]); poll([0]); poll([0])
+            let onPress = heard()
+            poll([])
+            let onRelease = heard()
+            poll([1]); poll([])
+            let mutedHold = Array(heard().dropFirst(onRelease.count))
+            poll([2]); poll([]); poll([2]); poll([])
+            let toggles = Array(heard().dropFirst(onRelease.count + mutedHold.count))
+            poll([0])
+            let before = heard().count
+            engine.stop()
+            let onStop = Array(heard().dropFirst(before))
+            GameControllerService.debugScriptedStates = [:]
+            try? await Task.sleep(for: .milliseconds(100))
+            InputSimulator.shared.releaseAll()
+            engine.debugQuiet = false
+            InputSimulator.debugEventSink = oldSink
+            TestCapture.active = oldCapture
+            TestCapture.clear()
+            StatsService.shared.debugRestore(savedStats)
+            record(cat, "On While Held opens the microphone on the press and mutes it on the release, once each",
+                   pass: onPress == ["microphone live bench"] && onRelease == ["microphone live bench", "microphone muted bench"],
+                   detail: "\(onRelease)")
+            record(cat, "Muted While Held mutes on the press and opens on the release",
+                   pass: mutedHold == ["microphone muted bench", "microphone live bench"], detail: "\(mutedHold)")
+            record(cat, "Mute / Unmute Microphone fires once per press and nothing on the release",
+                   pass: toggles == ["microphone toggle bench", "microphone toggle bench"], detail: "\(toggles)")
+            record(cat, "A preset that stops while On While Held is down mutes the microphone",
+                   pass: onStop == ["microphone muted bench"], detail: "\(onStop)")
+        } else {
+            skip(cat, "The microphone functions through the engine", detail: "Outputs are paused or held back, or the editor is open")
+        }
+        #endif
+        // The Mac's own microphone: muted, read back, and put back as it was.
+        guard let id = MicrophoneSwitch.deviceID(nil), let was = MicrophoneSwitch.isMuted(id) else {
+            skip(cat, "The Mac's current microphone mutes and comes back", detail: "No microphone that can be muted")
+            return
+        }
+        let set = MicrophoneSwitch.setMuted(!was, id)
+        let flipped = MicrophoneSwitch.isMuted(id)
+        let back = MicrophoneSwitch.setMuted(was, id)
+        let restored = MicrophoneSwitch.isMuted(id)
+        record(cat, "The Mac's current microphone mutes and comes back",
+               pass: set && flipped == !was && back && restored == was,
+               detail: "\(MicrophoneSwitch.way(id)), was \(was ? "muted" : "live"), flipped \(String(describing: flipped)), restored \(String(describing: restored))")
+    }
+
+    /// A pad's handlers move off main when nothing reads the pads. Builds 35
+    /// to 40 let the next change run on the idle queue while one was still
+    /// queued for main, and GameController ended the app ("Recursive or
+    /// concurrent mutation detected"). The idle queue is now held until main
+    /// has drained; these cases prove the hold is taken, let go, and never
+    /// left on, with any real pad that is connected sending through it.
+    func runHandlerQueueHoldCases() async {
+        let cat = "Handler Queue"
+        guard let service = AppState.current?.controllerService else {
+            skip(cat, "The idle queue is held while main drains", detail: "No controller service")
+            return
+        }
+        func idleQueueRuns(tries: Int = 40) async -> Bool {
+            final class Flag: @unchecked Sendable { let lock = NSLock(); var ran = false }
+            let flag = Flag()
+            GameControllerService.idleHandlerQueue.async { flag.lock.lock(); flag.ran = true; flag.lock.unlock() }
+            for _ in 0..<tries {
+                if flag.lock.withLock({ flag.ran }) { return true }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+        let hold = Int(GameControllerService.idleQueueHoldSeconds * 1000)
+        service.setControllersRead(true, reason: "bench")
+        var state = service.debugHandlerQueueState
+        record(cat, "A reader puts the handlers on main with the idle queue running",
+               pass: state.onMain && !state.held, detail: "onMain=\(state.onMain) held=\(state.held)")
+        service.setControllersRead(false, reason: "bench")
+        try? await Task.sleep(for: .milliseconds(40))
+        state = service.debugHandlerQueueState
+        guard !state.onMain else {
+            // Something else reads the pads (a preset, the visualizer, a scan).
+            skip(cat, "The idle queue is held while main drains", detail: "Another reader keeps the handlers on main")
+            return
+        }
+        // Well inside the hold, which began some 40 ms ago.
+        let heldRuns = await idleQueueRuns(tries: 6)
+        record(cat, "Moving off main holds the idle queue", pass: state.held && !heldRuns,
+               detail: "held=\(state.held) ran=\(heldRuns)")
+        // A reader inside the hold: the queue is let go before the wait, or
+        // this line would never return.
+        service.setControllersRead(true, reason: "bench")
+        state = service.debugHandlerQueueState
+        let backRuns = await idleQueueRuns()
+        record(cat, "A reader inside the hold lets the queue go and waits for it",
+               pass: state.onMain && !state.held && backRuns, detail: "onMain=\(state.onMain) held=\(state.held) ran=\(backRuns)")
+        service.setControllersRead(false, reason: "bench")
+        try? await Task.sleep(for: .milliseconds(hold + 200))
+        state = service.debugHandlerQueueState
+        let freeRuns = await idleQueueRuns()
+        record(cat, "The hold ends on its own", pass: !state.onMain && !state.held && freeRuns,
+               detail: "onMain=\(state.onMain) held=\(state.held) ran=\(freeRuns)")
+        // 400 moves, some in one main turn and some a turn apart, with any
+        // connected pad sending through them.
+        for i in 0..<400 {
+            service.setControllersRead(true, reason: "bench")
+            if i % 3 == 0 { await Task.yield() }
+            service.setControllersRead(false, reason: "bench")
+            if i % 2 == 0 { try? await Task.sleep(for: .milliseconds(i % 8 == 0 ? 6 : 1)) }
+        }
+        try? await Task.sleep(for: .milliseconds(hold + 250))
+        state = service.debugHandlerQueueState
+        let endRuns = await idleQueueRuns()
+        record(cat, "400 moves between the queues leave the idle queue running",
+               pass: !state.onMain && !state.held && endRuns, detail: "onMain=\(state.onMain) held=\(state.held) ran=\(endRuns)")
+    }
+}
+#endif
+
 // MARK: - Editor rows (closed row cost and its accessibility strings)
 
 extension TestBenchService {
@@ -7181,6 +9989,695 @@ extension TestBenchService {
         let cost = await EditorRowBench.cost(of: mixed)
         info(category, "row cost, shipped mix", detail: cost.line)
         info(category, "row struct size", detail: "BindingRowView \(MemoryLayout<BindingRowView>.size) bytes, copied into each closure its body makes")
+    }
+}
+#endif
+
+#if DEBUG
+/// DEBUG only: main thread gaps over 8 ms, each with the time it ended, so
+/// one interaction reads as its worst frame, its dropped frames and when the
+/// window went quiet again.
+@MainActor
+final class GapSampler {
+    private var timer: Timer?
+    private var last = 0.0
+    private(set) var started = 0.0
+    private(set) var gaps: [(end: Double, length: Double)] = []
+    func start() {
+        stop()
+        gaps = []
+        last = CACurrentMediaTime(); started = last
+        let t = Timer(timeInterval: 0.001, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+    private func tick() {
+        let now = CACurrentMediaTime(), gap = now - last
+        last = now
+        if gap > 0.008 { gaps.append((now, gap)) }
+    }
+    func stop() {
+        guard let t = timer else { return }
+        t.invalidate(); timer = nil
+        tick()
+    }
+    var worst: Double { gaps.map(\.length).max() ?? 0 }
+    var busy: Double { gaps.reduce(0) { $0 + $1.length } }
+    func over(_ seconds: Double) -> Int { gaps.filter { $0.length > seconds }.count }
+    /// Seconds from the start to the end of the last gap over `floor`.
+    func settled(floor: Double = 0.012) -> Double { (gaps.last { $0.length > floor }?.end ?? started) - started }
+    /// "worst 41.2 busy 133.0 over17 3 over34 1 over100 0", milliseconds.
+    var line: String {
+        String(format: "worst %.1f busy %.1f over17 %d over34 %d over100 %d", worst * 1000, busy * 1000, over(0.017), over(0.034), over(0.1))
+    }
+}
+
+/// DEBUG only: what the binding editor costs to open, scroll, type in, fold
+/// and drive, on a preset of the library, with nothing started.
+/// `post inputconfig.debug.editorprobe "preset=One-Stick Driving;phases=open,scroll,type,fold,drive;laps=3"`
+/// or the same text as the launch argument `-ICEditorProbe`; the lines go to
+/// tmp/editorprobe.txt, a "done" line last. Phases outside the editor
+/// (tabs, select, settings, menu, visualizer, sheet) are listed at
+/// `EditorProbe.windowPhases`.
+/// Parts of the editor left out for one measuring run ("knobs=a,b" in the
+/// probe's spec), to find which part a cost belongs to.
+enum ProbeKnob {
+    static let set: Set<String> = {
+        let spec = UserDefaults.standard.string(forKey: "ICEditorProbe") ?? ""
+        for part in spec.split(separator: ";") where part.hasPrefix("knobs=") {
+            return Set(part.dropFirst(6).split(separator: ",").map(String.init))
+        }
+        return []
+    }()
+    static func on(_ knob: String) -> Bool { set.contains(knob) }
+}
+
+@MainActor
+enum EditorProbe {
+    private static var running = false
+    private static var lines: [String] = []
+
+    static func runIfAsked() {
+        NotificationCenter.default.addObserver(forName: .init("inputconfig.debug.editorprobe"), object: nil, queue: .main) { note in
+            let spec = (note.object as? String) ?? ""
+            MainActor.assumeIsolated { start(spec) }
+        }
+        DebugHookRelay.shared.ensure("inputconfig.debug.editorprobe")
+        if let spec = UserDefaults.standard.string(forKey: "ICEditorProbe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { MainActor.assumeIsolated { start(spec) } }
+        }
+        // The whole Test Bench in this copy alone (`-ICTestBench YES`). The
+        // distributed hook of the same name reaches every Debug copy that
+        // is open, so it also started a bench in a copy doing other work.
+        if UserDefaults.standard.bool(forKey: "ICTestBench") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                NotificationCenter.default.post(name: .init("inputconfig.debug.testbench"), object: nil)
+            }
+        }
+    }
+
+    private static func start(_ spec: String) {
+        guard !running else { return }
+        running = true
+        Task { @MainActor in
+            await run(spec)
+            running = false
+        }
+    }
+
+    private static func out(_ line: String, finished: Bool = false) {
+        lines.append(line)
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("editorprobe.txt")
+        try? (lines.joined(separator: "\n") + (finished ? "\ndone\n" : "\nrunning\n")).write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static func pause(_ seconds: Double) async { try? await Task.sleep(for: .seconds(seconds)) }
+
+    /// Waits until the main thread has had no gap over 12 ms for `quiet`
+    /// seconds, `limit` seconds at most.
+    private static func settle(_ sampler: GapSampler, quiet: Double = 0.5, limit: Double = 10) async {
+        let from = CACurrentMediaTime()
+        while CACurrentMediaTime() - from < limit {
+            await pause(0.05)
+            let lastEnd = sampler.gaps.last { $0.length > 0.012 }?.end ?? sampler.started
+            if CACurrentMediaTime() - lastEnd > quiet { return }
+        }
+    }
+
+    /// A stick that circles (and, when asked, a button that changes four
+    /// times a second) on every slot, 60 readings a second.
+    private static func stickFeed(buttons: Bool) -> Task<Void, Never> {
+        Task { @MainActor in
+            let from = CACurrentMediaTime()
+            while !Task.isCancelled {
+                let t = CACurrentMediaTime() - from
+                var state = ControllerState()
+                state.axes = [0: Float(sin(t * 2.2) * 0.9), 1: Float(cos(t * 2.2) * 0.9), 2: 0, 3: 0]
+                if buttons { state.buttons = [Int(t * 4) % 8: 1] }
+                for slot in 0..<4 { GameControllerService.debugScriptedStates[slot] = state }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    /// What a running drive preset publishes: 15 readings a second.
+    private static func engineFeed() -> Task<Void, Never> {
+        Task { @MainActor in
+            let from = CACurrentMediaTime()
+            while !Task.isCancelled {
+                let t = CACurrentMediaTime() - from
+                DriveTelemetry.shared.state = DriveModeProcessor.LiveState(
+                    reverse: false, throttle: Float(0.5 + 0.4 * sin(t * 1.3)), brake: 0, steer: Float(sin(t * 0.9) * 0.6))
+                try? await Task.sleep(for: .milliseconds(66))
+            }
+        }
+    }
+
+    /// The first group's description field in the open editor.
+    private static func editorTextField() -> NSTextField? {
+        let sheet = MenuBarController.mainWindow?.attachedSheet ?? NSApp.windows.first { $0.sheetParent != nil }
+        guard let root = sheet?.contentView else { return nil }
+        let wanted = String(localized: "What this device does in the preset (optional)")
+        var found: NSTextField?
+        func walk(_ v: NSView) {
+            if found == nil, let f = v as? NSTextField, f.isEditable,
+               f.placeholderString == wanted || f.placeholderAttributedString?.string == wanted { found = f }
+            v.subviews.forEach(walk)
+        }
+        walk(root)
+        return found
+    }
+
+    private static func editorScroll() -> NSScrollView? {
+        let sheet = MenuBarController.mainWindow?.attachedSheet ?? NSApp.windows.first { $0.sheetParent != nil }
+        guard let root = sheet?.contentView else { return nil }
+        var best: NSScrollView?
+        func walk(_ v: NSView) {
+            if let s = v as? NSScrollView, (s.documentView?.frame.height ?? 0) > (best?.documentView?.frame.height ?? 0) { best = s }
+            v.subviews.forEach(walk)
+        }
+        walk(root)
+        return best
+    }
+
+    /// Scrolls the editor from `from` to `to` (0 the top, 1 the bottom) in
+    /// 8 ms steps over `seconds`.
+    /// How many steps the scrolls since the last reset took, and how long:
+    /// the time per step, less the 8 ms wait, is what one scrolled frame costs.
+    private static var scrollSteps = 0, scrollTime = 0.0
+    private static func stepLine() -> String {
+        defer { scrollSteps = 0; scrollTime = 0 }
+        return String(format: "steps %d each %.1f", scrollSteps, scrollSteps > 0 ? scrollTime / Double(scrollSteps) * 1000 : 0)
+    }
+
+    private static func scroll(_ view: NSScrollView, from: Double, to: Double, seconds: Double) async {
+        guard let doc = view.documentView else { return }
+        let clip = view.contentView
+        let span = max(0, doc.frame.height - clip.bounds.height)
+        let flipped = doc.isFlipped
+        let steps = max(1, Int(seconds / 0.008))
+        let began = CACurrentMediaTime()
+        for step in 0...steps {
+            // By the clock, as a finger does: a late frame skips ahead.
+            let t = min(1, max(Double(step) / Double(steps), (CACurrentMediaTime() - began) / seconds))
+            let f = from + (to - from) * t
+            let y = flipped ? span * f : span * (1 - f)
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+            view.reflectScrolledClipView(clip)
+            if t >= 1 { break }
+            try? await Task.sleep(for: .milliseconds(8))
+            scrollSteps += 1
+        }
+        scrollTime += CACurrentMediaTime() - began
+    }
+
+    private static func run(_ spec: String) async {
+        lines = []
+        var name = "One-Stick Driving", phases = ["open", "scroll", "type", "fold", "drive"], laps = 3, keys = 60
+        // What moves while the driving panel is open, one pass each: "car"
+        // (the demo car drives a loop), "still" (nothing), "stick" (a
+        // scripted stick circles), "engine" (a running drive preset's
+        // readings, 15 a second).
+        var driveModes = ["car"]
+        // "input=1": every slot's controller reports a moving stick and a
+        // changing button for the whole run, as a held controller does.
+        var input = false
+        // "scrolls=N": how many times the driving pass scrolls down and back.
+        var scrolls = 1
+        // The window phases' own settings ("tabs=N", "small=", "large=", "sheets=N").
+        var options: [String: String] = [:]
+        for part in spec.split(separator: ";") {
+            let kv = part.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2 else { continue }
+            switch kv[0] {
+            case "preset": name = kv[1]
+            case "phases": phases = kv[1].split(separator: ",").map(String.init)
+            case "laps": laps = max(1, Int(kv[1]) ?? laps)
+            case "keys": keys = max(1, Int(kv[1]) ?? keys)
+            case "drive": driveModes = kv[1].split(separator: ",").map(String.init)
+            case "input": input = kv[1] == "1"
+            case "scrolls": scrolls = max(1, Int(kv[1]) ?? 1)
+            default: options[kv[0]] = kv[1]
+            }
+        }
+        guard let store = AppState.current?.presetStore,
+              let preset = store.presets.first(where: { $0.name == name }) else { out("no preset named \(name)", finished: true); return }
+        guard MenuBarController.mainWindow?.isVisible == true, OpenEditor.current == nil else {
+            out("the main window is closed or an editor is open", finished: true); return
+        }
+        let rows = preset.joysticks.reduce(0) { $0 + $1.bindings.count }
+        out("preset \(name) groups \(preset.joysticks.count) rows \(rows) phases \(phases.joined(separator: ",")) laps \(laps)")
+        let center = NotificationCenter.default
+        // The phases outside the editor first, in the order asked for.
+        for phase in phases where windowPhases.contains(phase) {
+            await runWindowPhase(phase, preset: preset, store: store, laps: laps, options: options)
+            await pause(0.8)
+        }
+        guard phases.contains(where: { !windowPhases.contains($0) }) else { out("finished", finished: true); return }
+        center.post(name: .init("inputconfig.debug.selectid"), object: preset.id.uuidString)
+        await pause(1.0)
+        let sampler = GapSampler()
+        let inputFeed = input ? stickFeed(buttons: true) : nil
+        defer { inputFeed?.cancel(); GameControllerService.debugScriptedStates = [:] }
+        for lap in 1...laps {
+            // Open.
+            sampler.start()
+            let asked = CACurrentMediaTime()
+            center.post(name: .init("inputconfig.debug.edit"), object: nil)
+            var up = 0.0
+            for _ in 0..<500 where OpenEditor.current?.presetID != preset.id { try? await Task.sleep(for: .milliseconds(10)) }
+            up = CACurrentMediaTime() - asked
+            guard OpenEditor.current?.presetID == preset.id else { sampler.stop(); out("open lap \(lap): the editor did not open", finished: true); return }
+            await settle(sampler)
+            sampler.stop()
+            if phases.contains("open") {
+                out(String(format: "open lap %d: up %.0f settled %.0f %@", lap, up * 1000, sampler.settled() * 1000, sampler.line))
+            }
+            await pause(0.5)
+
+            if phases.contains("idle") {
+                sampler.start(); await pause(2); sampler.stop()
+                out("idle lap \(lap): 2 s \(sampler.line)")
+            }
+
+            if phases.contains("scroll") {
+                if let view = editorScroll() {
+                    let height = view.documentView?.frame.height ?? 0
+                    sampler.start()
+                    _ = stepLine()
+                    await scroll(view, from: 0, to: 1, seconds: 1.5)
+                    sampler.stop()
+                    out(String(format: "scroll down lap %d: %.0f points %@ %@", lap, height, sampler.line, stepLine()))
+                    await pause(0.4)
+                    sampler.start()
+                    await scroll(view, from: 1, to: 0, seconds: 1.5)
+                    sampler.stop()
+                    out(String(format: "scroll up lap %d: %@ %@", lap, sampler.line, stepLine()))
+                    await pause(0.4)
+                } else {
+                    out("scroll lap \(lap): no scroll view found")
+                }
+            }
+
+            if phases.contains("type"), let group = preset.joysticks.first, !group.bindings.isEmpty {
+                for key in 1...4 {
+                    sampler.start()
+                    center.post(name: .init("inputconfig.debug.editnote"), object: "0 \(key % group.bindings.count) probe\(lap)\(key)")
+                    await pause(0.3)
+                    sampler.stop()
+                    out("type lap \(lap) key \(key): \(sampler.line)")
+                    await pause(0.2)
+                }
+            }
+
+            // Many changes in a row, for a profile of what one costs.
+            if phases.contains("burst"), let group = preset.joysticks.first, !group.bindings.isEmpty {
+                sampler.start()
+                for key in 1...keys {
+                    center.post(name: .init("inputconfig.debug.editnote"), object: "0 \(key % group.bindings.count) burst\(lap)\(key)")
+                    await pause(0.06)
+                }
+                sampler.stop()
+                out("burst lap \(lap): \(keys) changes \(sampler.line)")
+                await pause(0.3)
+            }
+
+            // Real typing: characters put into the group's description
+            // field through its field editor, as the keyboard would.
+            if phases.contains("keys"), let field = editorTextField(),
+               let window = field.window, window.makeFirstResponder(field),
+               let fieldEditor = window.fieldEditor(true, for: field) as? NSTextView {
+                sampler.start()
+                for key in 1...keys {
+                    fieldEditor.insertText(key % 6 == 0 ? " " : "a", replacementRange: NSRange(location: NSNotFound, length: 0))
+                    await pause(0.06)
+                }
+                await pause(Double(EditorTextDrafts.pauseMilliseconds) / 1000 + 0.3)
+                sampler.stop()
+                let landed = OpenEditor.current?.draft().joysticks.first?.tag.count ?? -1
+                out("keys lap \(lap): \(keys) keys, \(landed) characters in the draft \(sampler.line)")
+                await pause(0.3)
+                // Three more keys, then Tab as a posted key event: the text
+                // must be in the draft before the typing pause has passed.
+                for _ in 0..<3 { fieldEditor.insertText("z", replacementRange: NSRange(location: NSNotFound, length: 0)) }
+                let typedAt = ProcessInfo.processInfo.systemUptime
+                let held = !EditorTextDrafts.isEmpty
+                if let tab = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: typedAt,
+                                              windowNumber: window.windowNumber, context: nil, characters: "\t",
+                                              charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48) {
+                    NSApp.postEvent(tab, atStart: false)
+                }
+                var waited = 0.0
+                while !EditorTextDrafts.isEmpty, waited < 0.25 {
+                    await pause(0.005)
+                    waited = ProcessInfo.processInfo.systemUptime - typedAt
+                }
+                waited = ProcessInfo.processInfo.systemUptime - typedAt
+                let after = OpenEditor.current?.draft().joysticks.first?.tag.count ?? -1
+                out(String(format: "keys lap %d: Tab after 3 more keys: held %@, %d characters in the draft after %.0f ms (pause is %d)",
+                           lap, held ? "yes" : "no", after, waited * 1000, EditorTextDrafts.pauseMilliseconds))
+                await pause(0.3)
+            }
+
+            if phases.contains("fold"), !preset.joysticks.isEmpty {
+                for step in ["fold", "unfold"] {
+                    sampler.start()
+                    OpenEditor.current?.edit { $0.joysticks[0].isExpanded.toggle() }
+                    await settle(sampler)
+                    sampler.stop()
+                    out(String(format: "%@ lap %d: settled %.0f %@", step, lap, sampler.settled() * 1000, sampler.line))
+                    await pause(0.3)
+                }
+            }
+
+            if phases.contains("drive") {
+                for mode in driveModes {
+                    if let view = editorScroll() { await scroll(view, from: 0, to: 1, seconds: 0.2) }
+                    await pause(0.4)
+                    DebugMarketing.shared.oneStickParked = mode != "car"
+                    let feed = mode == "stick" ? stickFeed(buttons: false) : mode == "engine" ? engineFeed() : nil
+                    sampler.start()
+                    DebugMarketing.shared.oneStick = true
+                    await settle(sampler, limit: 4)
+                    sampler.stop()
+                    out(String(format: "drive %@ open lap %d: settled %.0f %@", mode, lap, sampler.settled() * 1000, sampler.line))
+                    if let view = editorScroll() {
+                        await pause(0.3)
+                        sampler.start()
+                        _ = stepLine()
+                        for _ in 0..<scrolls {
+                            await scroll(view, from: 0.4, to: 1, seconds: 1.2)
+                            await scroll(view, from: 1, to: 0.4, seconds: 1.2)
+                        }
+                        sampler.stop()
+                        out("drive \(mode) scroll lap \(lap): \(sampler.line) \(stepLine())")
+                        await scroll(view, from: 0.4, to: 1, seconds: 0.2)
+                    }
+                    await pause(0.3)
+                    sampler.start(); await pause(2); sampler.stop()
+                    out("drive \(mode) idle lap \(lap): 2 s \(sampler.line)")
+                    DebugMarketing.shared.oneStick = false
+                    feed?.cancel()
+                    if !input { GameControllerService.debugScriptedStates = [:] }
+                    DriveTelemetry.shared.state = nil
+                    DebugMarketing.shared.oneStickParked = false
+                    await pause(0.3)
+                }
+            }
+
+            // Close, the draft dropped.
+            sampler.start()
+            center.post(name: .init("inputconfig.debug.closesheets"), object: nil)
+            for _ in 0..<300 where OpenEditor.current != nil { try? await Task.sleep(for: .milliseconds(10)) }
+            await settle(sampler, quiet: 0.4)
+            sampler.stop()
+            if phases.contains("open") { out(String(format: "close lap %d: settled %.0f %@", lap, sampler.settled() * 1000, sampler.line)) }
+            await pause(0.8)
+        }
+        out("finished", finished: true)
+    }
+}
+
+/// DEBUG only: the probe's phases outside the binding editor, so the main
+/// window, Settings, the menu bar pop-up and the visualizer can be timed the
+/// way the editor is. They run before the editor laps, in the order the spec
+/// lists them, and only select, open and close: the library is left as it was.
+///   tabs        Home and the first presets of the sidebar in turn ("tabs=N", 5)
+///   select      the smallest preset, then Minecraft and FPS (PS5 DualSense)
+///               ("small=<name>", "large=<a>,<b>")
+///   settings    Settings opened, each of its sections, closed
+///   menu        the menu bar pop-up opened and closed, through the status
+///               item's own click action
+///   visualizer  idle on Home, then on the preset's page with its Live
+///               Visualizer shown: main thread and process CPU, wakes
+///   sheet       the editor sheet opened and closed ("sheets=N", 3), open only
+extension EditorProbe {
+    static let windowPhases: Set<String> = ["tabs", "select", "settings", "menu", "visualizer", "sheet"]
+
+    /// Main run loop wakes while counting: a view that animates or ticks
+    /// wakes the main thread about once a frame.
+    @MainActor
+    final class WakeCounter {
+        private var observer: CFRunLoopObserver?
+        private(set) var wakes = 0
+        func start() {
+            stop()
+            wakes = 0
+            // The main run loop calls this on the main thread.
+            let o = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, 0) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.wakes += 1 }
+            }
+            CFRunLoopAddObserver(CFRunLoopGetMain(), o, .commonModes)
+            observer = o
+        }
+        func stop() {
+            guard let o = observer else { return }
+            CFRunLoopObserverInvalidate(o)
+            observer = nil
+        }
+    }
+
+    /// CPU seconds the calling thread (the main thread here) has used.
+    private static func mainCPU() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000_000 }
+    /// CPU seconds the whole process has used, every thread.
+    private static func processCPU() -> Double {
+        var u = rusage()
+        getrusage(RUSAGE_SELF, &u)
+        return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1_000_000
+    }
+
+    /// What `seconds` of doing nothing cost, with no gap sampler running:
+    /// its 1 ms timer would be most of the wakes and part of the CPU.
+    private static func idleCost(_ seconds: Double) async -> String {
+        let counter = WakeCounter()
+        let main0 = mainCPU(), proc0 = processCPU()
+        counter.start()
+        await pause(seconds)
+        counter.stop()
+        let main = (mainCPU() - main0) * 1000, proc = (processCPU() - proc0) * 1000
+        return String(format: "%.0f s cpu main %.0f process %.0f wakes %d per wake %.2f",
+                      seconds, main, proc, counter.wakes, counter.wakes > 0 ? main / Double(counter.wakes) : 0)
+    }
+
+    /// Seconds until `done` held, `limit` at most (nil: it never did).
+    private static func waitFor(_ limit: Double, _ done: () -> Bool) async -> Double? {
+        let from = CACurrentMediaTime()
+        while !done() {
+            if CACurrentMediaTime() - from > limit { return nil }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return CACurrentMediaTime() - from
+    }
+
+    private static func median(_ xs: [Double]) -> Double {
+        let s = xs.sorted()
+        guard !s.isEmpty else { return 0 }
+        return s.count % 2 == 1 ? s[s.count / 2] : (s[s.count / 2 - 1] + s[s.count / 2]) / 2
+    }
+
+    private static func viewCount(_ v: NSView) -> Int { 1 + v.subviews.reduce(0) { $0 + viewCount($1) } }
+
+    /// Home (nil) or a preset, as the sidebar picks it.
+    private static func show(_ id: UUID?) {
+        if let id {
+            NotificationCenter.default.post(name: .init("inputconfig.debug.selectid"), object: id.uuidString)
+        } else {
+            NotificationCenter.default.post(name: .init("inputconfig.debug.welcome"), object: nil)
+        }
+    }
+
+    /// One switch, timed until the window is quiet.
+    private static func timedSwitch(_ sampler: GapSampler, to id: UUID?) async -> (settled: Double, worst: Double, line: String) {
+        sampler.start()
+        show(id)
+        await settle(sampler)
+        sampler.stop()
+        return (sampler.settled(), sampler.worst, sampler.line)
+    }
+
+    /// "settled median 120 max 300 worst median 40 max 90 over17 3 over34 1 over100 0" over a set of switches.
+    private static func summary(_ runs: [(settled: Double, worst: Double, line: String)], over: [(Int, Int, Int)]) -> String {
+        let s17 = over.reduce(0) { $0 + $1.0 }, s34 = over.reduce(0) { $0 + $1.1 }, s100 = over.reduce(0) { $0 + $1.2 }
+        return String(format: "settled median %.0f max %.0f worst median %.1f max %.1f over17 %d over34 %d over100 %d",
+                      median(runs.map(\.settled)) * 1000, (runs.map(\.settled).max() ?? 0) * 1000,
+                      median(runs.map(\.worst)) * 1000, (runs.map(\.worst).max() ?? 0) * 1000, s17, s34, s100)
+    }
+
+    /// The status item's button: its action is the one a click sends.
+    private static func statusButton() -> NSStatusBarButton? {
+        func find(_ v: NSView) -> NSStatusBarButton? {
+            if let b = v as? NSStatusBarButton, b.target === MenuBarController.shared { return b }
+            for s in v.subviews { if let b = find(s) { return b } }
+            return nil
+        }
+        for w in NSApp.windows { if let root = w.contentView, let b = find(root) { return b } }
+        return nil
+    }
+
+    private static var popoverShown: Bool {
+        NSApp.windows.contains { $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+    }
+
+    /// The Settings section picker in the open Settings sheet.
+    private static func settingsSections(in v: NSView) -> NSSegmentedControl? {
+        if let s = v as? NSSegmentedControl, s.segmentCount == SettingsView.SettingsTab.allCases.count { return s }
+        for sub in v.subviews { if let s = settingsSections(in: sub) { return s } }
+        return nil
+    }
+
+    static func runWindowPhase(_ phase: String, preset: Preset, store: PresetStore, laps: Int, options: [String: String]) async {
+        let sampler = GapSampler()
+        let center = NotificationCenter.default
+        switch phase {
+        case "tabs":
+            let count = max(1, Int(options["tabs"] ?? "") ?? 5)
+            let stops: [(String, UUID?)] = store.presetsInSidebarOrder.prefix(count).map { ($0.name, Optional($0.id)) } + [("Home", nil)]
+            show(nil); await pause(1); _ = await timedSwitch(sampler, to: nil)
+            var warm: [(settled: Double, worst: Double, line: String)] = [], hitches: [(Int, Int, Int)] = []
+            for lap in 1...laps {
+                for (name, id) in stops {
+                    let r = await timedSwitch(sampler, to: id)
+                    out(String(format: "tabs lap %d %@: settled %.0f %@", lap, name, r.settled * 1000, r.line))
+                    // The first lap fills the pages' caches; the summary is the later laps.
+                    if lap > 1 || laps == 1 {
+                        warm.append(r)
+                        hitches.append((sampler.over(0.017), sampler.over(0.034), sampler.over(0.1)))
+                    }
+                    await pause(0.3)
+                }
+            }
+            out("tabs: \(warm.count) switches \(summary(warm, over: hitches))")
+
+        case "select":
+            let small = options["small"].flatMap { n in store.presets.first { $0.name == n } }
+                ?? store.presets.filter { p in p.joysticks.contains { !$0.bindings.isEmpty } }
+                    .min { a, b in a.joysticks.reduce(0) { $0 + $1.bindings.count } < b.joysticks.reduce(0) { $0 + $1.bindings.count } }
+            let largeNames = (options["large"] ?? "Minecraft,FPS (PS5 DualSense)").split(separator: ",").map(String.init)
+            var targets: [Preset] = small.map { [$0] } ?? []
+            for n in largeNames {
+                if let p = store.presets.first(where: { $0.name == n }) { targets.append(p) } else { out("select: no preset named \(n)") }
+            }
+            show(nil); await pause(1); _ = await timedSwitch(sampler, to: nil)
+            for lap in 1...laps {
+                for p in targets {
+                    let r = await timedSwitch(sampler, to: p.id)
+                    let rows = p.joysticks.reduce(0) { $0 + $1.bindings.count }
+                    out(String(format: "select lap %d %@ rows %d: settled %.0f %@", lap, p.name, rows, r.settled * 1000, r.line))
+                    await pause(0.3)
+                }
+            }
+
+        case "settings":
+            center.post(name: .init("inputconfig.debug.closesheets"), object: nil)
+            await pause(0.6)
+            for lap in 1...laps {
+                sampler.start()
+                center.post(name: .init("inputconfig.debug.sheet"), object: "settings")
+                let up = await waitFor(5) { MenuBarController.mainWindow?.attachedSheet != nil }
+                guard let up, let sheet = MenuBarController.mainWindow?.attachedSheet else {
+                    sampler.stop(); out("settings lap \(lap): Settings did not open"); return
+                }
+                await settle(sampler)
+                sampler.stop()
+                out(String(format: "settings open lap %d: up %.0f settled %.0f %@ views %d", lap, up * 1000, sampler.settled() * 1000,
+                           sampler.line, sheet.contentView.map(viewCount) ?? 0))
+                await pause(0.3)
+                if let root = sheet.contentView, let picker = settingsSections(in: root) {
+                    let tabs = SettingsView.SettingsTab.allCases
+                    for index in Array(1..<tabs.count) + [0] {
+                        sampler.start()
+                        picker.selectedSegment = index
+                        picker.sendAction(picker.action, to: picker.target)
+                        await settle(sampler)
+                        sampler.stop()
+                        out(String(format: "settings %@ lap %d: settled %.0f %@ views %d", tabs[index].rawValue, lap,
+                                   sampler.settled() * 1000, sampler.line, viewCount(root)))
+                        await pause(0.3)
+                    }
+                } else {
+                    out("settings lap \(lap): no section picker found")
+                }
+                sampler.start()
+                center.post(name: .init("inputconfig.debug.closesheets"), object: nil)
+                _ = await waitFor(5) { MenuBarController.mainWindow?.attachedSheet == nil }
+                await settle(sampler, quiet: 0.4)
+                sampler.stop()
+                out(String(format: "settings close lap %d: settled %.0f %@", lap, sampler.settled() * 1000, sampler.line))
+                await pause(0.6)
+            }
+
+        case "menu":
+            guard let button = statusButton(), let action = button.action else { out("menu: no status item"); return }
+            for lap in 1...laps {
+                sampler.start()
+                // The click's action builds and shows the pop-up before it
+                // returns: "call" is that, "up" anything after it.
+                let asked = CACurrentMediaTime()
+                NSApp.sendAction(action, to: button.target, from: button)
+                let call = CACurrentMediaTime() - asked
+                let up = await waitFor(3) { popoverShown }
+                await settle(sampler, quiet: 0.4, limit: 5)
+                sampler.stop()
+                guard let up else { out("menu lap \(lap): the pop-up did not open"); return }
+                out(String(format: "menu open lap %d: call %.0f up %.0f settled %.0f %@", lap, call * 1000, up * 1000,
+                           sampler.settled() * 1000, sampler.line))
+                await pause(0.3)
+                sampler.start()
+                NSApp.sendAction(action, to: button.target, from: button)
+                _ = await waitFor(3) { !popoverShown }
+                await settle(sampler, quiet: 0.4, limit: 5)
+                sampler.stop()
+                out(String(format: "menu close lap %d: settled %.0f %@", lap, sampler.settled() * 1000, sampler.line))
+                await pause(0.6)
+            }
+
+        case "visualizer":
+            for lap in 1...laps {
+                show(nil); await pause(0.5); _ = await timedSwitch(sampler, to: nil)
+                let home = await idleCost(2)
+                out("visualizer home idle lap \(lap): \(home)")
+                var r = await timedSwitch(sampler, to: preset.id)
+                out(String(format: "visualizer page lap %d: settled %.0f %@", lap, r.settled * 1000, r.line))
+                sampler.start()
+                center.post(name: .inputConfigScrollToVisualizer, object: nil)
+                await settle(sampler)
+                sampler.stop()
+                out(String(format: "visualizer show lap %d: settled %.0f %@", lap, sampler.settled() * 1000, sampler.line))
+                let shown = await idleCost(2)
+                out("visualizer idle lap \(lap): \(shown)")
+                r = await timedSwitch(sampler, to: nil)
+                out(String(format: "visualizer close lap %d: settled %.0f %@", lap, r.settled * 1000, r.line))
+                await pause(0.3)
+            }
+
+        case "sheet":
+            show(preset.id)
+            await pause(1)
+            let count = max(1, Int(options["sheets"] ?? "") ?? 3)
+            for index in 1...count {
+                sampler.start()
+                let asked = CACurrentMediaTime()
+                center.post(name: .init("inputconfig.debug.edit"), object: nil)
+                let up = await waitFor(5) { OpenEditor.current?.presetID == preset.id }
+                guard up != nil else { sampler.stop(); out("sheet \(index): the editor did not open"); return }
+                let shown = CACurrentMediaTime() - asked
+                await settle(sampler)
+                sampler.stop()
+                out(String(format: "sheet %d: up %.0f settled %.0f %@", index, shown * 1000, sampler.settled() * 1000, sampler.line))
+                await pause(0.3)
+                center.post(name: .init("inputconfig.debug.closesheets"), object: nil)
+                sampler.start()
+                _ = await waitFor(3) { OpenEditor.current == nil }
+                await settle(sampler, quiet: 0.4)
+                sampler.stop()
+                await pause(0.8)
+            }
+
+        default:
+            break
+        }
     }
 }
 #endif

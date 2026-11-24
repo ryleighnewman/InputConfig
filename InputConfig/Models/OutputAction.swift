@@ -107,6 +107,14 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     case volumeUp = "vup"
     case volumeDown = "vdn"
     case muteToggle = "mut"
+    /// Each press mutes or unmutes a microphone: the one the Mac is using,
+    /// or one chosen by name, kept in the output's `text` field (see
+    /// MicrophoneSwitch).
+    case microphoneToggle = "mic"
+    /// The microphone is live only while the input is held.
+    case microphoneOnWhileHeld = "mih"
+    /// The microphone is muted only while the input is held.
+    case microphoneMutedWhileHeld = "mim"
     // Media
     case playPause = "ply"
     case nextTrack = "nxt"
@@ -140,6 +148,9 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         case .volumeUp: return String(localized: "Volume Up")
         case .volumeDown: return String(localized: "Volume Down")
         case .muteToggle: return String(localized: "Mute / Unmute")
+        case .microphoneToggle: return String(localized: "Mute / Unmute Microphone")
+        case .microphoneOnWhileHeld: return String(localized: "Microphone On While Held")
+        case .microphoneMutedWhileHeld: return String(localized: "Microphone Muted While Held")
         case .playPause: return String(localized: "Play / Pause")
         case .nextTrack: return String(localized: "Next Track")
         case .previousTrack: return String(localized: "Previous Track")
@@ -173,11 +184,26 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// The three kinds that mute or unmute a microphone.
+    var isMicrophone: Bool {
+        switch self {
+        case .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld: return true
+        default: return false
+        }
+    }
+
+    /// The kinds with a release half: what the press did is undone when
+    /// the input is let go.
+    var actsWhileHeld: Bool { self == .microphoneOnWhileHeld || self == .microphoneMutedWhileHeld }
+
     var iconName: String {
         switch self {
         case .volumeUp: return "speaker.plus.fill"
         case .volumeDown: return "speaker.minus.fill"
         case .muteToggle: return "speaker.slash.fill"
+        case .microphoneToggle: return "mic.slash.fill"
+        case .microphoneOnWhileHeld: return "mic.fill"
+        case .microphoneMutedWhileHeld: return "mic.slash"
         case .playPause: return "playpause.fill"
         case .nextTrack: return "forward.fill"
         case .previousTrack: return "backward.fill"
@@ -204,7 +230,8 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
     /// Section header the kind appears under in the output picker.
     var category: String {
         switch self {
-        case .volumeUp, .volumeDown, .muteToggle: return String(localized: "Sound")
+        case .volumeUp, .volumeDown, .muteToggle,
+             .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld: return String(localized: "Sound")
         case .playPause, .nextTrack, .previousTrack: return String(localized: "Media")
         case .brightnessUp, .brightnessDown,
              .keyboardBrightnessUp, .keyboardBrightnessDown: return String(localized: "Display")
@@ -232,7 +259,8 @@ enum SystemActionKind: String, Codable, CaseIterable, Identifiable {
 
     /// Picker order, grouped by category.
     static let grouped: [(category: String, kinds: [SystemActionKind])] = [
-        (String(localized: "Sound"), [.volumeUp, .volumeDown, .muteToggle]),
+        (String(localized: "Sound"), [.volumeUp, .volumeDown, .muteToggle,
+                                      .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld]),
         (String(localized: "Media"), [.playPause, .nextTrack, .previousTrack]),
         (String(localized: "Display"), [.brightnessUp, .brightnessDown,
                      .keyboardBrightnessUp, .keyboardBrightnessDown]),
@@ -945,6 +973,8 @@ extension OutputAction {
         ("mission control", .missionControl), ("launchpad", .launchpad), ("apps", .launchpad),
         ("spotlight", .spotlight), ("lock screen", .lockScreen), ("screenshot menu", .screenshotMenu),
         ("run shortcut", .runShortcut), ("open app", .openApp), ("open url", .openURL),
+        ("mute microphone", .microphoneToggle), ("microphone on while held", .microphoneOnWhileHeld),
+        ("microphone muted while held", .microphoneMutedWhileHeld),
     ]
 
     /// The System Function a macro text phrase names, in any case, or nil.

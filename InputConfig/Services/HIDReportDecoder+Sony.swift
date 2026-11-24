@@ -88,8 +88,9 @@ extension HIDReportDecoder {
     /// bytes with the same section at [3] and the 0xA1 CRC at 74.
     /// Indices: Cross 0, Circle 1, Square 2, Triangle 3, L1 4, R1 5, L2 6,
     /// R2 7, Share 8, Options 9, PS 10, L3 11, R3 12, touchpad 13. A pad
-    /// that sets only the digital L2 or R2 bit (a Victrix stick) forces the
-    /// trigger axis full, as SDL does.
+    /// that sets only the digital L2 or R2 bit, its analog byte left at 0
+    /// (a Victrix stick), reads the trigger axis full, as SDL does; with
+    /// any analog value the axis is that value.
     static func decodeDualShock4(report: Data, into state: inout ControllerState) {
         let bytes = Array(report)
         let base: Int
@@ -134,8 +135,11 @@ extension HIDReportDecoder {
         state.buttons[10] = bit(b2, 0)   // PS
         state.buttons[13] = bit(b2, 1)   // touchpad click
         let l2Bit = bit(b1, 2), r2Bit = bit(b1, 3)
-        let l2 = max(Float(bytes[triggers]) / 255, l2Bit)
-        let r2 = max(Float(bytes[triggers + 1]) / 255, r2Bit)
+        // Full from the bit only when the analog byte is 0: a pad that
+        // sets the bit at the first of the pull and sends the pull too
+        // read every partial pull as full.
+        let l2 = bytes[triggers] == 0 && l2Bit > 0.5 ? 1 : Float(bytes[triggers]) / 255
+        let r2 = bytes[triggers + 1] == 0 && r2Bit > 0.5 ? 1 : Float(bytes[triggers + 1]) / 255
         state.axes[4] = l2
         state.axes[5] = r2
         state.buttons[6] = l2Bit > 0.5 || l2 > 0.12 ? 1 : 0

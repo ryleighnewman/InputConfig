@@ -340,31 +340,41 @@ extension BindingRowView {
         switch kind {
         case .runShortcut:
             HStack(spacing: 6) {
-                TextField("Shortcut name", text: outputTextBinding(at: index, in: list))
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .frame(minWidth: 140)
+                DraftTextField(outputTextBinding(at: index, in: list)) { text in
+                    TextField("Shortcut name", text: text)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                        .frame(minWidth: 140)
+                }
                 SystemListChooser(list: .shortcuts) { name in updateOutput(index, in: list) { $0.text = name } }
                     .accessibilityLabel("Choose a Shortcut")
                     .hoverHelp("Pick one of your installed Shortcuts.")
             }
         case .openApp:
             HStack(spacing: 6) {
-                TextField("App name or full path", text: outputTextBinding(at: index, in: list))
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .frame(minWidth: 160)
-                    .hoverHelp("An app name like Safari, a bundle identifier, or a full .app path.")
+                DraftTextField(outputTextBinding(at: index, in: list)) { text in
+                    TextField("App name or full path", text: text)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                        .frame(minWidth: 160)
+                        .hoverHelp("An app name like Safari, a bundle identifier, or a full .app path.")
+                }
                 SystemListChooser(list: .apps) { name in updateOutput(index, in: list) { $0.text = name } }
                     .accessibilityLabel("Choose an app")
                     .hoverHelp("Pick one of your installed applications.")
             }
         case .openURL:
-            TextField("https:// or any URL scheme", text: outputTextBinding(at: index, in: list))
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.small)
-                .frame(minWidth: 160)
-                .hoverHelp("Opens in the default handler. Any scheme works: https, mailto, facetime, shortcuts.")
+            DraftTextField(outputTextBinding(at: index, in: list)) { text in
+                TextField("https:// or any URL scheme", text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .frame(minWidth: 160)
+                    .hoverHelp("Opens in the default handler. Any scheme works: https, mailto, facetime, shortcuts.")
+            }
+        case .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld:
+            MicrophoneOutputPicker(parameter: output(at: index, in: list)?.text) { parameter in
+                updateOutput(index, in: list) { $0.text = parameter }
+            }
         default:
             // Never .fixedSize() horizontally: that lets a long explainer
             // force the row wider than the editor sheet, which pushes the
@@ -400,6 +410,7 @@ extension BindingRowView {
         case .zoomIn: return String(localized: "Zooms the screen in (Option+Cmd+=)")
         case .zoomOut: return String(localized: "Zooms the screen out (Option+Cmd+-)")
         case .runShortcut, .openApp, .openURL: return ""
+        case .microphoneToggle, .microphoneOnWhileHeld, .microphoneMutedWhileHeld: return ""
         }
     }
 
@@ -459,7 +470,10 @@ extension BindingRowView {
     var axisDirectionBinding: SwiftUI.Binding<AxisDirection> {
         SwiftUI.Binding(
             get: { binding.input.axisDirection ?? .positive },
-            set: { binding.input.axisDirection = $0 }
+            set: {
+                binding.input.axisDirection = $0
+                binding.input.normalizeTriggerDirection()
+            }
         )
     }
 
@@ -508,12 +522,6 @@ extension BindingRowView {
         case .doubleTap: if binding.doubleTapOutputs != nil { binding.doubleTapOutputs = value }
         case .tripleTap: if binding.tripleTapOutputs != nil { binding.tripleTapOutputs = value }
         }
-    }
-
-    /// The live speed mirror's key: the main list keeps the bare index, and
-    /// each extra list its own range, so two lists never share a readout.
-    func liveSpeedKey(_ index: Int, _ list: OutputList) -> Int {
-        list.rawValue * 1000 + index
     }
 
     /// The output at `index`, or nil once it has been removed. A field that
@@ -631,25 +639,6 @@ extension BindingRowView {
         )
     }
 
-    /// TextField binding that reads from the live drag mirror so the box
-    /// updates while the user is sliding, and writes go to both the mirror
-    /// and the underlying preset (so typing into the field still works).
-    func liveSpeedBinding(at index: Int, in list: OutputList = .main) -> SwiftUI.Binding<Int> {
-        let key = liveSpeedKey(index, list)
-        return SwiftUI.Binding(
-            get: {
-                if let live = liveSpeed[key] { return Int(live) }
-                return output(at: index, in: list)?.speed ?? 6
-            },
-            set: { newValue in
-                guard output(at: index, in: list) != nil else { return }
-                let clamped = max(1, min(50, newValue))
-                updateOutput(index, in: list) { $0.speed = clamped }
-                liveSpeed[key] = Double(clamped)
-            }
-        )
-    }
-
     // MARK: - MIDI Bindings
 
     func midiVelocityBinding(at index: Int, in list: OutputList = .main) -> SwiftUI.Binding<Int> {
@@ -680,5 +669,35 @@ extension BindingRowView {
             all.remove(at: index)
             setOutputs(all, in: list)
         }
+    }
+}
+
+/// Chooses the microphone a microphone System Function acts on: the one
+/// the Mac is using when the row fires, or one by name.
+struct MicrophoneOutputPicker: View {
+    @StateObject private var list = MicrophoneList()
+    let parameter: String?
+    let choose: (String?) -> Void
+
+    var body: some View {
+        let uid = MicrophoneSwitch.uid(from: parameter) ?? ""
+        Picker("Microphone", selection: Binding(get: { uid }, set: { choose(MicrophoneSwitch.parameter(forUID: $0)) })) {
+            Text(defaultLabel).tag("")
+            ForEach(list.devices) { device in Text(device.name).tag(device.uid) }
+            if !uid.isEmpty, !list.devices.contains(where: { $0.uid == uid }) {
+                Text(String(localized: "\(uid) (not connected)")).tag(uid)
+            }
+        }
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(maxWidth: 260)
+        .onAppear { list.watch() }
+    }
+
+    private var defaultLabel: String {
+        if let device = list.devices.first(where: { $0.uid == list.defaultUID }) {
+            return String(localized: "System default (\(device.name))")
+        }
+        return String(localized: "System default")
     }
 }

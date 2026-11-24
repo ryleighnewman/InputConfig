@@ -10,7 +10,8 @@ import IOBluetooth
 /// InputConfig supports controllers that GameController can't see:
 /// 8BitDo Ultimate 2C in XInput mode, DInput-mode pads, the GameCube
 /// adapter, the Switch 2 Pro Controller, fight sticks, wheels, etc.
-/// (Xbox 360 style XUSB pads are not HID and never reach it.)
+/// (Xbox 360 style XUSB pads are not HID: XInputUSBService reads them
+/// over USB and lists them here as external pads.)
 ///
 /// Architecture overview:
 ///
@@ -68,8 +69,22 @@ final class RawHIDGamepadService: ObservableObject {
     private var forcedKeys: Set<UInt64> = []
     /// Logitech wheels sent the native-mode switch, by location, and when:
     /// within half a minute the same wheel is not switched again (it is
-    /// read as it is if the switch did nothing); a later plug-in is.
+    /// read as it is if the switch did nothing). The stamp is set only
+    /// when the switch was written, and goes when the wheel comes back in
+    /// its own mode, so the next plug-in at that port is switched again.
     private var wheelsSwitched: [UInt64: Date] = [:]
+
+    /// Whether a Logitech wheel attaching at `location` is sent the mode
+    /// switch now. A wheel with no switch command is in its own mode
+    /// already: its stamp is removed (it stayed for good, and a wheel
+    /// plugged in again within half a minute was left in compatibility
+    /// mode). A wheel that ignored the switch still has a command and
+    /// waits out the half minute, so it is not switched in a loop.
+    nonisolated static func wheelSwitchDue(_ stamps: inout [UInt64: Date], location: UInt64,
+                                           hasCommand: Bool, now: Date) -> Bool {
+        guard hasCommand else { stamps[location] = nil; return false }
+        return stamps[location].map { now.timeIntervalSince($0) > 30 } ?? true
+    }
     /// Interfaces waiting a moment for GameController to claim them.
     private var awaitingGameController: Set<UInt64> = []
     /// How long to give GameController to list a controller from a vendor
@@ -378,8 +393,13 @@ final class RawHIDGamepadService: ObservableObject {
             for (id, stop) in self.eightBitDoRumbleStop {
                 stop.cancel()
                 self.deviceLookupLock.lock()
-                let device = self.gamepadsByKey[id]?.device
+                var device = self.gamepadsByKey[id]?.device
                 self.deviceLookupLock.unlock()
+                if device == nil {
+                    self.eightBitDoListedLock.lock()
+                    device = self.eightBitDoListed[id]
+                    self.eightBitDoListedLock.unlock()
+                }
                 if let device {
                     var off = Self.eightBitDoRumbleReport(intensity: 0)
                     HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x05, &off, off.count)
@@ -388,6 +408,152 @@ final class RawHIDGamepadService: ObservableObject {
             self.eightBitDoRumbleStop.removeAll()
         }
         if wait { Self.steam2026Queue.sync(execute: work) } else { Self.steam2026Queue.async(execute: work) }
+    }
+
+    // MARK: - 8BitDo motors of a pad macOS GameController lists
+
+    /// The devices opened only to write the motor report, by IORegistry
+    /// entry ID; the ones whose pad refused it; the ones already said to
+    /// work. Guarded by `eightBitDoListedLock`.
+    nonisolated(unsafe) private var eightBitDoListed: [UInt64: IOHIDDevice] = [:]
+    nonisolated(unsafe) private var eightBitDoListedRefused: Set<UInt64> = []
+    nonisolated(unsafe) private var eightBitDoListedSaid: Set<UInt64> = []
+    nonisolated private let eightBitDoListedLock = NSLock()
+
+    /// Which of the model's HID devices a buzz for one GameController
+    /// controller goes to. `named` says, per device, whether GameController
+    /// lists it as that controller: those that are, else a lone device.
+    nonisolated static func eightBitDoListedTargets(named: [Bool]) -> [Int] {
+        let own = named.indices.filter { named[$0] }
+        if !own.isEmpty { return own }
+        return named.count == 1 ? [0] : []
+    }
+
+    /// The motors of an 8BitDo pad that macOS GameController lists. macOS
+    /// reads such a pad's buttons but has no haptics for it (8BitDo's page
+    /// for Apple devices: rumble is not supported), while the pad still
+    /// takes its own motor report. So that report is written straight to
+    /// the HID device, opened shared beside GameController, which goes on
+    /// reading the buttons. False when `controller` is no such pad, or its
+    /// pad refused the report (firmware older than the one with motors).
+    @discardableResult
+    func rumbleListedEightBitDo(controller: GCController, intensity: Float, durationMs: Int) -> Bool {
+        let matching = IOServiceMatching(kIOHIDDeviceKey) as NSMutableDictionary
+        matching[kIOHIDVendorIDKey as String] = Self.eightBitDoRumbleVendor
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else { return false }
+        defer { IOObjectRelease(iterator) }
+        // The pads read here have their own motor path (rumbleEightBitDo).
+        let readHere = Set(openDevices.values.compactMap { $0.device.flatMap(Self.registryEntryID) })
+        var present: [(id: UInt64, entry: io_service_t, name: String, named: Bool)] = []
+        defer { for item in present { IOObjectRelease(item.entry) } }
+        var entry = IOIteratorNext(iterator)
+        while entry != 0 {
+            defer { entry = IOIteratorNext(iterator) }
+            func property(_ key: String) -> Any? {
+                IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+            }
+            var id: UInt64 = 0
+            // A game pad or joystick collection of one of the models; an
+            // interface that says nothing about its use is taken too.
+            let page = (property(kIOHIDPrimaryUsagePageKey) as? NSNumber)?.intValue
+            let usage = (property(kIOHIDPrimaryUsageKey) as? NSNumber)?.intValue
+            guard let pid = (property(kIOHIDProductIDKey) as? NSNumber)?.int32Value,
+                  Self.eightBitDoRumbleProducts[pid] != nil,
+                  page == nil || (page == 1 && (usage == 4 || usage == 5)),
+                  IORegistryEntryGetRegistryEntryID(entry, &id) == KERN_SUCCESS, id != 0, !readHere.contains(id) else {
+                IOObjectRelease(entry)
+                continue
+            }
+            let name = (property(kIOHIDProductKey) as? String) ?? "8BitDo controller"
+            let named = Self.listingController(vendorID: Self.eightBitDoRumbleVendor, productID: pid, productName: name) === controller
+            present.append((id, entry, name, named))
+        }
+        eightBitDoListedLock.lock()
+        // A pad that left: its device is let go of.
+        let live = Set(present.map(\.id))
+        for (id, device) in eightBitDoListed where !live.contains(id) {
+            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+            eightBitDoListed[id] = nil
+        }
+        eightBitDoListedRefused.formIntersection(live)
+        eightBitDoListedSaid.formIntersection(live)
+        var targets: [(id: UInt64, device: IOHIDDevice, name: String)] = []
+        for index in Self.eightBitDoListedTargets(named: present.map(\.named)) {
+            let item = present[index]
+            guard !eightBitDoListedRefused.contains(item.id) else { continue }
+            if let device = eightBitDoListed[item.id] {
+                targets.append((item.id, device, item.name))
+            } else if let device = IOHIDDeviceCreate(kCFAllocatorDefault, item.entry) {
+                let opened = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
+                if opened == kIOReturnSuccess {
+                    eightBitDoListed[item.id] = device
+                    targets.append((item.id, device, item.name))
+                } else if eightBitDoListedRefused.insert(item.id).inserted {
+                    // Not asked again while it stays connected, and said once.
+                    let name = item.name, text = String(format: "0x%x", opened)
+                    DispatchQueue.main.async {
+                        ActivityLog.shared.warning("Controllers", "\(name) could not be opened for its vibration (\(text))")
+                    }
+                }
+            }
+        }
+        eightBitDoListedLock.unlock()
+        guard !targets.isEmpty else { return false }
+        let ms = max(60, durationMs)
+        Self.steam2026Queue.async { [weak self] in
+            guard let self else { return }
+            for target in targets {
+                self.eightBitDoRumbleStop[target.id]?.cancel()
+                self.eightBitDoRumbleStop[target.id] = nil
+                var on = Self.eightBitDoRumbleReport(intensity: intensity)
+                let result = HIDWrite.setReport(target.device, kIOHIDReportTypeOutput, 0x05, &on, on.count)
+                guard result == kIOReturnSuccess else {
+                    self.refuseListedEightBitDo(target.id, name: target.name, code: result)
+                    continue
+                }
+                self.sayListedEightBitDo(target.id, name: target.name)
+                let device = target.device, id = target.id
+                let stop = DispatchWorkItem { [weak self] in
+                    var off = Self.eightBitDoRumbleReport(intensity: 0)
+                    HIDWrite.setReport(device, kIOHIDReportTypeOutput, 0x05, &off, off.count)
+                    self?.eightBitDoRumbleStop[id] = nil
+                }
+                self.eightBitDoRumbleStop[id] = stop
+                Self.steam2026Queue.asyncAfter(deadline: .now() + .milliseconds(ms), execute: stop)
+            }
+        }
+        return true
+    }
+
+    nonisolated private static func registryEntryID(_ device: IOHIDDevice) -> UInt64? {
+        var id: UInt64 = 0
+        return IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device), &id) == KERN_SUCCESS && id != 0 ? id : nil
+    }
+
+    /// The pad did not take the report: let go of, not tried again while it
+    /// stays connected, and said once with what usually cures it.
+    nonisolated private func refuseListedEightBitDo(_ id: UInt64, name: String, code: IOReturn) {
+        eightBitDoListedLock.lock()
+        let device = eightBitDoListed.removeValue(forKey: id)
+        let first = eightBitDoListedRefused.insert(id).inserted
+        eightBitDoListedLock.unlock()
+        if let device { IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone)) }
+        guard first else { return }
+        let text = String(format: "0x%x", code)
+        DispatchQueue.main.async {
+            ActivityLog.shared.warning("Controllers", "\(name) did not take the vibration report (\(text)). Firmware 1.03 and later has vibration over Bluetooth; it is updated with 8BitDo Ultimate Software V2")
+        }
+    }
+
+    nonisolated private func sayListedEightBitDo(_ id: UInt64, name: String) {
+        eightBitDoListedLock.lock()
+        let first = eightBitDoListedSaid.insert(id).inserted
+        eightBitDoListedLock.unlock()
+        guard first else { return }
+        DispatchQueue.main.async {
+            ActivityLog.shared.info("Controllers", "\(name): vibration goes through the controller's own report, since macOS has no haptics for it")
+        }
     }
 
     /// Stop every rumble now (an emergency stop, a disconnect).
@@ -542,6 +708,13 @@ final class RawHIDGamepadService: ObservableObject {
     @discardableResult
     func attachExternalPad(vendorID: Int32, productID: Int32, transport: String, productName: String) -> UInt64? {
         guard let profile = ControllerProfileDatabase.profile(forVendor: vendorID, product: productID) else { return nil }
+        return attachExternalPad(profile: profile, vendorID: vendorID, productID: productID, transport: transport, productName: productName)
+    }
+
+    /// The same with the profile given: an Xbox 360 class pad over USB is
+    /// known by its interface, not by its IDs.
+    @discardableResult
+    func attachExternalPad(profile: ControllerProfile, vendorID: Int32, productID: Int32, transport: String, productName: String) -> UInt64 {
         Self.externalCounter += 1
         let key = Self.externalKeyBase | Self.externalCounter
         let pad = RawHIDGamepad(testProfile: profile, vendorID: vendorID, productID: productID,
@@ -857,10 +1030,12 @@ final class RawHIDGamepadService: ObservableObject {
     /// them raw: every bit of the report becomes a button, so the scanner
     /// still finds whichever bit a control flips. A device GameController
     /// already lists is refused: reading it here too doubles every input.
+    /// `insteadOfGameController` lifts that refusal for a pad the person
+    /// chose to read here (see `readInsteadOfGameController`).
     @discardableResult
-    func adopt(_ device: IOHIDDevice, remember: Bool = true) -> Bool {
+    func adopt(_ device: IOHIDDevice, remember: Bool = true, insteadOfGameController: Bool = false) -> Bool {
         guard let info = readDeviceInfo(device) else { return false }
-        if isListedByGameController(device) {
+        if !insteadOfGameController, isListedByGameController(device) {
             ActivityLog.shared.info("Devices", "Not connecting \(info.productName) by hand: macOS GameController already reads it")
             return false
         }
@@ -894,8 +1069,121 @@ final class RawHIDGamepadService: ObservableObject {
         return opened
     }
 
+    // MARK: - Read directly instead of GameController
+
+    /// Pads the person chose to read here although macOS GameController
+    /// lists them, by `HIDDeviceRegistry.rememberKey`. For some third-party
+    /// pads GameController passes along nothing, or less than the pad sends
+    /// (a GameSir Nova Lite in its HID mode sends no presses). While such a
+    /// pad is read here, GameController's copy of it reads as switched off
+    /// (`readsDirectlyInstead(of:)`), so no press arrives twice. Empty
+    /// unless someone picked Read Directly Instead in the Devices menu.
+    nonisolated static let insteadOfGameControllerKey = "InputConfig.readInsteadOfGameController"
+    @Published private(set) var insteadOfGameController: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: RawHIDGamepadService.insteadOfGameControllerKey) ?? [])
+
+    /// Whether a pad from this vendor may be read here instead of through
+    /// GameController: not one with GameController rules of its own (Xbox,
+    /// PlayStation, Nintendo, Stadia, Luna), and not a Steam Controller,
+    /// which has its own reader.
+    static func mayReadInsteadOfGameController(vendorID: Int32, productID: Int32) -> Bool {
+        !gameControllerVendors.contains(vendorID) && vendorID != 0x28DE
+            && gameControllerKeywords(vendorID: vendorID, productID: productID) == nil
+    }
+
+    /// The same, for a device GameController lists right now.
+    func mayReadInsteadOfGameController(_ device: IOHIDDevice) -> Bool {
+        guard let info = readDeviceInfo(device) else { return false }
+        return Self.mayReadInsteadOfGameController(vendorID: info.vendorID, productID: info.productID)
+            && isListedByGameController(device)
+    }
+
+    /// Read this pad here instead of through GameController, and remember
+    /// the choice. The choice is recorded first, so GameController's copy
+    /// reads as off by the time the pad's own slot appears. True when the
+    /// pad is read here now, or will be once Input Monitoring is on.
+    @discardableResult
+    func readInsteadOfGameController(_ device: IOHIDDevice) -> Bool {
+        guard mayReadInsteadOfGameController(device), let info = readDeviceInfo(device),
+              let key = HIDDeviceRegistry.rememberKey(for: device) else { return false }
+        setInsteadOfGameController(key, true)
+        let opened = adopt(device, insteadOfGameController: true)
+        if opened {
+            ActivityLog.shared.info("Devices", "Reading \(info.productName) directly instead of through macOS GameController; its GameController copy is switched off")
+            return true
+        }
+        if isOpen(device) || awaitingInputMonitoring[info.key] != nil { return true }
+        setInsteadOfGameController(key, false)
+        return false
+    }
+
+    /// Whether a Scan that heard nothing should point at Read Directly
+    /// Instead for a pad: one GameController lists, that may be read here,
+    /// from which GameController has passed no press or stick move since
+    /// it connected, after a wait long enough for a press to have come,
+    /// and not one already offered since the app opened.
+    nonisolated static func offersReadingDirectly(mayReadInstead: Bool, passedInput: Bool, alreadyOffered: Bool,
+                                                  waited seconds: TimeInterval) -> Bool {
+        mayReadInstead && !passedInput && !alreadyOffered && seconds >= 5
+    }
+
+    /// The connected pads GameController lists that may be read here
+    /// instead and has passed nothing from since they connected, each once.
+    func silentPadsReadableDirectly() -> [(device: IOHIDDevice, name: String, key: String)] {
+        var found: [(device: IOHIDDevice, name: String, key: String)] = []
+        for entry in HIDDeviceRegistry.shared.entries {
+            for device in HIDDeviceRegistry.shared.devices(for: entry) {
+                guard mayReadInsteadOfGameController(device), let controller = listedController(for: device),
+                      !ControllerPowerService.shared.hasPassedInput(controller),
+                      let key = HIDDeviceRegistry.rememberKey(for: device), !found.contains(where: { $0.key == key }) else { continue }
+                found.append((device, entry.name, key))
+            }
+        }
+        return found
+    }
+
+    /// Counts changes to the choices and to the pads open here, so a cached
+    /// answer about GameController's copy is asked again.
+    private(set) var insteadOfGameControllerRevision = 0
+
+    private func setInsteadOfGameController(_ key: String, _ on: Bool) {
+        insteadOfGameControllerRevision &+= 1
+        if on { insteadOfGameController.insert(key) } else { insteadOfGameController.remove(key) }
+        UserDefaults.standard.set(Array(insteadOfGameController).sorted(), forKey: Self.insteadOfGameControllerKey)
+    }
+
+    /// Reset Settings and Restore from Backup change the stored list; the
+    /// set in memory follows.
+    func reloadInsteadOfGameControllerFromDefaults() {
+        let stored = Set(UserDefaults.standard.stringArray(forKey: Self.insteadOfGameControllerKey) ?? [])
+        guard stored != insteadOfGameController else { return }
+        insteadOfGameControllerRevision &+= 1
+        insteadOfGameController = stored
+    }
+
+    /// Forgets the choice for this device, when it was made: called as the
+    /// device stops being read by hand, so GameController's copy reads again.
+    private func forgetInsteadOfGameController(_ device: IOHIDDevice) {
+        guard !insteadOfGameController.isEmpty, let key = HIDDeviceRegistry.rememberKey(for: device),
+              insteadOfGameController.contains(key) else { return }
+        setInsteadOfGameController(key, false)
+    }
+
+    /// True when `controller` is GameController's copy of a pad read here
+    /// instead: found the way `isListedByGameController` finds it, by the
+    /// pad's HID product name.
+    func readsDirectlyInstead(of controller: GCController) -> Bool {
+        guard !insteadOfGameController.isEmpty else { return false }
+        return openDevices.values.contains { pad in
+            guard let device = pad.device, let key = HIDDeviceRegistry.rememberKey(for: device),
+                  insteadOfGameController.contains(key) else { return false }
+            return listedController(for: device) === controller
+        }
+    }
+
     /// Stop reading a device the user connected by hand and forget it.
     func release(_ device: IOHIDDevice) {
+        forgetInsteadOfGameController(device)
         if let info = readDeviceInfo(device) {
             HIDDeviceRegistry.remember(device, false)
             ActivityLog.shared.info("Devices", "Disconnected \(info.productName)")
@@ -910,6 +1198,7 @@ final class RawHIDGamepadService: ObservableObject {
     func release(devices: [IOHIDDevice]) {
         var logged = false
         for device in devices {
+            forgetInsteadOfGameController(device)
             HIDDeviceRegistry.remember(device, false)
             guard isOpen(device) else { continue }
             if !logged, let info = readDeviceInfo(device) {
@@ -926,6 +1215,7 @@ final class RawHIDGamepadService: ObservableObject {
     func release(vendorID: Int32, productID: Int32) {
         for gamepad in openDevices.values where gamepad.vendorID == vendorID && gamepad.productID == productID {
             guard let device = gamepad.device else { continue }
+            forgetInsteadOfGameController(device)
             HIDDeviceRegistry.remember(device, false)
             ActivityLog.shared.info("Devices", "Disconnected \(gamepad.productName)")
             handleDeviceDetached(device)
@@ -1023,12 +1313,11 @@ final class RawHIDGamepadService: ObservableObject {
         // Opening a wheel that also lists a keyboard collection would raise
         // the Input Monitoring prompt on plug-in (the gate below); such a
         // wheel stays in compatibility mode until the person connects it.
-        if LogitechWheel.isWheel(vendor: info.vendorID, product: info.productID),
-           !Self.blockedByInputMonitoring(device),
-           wheelsSwitched[info.locationID].map({ Date().timeIntervalSince($0) > 30 }) ?? true {
+        if LogitechWheel.isWheel(vendor: info.vendorID, product: info.productID) {
             let bcd = (IOHIDDeviceGetProperty(device, kIOHIDVersionNumberKey as CFString) as? NSNumber)?.intValue ?? 0
-            if let switchTo = LogitechWheel.nativeModeCommand(product: info.productID, bcdDevice: bcd) {
-                wheelsSwitched[info.locationID] = Date()
+            let command = LogitechWheel.nativeModeCommand(product: info.productID, bcdDevice: bcd)
+            if Self.wheelSwitchDue(&wheelsSwitched, location: info.locationID, hasCommand: command != nil, now: Date()),
+               let switchTo = command, !Self.blockedByInputMonitoring(device) {
                 // A report can only be sent to an open device; it is closed
                 // again at once, since the wheel re-attaches as a new one.
                 var kr = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -1051,6 +1340,9 @@ final class RawHIDGamepadService: ObservableObject {
                     ? "\(info.productName): a Logitech \(switchTo.name) in compatibility mode; switched it to its own mode"
                     : "\(info.productName): could not switch the \(switchTo.name) out of compatibility mode (error \(kr)); reading it as it is")
                 if kr == kIOReturnSuccess {
+                    // Stamped only now: a switch that could not be written
+                    // is tried again at the next plug-in.
+                    wheelsSwitched[info.locationID] = Date()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
                         MainActor.assumeIsolated {
                             guard let self, Self.isLive(device) else { return }
@@ -1694,6 +1986,10 @@ final class RawHIDGamepadService: ObservableObject {
         deviceLookupLock.lock()
         let gamepad = gamepadsByKey[key]
         let players = playerPads[key]
+        // An Xbox pad over Bluetooth that has sent a report 0x02 keeps its
+        // Xbox button there (the saved reports are per interface, and this
+        // report is already among them).
+        let sawGuidePacket = lastReports[key]?[0x02] != nil
         deviceLookupLock.unlock()
         guard let gamepad, let profile = gamepad.profile else { return }
         if profile.layout == .steamController2026 {
@@ -1702,7 +1998,8 @@ final class RawHIDGamepadService: ObservableObject {
         }
         // The rest lives in RawHIDReportApplier, shared with the bench.
         let applied = RawHIDReportApplier.apply(
-            data: data, to: gamepad, profile: profile, players: players, replay: replay, steam2026: nil)
+            data: data, to: gamepad, profile: profile, players: players, replay: replay, steam2026: nil,
+            sawGuidePacket: sawGuidePacket)
         guard applied else { return }
 
         if RawHIDReportApplier.isGameCubeAdapter(gamepad) {

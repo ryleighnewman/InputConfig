@@ -30,6 +30,17 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     /// a Set and a sort, about six allocations) up to 1000 times a second,
     /// unchanged reports included.
     let relativeAxes: [Int]
+    /// Whether a GameCube controller for Switch 2 keeps the B and Y an
+    /// earlier version gave it (HIDDeviceRegistry.keepsLegacyNumbering).
+    /// Asked once here: the answer is fixed for a launch, and asking per
+    /// report built a string and searched a set each time.
+    let keepsLegacyNumbering: Bool
+
+    /// The answer for a profile: only the one layout that asks per report.
+    static func keepsLegacyNumbering(profile: ControllerProfile?, vendorID: Int32, productID: Int32) -> Bool {
+        profile?.layout == .switch2GameCube
+            && HIDDeviceRegistry.keepsLegacyNumbering(vendorID: vendorID, productID: productID)
+    }
 
     /// The relative axis slots of a profile's descriptor plan; none for a
     /// hand-coded layout of another kind.
@@ -66,6 +77,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         self.transport = transport
         self.profile = profile
         self.relativeAxes = Self.relativeAxisSlots(of: profile)
+        self.keepsLegacyNumbering = Self.keepsLegacyNumbering(profile: profile, vendorID: vendorID, productID: productID)
     }
 
     /// A pad with no device behind it, fed reports by the bench or the
@@ -81,6 +93,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         self.transport = transport
         self.profile = testProfile
         self.relativeAxes = Self.relativeAxisSlots(of: testProfile)
+        self.keepsLegacyNumbering = Self.keepsLegacyNumbering(profile: testProfile, vendorID: vendorID, productID: productID)
     }
 
     /// Atomic snapshot of the latest decoded controller state. Safe to
@@ -88,6 +101,17 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     var state: ControllerState {
         lock.lock()
         defer { lock.unlock() }
+        return _state
+    }
+
+    /// The same snapshot, for the engine's poll: it also notes that the
+    /// poll is reading this pad and has now read every short press held
+    /// (see `schedulePulseRelease`). A display read uses `state`.
+    func stateForPoll() -> ControllerState {
+        lock.lock()
+        defer { lock.unlock() }
+        lastPollRead = CACurrentMediaTime()
+        for (index, entry) in pulses where entry.busy && (_state.buttons[index] ?? 0) > 0.5 { pulsesSeen.insert(index) }
         return _state
     }
 
@@ -105,6 +129,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         _state = ControllerState()
         counters = [:]
         pulses = [:]
+        pulsesSeen = []
         axisResetPending = []
         pulseGeneration &+= 1
         lock.unlock()
@@ -174,6 +199,23 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
 
     /// Per button: whether a pulse is held or in its gap, and how many wait.
     private var pulses: [Int: (busy: Bool, waiting: Int)] = [:]
+    /// The buttons whose press now held the engine's poll has read, and
+    /// when the poll last read this pad (0 before its first read).
+    private var pulsesSeen: Set<Int> = []
+    private var lastPollRead: TimeInterval = 0
+    /// How many times a release waits one more gap for the poll, and how
+    /// recent the poll's last read must be for it to wait at all.
+    static let pulseReleaseTries = 3
+    static let pulsePollWindow: TimeInterval = 1
+
+    /// Whether a short press due for release is held one more gap: the
+    /// poll is reading this pad (it read it within `pulsePollWindow`) and
+    /// has not read this press yet. A main thread busy past the hold ran
+    /// the release before the poll, which then never saw the turn. Three
+    /// times at most; with no poll reading the pad the release is on time.
+    nonisolated static func pulseWaitsForPoll(seen: Bool, sincePoll: TimeInterval, tries: Int) -> Bool {
+        !seen && tries < pulseReleaseTries && sincePoll < pulsePollWindow
+    }
     /// Bumped by `resetState`, so pulses already scheduled do nothing.
     private var pulseGeneration = 0
 
@@ -193,6 +235,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
                 continue
             }
             pulses[index] = (true, entry.waiting)
+            pulsesSeen.remove(index)
             _state.buttons[index] = 1
             let generation = pulseGeneration
             lock.unlock()
@@ -272,11 +315,18 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
         }
     }
 
-    private func schedulePulseRelease(_ index: Int, generation: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pulseHold) { [weak self] in
+    private func schedulePulseRelease(_ index: Int, generation: Int, after delay: TimeInterval = RawHIDGamepad.pulseHold, tries: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             self.lock.lock()
             guard self.pulseGeneration == generation else { self.lock.unlock(); return }
+            // Not read by the poll yet: held for one more gap.
+            if Self.pulseWaitsForPoll(seen: self.pulsesSeen.contains(index),
+                                      sincePoll: CACurrentMediaTime() - self.lastPollRead, tries: tries) {
+                self.lock.unlock()
+                self.schedulePulseRelease(index, generation: generation, after: Self.pulseGap, tries: tries + 1)
+                return
+            }
             self._state.buttons[index] = 0
             var entry = self.pulses[index] ?? (false, 0)
             let again = entry.waiting > 0
@@ -288,6 +338,7 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
                 guard let self else { return }
                 self.lock.lock()
                 guard self.pulseGeneration == generation else { self.lock.unlock(); return }
+                self.pulsesSeen.remove(index)
                 self._state.buttons[index] = 1
                 self.lock.unlock()
                 self.schedulePulseRelease(index, generation: generation)
@@ -303,22 +354,32 @@ final class RawHIDGamepad: Identifiable, @unchecked Sendable {
     /// as a slow drift. SDL reads the pad's calibration from its flash; this
     /// takes the rest point from the first reports with every axis near the
     /// middle and removes it from each reading after.
-    private var stickRest: [Int: Float]?
+    private var stickRest: [Int: Float] = [:]
 
-    func removeStickRest(_ state: inout ControllerState) {
+    /// `first` and `second`: whether axes 0 and 1, and axes 2 and 3, were
+    /// read with no flash calibration and so still carry their rest. The
+    /// rest is learned from the first report in which every such axis the
+    /// report carries is near the middle (a Joy-Con 2 on its own carries
+    /// two, and never learned while four were asked for). Every stick axis
+    /// leaves within -1 to 1, a calibrated one included.
+    func removeStickRest(_ state: inout ControllerState, first: Bool = true, second: Bool = true) {
         lock.lock()
         defer { lock.unlock() }
-        if stickRest == nil {
-            var rest: [Int: Float] = [:]
-            for axis in 0...3 { if let v = state.axes[axis], abs(v) < 0.12 { rest[axis] = v } }
-            guard rest.count == 4 else {
-                for axis in 0...3 { if let v = state.axes[axis] { state.axes[axis] = max(-1, min(1, v)) } }
-                return
-            }
-            stickRest = rest
+        var toLearn = false, atRest = true
+        for axis in 0...3 where (axis < 2 ? first : second) && stickRest[axis] == nil {
+            guard let v = state.axes[axis] else { continue }
+            toLearn = true
+            if abs(v) >= 0.12 { atRest = false }
         }
-        for (axis, offset) in stickRest ?? [:] {
-            if let v = state.axes[axis] { state.axes[axis] = max(-1, min(1, v - offset)) }
+        if toLearn && atRest {
+            for axis in 0...3 where (axis < 2 ? first : second) && stickRest[axis] == nil {
+                if let v = state.axes[axis] { stickRest[axis] = v }
+            }
+        }
+        for axis in 0...3 {
+            guard let v = state.axes[axis] else { continue }
+            let offset = (axis < 2 ? first : second) ? stickRest[axis] ?? 0 : 0
+            state.axes[axis] = max(-1, min(1, v - offset))
         }
     }
 

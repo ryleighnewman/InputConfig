@@ -20,7 +20,11 @@ import Foundation
 ///   6 and up = extra generic axes (sliders, dials, rudder, throttle)
 enum HIDReportDecoder {
 
-    static func decode(report: Data, profile: ControllerProfile) -> ControllerState {
+    /// `sawGuidePacket` matters to an Xbox pad over Bluetooth alone (see
+    /// XboxBluetoothLayout.decode). `calibration` matters to the Switch 2
+    /// layouts alone (see Switch2Calibration.Choice).
+    static func decode(report: Data, profile: ControllerProfile, sawGuidePacket: Bool = false,
+                       calibration: Switch2Calibration.Choice = .stored) -> ControllerState {
         var state = ControllerState()
         switch profile.layout {
         case .xinput:
@@ -32,15 +36,15 @@ enum HIDReportDecoder {
         case .dualSenseAlt:
             decodeDualSenseAlt(report: report, into: &state)
         case .xboxBluetooth(let share):
-            XboxBluetoothLayout.decode(report: report, share: share, into: &state)
+            XboxBluetoothLayout.decode(report: report, share: share, sawGuidePacket: sawGuidePacket, into: &state)
         case .switch2Pro:
-            decodeSwitch2Pro(report: report, into: &state)
+            decodeSwitch2Pro(report: report, calibration: calibration, into: &state)
         case .switch2GameCube:
-            decodeSwitch2GameCube(report: report, into: &state)
+            decodeSwitch2GameCube(report: report, calibration: calibration, into: &state)
         case .switch2JoyConLeft:
-            decodeSwitch2JoyCon(report: report, left: true, into: &state)
+            decodeSwitch2JoyCon(report: report, left: true, calibration: calibration, into: &state)
         case .switch2JoyConRight:
-            decodeSwitch2JoyCon(report: report, left: false, into: &state)
+            decodeSwitch2JoyCon(report: report, left: false, calibration: calibration, into: &state)
         case .steamController2026:
             decodeSteamController2026(report: report, into: &state)
         case .eightBitDo:

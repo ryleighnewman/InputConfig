@@ -595,6 +595,7 @@ final class AppState: ObservableObject {
         // The 8BitDo motors are written from their own queue; stop them
         // before the process goes.
         RawHIDGamepadService.shared.stopEightBitDoRumble(wait: true)
+        XInputUSBService.shared.stopMotors(wait: true)
     }
 }
 
@@ -1400,41 +1401,15 @@ struct SolidButton: ButtonStyle {
     /// A label color chosen by the caller instead of the measured one.
     var labelOverride: Color? = nil
     @Environment(\.isEnabled) private var isEnabled
-    /// For the fill as drawn: the accent picked in Settings lives in the
-    /// environment, which NSColor(Color.accentColor) cannot see, so a yellow
-    /// accent measured as the system blue and kept white text.
-    @Environment(\.self) private var environment
 
-    private var labelColor: Color {
-        if let labelOverride { return labelOverride }
-        var fill = tint
-        // More contrast asked for (macOS or the app): the label that reads
-        // best on the fill as drawn, which the lighter Increase Contrast
-        // reds and blues need; white measured under 3:1 on them.
-        if environment.colorSchemeContrast == .increased || environment.appHighContrast {
-            if tint == .accentColor {
-                let d = UserDefaults.standard
-                let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
-                if let picked = choice.color(customHex: d.string(forKey: AppAccent.customKey) ?? "") { fill = picked }
-            }
-            let c = fill.resolve(in: environment)
-            return Color.higherContrastLabel(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue))
-        }
-        if tint == .accentColor {
-            let d = UserDefaults.standard
-            let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
-            // The app's own look on the system blue stays white.
-            if choice == .automatic || choice == .blue { return .white }
-            if let picked = choice.color(customHex: d.string(forKey: AppAccent.customKey) ?? "") { fill = picked }
-            // Any other accent gets whichever of white and black reads
-            // better: white stayed on graphite and cyan at under 3:1.
-            let c = fill.resolve(in: environment)
-            func linear(_ v: Float) -> Float { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-            let l = 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
-            return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? .white : .black
-        }
-        let c = fill.resolve(in: environment)
-        return Color.readableLabel(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue))
+    /// The label's style. A prominent label is worked out where it is drawn
+    /// (SolidLabelStyle); reading the whole environment here made every
+    /// solid button, the Scan button on each editor row among them, run its
+    /// body again on any environment change above it.
+    private var labelStyle: AnyShapeStyle {
+        guard prominent else { return AnyShapeStyle(.primary) }
+        if let labelOverride { return AnyShapeStyle(labelOverride) }
+        return AnyShapeStyle(SolidLabelStyle(tint: tint))
     }
 
     /// Back-compat with the earlier `compact:` spelling.
@@ -1469,13 +1444,52 @@ struct SolidButton: ButtonStyle {
             .fixedSize(horizontal: false, vertical: true)
             // White on dark fills, black on light ones: a light custom accent
             // (yellow, mint) put white text at about 1.6:1.
-            .foregroundStyle(prominent ? AnyShapeStyle(labelColor) : AnyShapeStyle(.primary))
+            .foregroundStyle(labelStyle)
             .padding(.horizontal, hPad)
             .padding(.vertical, vPad)
             .background(prominent ? AnyShapeStyle(tint) : AnyShapeStyle(Color.secondary.opacity(0.16)),
                         in: Capsule())
             .contentShape(Capsule())
             .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1.0) : 0.4)
+    }
+}
+
+/// The label color of a prominent SolidButton, resolved against the
+/// environment where the label is drawn: the accent picked in Settings lives
+/// there, which NSColor(Color.accentColor) cannot see, so a yellow accent
+/// measured as the system blue and kept white text.
+private struct SolidLabelStyle: ShapeStyle {
+    let tint: Color
+
+    func resolve(in environment: EnvironmentValues) -> Color {
+        var fill = tint
+        // More contrast asked for (macOS or the app): the label that reads
+        // best on the fill as drawn, which the lighter Increase Contrast
+        // reds and blues need; white measured under 3:1 on them.
+        if environment.colorSchemeContrast == .increased || environment.appHighContrast {
+            if tint == .accentColor {
+                let d = UserDefaults.standard
+                let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
+                if let picked = choice.color(customHex: d.string(forKey: AppAccent.customKey) ?? "") { fill = picked }
+            }
+            let c = fill.resolve(in: environment)
+            return Color.higherContrastLabel(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue))
+        }
+        if tint == .accentColor {
+            let d = UserDefaults.standard
+            let choice = AppAccent(rawValue: d.string(forKey: AppAccent.storageKey) ?? "") ?? .automatic
+            // The app's own look on the system blue stays white.
+            if choice == .automatic || choice == .blue { return .white }
+            if let picked = choice.color(customHex: d.string(forKey: AppAccent.customKey) ?? "") { fill = picked }
+            // Any other accent gets whichever of white and black reads
+            // better: white stayed on graphite and cyan at under 3:1.
+            let c = fill.resolve(in: environment)
+            func linear(_ v: Float) -> Float { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            let l = 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+            return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? .white : .black
+        }
+        let c = fill.resolve(in: environment)
+        return Color.readableLabel(red: CGFloat(c.red), green: CGFloat(c.green), blue: CGFloat(c.blue))
     }
 }
 
@@ -1774,6 +1788,7 @@ final class QuitCoordinator: NSObject, NSApplicationDelegate {
         _ = KeyboardLayoutService.shared
         #if DEBUG
         LayoutSnapshots.installHook()
+        EditorProbe.runIfAsked()
         #endif
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard MenuBarController.mainWindow == nil else { return }

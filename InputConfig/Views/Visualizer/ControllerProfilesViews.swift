@@ -199,6 +199,10 @@ struct AccessProfileEditorPanel: View {
 
     private var hasEdits: Bool { original.map { $0 != profile } ?? true }
 
+    /// Whether a preset switch may close the editor: not while a write is
+    /// out, and not over edits nobody was asked about.
+    nonisolated static func closesOnPresetSwitch(edited: Bool, saving: Bool) -> Bool { !edited && !saving }
+
     /// The drawing's control for a button slot (1...10) and a port (1...4).
     static func controlID(slot: Int) -> String { slot <= 8 ? "socket\(slot)" : slot == 9 ? "center" : "stick" }
     static func controlID(port: Int) -> String { "e\(port)" }
@@ -220,6 +224,9 @@ struct AccessProfileEditorPanel: View {
                     // what is saved.
                     if new.utf16.count > Service.nameUnitLimit { profile.name = Service.storableName(new) }
                 }
+                // Nothing changes while the write is out: the editor
+                // closed on its answer and dropped what was typed since.
+                .disabled(saving)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     section("Button Assignments") {
@@ -261,6 +268,7 @@ struct AccessProfileEditorPanel: View {
                     }
                 }
                 .padding(.trailing, 4)
+                .disabled(saving)
             }
             if let error {
                 Text(error)

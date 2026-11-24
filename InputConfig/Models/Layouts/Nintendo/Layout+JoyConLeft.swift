@@ -56,7 +56,7 @@ extension ControllerLayout {
             // A Joy-Con 2 (L) read directly (USB grip or Bluetooth LE)
             // takes this drawing with the same numbering.
             [.rawProfileLayout("switch2JoyConLeft")],
-            [.vidPid(vendor: 0x057E, products: [0x2066])],
+            [.vidPid(vendor: 0x057E, products: [Switch2USBEnabler.joyConLeftProductID])],
         ],
         matchPriority: 10,
         readability: .partial("On a first Joy-Con L and ZL never reach the Mac and the Minus, Capture and stick press indices are unverified; a Joy-Con 2 is read directly (USB grip or Bluetooth LE) with L, ZL, GL and its motion sensors, not yet checked on one"),

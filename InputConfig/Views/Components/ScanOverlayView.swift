@@ -17,6 +17,8 @@ struct ScanOverlayView: View {
     @State private var touchpadCandidates: [InputEvent] = []
 
     @State private var timeRemaining: Int = 20
+    /// When this scan began, for how long it waited in silence.
+    @State private var scanStartedAt = Date()
     @State private var detectedInput: InputEvent?
     @State private var timer: Timer?
     @State private var didCompleteScan = false
@@ -45,6 +47,13 @@ struct ScanOverlayView: View {
     /// The whole card: a click on it (a dwell click on the way to Cancel)
     /// is never taken as the scanned input.
     @State private var cardFrame: CGRect = .zero
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.appReduceMotion) private var appReduceMotion
+    /// The countdown ticks and the detected control eases in; both are
+    /// instant under either Reduce Motion.
+    private var cardAnimation: Animation? {
+        systemReduceMotion || appReduceMotion ? nil : .snappy(duration: 0.22)
+    }
 
     var body: some View {
         ZStack {
@@ -59,6 +68,9 @@ struct ScanOverlayView: View {
                 Text(ScanTiming.seconds > 0 ? "\(timeRemaining)" : String(localized: "Waiting"))
                     .font(.system(size: 48, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
+                    // Each second rolls over rather than snapping.
+                    .contentTransition(.numericText(countsDown: true))
+                    .animation(cardAnimation, value: timeRemaining)
 
                 Text("Press a control to map it")
                     .font(.headline)
@@ -88,6 +100,7 @@ struct ScanOverlayView: View {
                         canceled = true
                         cleanup()
                         onCancel()
+                        offerReadingDirectly()
                     } label: {
                         Text("Cancel")
                             .font(.callout.weight(.semibold))
@@ -137,11 +150,15 @@ struct ScanOverlayView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Scan for input. Press a control on your controller, a key, click, or scroll on your Mac, or a note or knob on a MIDI device, to map it.")
             .accessibilityHint("Use the Cancel scan button or press Escape to cancel.")
-            .accessibilityAction(.escape) { canceled = true; cleanup(); onCancel() }
+            .accessibilityAction(.escape) { canceled = true; cleanup(); onCancel(); offerReadingDirectly() }
             // Modal: VoiceOver and Switch Control stay on the scan card, not
             // the editor behind the dim.
             .accessibilityAddTraits(.isModal)
         }
+        // The Detected line's transition played without an animation, so it
+        // popped in and the card jumped taller. The card is small; only it
+        // and the dim are under this overlay.
+        .animation(cardAnimation, value: detectedInput != nil)
         .onAppear {
             startTimer()
             controllerService.startScanning { event in
@@ -259,6 +276,7 @@ struct ScanOverlayView: View {
                 canceled = true
                 cleanup()
                 onCancel()
+                offerReadingDirectly()
                 return true
             }
             if event.isARepeat { return true }
@@ -432,7 +450,16 @@ struct ScanOverlayView: View {
         }
     }
 
+    /// The scan ended with nothing heard. Once the overlay is gone, a
+    /// controller that macOS lists and has passed nothing from is offered
+    /// the Devices menu's Read Directly Instead (see ReadDirectlyOffer).
+    private func offerReadingDirectly() {
+        let waited = Date().timeIntervalSince(scanStartedAt)
+        DispatchQueue.main.async { ReadDirectlyOffer.afterSilentScan(waited: waited) }
+    }
+
     private func startTimer() {
+        scanStartedAt = Date()
         // How long Scan waits is a setting (Settings, General, Scan): a
         // fixed 20 seconds was too short for some hands. Zero waits until
         // the scan is canceled.
@@ -450,6 +477,7 @@ struct ScanOverlayView: View {
                 announce(String(localized: "Scan timed out. Nothing was set."))
                 cleanup()
                 onCancel()
+                offerReadingDirectly()
             }
         }
     }
@@ -502,5 +530,35 @@ enum ScanTiming {
         // VoiceOver too: its spoken instruction took most of the 5 seconds.
         if unset, !NSWorkspace.shared.isSwitchControlEnabled, !NSWorkspace.shared.isVoiceOverEnabled { return 5 }
         return seconds == 0 ? 60 : seconds
+    }
+}
+
+/// After a Scan that heard nothing: when a connected controller is one
+/// macOS GameController lists and has passed nothing from since it
+/// connected, and it may be read here instead, the person is offered the
+/// Devices menu's Read Directly Instead, which few would go looking for.
+/// Once per controller for as long as the app is open.
+@MainActor
+enum ReadDirectlyOffer {
+    private static var offered: Set<String> = []
+
+    static func afterSilentScan(waited: TimeInterval) {
+        let gamepads = RawHIDGamepadService.shared
+        guard let pad = gamepads.silentPadsReadableDirectly().first(where: {
+            RawHIDGamepadService.offersReadingDirectly(mayReadInstead: true, passedInput: false,
+                                                       alreadyOffered: offered.contains($0.key), waited: waited)
+        }) else { return }
+        offered.insert(pad.key)
+        let alert = NSAlert()
+        alert.messageText = String(localized: "\(pad.name) sent nothing during the scan")
+        alert.informativeText = String(localized: "macOS reads this controller itself, and for some controllers it passes none of the presses on. InputConfig can read it directly instead. To go back, untick it in the Devices menu.")
+        alert.addButton(withTitle: String(localized: "Read Directly Instead"))
+        alert.addButton(withTitle: String(localized: "Not Now"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard gamepads.readInsteadOfGameController(pad.device) else {
+            ActivityLog.shared.warning("Devices", "\(pad.name) could not be read directly")
+            return
+        }
+        if gamepads.isAwaitingInputMonitoring(anyOf: [pad.device]) { RawHIDGamepadService.requestInputMonitoring() }
     }
 }

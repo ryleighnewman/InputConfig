@@ -3,10 +3,19 @@ import Foundation
 /// Thrustmaster wheel bases in their native (PC) mode, read through the
 /// descriptor parser, put on the one wheel convention the app uses for
 /// Logitech wheels: steering on axis 0, clutch on 1, brake on 4, gas on 5,
-/// each pedal 0 released and 1 floored. The fixed descriptors in hid-tmff2
-/// (hid-tmt300rs.c, hid-tmt248.c, hid-tmtx.c, hid-tmtsxw.c, hid-tmtspc.c)
+/// each pedal 0 released and 1 floored. The slot table follows the fixed
+/// descriptors in hid-tmff2 for the T300 RS normal mode, TX, TS-XW and
+/// TS-PC (hid-tmt300rs.c, hid-tmtx.c, hid-tmtsxw.c, hid-tmtspc.c), which
 /// name X 16 bit, then Rz (brake), Z (gas), Y (clutch) 0 to 1023; without
 /// this they paired onto the stick slots and read full deflection at rest.
+/// The T248 array (hid-tmt248.c) and the T300 RS advanced mode array name
+/// X, Y, Rz and Slider instead.
+///
+/// UNVERIFIED: the field order a Mac sees. Those arrays are the
+/// descriptors the Linux driver puts in place of the wheel's own
+/// (`report_fixup` in hid-tmff2.c), and a Mac parses the wheel's own. Read
+/// the descriptor with ioreg on a wheel in native mode before changing a
+/// slot.
 ///
 /// UNVERIFIED: which end of 0 to 1023 a Thrustmaster pedal rests at. The
 /// Logitech convention (released = maximum) is assumed, so `inverted` is

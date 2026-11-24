@@ -362,6 +362,15 @@ struct KeyCodeMap {
         codeTextWords[code]
     }
 
+    /// The code a key is read under as an input. Two entries of the list
+    /// share a Mac key with another one: "# ~ (ISO, next to Return)" (50)
+    /// is backslash's key (49) and "PrintScreen (F13)" (70) is F13 (104),
+    /// and a pressed key always arrives under the second of each pair. A
+    /// stored 50 or 70 is matched as its twin; as outputs the two stay.
+    static func canonicalInputCode(_ code: Int) -> Int {
+        code == 70 ? 104 : (code == 50 ? 49 : code)
+    }
+
     /// HID usage code to macOS virtual key code mapping (for CGEvent)
     /// This maps the HID codes used in presets to the macOS virtual key codes needed for CGEvent
     static let hidToVirtualKeyCode: [Int: Int] = [

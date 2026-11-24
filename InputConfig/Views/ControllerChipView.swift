@@ -89,6 +89,9 @@ struct RawHIDChipView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .hoverFill(isHovering)
+        // The fill fades rather than blinks; Reduce Motion's gate at the
+        // window root takes the animation out.
+        .animation(.easeOut(duration: 0.12), value: isHovering)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
     }
@@ -272,6 +275,8 @@ struct ControllerChipView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .hoverFill(isHovering)
+        // As the raw HID chip: a short fade, off under Reduce Motion.
+        .animation(.easeOut(duration: 0.12), value: isHovering)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
@@ -544,7 +549,9 @@ struct ControllerChipView: View {
             // One grid of everything the light can be: the fixed colors,
             // a custom color (the picker itself is the swatch, and applies
             // as soon as a color is chosen), and Rainbow, which is the RGB
-            // cycle. Picking any color stops the cycle.
+            // cycle. Picking any color stops the cycle: the set light
+            // closure stops it before it sets the color, so the swatches do
+            // not toggle it first.
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 8) {
                 ForEach(Self.lightPresets, id: \.name) { preset in
                     let swatchColor = preset.name == "Off" ? Color.gray.opacity(0.3) :
@@ -553,7 +560,6 @@ struct ControllerChipView: View {
                         name: localizedColorName(preset.name),
                         color: swatchColor,
                         action: {
-                            if isRGBActive { onToggleRGB() }
                             onSetLight(preset.r, preset.g, preset.b)
                         }
                     )
@@ -571,7 +577,6 @@ struct ControllerChipView: View {
                         .voiceNames("Custom", "Custom light bar color")
                         .onChange(of: customColor) { _, value in
                             let nsColor = NSColor(value).usingColorSpace(.sRGB) ?? NSColor(value)
-                            if isRGBActive { onToggleRGB() }
                             onSetLight(Float(nsColor.redComponent), Float(nsColor.greenComponent), Float(nsColor.blueComponent))
                         }
                     Text("Custom")

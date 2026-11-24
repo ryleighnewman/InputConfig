@@ -41,7 +41,7 @@ enum PresetPrint {
     static func run(_ preset: Preset, controllers: GameControllerService) {
         guard let made = page(preset, controllers: controllers) else { return }
         let operation = NSPrintOperation(view: made.view, printInfo: made.info)
-        operation.jobTitle = preset.name
+        operation.jobTitle = preset.shownName
         operation.showsPrintPanel = true
         operation.showsProgressPanel = true
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
@@ -74,7 +74,7 @@ enum PresetPrint {
                 .font: font, .foregroundColor: NSColor.black, .paragraphStyle: style,
             ]))
         }
-        add(preset.name, .boldSystemFont(ofSize: 20), after: 2)
+        add(preset.shownName, .boldSystemFont(ofSize: 20), after: 2)
         let tag = preset.tag.trimmingCharacters(in: .whitespacesAndNewlines)
         if !tag.isEmpty { add(ShippedText.t(tag), .systemFont(ofSize: 12), after: 8) }
         let notes = (preset.notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,6 +125,10 @@ enum PresetPrint {
         if let twice = row.doubleTapOutputs, !twice.isEmpty {
             let what = OutputAction.names(twice).joined(separator: " + ")
             does.append(String(localized: "Double tap: \(what)"))
+        }
+        if let thrice = row.tripleTapOutputs, !thrice.isEmpty {
+            let what = OutputAction.names(thrice).joined(separator: " + ")
+            does.append(String(localized: "Triple tap: \(what)"))
         }
         if let steps = row.macroSteps, !steps.isEmpty {
             does.append(steps.count == 1 ? String(localized: "Runs a macro of 1 step")
